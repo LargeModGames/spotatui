@@ -227,7 +227,7 @@ Details: `src/infra/player/AGENTS.md`.
 
 ### Adding a new screen
 
-See `.claude/skills/add-tui-screen/SKILL.md` for the six-place checklist.
+See `src/tui/AGENTS.md` for the six-place checklist.
 
 ### Dispatching network calls
 
@@ -407,7 +407,7 @@ never config:
 
 ### Adding a feature-gated sidebar row
 
-See `.claude/skills/add-tui-screen/SKILL.md`.
+See `src/tui/AGENTS.md`.
 
 ### Domain-specific conventions
 
@@ -416,6 +416,7 @@ reads a file in that directory. Other agents must open it.
 
 | Area | Read first |
 |------|------------|
+| A new TUI screen or sidebar row | `src/tui/AGENTS.md` |
 | DJ lanes, guards, avoid-library filter | `src/infra/dj/AGENTS.md` |
 | MCP server | `src/infra/mcp/AGENTS.md` |
 | Lua plugins | `src/infra/scripting/AGENTS.md` |

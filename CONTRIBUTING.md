@@ -1,93 +1,134 @@
 # Contributing to spotatui
 
-Thanks for your interest in spotatui! 💚 We welcome all kinds of contributions, not just code.
+Thanks for your interest in spotatui! You do not need to write code to help: bug reports, docs, themes, packaging and testing on your setup all count, and all of them get you on the [contributor list](#recognition).
 
-## Ways to Contribute
+- [Ways to help](#ways-to-help)
+- [Report a bug](#report-a-bug)
+- [Set up](#set-up)
+- [Where things live](#where-things-live)
+- [Run it](#run-it)
+- [Before you open a PR](#before-you-open-a-pr)
+- [If the gates test fails](#if-the-gates-test-fails)
+- [After you open a PR](#after-you-open-a-pr)
+- [Using AI Tools](#using-ai-tools)
+- [Contributing to the librespot fork](#contributing-to-the-librespot-fork)
+- [Recognition](#recognition)
+- [Questions](#questions)
 
-### 🐛 Report Bugs
-Found something broken? [Open an issue](https://github.com/LargeModGames/spotatui/issues/new) with:
-- What you expected vs what happened
-- Steps to reproduce
-- Your OS and spotatui version
+## Ways to help
 
-### 💡 Suggest Features
-Have an idea? Start a [Discussion](https://github.com/LargeModGames/spotatui/discussions) or open an issue. We love hearing what would make spotatui better for you.
+- **Report a bug** or ask for a feature with the [issue forms](https://github.com/LargeModGames/spotatui/issues/new/choose).
+- **Fix the docs.** The user docs live in [`docs/`](docs/README.md); change them with a normal PR. (The GitHub wiki is out of date and takes no PRs; `docs/` replaces it.)
+- **Add a theme preset.** See `ThemePreset` in `src/core/theme.rs` and [`docs/themes.md`](docs/themes.md).
+- **Test on your setup.** Try a release on an unusual distro, BSD, WSL or audio setup and tell us what breaks.
+- **Package spotatui** for a system it is not on yet. See the [help wanted](https://github.com/LargeModGames/spotatui/issues?q=is%3Aissue%20state%3Aopen%20label%3A%22help%20wanted%22) issues.
+- **Write code.** Start with a [good first issue](https://github.com/LargeModGames/spotatui/issues?q=is%3Aissue%20state%3Aopen%20label%3A%22good%20first%20issue%22), and open an issue first for a new feature or a large refactor.
 
-### 📖 Improve Documentation
-- Fix typos or unclear instructions
-- Add examples or clarify setup steps
-- Translate docs (we'd love to support more languages!)
+Be kind, and follow the [Code of Conduct](CODE_OF_CONDUCT.md).
 
-The wiki is included as a submodule in `spotatui.wiki/`. To contribute:
+## Report a bug
+
+Run spotatui again with `--debug`, make the bug happen, and attach the log:
+
 ```bash
-git clone --recurse-submodules https://github.com/LargeModGames/spotatui.git
-# Make your changes in spotatui.wiki/
-# Then commit and open a PR
+spotatui --debug
 ```
 
-### 🎨 Create Themes
-Love customization? Add a new theme preset! Check out `ThemePreset` in `src/core/theme.rs` for examples, and `docs/themes.md` for the theming docs.
+spotatui prints the log path when it starts and when it exits: `spotatui_logs/spotatuilog<pid>` in your temp directory. If it crashed, `spotatui_panic.log` in the state directory has the panic, a backtrace and the end of the log. Skim the log before you post it: tokens are never written, but a log can contain your display name. See [Logging](docs/configuration.md#logging).
 
-### 🧪 Test on Your Setup
-- Try pre-releases and report issues
-- Test on unusual setups (BSD, WSL, specific distros)
-- Verify audio works with different backends
+Tell us the frontend (terminal or desktop app), the source, your OS, how you installed spotatui, and the version. Report what you see on the spotatui tracker, even when the cause may be in the librespot fork; we move it if it is.
 
-### ⭐ Spread the Word
-- Star the repo
-- Share spotatui with music lovers
-- Write about your experience
+Security problems go to the [security policy](SECURITY.md), not to a public issue.
 
----
+## Set up
 
-## Code Contributions
+1. Install Rust with [rustup](https://rustup.rs). The minimum version is the `rust-version` in `Cargo.toml`.
+2. Install the system packages for your OS from [docs/installation.md#prerequisites](docs/installation.md#prerequisites).
+3. For the browser GUI and the desktop app, install Node 24.
+4. For the YouTube source, install [yt-dlp](https://github.com/yt-dlp/yt-dlp).
+5. Fork the repo, clone your fork, and make a branch from `main`.
 
-### Ground Rules
-- Be kind and follow our [Code of Conduct](CODE_OF_CONDUCT.md)
-- Open an issue first for new features or larger refactors
-- Keep PRs focused and scoped for easier review
+## Where things live
 
-### Getting Set Up
+| Path | What it is |
+|---|---|
+| `src/core/` | App state, the tick scheduler, the shared `Action` vocabulary, config and state files |
+| `src/infra/` | Spotify (through the librespot fork), the other sources, audio, Lua scripting, the AI DJ and MCP, OS integrations |
+| `src/tui/` | The terminal UI: event loop, key handlers, draw functions |
+| `src/gui/` | The server and protocol behind the browser GUI and the desktop app |
+| `src/cli/` | The `spotatui <subcommand>` commands |
+| `src/runtime/` | Startup and the entry points of each frontend |
+| `gui/` | The web page of the browser GUI and the desktop app (TypeScript) |
+| `desktop/` | The Tauri desktop app, a separate crate with its own `Cargo.lock` |
+| `agent-plugin/` | The agent plugin that makes a coding agent the DJ |
+| `examples/plugins/` | Example Lua plugins |
+| `docs/` | The user docs |
 
-1. Install a recent stable Rust toolchain (`rustup` recommended)
-2. Install platform dependencies from [Development](README.md#development):
-   - OpenSSL
-   - `xorg-dev` (Linux; clipboard support)
-   - ALSA + pkg-config (Linux, glibc and musl; default build)
-   - PipeWire dev libraries (Linux; optional, for `--features audio-viz`)
-   - `portaudio` via Homebrew (macOS)
-3. Clone your fork and create a topic branch from `main`
+The design rules of each area are in the `AGENTS.md` file of its folder ([`AGENTS.md`](AGENTS.md) at the root links them all). They are written for AI agents, but they are the best map of the code for people too. To add a terminal screen, follow the checklist in [`src/tui/AGENTS.md`](src/tui/AGENTS.md).
 
-Run locally:
+## Run it
+
 ```bash
+# The full terminal app: Spotify only
 cargo run
-```
 
-Slim build (no audio/streaming):
-```bash
+# With the other sources
+cargo run --features all-sources
+
+# The slim build: no librespot, audio or scripting. Fastest to compile.
 cargo run --no-default-features --features telemetry,tui
 ```
 
-### Before Opening a PR
+The browser GUI needs its page built first; without it, the page is a 503 error:
 
-Run these checks (the fast local gate):
+```bash
+cd gui
+npm ci
+npm run build
+cd ..
+cargo run --bin spotatui-gui --features gui
+```
+
+The desktop app needs the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) and the built page:
+
+```bash
+cargo run --manifest-path desktop/Cargo.toml
+```
+
+## Before you open a PR
+
+Run the fast local gate. CI runs the same three commands:
+
 ```bash
 cargo fmt --all
 cargo clippy --no-default-features --features telemetry,tui -- -D warnings
 cargo test --no-default-features --features telemetry,tui
 ```
 
-CI runs a wider eight-leg feature matrix plus a macOS job (see `.github/workflows/ci.yml`), including
-a plain `cargo test` with default features, and passes `--locked` - regenerate
-`Cargo.lock` if you touch `Cargo.toml`. See `AGENTS.md` for the full matrix.
-A change under `gui/` must also pass the npm checks in `.github/workflows/gui.yml` (run in `gui/`):
-`npm ci`, `npm run lint`, `npm run format:check`, `npm run typecheck`, `npm test`, `npm run build`.
+Also run, when they apply:
 
-### PR Tips
-- Add/adjust tests when changing behavior
-- Update `README.md` and `CHANGELOG.md` for user-facing changes
-- Include screenshots for UI changes
-- Keep commits logical; squashing welcome but not required
+- a default `cargo test`, if you changed code behind a feature flag. The slim gate does not compile it.
+- in `gui/`: `npm ci`, `npm run lint`, `npm run format:check`, `npm run typecheck`, `npm test` and `npm run build`, if you changed `gui/`.
+- `cargo clippy --manifest-path desktop/Cargo.toml -- -D warnings` and `cargo test --manifest-path desktop/Cargo.toml`, if you changed `desktop/`, `src/gui/` or `src/runtime/gui.rs`.
+- any cargo command after you edit `Cargo.toml`, so `Cargo.lock` updates. CI builds with `--locked` and fails on a stale lock.
+
+CI then checks eight feature combinations on Linux plus one macOS job ([`ci.yml`](.github/workflows/ci.yml)). The desktop app builds on macOS and Windows only after the merge. Code coverage is reported but never blocks a PR.
+
+Add or update tests when you change behavior, add a line under `## [Unreleased]` in [`CHANGELOG.md`](CHANGELOG.md) for a change users notice, and add screenshots for a UI change.
+
+## If the gates test fails
+
+`cargo test` includes a gates test. It counts how often some code reaches across the layers of the app, for example a key handler that writes a field of `App` directly, and it keeps those numbers in [`tools/gates.count`](tools/gates.count). The numbers may only go down.
+
+When your change makes one go up, change the code instead of the number: use an `App` method, `app.apply(Action::...)`, or `app.view` for presentation state. The failure message names the counter, and [`src/gates.rs`](src/gates.rs) says what each counter measures. Never edit the two adoption floors at the end of the file; a bot raises them after the merge. If `tools/gates.count` conflicts with `main`, leave it to a maintainer.
+
+## After you open a PR
+
+- **Title:** `type(scope): subject`, with a type in use here (`feat`, `fix`, `perf`, `refactor`, `docs`, `chore`, `ci`, `test`), for example `fix(queue): keep the order after a skip`.
+- **Description:** fill in the template: what changed and why, and the commands you ran under Testing.
+- **`Fixes #N`:** only when the PR fixes the whole issue, because the issue closes on merge. For part of an issue, write `Part of #N`.
+- **CodeRabbit** reviews every PR, drafts too, and asks for changes until its threads are resolved. Answer it like a person: fix what is right, and say why when it is wrong.
+- A [maintainer](README.md#maintainers) reviews and squash-merges the PR. Releases come out every few weeks.
 
 ### Using AI Tools
 
@@ -102,12 +143,29 @@ AI tools are welcome. How you wrote the code matters less than whether you check
 
 PRs that ignore the issue, delete unrelated content, or claim checks that were never run are closed without a detailed review. Accounts that open PRs in bulk and do not read the reviews are blocked.
 
----
+These rules apply to the librespot fork too.
+
+## Contributing to the librespot fork
+
+Spotify playback, Spotify Connect, the Spotify session and the calls spotatui makes to Spotify run on our librespot fork, [spotatui-librespot](https://github.com/LargeModGames/spotatui-librespot). It is published on crates.io as seven `spotatui-librespot-*` crates with one version, and spotatui pins the ones it uses to that exact version.
+
+The fork is part of spotatui: **a merged PR there counts as a spotatui contribution**, and it gets you on the spotatui [contributor list](#recognition).
+
+- **Bugs:** report what you see on the spotatui tracker. Open an issue on the [fork's tracker](https://github.com/LargeModGames/spotatui-librespot/issues) when you know the bug is in the library code.
+- **PRs** go to the fork's `spotatui` branch. Its [`.github/CONTRIBUTING.md`](https://github.com/LargeModGames/spotatui-librespot/blob/spotatui/.github/CONTRIBUTING.md) has the checks and how to test your change inside spotatui.
+- **Releases:** after the merge, a maintainer publishes a new fork version and updates the pins here in a separate PR.
+- A fix that is not specific to spotatui is worth offering to [librespot](https://github.com/librespot-org/librespot) too.
 
 ## Recognition
 
-We use [all-contributors](https://allcontributors.org/) to recognize everyone who helps—code or not! After your contribution is merged, the maintainer will add you to the contributors list.
+We use [all-contributors](https://allcontributors.org) to thank everyone who helps, with code or without. After your PR is merged, or after a bug report or another contribution, comment on that PR or issue:
 
-## Questions?
+```text
+@all-contributors please add @your-name for code
+```
 
-Join the [spotatui Discord](https://spotatui.com/discord), start a [Discussion](https://github.com/LargeModGames/spotatui/discussions), or ping us in an issue. We're happy to help!
+Use `code`, `doc`, `bug`, `ideas`, `design`, `platform` (packaging), `test`, or any other [contribution type](https://allcontributors.org/docs/en/emoji-key). The bot opens a PR that adds you to the [contributor list](README.md#spotatui-contributors). For a fork PR, comment on a spotatui issue or PR and link the fork PR. A maintainer can also add you.
+
+## Questions
+
+Ask in the [Discord](https://spotatui.com/discord) or in [Discussions](https://github.com/LargeModGames/spotatui/discussions). We are happy to help.

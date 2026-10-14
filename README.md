@@ -3,19 +3,17 @@
   spotatui
 </h1>
 <p align="center">
-  A terminal music player written in Rust, powered by <a href="https://github.com/ratatui-org/ratatui">Ratatui</a><br>
-  Native Spotify streaming, synced lyrics, a real-time audio visualizer, local file,<br> Subsonic/Navidrome, Internet Radio, YouTube, and Qobuz sources, plus Apple Music on macOS. Spotify is optional.
+  A fast music player for the terminal and the desktop, written in Rust.<br>
+  Spotify through its own built-in client, plus local files, Subsonic/Navidrome, internet radio, YouTube and Qobuz, and Apple Music on macOS.
+</p>
+<p align="center">
+  <a href="#installation">Install</a> · <a href="docs/README.md">Docs</a> · <a href="docs/installation.md#desktop-app">Desktop app</a> · <a href="CONTRIBUTING.md">Contributing</a> · <a href="https://spotatui.com/discord">Discord</a>
 </p>
 
 [![Crates.io](https://img.shields.io/crates/v/spotatui.svg)](https://crates.io/crates/spotatui)
-[![codecov](https://codecov.io/gh/LargeModGames/spotatui/graph/badge.svg)](https://codecov.io/gh/LargeModGames/spotatui)
 [![Discord](https://img.shields.io/discord/1534820237122207815?logo=discord&logoColor=white&label=Discord&color=5865F2)](https://spotatui.com/discord)
-[![Upstream](https://img.shields.io/badge/upstream-Rigellute%2Fspotify--tui-blue)](https://github.com/Rigellute/spotify-tui)
-[![X](https://img.shields.io/badge/@LargeModGames-000000?logo=x&logoColor=white)](https://twitter.com/LargeModGames)
-[![Songs played using Spotatui](https://img.shields.io/badge/dynamic/json?url=https://spotatui-counter.spotatui.workers.dev&query=count&label=Songs%20played%20using%20spotatui&labelColor=0b0f14&color=1ed760&logo=spotify&logoColor=1ed760&style=flat-square&cacheSeconds=600)](https://github.com/LargeModGames/spotatui)
+[![Songs played using spotatui](https://img.shields.io/badge/dynamic/json?url=https://spotatui-counter.spotatui.workers.dev&query=count&label=Songs%20played%20using%20spotatui&labelColor=0b0f14&color=1ed760&style=flat-square&cacheSeconds=600)](#song-history)
 [![spotatui Contributors](https://img.shields.io/badge/dynamic/json?url=https://raw.githubusercontent.com/LargeModGames/spotatui/main/.all-contributorsrc&query=%24.contributors.length&label=spotatui%20contributors&color=1ed760&style=flat-square)](#spotatui-contributors)
-[![Upstream Contributors](https://img.shields.io/badge/upstream_contributors-94-orange.svg?style=flat-square)](#upstream-contributors-spotify-tui)
-
 
 ![Demo](.github/demo.gif)
 
@@ -24,435 +22,97 @@
 ## Table of Contents
 
 - [About](#about)
-- [Features](#features)
 - [Installation](#installation)
-  - [Desktop app (preview)](#desktop-app-preview)
 - [Quickstart](#quickstart)
-  - [Adding Spotify later](#adding-spotify-later)
-- [Music Sources](#music-sources)
-  - [Local Files](#local-files)
-  - [Subsonic / Navidrome](#subsonic--navidrome)
-  - [Internet Radio](#internet-radio)
-  - [YouTube](#youtube)
-  - [Qobuz](#qobuz)
-  - [Apple Music](#apple-music)
-- [AI DJ](#ai-dj)
-- [Native Streaming](#native-streaming)
-- [Configuration](#configuration)
-  - [Discord Rich Presence](#discord-rich-presence)
-  - [Anonymous Song Counter](#anonymous-song-counter)
-  - [GitHub Profile Widget](#github-profile-widget)
-- [Plugins](#plugins)
-- [Performance](#performance)
-- [Playback Requirements](#playback-requirements)
-  - [Audio Visualizer](#audio-visualizer)
-- [Using with spotifyd](#using-with-spotifyd)
-- [Migrating from spotify-tui](#migrating-from-spotify-tui)
+- [Sources](#sources)
+- [Learn more](#learn-more)
+- [Contributing](#contributing)
 - [Song History](#song-history)
 - [Star History](#star-history)
-- [Libraries used](#libraries-used)
-- [Development](#development)
-  - [Windows Subsystem for Linux](#windows-subsystem-for-linux)
-- [Help Wanted](#help-wanted)
 - [Maintainers](#maintainers)
 - [Code signing policy](#code-signing-policy)
 - [spotatui Contributors](#spotatui-contributors)
-- [Upstream Contributors (spotify-tui)](#upstream-contributors-spotify-tui)
-- [Roadmap](#roadmap)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
 ## About
-A community-maintained, actively developed fork of [spotify-tui](https://github.com/Rigellute/spotify-tui) that has since diverged on multiple fronts.
 
-| Key differences | spotify-tui | spotatui |
-|---|---|---|
-| Spotify backend | external Connect device (spotifyd, official client, ...) | built-in native client |
-| Source(s) | Spotify | Spotify, YouTube, local, Subsonic, Navidrome, Internet Radio, Qobuz, Apple Music (macOS) |
+spotatui is a music player for the terminal, with a desktop app in preview. Spotify is optional: it is one of seven sources.
 
-## Features
+- Synced lyrics, and a real-time audio visualizer.
+- A play queue that mixes tracks from different sources.
+- [Playlist sync](docs/playlist-sync.md): mirror one playlist onto Spotify, Qobuz, Subsonic or YouTube.
+- [Lua plugins](PLUGINS.md) for commands, keys, popups and themes.
+- An [AI DJ](docs/ai-dj.md) inside the app, or your coding agent as the DJ over [MCP](docs/mcp-setup.md).
+- A local listening history with stats and a shareable recap.
+- A [CLI](docs/cli.md) for playback, search and playlists.
 
-- **Multiple sources — Spotify optional.** Play from Spotify, [Local Files](#local-files), a [Subsonic/Navidrome](#subsonic--navidrome) server, [Internet Radio](#internet-radio), [YouTube](#youtube), [Qobuz](#qobuz), or [Apple Music](#apple-music) on macOS. The free sources need no Spotify account; press `d` to switch between them at any time.
-- **[Native streaming](#native-streaming).** Play Spotify audio directly, no official app or spotifyd required — spotatui appears as its own Spotify Connect device (Premium required).
-- **Synced lyrics.** Line-by-line lyrics that follow playback.
-- **Real-time audio visualizer.** A system-wide FFT visualizer (press `v`) that reacts to whatever is playing, and for Spotify tracks the pitch view of the original spotify-tui.
-- **Cross-source play queue.** Press `z` on any track to queue it — the queue plays across every source before your current context resumes.
-- **[Playlist sync](docs/playlist-sync.md).** Link one playlist as the master and mirror it onto Spotify, Qobuz, Subsonic or YouTube. Runs at startup and from `spotatui sync`.
-- **[Lua plugins](#plugins).** Extend spotatui with event hooks, commands, keybindings, popups, and theming.
-- **Listening history & recap.** spotatui keeps a local play history and can generate a shareable HTML recap (`spotatui history recap`).
-- **Full CLI.** Most of what the UI does is scriptable — playback, search, playlists, shell completions. Run `spotatui --help`.
-- **Lightweight.** ~78 MB RAM while streaming, versus a full Electron client. See [Performance](#performance).
+**Spotify needs Premium.** spotatui logs in with its own built-in client, so you need no developer app and no client ID.
+
+spotatui started as a fork of [spotify-tui](https://github.com/Rigellute/spotify-tui) and has since grown its own player, sources and desktop app.
 
 ## Installation
 
-> **Spotify is optional.** On first launch spotatui asks which source you want to use. YouTube, Subsonic/Navidrome, Internet Radio, Local Files, Qobuz, and Apple Music (macOS) all work with no Spotify account. Spotify Premium is only needed for the Spotify source; you can add it anytime from the `d` menu.
+Spotify is optional: every other source works without an account.
 
-```bash
-# One-line installer — macOS, Linux, WSL. Grabs the prebuilt binary for your
-# system, verifies its checksum, and puts spotatui on your PATH. No Rust needed.
-curl -fsSL https://spotatui.com/install.sh | bash
-
-# Homebrew (macOS only)
-brew tap LargeModGames/spotatui && brew trust --formula LargeModGames/spotatui/spotatui
-brew install spotatui
-
-# Cargo — compile from crates.io …
-cargo install --locked spotatui
-# … or fetch the prebuilt binary without compiling
-cargo binstall spotatui
-
-# Arch Linux (AUR) — prebuilt binary (faster)
-yay -S spotatui-bin
-# …or build from source
-yay -S spotatui
-
-# Void Linux (unofficial repo)
-echo repository=https://raw.githubusercontent.com/Event-Horizon-VL/blackhole-vl/repository-x86_64 | sudo tee /etc/xbps.d/20-repository-extra.conf
-sudo xbps-install -S spotatui
-```
-
-```powershell
-# One-line installer — Windows PowerShell
-irm https://spotatui.com/install.ps1 | iex
-
-# …or via Winget
-winget install spotatui
-```
-```nix
-# NixOS (Flake, recommended for NixOS)
-
-# Add spotatui to your flake inputs:
-inputs = {
-  spotatui = {
-    url = "github:LargeModGames/spotatui";
-    inputs.nixpkgs.follows = "nixpkgs";
-  };
-}
-
-# Add the spotatui package from your inputs to your config:
-{ inputs, ...}:{
-  # Your other configurations
-  environment.systemPackages = with pkgs; [
-    inputs.spotatui.packages.${pkgs.stdenv.hostPlatform.system}.default
-  ];
-}
-```
-
-The flake will take care of all the dependencies for you, except for setting the audio backend.
-If you use alsa:
-   ```nix
-    hardware.alsa.enable = true;
-   ```
-Or if you use pipewire:
-   ```nix
-    services.pipewire = {
-        enable = true;
-        alsa.enable = true;
-        #your other settings
-    };
-   ```
-
-
-The flake provides `x86_64-linux`, `aarch64-linux`, and `aarch64-darwin`. nixpkgs 26.11 dropped Intel Macs (`x86_64-darwin`), so on those use the Homebrew formula, the one-line installer, or the release tarball below.
-
-Or download pre-built binaries from [GitHub Releases](https://github.com/LargeModGames/spotatui/releases/latest).
-
-> **Which build has which sources?** The prebuilt Linux, macOS, and Windows binaries (the one-line installer, GitHub Releases, and `cargo binstall`) and the [desktop app](#desktop-app-preview) include the extra music sources: Local Files, Subsonic, Internet Radio, YouTube, and Qobuz, and the macOS ones also Apple Music. YouTube needs [yt-dlp](https://github.com/yt-dlp/yt-dlp) installed (ffmpeg recommended). A plain `cargo install --locked spotatui` does not; enable them with `--features local-files,subsonic,internet-radio,youtube,qobuz` (on macOS, add `apple-music`).
-
-See the [Installation Wiki](https://github.com/LargeModGames/spotatui/wiki/Installation) for platform-specific requirements and building from source.
-
-### Desktop app (preview)
-
-spotatui also comes as a desktop app: the same player in its own window, with a Spotify-style layout (Home, album and artist pages, Your Library, lyrics). It uses the same login, settings and history as the terminal app, and only one of the two runs at a time. Closing the window quits it.
-
-The preview plays Spotify (Premium required), Local Files, Subsonic, Internet Radio, YouTube and Qobuz, and on macOS also Apple Music. As in the terminal app, YouTube needs [yt-dlp](https://github.com/yt-dlp/yt-dlp) installed (ffmpeg recommended). Installed from the Windows installer, the macOS app or the AppImage, it updates itself; a `.deb` or `.rpm` install updates with a new download from [GitHub Releases](https://github.com/LargeModGames/spotatui/releases/latest). The `behavior.disable_auto_update` and `behavior.auto_update_delay` settings, also on the app's Settings page, control the updates.
-
-| System | File |
+| System | Command |
 |---|---|
-| Windows 10/11 (64-bit) | `spotatui-desktop_<version>_x64-setup.exe` |
-| macOS, Apple Silicon | `spotatui_<version>_aarch64.dmg` |
-| macOS, Intel | `spotatui_<version>_x64.dmg` |
-| Debian/Ubuntu | `spotatui-desktop_<version>_amd64.deb` or `_arm64.deb` |
-| Fedora | `spotatui-desktop-<version>-1.x86_64.rpm` or `.aarch64.rpm` |
-| Other Linux | `spotatui-desktop_<version>_amd64.AppImage` or `_aarch64.AppImage` |
+| macOS, Linux, WSL | `curl -fsSL https://spotatui.com/install.sh \| bash` |
+| Windows | `irm https://spotatui.com/install.ps1 \| iex` or `winget install spotatui` |
+| Arch Linux | `yay -S spotatui-bin` |
+| With Rust | `cargo install --locked spotatui` |
 
-The installers are not signed yet, so your system warns on the first start:
+Homebrew, Nix, Void, `.deb` packages and building from source are in the [installation guide](docs/installation.md).
 
-- **Windows:** SmartScreen says "Windows protected your PC". Click **More info**, then **Run anyway**.
-- **macOS:** macOS refuses to open the app the first time. Close the dialog, open **System Settings > Privacy & Security**, click **Open Anyway** next to the spotatui message, and confirm. If macOS says the app is damaged, run `xattr -dr com.apple.quarantine /Applications/spotatui.app` once.
-
-On Linux the app needs glibc 2.39 and WebKitGTK 4.1 (`webkit2gtk-4.1`): Ubuntu 24.04 or newer, Debian 13, Fedora 40 or newer, or Arch. If the window stays blank on Wayland with an NVIDIA GPU, start it with `GDK_BACKEND=x11 spotatui-desktop`. The app already sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` unless you set it yourself.
-
-To [drive the desktop app from a coding agent](#ai-dj) over MCP, also install the terminal `spotatui`: the agent starts `spotatui mcp`, which only the terminal binary has.
+- **Desktop app:** download the installer for your system from the [latest release](https://github.com/LargeModGames/spotatui/releases/latest). See [Desktop app](docs/installation.md#desktop-app).
+- **Features per build:** the prebuilt terminal binaries include every source, the MCP server and the AI DJ. `cargo install` builds Spotify only unless you add [the features](docs/installation.md#which-build-has-which-features), and the Nix flake builds Spotify only.
+- **Updates:** the terminal app updates itself. If a package manager installed it, set `behavior.disable_auto_update: true`. See [Updating](docs/installation.md#updating).
 
 ## Quickstart
 
-Run `spotatui`. On the first launch it asks which source to set up:
+Run `spotatui`. The first launch asks which sources you want. Pick Spotify to log in: spotatui shows a code and opens Spotify's pairing page, where you confirm it.
 
-```
-Welcome to spotatui! Choose your music source:
+Then:
 
-  1) Spotify        (needs login)
-  2) YouTube        (free, needs the yt-dlp binary)
-  3) Subsonic       (free, needs a Subsonic/Navidrome server)
-  4) Internet Radio (free)
-  5) Local Files    (free)
-  6) Qobuz          (paid subscription, logs in through the browser)
-  7) Apple Music    (macOS Music app, needs Automation permission)
-```
+- `?` lists every key.
+- `/` searches. Choose the **Songs** panel with the arrow keys, press `Enter` to go into it, and `Enter` again to play a track.
+- `d` switches the source and the device.
+- `z` queues a track, and `Shift+Q` opens the queue.
+- `spotatui --help` shows the [CLI](docs/cli.md).
 
-Pick a **free source** to skip Spotify entirely, or pick **Spotify** to log in: spotatui shows a code and opens Spotify's pairing page in your browser, where you confirm the code. No developer app or client ID is necessary. Spotify needs a **Premium** account. Only sources compiled into your build are listed.
-Once you're in:
+## Sources
 
-- Press `?` for the in-app help menu of all key events.
-- Press `d` to open the **Source & Device** picker and switch sources.
-- Press `z` on a track to queue it; open the queue with `Shift+Q`.
-- Run `spotatui --help` for the CLI. See the [Keybindings Wiki](https://github.com/LargeModGames/spotatui/wiki/Keybindings) for every shortcut.
+| Source | You need |
+|---|---|
+| **Spotify** | A Premium account |
+| **Local Files** | A music folder |
+| **Subsonic / Navidrome** | A server account |
+| **Internet Radio** | Nothing (30k+ stations from [radio-browser.info](https://www.radio-browser.info)) |
+| **YouTube** | [yt-dlp](https://github.com/yt-dlp/yt-dlp) on your `PATH` |
+| **Qobuz** | A paid Qobuz account |
+| **Apple Music** | macOS and the Music app |
 
-To search and play a result with the default keys:
+Local Files, Subsonic, Internet Radio, YouTube and Qobuz play through spotatui's own audio engine. Apple Music plays in the Music app, and spotatui is its remote. The setup of each source is in [Configuration](docs/configuration.md).
 
-1. Press `/`, type a search phrase, and press `Enter` to submit it. `Ctrl+L` clears an existing query.
-2. Use the arrow keys to choose the **Songs** result panel and press `Enter` to focus its list.
-3. Use `Up`/`Down` to select a track, then press `Enter` again to play it. `Space` toggles play/pause.
+Spotify plays in spotatui itself, on any Spotify Connect device, or on Cast and Connect speakers on your network. See [Where Spotify plays](docs/native-streaming.md#where-spotify-plays).
 
-Selecting a result panel does not start playback.
+## Learn more
 
-A few CLI examples to get you started:
+| You want to | Read |
+|---|---|
+| Install another way, or build from source | [Installation](docs/installation.md) |
+| Change settings, keys or the theme | [Configuration](docs/configuration.md), [Keybindings](docs/keybindings.md), [Themes](docs/themes.md) |
+| Control spotatui from your shell | [CLI](docs/cli.md) |
+| Write or install a Lua plugin | [PLUGINS.md](PLUGINS.md), [Scripting API](docs/scripting.md) |
+| Let an AI pick the music | [AI DJ](docs/ai-dj.md), [MCP setup](docs/mcp-setup.md) |
+| Report a bug | [New issue](https://github.com/LargeModGames/spotatui/issues/new/choose), with a `spotatui --debug` [log](docs/configuration.md#logging) |
+| Everything else | [All docs](docs/README.md) |
 
-```bash
-spotatui --completions zsh                                # Shell completions (bash, powershell, and more supported)
-spotatui play --name "Your Playlist" --playlist --random  # Play a random song from a playlist
-spotatui playback --toggle                                # Play/pause current playback
-spotatui list --liked --limit 50                          # List your liked songs
-spotatui history recap --period 30d --output ./recap.html # Generate a shareable listening recap
-```
+## Contributing
 
-### Adding Spotify later
+spotatui is built by a small team and a growing group of contributors, and you do not need to write code to help. Start with [CONTRIBUTING.md](CONTRIBUTING.md), or pick a [good first issue](https://github.com/LargeModGames/spotatui/issues?q=is%3Aissue%20state%3Aopen%20label%3A%22good%20first%20issue%22).
 
-Started with a free source and want Spotify too? Press `d` to open the **Source & Device** picker. If the **Devices** panel has focus (including when it says "No devices found"), press `Tab` to focus **Source**, select **Spotify**, and press `Enter`. Spotatui shows a pairing code in the status line and opens your browser to log in without a restart. Browsing, playlists, and the control of other devices work at once. **Native (librespot) streaming still requires a restart**, because it starts with the app.
-## Music Sources
-
-spotatui is a general music player, not just a Spotify client. Press `d` to open the **Source & Device** picker; the sidebar and search re-scope to the active source. Playback for these sources runs through spotatui's own audio engine, so volume control and the visualizer work exactly as they do for Spotify — and none of them need Spotify Premium.
-
-| Source | What it does | Needs |
-|---|---|---|
-| **Local Files** | Browse and play a folder of audio files (FLAC, MP3, OGG, WAV, …) | Nothing; set `local_music_path` or use the OS music dir |
-| **Subsonic** | Browse, search, and stream from any Subsonic-compatible server (Navidrome, Gonic, Airsonic, Funkwhale, …) | A server account |
-| **Internet Radio** | Play icecast/shoutcast streams with live now-playing metadata; search the [radio-browser.info](https://www.radio-browser.info) directory (30k+ stations) | Nothing |
-| **YouTube** | Search YouTube and play audio; build **local playlists** stored in a plain file | [`yt-dlp`](https://github.com/yt-dlp/yt-dlp) on your `PATH` (ffmpeg recommended) |
-| **Qobuz** | Stream your Qobuz library (favorites, playlists, albums, search) at the configured quality, MP3 320 up to FLAC 24/192, through spotatui's own engine | A paid Qobuz account |
-| **Apple Music** | Browse and search your Music library and its playlists; the Music app plays them, spotatui is the remote | macOS and the Music app; your own Apple Music login |
-
-**Resuming your last session:** quit while playing from a non-Spotify source and spotatui restores that track and its position on the next launch, following the `startup_behavior` setting (`continue`, `play`, or `pause`).
-
-**Availability:** included in the Linux, macOS, and Windows release binaries; Apple Music is in the macOS ones only. When building from source, enable them with cargo features:
-
-```bash
-cargo install --locked spotatui --features local-files,subsonic,internet-radio,youtube,qobuz
-# macOS: add apple-music
-```
-
-Each source has a few config keys; the essentials are below, and the full reference lives in the [Configuration Wiki](https://github.com/LargeModGames/spotatui/wiki/Configuration).
-
-### Local Files
-
-Set a folder (defaults to the OS music directory), then pick **Local Files** in the `d` picker:
-
-```yaml
-behavior:
-  local_music_path: "/home/you/Music"
-```
-
-### Subsonic / Navidrome
-
-```yaml
-behavior:
-  subsonic_url: "https://music.example.com"
-  subsonic_username: "you"
-```
-
-Prefer setting the password via the `SPOTATUI_SUBSONIC_PASSWORD` environment variable so it never sits in the config file in plaintext.
-
-### Internet Radio
-
-Search the radio-browser.info directory in-app (Enter plays a station directly), and press the save key (`F` by default) to keep a station in your sidebar. Stations can also be preconfigured in `config.yml`; stations saved in-app live in `state.yml`. The playbar shows a `LIVE` badge with the stream's now-playing title.
-
-### YouTube
-
-Requires the [`yt-dlp`](https://github.com/yt-dlp/yt-dlp) binary (`ffmpeg` recommended). No Google account, API key, or cookies — search and playback are anonymous. If playback breaks after a YouTube change, updating yt-dlp (`yt-dlp -U`) is the fix; no spotatui update needed.
-
-**Local YouTube playlists** live in the spotatui config directory as `youtube_playlists.yml`, a plain human-editable file you can back up or share. Create one from the sidebar, add tracks with `w`, and play a playlist as a queue with `Enter`.
-
-### Qobuz
-
-Pick **Qobuz** in the first-run picker or the `d` menu: spotatui opens the Qobuz login page in your browser and saves the token to `qobuz_credentials.yml` in the config directory (owner-only on Unix; on Windows the file keeps the config folder's permissions). No app registration is needed. The sidebar lists your favorite tracks, playlists, and favorite albums; search finds tracks. Each track plays while it downloads: the encrypted stream is decrypted and rebuilt as a FLAC temporary file, playback starts after the first segments arrive, and a seek past the downloaded part continues the download from there. When a track plays from a Qobuz listing, the playbar shows the format that Qobuz delivered, for example `FLAC 16/44.1`. This can be lower than the configured quality.
-
-```yaml
-behavior:
-  qobuz_quality: 6   # 5 = MP3 320, 6 = FLAC 16/44.1, 7 = FLAC 24/96, 27 = FLAC 24/192
-```
-
-Environment variables: `SPOTATUI_QOBUZ_TOKEN` overrides the saved token. spotatui reads the three constants it needs from the Qobuz web player at runtime; when Qobuz changes its web player and the login stops working, set `SPOTATUI_QOBUZ_APP_ID`, `SPOTATUI_QOBUZ_APP_SECRET`, and `SPOTATUI_QOBUZ_OAUTH_KEY` from the bundle instead of waiting for a release.
-
-### Apple Music
-
-macOS only. Pick **Apple Music** in the first-run picker or the `d` menu. Unlike the other sources, the audio does not go through spotatui: the Music app plays the songs with your own Apple Music login and library, and spotatui drives it from the terminal. Music is started in the background and never brought to the front. The first time, macOS asks whether your terminal may control Music; allow it (or later under System Settings > Privacy & Security > Automation).
-
-The sidebar lists **All songs** and your playlists, including Apple Music playlists you added to your library; search looks through your library. Play/pause, next, previous, seek, volume, the media keys and the playbar follow Music. Next and previous step through the playlist or search results a song was started from, and follow Music's shuffle setting. Only one player is audible when you switch inside spotatui: starting a Music song from spotatui pauses Spotify and the other sources, and starting one of those pauses Music first. Pressing play in the Music app itself while another source is playing is not detected.
-
-Not available for Apple Music songs: the queue, the shuffle and repeat toggles (change them in Music), likes, and playlist edits. Songs Music cannot play (no longer available, or a local file that is missing) are listed, but choosing one shows a message instead of playing it, and next and previous skip them: Music would answer them with a dialog that blocks every later start. spotatui never lets Music's volume reach 0 for the same reason.
-
-## AI DJ
-
-spotatui can pick music for you, from your own listening history. Two ways in:
-
-**Drive it from your coding agent** (`--features mcp-server`) — spotatui exposes the player and your listening history as [MCP](https://modelcontextprotocol.io) tools, so Claude Code, Codex, Gemini CLI, or any MCP client becomes the DJ. **No API key**: it uses the agent subscription you already have. Setup is one line you hand to your agent:
-
-> Read `docs/mcp-setup.md` in the spotatui repo and set up the spotatui MCP server for me, following it exactly.
-
-That file is written as instructions *for the agent*, and `spotatui mcp status` gives it a safe, checkable probe of every step. Full guide: [`docs/mcp-setup.md`](docs/mcp-setup.md).
-
-Clients that support agent plugins can do the whole registration in one step, and get a DJ skill along with the server: in Claude Code, `/plugin marketplace add LargeModGames/spotatui` then `/plugin install spotatui@spotatui`; clients that read the new [Agent Plugins](https://agent-plugins.org) format load [`agent-plugin/`](agent-plugin/README.md) from this repo. (These are *agent* plugins, for AI clients — spotatui's in-app Lua plugins live in [`PLUGINS.md`](PLUGINS.md).)
-
-**Or use the DJ built into the TUI** (`--features ai-dj`) — press `Ctrl-j` for a DJ screen with a chat prompt, `Ctrl-t` for continuous auto-queue, `Ctrl-y` to shift the vibe, `Ctrl-o` for "only tracks I don't already have", `Ctrl-g` to choose which AI and model it uses. It drives the same tools as the MCP server, so it can search, check your queue and queue tracks, and it will ask what you actually want before it plays anything rather than queueing on every message. Its brain is a locally installed agent CLI (`claude`, `codex`, `agy`, `copilot`, `opencode`, no key), an API key, or a local model via Ollama / LM Studio; it asks which one on your first visit, since the agent CLIs spend the coding subscription you already pay for. Full guide: [`docs/ai-dj.md`](docs/ai-dj.md).
-
-What reaches a model is track, artist, and album *names*: aggregates from your local history, what is playing now, and the conversation you typed. No identifiers, no timestamps, no account. Full breakdown in [`docs/ai-dj.md`](docs/ai-dj.md#what-is-sent-to-the-model).
-
-```bash
-cargo install --locked spotatui --features mcp-server,ai-dj
-```
-
-## Native Streaming
-
-spotatui can play Spotify audio directly, without spotifyd or the official app — just run it and it appears as a Spotify Connect device.
-
-- Premium account required
-- Works with media keys, MPRIS (Linux), and macOS Now Playing
-- Runs on our maintained [librespot fork](https://github.com/LargeModGames/spotatui-librespot), which backports upstream fixes for Spotify's evolving audio delivery (e.g. the HTTP 530 CDN issue that silenced native playback)
-
-See the [Native Streaming Wiki](https://github.com/LargeModGames/spotatui/wiki/Native-Streaming) for setup details.
-
-## Configuration
-
-The config file is at `$XDG_CONFIG_HOME/spotatui/config.yml` when `XDG_CONFIG_HOME` is set to an absolute path, falling back to `${HOME}/.config/spotatui/config.yml` when it is unset or not absolute. You can also configure spotatui in-app by pressing `Alt-,` to open Settings.
-
-Nearly everything is customizable: keybindings, themes, icons, playbar button labels, status-line and window-title format templates, table columns (reorder/rename/resize), default sorting per screen, startup screen, and layout (sidebar/playbar position). Invalid values fall back to defaults with a logged warning — a config typo never blocks startup.
-
-With the `cover-art` feature, Settings offers optional two-color dithering for the playbar, full-screen art view, and plugin cover-art widgets. In `config.yml`, set `behavior.cover_art_dither: true`, use the default `stucki` algorithm (or choose `bayer8x8`/`atkinson` with `behavior.cover_art_dither_algorithm`), and set `behavior.cover_art_dither_pixel_scale` from `1` to `3` for larger visual pixels. Scale `1` uses every output pixel on graphics terminals or every Braille dot on basic terminals. Each surface makes its mask from the original decoded image at its own output resolution. `theme.cover_art_dither_color` accepts a named color or an exact `R, G, B` value; omit it or set it to `auto` to follow the current playbar progress color, including adaptive-theme changes. The color override survives preset changes. Dithering does not enable cover art on a terminal where it is otherwise disabled; `behavior.draw_cover_art_forced` still controls the terminal fallback.
-
-- Customization guide: [`docs/configuration.md`](docs/configuration.md), with a commented [`examples/config.example.yml`](examples/config.example.yml)
-- Full config reference: [Configuration Wiki](https://github.com/LargeModGames/spotatui/wiki/Configuration)
-- Built-in themes (Spotify, Dracula, Nord, …): [Themes Wiki](https://github.com/LargeModGames/spotatui/wiki/Themes)
-
-spotatui also stores local listening history at `$XDG_STATE_HOME/spotatui/history/listens.jsonl` when `XDG_STATE_HOME` is set to an absolute path, falling back to `${HOME}/.local/state/spotatui/history/listens.jsonl` when it is unset or not absolute. This powers `spotatui history recap`. Short or skipped plays are stored but excluded from recap totals.
-
-### Discord Rich Presence
-
-Enabled by default using the built-in spotatui application ID, so no setup is required. Optional overrides:
-
-```yaml
-behavior:
-  enable_discord_rpc: true
-  discord_rpc_client_id: "your_client_id"
-```
-
-You can also override the app ID via `SPOTATUI_DISCORD_APP_ID`, or disable it in Settings or with `behavior.enable_discord_rpc: false`.
-
-### Anonymous Song Counter
-
-spotatui includes an opt-in global counter showing how many songs have been played by all users worldwide (the badge and chart at the top of this README). It is **completely anonymous** — no personal information, song names, artists, or listening history is collected; it only sends a simple increment once a song has played for 30 seconds, from any source (Spotify, local files, Subsonic, Qobuz or YouTube). Internet radio counts one song for every 2.5 minutes of listening. It is enabled by default and can be disabled with `enable_global_song_count: false` in `config.yml`. This is purely a fun community metric with zero tracking of individual users.
-
-### GitHub Profile Widget
-
-Show what you're listening to as a live card on your GitHub profile. Create an account at [spotatui.com](https://spotatui.com), paste your sync token into Settings → `sync_token`, then pick a public username and enable the widget on your dashboard. Add this to your profile README:
-
-```markdown
-[![Now playing on spotatui](https://spotatui.com/widget/your-username.svg)](https://spotatui.com)
-```
-
-The card shows cover art, title, artist, a progress bar, and an animated equalizer while playing; internet radio gets a LIVE badge. Append `?theme=light` for the light variant. Only your current track is public, and only after you opt in.
-
-## Plugins
-
-spotatui runs user-written Lua plugins. They react to playback events, add commands and key bindings, draw popups and playbar segments, restyle the theme, and make async HTTP requests. Install one published as a git repository (requires `git`):
-
-```bash
-spotatui plugin add owner/repo
-spotatui plugin list
-spotatui plugin update
-spotatui plugin remove <name>
-```
-
-See [`PLUGINS.md`](PLUGINS.md) for the ecosystem overview, [`examples/plugins/`](examples/plugins) for runnable examples, and [`docs/scripting.md`](docs/scripting.md) for the full API reference.
-
-## Performance
-
-spotatui is extremely lightweight compared to the official Electron client.
-
-| Mode                            | RAM Usage |
-| :------------------------------ | :-------- |
-| **Native Streaming (Base)**     | ~78 MB    |
-| **With Synced Lyrics**          | ~78 MB    |
-| **With System-Wide Visualizer** | ~80 MB    |
-
-*Tested on Arch Linux (Hyprland).*
-
-## Playback Requirements
-
-The non-Spotify sources (Local Files, Subsonic, Internet Radio, YouTube, Qobuz) play through spotatui's own audio engine and need no extra setup. Apple Music (macOS) plays through the Music app instead; see [Apple Music](#apple-music).
-
-Spotify is different: spotatui talks to Spotify the way the official app does, and that connection does not play audio itself. To play Spotify tracks you need **one** of:
-
-1. **Native Streaming**: spotatui plays audio directly using its built-in streaming. See [Native Streaming](#native-streaming). *(Recommended.)*
-2. **Official Spotify Client**: have the official app open on your computer.
-3. **[spotifyd](https://github.com/Spotifyd/spotifyd)**: a lightweight background alternative.
-
-Spotify in spotatui requires a **Premium** account: the login refuses a free account. spotatui needs no Spotify developer app and no client ID. Older releases asked for one; spotatui leaves their `client.yml` on disk and copies its streaming settings and saved device into `config.yml` and `state.yml`.
-
-### Audio Visualizer
-
-The **audio visualizer** (press `v`) uses **local real-time FFT analysis** of your system audio:
-
-| Platform    | Status               | Notes                                    |
-| ----------- | -------------------- | ---------------------------------------- |
-| **Windows** | Works out of the box | Uses WASAPI loopback                     |
-| **Linux**   | Works out of the box | Uses PipeWire/PulseAudio monitor devices |
-| **macOS**   | Requires setup       | Needs a virtual audio device (see below) |
-
-> **macOS:** macOS doesn't natively expose system audio loopback. Install a virtual audio device like [BlackHole](https://github.com/ExistentialAudio/BlackHole) (free) or [Loopback](https://rogueamoeba.com/loopback/) (paid), route system audio through it, and set it as your default input device.
->
-> **Note:** The visualizer is **system-wide**: it captures all audio on your system, so it also reacts to YouTube videos, games, and any other source.
-
-While a Spotify track plays, `v` opens the **Spotify Pitch** view instead, the visualizer of the original spotify-tui: the strength of the twelve pitch classes (C to B) drawn as Cava bars that rise with the loudness of the music and fall with gravity, with the tempo, key and time signature of the current section, from Spotify's own audio analysis. It needs no audio capture, so it also works when Spotify plays on another device. Press `V` to switch between Cava, Bar Graph and Spotify Pitch.
-## Using with [spotifyd](https://github.com/Spotifyd/spotifyd)
-
-> **Note:** If you're using native streaming, you don't need spotifyd!
-
-Follow the spotifyd documentation to get set up. After that:
-
-1. Start the spotifyd daemon.
-1. Start `spotatui`.
-1. Press `d` to open the device selection menu — the spotifyd "device" should appear (if not, check [these docs](https://github.com/Spotifyd/spotifyd#logging)).
-
-## Migrating from spotify-tui
-
-If you used the original `spotify-tui` before:
-
-- The binary name changed from `spt` to `spotatui`.
-- Config paths changed: `~/.config/spotify-tui/` -> `$XDG_CONFIG_HOME/spotatui/` when `XDG_CONFIG_HOME` is set to an absolute path, or `~/.config/spotatui/` when it is unset or not absolute.
-
-You can copy your existing config:
-
-```bash
-case "${XDG_CONFIG_HOME:-}" in
-  /*) config_home="$XDG_CONFIG_HOME" ;;
-  *) config_home="$HOME/.config" ;;
-esac
-mkdir -p "$config_home/spotatui"
-cp -r ~/.config/spotify-tui/* "$config_home/spotatui/"
-```
-
-You may be asked to re-authenticate with Spotify the first time.
+Native playback and Spotify Connect run on our librespot fork, [spotatui-librespot](https://github.com/LargeModGames/spotatui-librespot). It is part of the project: a merged PR there counts as a spotatui contribution. See [Contributing to the librespot fork](CONTRIBUTING.md#contributing-to-the-librespot-fork).
 
 ## Song History
 
@@ -468,88 +128,15 @@ You may be asked to re-authenticate with Spotify the first time.
  </picture>
 </a>
 
-## Libraries used
-
-- [ratatui](https://github.com/ratatui-org/ratatui) - Terminal UI framework
-- [rspotify](https://github.com/ramsayleung/rspotify) - Spotify model and id types
-- [librespot](https://github.com/librespot-org/librespot) - Spotify Connect streaming (via our maintained fork [spotatui-librespot](https://github.com/LargeModGames/spotatui-librespot), which backports fixes for Spotify's CDN changes)
-- [tokio](https://github.com/tokio-rs/tokio) - Async runtime
-- [crossterm](https://github.com/crossterm-rs/crossterm) - Terminal manipulation
-- [clap](https://github.com/clap-rs/clap) - CLI argument parsing
-
-## Development
-
-1. [Install OpenSSL](https://docs.rs/openssl/0.10.25/openssl/#automatic)
-1. [Install Rust](https://www.rust-lang.org/tools/install)
-1. [Install `xorg-dev`](https://github.com/aweinstock314/rust-clipboard#prerequisites) (required for clipboard support)
-1. **Linux only:** Install ALSA + pkg-config for the default build. This applies to both glibc and musl targets: glibc uses the `librespot` alsa-backend, and both use cpal (audio visualization, and rodio on musl), which links ALSA on Linux. Package list matches [docs/installation.md#prerequisites](docs/installation.md#prerequisites).
-   ```bash
-   # Debian/Ubuntu
-   sudo apt-get install libasound2-dev pkg-config
-
-   # Arch Linux
-   sudo pacman -S alsa-lib pkg-config
-
-   # Fedora
-   sudo dnf install alsa-lib-devel pkg-config
-
-   # NixOS
-   nix develop github:LargeModGames/spotatui
-   ```
-   Optional: `--features audio-viz` (and the Linux release / `all-sources` CI leg) need PipeWire dev packages — `libpipewire-0.3-dev libspa-0.2-dev` (Debian/Ubuntu), `pipewire` (Arch), `pipewire-devel` (Fedora). The slim `--no-default-features --features telemetry,tui` build needs neither ALSA nor PipeWire.
-1. Clone or fork this repo and `cd` to it
-1. And then `cargo run`
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for pull request guidelines.
-
-### Windows Subsystem for Linux
-
-You might get a linking error. If so, you'll probably need to install additional dependencies required by the clipboard package:
-
-```bash
-sudo apt-get install -y -qq pkg-config libssl-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
-```
-
-## Reporting a Bug
-
-Run the thing that broke again with `--debug`, then attach the log file:
-
-```bash
-spotatui --debug
-```
-
-spotatui prints the log path on startup and on exit — it lives in your temp
-directory as `spotatui_logs/spotatuilog<pid>`. With `--debug` it records every
-Spotify request (method, path, status, duration), which is what turns
-"it doesn't play" into something diagnosable.
-
-If it crashed instead, `spotatui_panic.log` in the state directory already has
-the panic, a backtrace, and the tail of the log in one file.
-
-Tokens and headers are never written to the log, and known secret fields are
-redacted — but a log can still contain your display name, and a `trace` log
-your country. Have a quick look before posting it publicly. See
-[`docs/configuration.md`](docs/configuration.md#logging) for the details.
-
-## Help Wanted
-
-**spotatui is maintained by a small team, with help from a growing group of contributors.** There is always room for more, and **you don't need to write code to help**:
-
-- **Star the repo** to help others discover the project
-- **Report bugs** or request features in [Issues](https://github.com/LargeModGames/spotatui/issues)
-- **Join the community** in [Discussions](https://github.com/LargeModGames/spotatui/discussions)
-- **Submit a PR** for code, docs, or themes
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for more details!
 
 ## Maintainers
 
-- **[LargeModGames](https://github.com/LargeModGames)** ([@LargeModGames](https://twitter.com/LargeModGames) on Twitter)
+- **[LargeModGames](https://github.com/LargeModGames)** ([@LargeModGames](https://x.com/LargeModGames) on X)
 - [shilicioo](https://github.com/shilicioo)
 - [2570165831](https://github.com/2570165831)
 - [Oud](https://github.com/Oud-Idk)
 
-Originally forked from [spotify-tui](https://github.com/Rigellute/spotify-tui) by [Alexander Keliris](https://github.com/Rigellute).
+Originally forked from [spotify-tui](https://github.com/Rigellute/spotify-tui) by [Alexander Keliris](https://github.com/Rigellute). The spotify-tui contributors and the libraries spotatui uses are in [CREDITS.md](CREDITS.md).
 
 ## Code signing policy
 
@@ -564,7 +151,7 @@ Privacy: see the [privacy policy](https://spotatui.com/privacy) for the data spo
 
 ## spotatui Contributors
 
-**Looking for contributors!** spotatui is actively maintained but could use your help. Whether it's bug fixes, new features, documentation, or testing - all contributions are welcome!
+Everyone who helped, with code or without. To get on this list, see [Recognition](CONTRIBUTING.md#recognition).
 
 <!-- ALL-CONTRIBUTORS-LIST:START - Do not remove or modify this section -->
 <!-- prettier-ignore-start -->
@@ -656,153 +243,4 @@ Privacy: see the [privacy policy](https://spotatui.com/privacy) for the data spo
 
 <!-- ALL-CONTRIBUTORS-LIST:END -->
 
-*Want to see your name here? Check out our [open issues](https://github.com/LargeModGames/spotatui/issues) or the [Roadmap](#roadmap) below!*
-
----
-
-## Upstream Contributors (spotify-tui)
-
-Thanks to all the contributors who built the original [spotify-tui](https://github.com/Rigellute/spotify-tui) that this project is forked from:
-
-<table>
-  <tbody>
-    <tr>
-      <td align="center" valign="top" width="14.28%"><a href="https://keliris.dev/"><img src="https://avatars2.githubusercontent.com/u/12150276?v=4?s=100" width="100px;" alt="Alexander Keliris"/><br /><sub><b>Alexander Keliris</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=Rigellute" title="Code">💻</a> <a href="https://github.com/Rigellute/spotify-tui/commits?author=Rigellute" title="Documentation">📖</a> <a href="#design-Rigellute" title="Design">🎨</a> <a href="#blog-Rigellute" title="Blogposts">📝</a> <a href="#ideas-Rigellute" title="Ideas, Planning, & Feedback">🤔</a> <a href="#infra-Rigellute" title="Infrastructure (Hosting, Build-Tools, etc)">🚇</a> <a href="#platform-Rigellute" title="Packaging/porting to new platform">📦</a> <a href="https://github.com/Rigellute/spotify-tui/pulls?q=is%3Apr+reviewed-by%3ARigellute" title="Reviewed Pull Requests">👀</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/mikepombal"><img src="https://avatars3.githubusercontent.com/u/6864231?v=4?s=100" width="100px;" alt="Mickael Marques"/><br /><sub><b>Mickael Marques</b></sub></a><br /><a href="#financial-mikepombal" title="Financial">💵</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/HakierGrzonzo"><img src="https://avatars0.githubusercontent.com/u/36668331?v=4?s=100" width="100px;" alt="Grzegorz Koperwas"/><br /><sub><b>Grzegorz Koperwas</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=HakierGrzonzo" title="Documentation">📖</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/amgassert"><img src="https://avatars2.githubusercontent.com/u/22896005?v=4?s=100" width="100px;" alt="Austin Gassert"/><br /><sub><b>Austin Gassert</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=amgassert" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://robinette.dev"><img src="https://avatars2.githubusercontent.com/u/30757528?v=4?s=100" width="100px;" alt="Calen Robinette"/><br /><sub><b>Calen Robinette</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=calenrobinette" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://mcofficer.me"><img src="https://avatars0.githubusercontent.com/u/22377202?v=4?s=100" width="100px;" alt="M*C*O"/><br /><sub><b>M*C*O</b></sub></a><br /><a href="#infra-MCOfficer" title="Infrastructure (Hosting, Build-Tools, etc)">🚇</a></td>
-    </tr>
-    <tr>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/eminence"><img src="https://avatars0.githubusercontent.com/u/402454?v=4?s=100" width="100px;" alt="Andrew Chin"/><br /><sub><b>Andrew Chin</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=eminence" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://www.samnaser.com/"><img src="https://avatars0.githubusercontent.com/u/4377348?v=4?s=100" width="100px;" alt="Sam Naser"/><br /><sub><b>Sam Naser</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=Monkeyanator" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/radogost"><img src="https://avatars0.githubusercontent.com/u/15713820?v=4?s=100" width="100px;" alt="Micha"/><br /><sub><b>Micha</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=radogost" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/neriglissar"><img src="https://avatars2.githubusercontent.com/u/53038761?v=4?s=100" width="100px;" alt="neriglissar"/><br /><sub><b>neriglissar</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=neriglissar" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/TimonPost"><img src="https://avatars3.githubusercontent.com/u/19969910?v=4?s=100" width="100px;" alt="Timon"/><br /><sub><b>Timon</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=TimonPost" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/echoSayonara"><img src="https://avatars2.githubusercontent.com/u/54503126?v=4?s=100" width="100px;" alt="echoSayonara"/><br /><sub><b>echoSayonara</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=echoSayonara" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/D-Nice"><img src="https://avatars1.githubusercontent.com/u/2888248?v=4?s=100" width="100px;" alt="D-Nice"/><br /><sub><b>D-Nice</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=D-Nice" title="Documentation">📖</a> <a href="#infra-D-Nice" title="Infrastructure (Hosting, Build-Tools, etc)">🚇</a></td>
-    </tr>
-    <tr>
-      <td align="center" valign="top" width="14.28%"><a href="http://gpawlik.com"><img src="https://avatars3.githubusercontent.com/u/6296883?v=4?s=100" width="100px;" alt="Grzegorz Pawlik"/><br /><sub><b>Grzegorz Pawlik</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=gpawlik" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="http://lenny.ninja"><img src="https://avatars1.githubusercontent.com/u/4027243?v=4?s=100" width="100px;" alt="Lennart Bernhardt"/><br /><sub><b>Lennart Bernhardt</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=LennyPenny" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/BlackYoup"><img src="https://avatars3.githubusercontent.com/u/6098160?v=4?s=100" width="100px;" alt="Arnaud Lefebvre"/><br /><sub><b>Arnaud Lefebvre</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=BlackYoup" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/tem1029"><img src="https://avatars3.githubusercontent.com/u/57712713?v=4?s=100" width="100px;" alt="tem1029"/><br /><sub><b>tem1029</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=tem1029" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="http://peter.moss.dk"><img src="https://avatars2.githubusercontent.com/u/12544579?v=4?s=100" width="100px;" alt="Peter K. Moss"/><br /><sub><b>Peter K. Moss</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=Peterkmoss" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="http://www.zephyrizing.net/"><img src="https://avatars1.githubusercontent.com/u/113102?v=4?s=100" width="100px;" alt="Geoff Shannon"/><br /><sub><b>Geoff Shannon</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=RadicalZephyr" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="http://zacklukem.info"><img src="https://avatars0.githubusercontent.com/u/8787486?v=4?s=100" width="100px;" alt="Zachary Mayhew"/><br /><sub><b>Zachary Mayhew</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=zacklukem" title="Code">💻</a></td>
-    </tr>
-    <tr>
-      <td align="center" valign="top" width="14.28%"><a href="http://jfaltis.de"><img src="https://avatars2.githubusercontent.com/u/45465572?v=4?s=100" width="100px;" alt="jfaltis"/><br /><sub><b>jfaltis</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=jfaltis" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://marcelschr.me"><img src="https://avatars3.githubusercontent.com/u/19377618?v=4?s=100" width="100px;" alt="Marcel Schramm"/><br /><sub><b>Marcel Schramm</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=Bios-Marcel" title="Documentation">📖</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/fangyi-zhou"><img src="https://avatars3.githubusercontent.com/u/7815439?v=4?s=100" width="100px;" alt="Fangyi Zhou"/><br /><sub><b>Fangyi Zhou</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=fangyi-zhou" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/synth-ruiner"><img src="https://avatars1.githubusercontent.com/u/8642013?v=4?s=100" width="100px;" alt="Max"/><br /><sub><b>Max</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=synth-ruiner" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/svenvNL"><img src="https://avatars1.githubusercontent.com/u/13982006?v=4?s=100" width="100px;" alt="Sven van der Vlist"/><br /><sub><b>Sven van der Vlist</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=svenvNL" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/jacobchrismarsh"><img src="https://avatars2.githubusercontent.com/u/15932179?v=4?s=100" width="100px;" alt="jacobchrismarsh"/><br /><sub><b>jacobchrismarsh</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=jacobchrismarsh" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/TheWalkingLeek"><img src="https://avatars2.githubusercontent.com/u/36076343?v=4?s=100" width="100px;" alt="Nils Rauch"/><br /><sub><b>Nils Rauch</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=TheWalkingLeek" title="Code">💻</a></td>
-    </tr>
-    <tr>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/sputnick1124"><img src="https://avatars1.githubusercontent.com/u/8843309?v=4?s=100" width="100px;" alt="Nick Stockton"/><br /><sub><b>Nick Stockton</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=sputnick1124" title="Code">💻</a> <a href="https://github.com/Rigellute/spotify-tui/issues?q=author%3Asputnick1124" title="Bug reports">🐛</a> <a href="#maintenance-sputnick1124" title="Maintenance">🚧</a> <a href="#question-sputnick1124" title="Answering Questions">💬</a> <a href="https://github.com/Rigellute/spotify-tui/commits?author=sputnick1124" title="Documentation">📖</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="http://stuarth.github.io"><img src="https://avatars3.githubusercontent.com/u/7055?v=4?s=100" width="100px;" alt="Stuart Hinson"/><br /><sub><b>Stuart Hinson</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=stuarth" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/samcal"><img src="https://avatars3.githubusercontent.com/u/2117940?v=4?s=100" width="100px;" alt="Sam Calvert"/><br /><sub><b>Sam Calvert</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=samcal" title="Code">💻</a> <a href="https://github.com/Rigellute/spotify-tui/commits?author=samcal" title="Documentation">📖</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/jwijenbergh"><img src="https://avatars0.githubusercontent.com/u/46386452?v=4?s=100" width="100px;" alt="Jeroen Wijenbergh"/><br /><sub><b>Jeroen Wijenbergh</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=jwijenbergh" title="Documentation">📖</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://twitter.com/KimberleyCook91"><img src="https://avatars3.githubusercontent.com/u/2683270?v=4?s=100" width="100px;" alt="Kimberley Cook"/><br /><sub><b>Kimberley Cook</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=KimberleyCook" title="Documentation">📖</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/baxtea"><img src="https://avatars0.githubusercontent.com/u/22502477?v=4?s=100" width="100px;" alt="Audrey Baxter"/><br /><sub><b>Audrey Baxter</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=baxtea" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://koehr.in"><img src="https://avatars2.githubusercontent.com/u/246402?v=4?s=100" width="100px;" alt="Norman"/><br /><sub><b>Norman</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=nkoehring" title="Documentation">📖</a></td>
-    </tr>
-    <tr>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/blackwolf12333"><img src="https://avatars0.githubusercontent.com/u/1572975?v=4?s=100" width="100px;" alt="Peter Maatman"/><br /><sub><b>Peter Maatman</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=blackwolf12333" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/AlexandreSi"><img src="https://avatars1.githubusercontent.com/u/32449369?v=4?s=100" width="100px;" alt="AlexandreS"/><br /><sub><b>AlexandreS</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=AlexandreSi" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/fiinnnn"><img src="https://avatars2.githubusercontent.com/u/5011796?v=4?s=100" width="100px;" alt="Finn Vos"/><br /><sub><b>Finn Vos</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=fiinnnn" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/hurricanehrndz"><img src="https://avatars0.githubusercontent.com/u/5804237?v=4?s=100" width="100px;" alt="Carlos Hernandez"/><br /><sub><b>Carlos Hernandez</b></sub></a><br /><a href="#platform-hurricanehrndz" title="Packaging/porting to new platform">📦</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/pedrohva"><img src="https://avatars3.githubusercontent.com/u/33297928?v=4?s=100" width="100px;" alt="Pedro Alves"/><br /><sub><b>Pedro Alves</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=pedrohva" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://gitlab.com/jtagcat/"><img src="https://avatars1.githubusercontent.com/u/38327267?v=4?s=100" width="100px;" alt="jtagcat"/><br /><sub><b>jtagcat</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=jtagcat" title="Documentation">📖</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/BKitor"><img src="https://avatars0.githubusercontent.com/u/16880850?v=4?s=100" width="100px;" alt="Benjamin Kitor"/><br /><sub><b>Benjamin Kitor</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=BKitor" title="Code">💻</a></td>
-    </tr>
-    <tr>
-      <td align="center" valign="top" width="14.28%"><a href="https://ales.rocks"><img src="https://avatars0.githubusercontent.com/u/544082?v=4?s=100" width="100px;" alt="Aleš Najmann"/><br /><sub><b>Aleš Najmann</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=littleli" title="Documentation">📖</a> <a href="#platform-littleli" title="Packaging/porting to new platform">📦</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/jeremystucki"><img src="https://avatars3.githubusercontent.com/u/7629727?v=4?s=100" width="100px;" alt="Jeremy Stucki"/><br /><sub><b>Jeremy Stucki</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=jeremystucki" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="http://pt2121.github.io"><img src="https://avatars0.githubusercontent.com/u/616399?v=4?s=100" width="100px;" alt="(´⌣`ʃƪ)"/><br /><sub><b>(´⌣`ʃƪ)</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=pt2121" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/tim77"><img src="https://avatars0.githubusercontent.com/u/5614476?v=4?s=100" width="100px;" alt="Artem Polishchuk"/><br /><sub><b>Artem Polishchuk</b></sub></a><br /><a href="#platform-tim77" title="Packaging/porting to new platform">📦</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/slumber"><img src="https://avatars2.githubusercontent.com/u/48099298?v=4?s=100" width="100px;" alt="Chris Sosnin"/><br /><sub><b>Chris Sosnin</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=slumber" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="http://www.benbuhse.com"><img src="https://avatars1.githubusercontent.com/u/21225303?v=4?s=100" width="100px;" alt="Ben Buhse"/><br /><sub><b>Ben Buhse</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=bwbuhse" title="Documentation">📖</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/ilnaes"><img src="https://avatars1.githubusercontent.com/u/20805499?v=4?s=100" width="100px;" alt="Sean Li"/><br /><sub><b>Sean Li</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=ilnaes" title="Code">💻</a></td>
-    </tr>
-    <tr>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/TimotheeGerber"><img src="https://avatars3.githubusercontent.com/u/37541513?v=4?s=100" width="100px;" alt="TimotheeGerber"/><br /><sub><b>TimotheeGerber</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=TimotheeGerber" title="Code">💻</a> <a href="https://github.com/Rigellute/spotify-tui/commits?author=TimotheeGerber" title="Documentation">📖</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/fratajczak"><img src="https://avatars2.githubusercontent.com/u/33835579?v=4?s=100" width="100px;" alt="Ferdinand Ratajczak"/><br /><sub><b>Ferdinand Ratajczak</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=fratajczak" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/sheelc"><img src="https://avatars0.githubusercontent.com/u/1355710?v=4?s=100" width="100px;" alt="Sheel Choksi"/><br /><sub><b>Sheel Choksi</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=sheelc" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="http://fnanp.in-ulm.de/microblog/"><img src="https://avatars1.githubusercontent.com/u/414112?v=4?s=100" width="100px;" alt="Michael Hellwig"/><br /><sub><b>Michael Hellwig</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=mhellwig" title="Documentation">📖</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/oliver-daniel"><img src="https://avatars2.githubusercontent.com/u/17235417?v=4?s=100" width="100px;" alt="Oliver Daniel"/><br /><sub><b>Oliver Daniel</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=oliver-daniel" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/Drewsapple"><img src="https://avatars2.githubusercontent.com/u/4532572?v=4?s=100" width="100px;" alt="Drew Fisher"/><br /><sub><b>Drew Fisher</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=Drewsapple" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/ncoder-1"><img src="https://avatars0.githubusercontent.com/u/7622286?v=4?s=100" width="100px;" alt="ncoder-1"/><br /><sub><b>ncoder-1</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=ncoder-1" title="Documentation">📖</a></td>
-    </tr>
-    <tr>
-      <td align="center" valign="top" width="14.28%"><a href="http://macguire.me"><img src="https://avatars3.githubusercontent.com/u/18323154?v=4?s=100" width="100px;" alt="Macguire Rintoul"/><br /><sub><b>Macguire Rintoul</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=macguirerintoul" title="Documentation">📖</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="http://ricardohe97.github.io"><img src="https://avatars3.githubusercontent.com/u/28399979?v=4?s=100" width="100px;" alt="Ricardo Holguin"/><br /><sub><b>Ricardo Holguin</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=RicardoHE97" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://ksk.netlify.com"><img src="https://avatars3.githubusercontent.com/u/13160198?v=4?s=100" width="100px;" alt="Keisuke Toyota"/><br /><sub><b>Keisuke Toyota</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=ksk001100" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://jackson15j.github.io"><img src="https://avatars1.githubusercontent.com/u/3226988?v=4?s=100" width="100px;" alt="Craig Astill"/><br /><sub><b>Craig Astill</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=jackson15j" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/onielfa"><img src="https://avatars0.githubusercontent.com/u/4358172?v=4?s=100" width="100px;" alt="Onielfa"/><br /><sub><b>Onielfa</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=onielfa" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://usrme.xyz"><img src="https://avatars3.githubusercontent.com/u/5902545?v=4?s=100" width="100px;" alt="usrme"/><br /><sub><b>usrme</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=usrme" title="Documentation">📖</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/murlakatamenka"><img src="https://avatars2.githubusercontent.com/u/7361274?v=4?s=100" width="100px;" alt="Sergey A."/><br /><sub><b>Sergey A.</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=murlakatamenka" title="Code">💻</a></td>
-    </tr>
-    <tr>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/elcih17"><img src="https://avatars3.githubusercontent.com/u/17084445?v=4?s=100" width="100px;" alt="Hideyuki Okada"/><br /><sub><b>Hideyuki Okada</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=elcih17" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/kepae"><img src="https://avatars2.githubusercontent.com/u/4238598?v=4?s=100" width="100px;" alt="kepae"/><br /><sub><b>kepae</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=kepae" title="Code">💻</a> <a href="https://github.com/Rigellute/spotify-tui/commits?author=kepae" title="Documentation">📖</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/ericonr"><img src="https://avatars0.githubusercontent.com/u/34201958?v=4?s=100" width="100px;" alt="Érico Nogueira Rolim"/><br /><sub><b>Érico Nogueira Rolim</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=ericonr" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/BeneCollyridam"><img src="https://avatars2.githubusercontent.com/u/15802915?v=4?s=100" width="100px;" alt="Alexander Meinhardt Scheurer"/><br /><sub><b>Alexander Meinhardt Scheurer</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=BeneCollyridam" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/Toaster192"><img src="https://avatars0.githubusercontent.com/u/14369229?v=4?s=100" width="100px;" alt="Ondřej Kinšt"/><br /><sub><b>Ondřej Kinšt</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=Toaster192" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/Kryan90"><img src="https://avatars3.githubusercontent.com/u/18740821?v=4?s=100" width="100px;" alt="Kryan90"/><br /><sub><b>Kryan90</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=Kryan90" title="Documentation">📖</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/n-ivanov"><img src="https://avatars3.githubusercontent.com/u/11470871?v=4?s=100" width="100px;" alt="n-ivanov"/><br /><sub><b>n-ivanov</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=n-ivanov" title="Code">💻</a></td>
-    </tr>
-    <tr>
-      <td align="center" valign="top" width="14.28%"><a href="http://matthewbilyeu.com/resume/"><img src="https://avatars3.githubusercontent.com/u/1185129?v=4?s=100" width="100px;" alt="bi1yeu"/><br /><sub><b>bi1yeu</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=bi1yeu" title="Code">💻</a> <a href="https://github.com/Rigellute/spotify-tui/commits?author=bi1yeu" title="Documentation">📖</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/Utagai"><img src="https://avatars2.githubusercontent.com/u/10730394?v=4?s=100" width="100px;" alt="May"/><br /><sub><b>May</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=Utagai" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://mucinoab.github.io/"><img src="https://avatars1.githubusercontent.com/u/28630268?v=4?s=100" width="100px;" alt="Bruno A. Muciño"/><br /><sub><b>Bruno A. Muciño</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=mucinoab" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/OrangeFran"><img src="https://avatars2.githubusercontent.com/u/55061632?v=4?s=100" width="100px;" alt="Finn Hediger"/><br /><sub><b>Finn Hediger</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=OrangeFran" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/dp304"><img src="https://avatars1.githubusercontent.com/u/34493835?v=4?s=100" width="100px;" alt="dp304"/><br /><sub><b>dp304</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=dp304" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="http://marcomicera.github.io"><img src="https://avatars0.githubusercontent.com/u/13918587?v=4?s=100" width="100px;" alt="Marco Micera"/><br /><sub><b>Marco Micera</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=marcomicera" title="Documentation">📖</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="http://marcoieni.com"><img src="https://avatars3.githubusercontent.com/u/11428655?v=4?s=100" width="100px;" alt="Marco Ieni"/><br /><sub><b>Marco Ieni</b></sub></a><br /><a href="#infra-MarcoIeni" title="Infrastructure (Hosting, Build-Tools, etc)">🚇</a></td>
-    </tr>
-    <tr>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/ArturKovacs"><img src="https://avatars3.githubusercontent.com/u/8320264?v=4?s=100" width="100px;" alt="Artúr Kovács"/><br /><sub><b>Artúr Kovács</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=ArturKovacs" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/aokellermann"><img src="https://avatars.githubusercontent.com/u/26678747?v=4?s=100" width="100px;" alt="Antony Kellermann"/><br /><sub><b>Antony Kellermann</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=aokellermann" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/rasmuspeders1"><img src="https://avatars.githubusercontent.com/u/1898960?v=4?s=100" width="100px;" alt="Rasmus Pedersen"/><br /><sub><b>Rasmus Pedersen</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=rasmuspeders1" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/noir-Z"><img src="https://avatars.githubusercontent.com/u/45096516?v=4?s=100" width="100px;" alt="noir-Z"/><br /><sub><b>noir-Z</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=noir-Z" title="Documentation">📖</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://davidbailey.codes/"><img src="https://avatars.githubusercontent.com/u/4248177?v=4?s=100" width="100px;" alt="David Bailey"/><br /><sub><b>David Bailey</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=davidbailey00" title="Documentation">📖</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/sheepwall"><img src="https://avatars.githubusercontent.com/u/22132993?v=4?s=100" width="100px;" alt="sheepwall"/><br /><sub><b>sheepwall</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=sheepwall" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/Hwatwasthat"><img src="https://avatars.githubusercontent.com/u/29790143?v=4?s=100" width="100px;" alt="Hwatwasthat"/><br /><sub><b>Hwatwasthat</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=Hwatwasthat" title="Code">💻</a></td>
-    </tr>
-    <tr>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/Jesse-Bakker"><img src="https://avatars.githubusercontent.com/u/22473248?v=4?s=100" width="100px;" alt="Jesse"/><br /><sub><b>Jesse</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=Jesse-Bakker" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/hantatsang"><img src="https://avatars.githubusercontent.com/u/11912225?v=4?s=100" width="100px;" alt="Sang"/><br /><sub><b>Sang</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=hantatsang" title="Documentation">📖</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://yktakaha4.github.io/"><img src="https://avatars.githubusercontent.com/u/20282867?v=4?s=100" width="100px;" alt="Yuuki Takahashi"/><br /><sub><b>Yuuki Takahashi</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=yktakaha4" title="Documentation">📖</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://alejandr0angul0.dev/"><img src="https://avatars.githubusercontent.com/u/5242883?v=4?s=100" width="100px;" alt="Alejandro Angulo"/><br /><sub><b>Alejandro Angulo</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=alejandro-angulo" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="http://t.me/lego1as"><img src="https://avatars.githubusercontent.com/u/11005780?v=4?s=100" width="100px;" alt="Anton Kostin"/><br /><sub><b>Anton Kostin</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=masguit42" title="Documentation">📖</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://justinsexton.net"><img src="https://avatars.githubusercontent.com/u/20236003?v=4?s=100" width="100px;" alt="Justin Sexton"/><br /><sub><b>Justin Sexton</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=JSextonn" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/lejiati"><img src="https://avatars.githubusercontent.com/u/6442124?v=4?s=100" width="100px;" alt="Jiati Le"/><br /><sub><b>Jiati Le</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=lejiati" title="Documentation">📖</a></td>
-    </tr>
-    <tr>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/cobbinma"><img src="https://avatars.githubusercontent.com/u/578718?v=4?s=100" width="100px;" alt="Matthew Cobbing"/><br /><sub><b>Matthew Cobbing</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=cobbinma" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://milo123459.vercel.app"><img src="https://avatars.githubusercontent.com/u/50248166?v=4?s=100" width="100px;" alt="Milo"/><br /><sub><b>Milo</b></sub></a><br /><a href="#infra-Milo123459" title="Infrastructure (Hosting, Build-Tools, etc)">🚇</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://www.diegoveralli.com"><img src="https://avatars.githubusercontent.com/u/297206?v=4?s=100" width="100px;" alt="Diego Veralli"/><br /><sub><b>Diego Veralli</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=diegov" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/majabojarska"><img src="https://avatars.githubusercontent.com/u/33836570?v=4?s=100" width="100px;" alt="Maja Bojarska"/><br /><sub><b>Maja Bojarska</b></sub></a><br /><a href="https://github.com/Rigellute/spotify-tui/commits?author=majabojarska" title="Code">💻</a></td>
-    </tr>
-  </tbody>
-</table>
-
-<!-- markdownlint-restore -->
-<!-- prettier-ignore-end -->
-
-<!-- ALL-CONTRIBUTORS-LIST:END -->
-
 This project follows the [all-contributors](https://github.com/all-contributors/all-contributors) specification. Contributions of any kind welcome!
-
-## Roadmap
-
-The goal is to eventually implement almost every Spotify feature.
-
-**High-priority features:**
-- Scroll through result pages in every view
-
-See the [Roadmap Wiki](https://github.com/LargeModGames/spotatui/wiki/Roadmap) for the full API coverage table.

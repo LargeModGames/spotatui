@@ -55,7 +55,7 @@ jobs:
             args: "--locked --no-default-features --features telemetry,tui,mcp-server"
           - name: ai-dj-only
             args: "--locked --no-default-features --features telemetry,tui,ai-dj"
-          # Slim build used for fast local iteration (matches CLAUDE.md).
+          # Slim build used for fast local iteration (matches AGENTS.md).
           - name: slim
             args: "--locked --no-default-features --features telemetry,tui"
           # Headless: one of three legs without `tui`. `mod tui` is

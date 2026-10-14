@@ -729,8 +729,8 @@ jobs:
           # Manual changes will be overwritten.
 
           class Spotatui < Formula
-            desc "Spotify client for the terminal written in Rust, powered by Ratatui"
-            homepage "https://github.com/LargeModGames/spotatui"
+            desc "Terminal music player for Spotify, local files, Subsonic, radio, YouTube, Qobuz"
+            homepage "https://spotatui.com"
             version "${{ steps.version.outputs.version }}"
             license "MIT"
 

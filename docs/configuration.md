@@ -9,7 +9,7 @@ You can also point spotatui at a specific config file with `--config <path>`.
 
 All fields are optional; omitted values use the built-in defaults. A complete, commented example lives in [`examples/config.example.yml`](../examples/config.example.yml).
 
-Simple values (numbers, toggles, icons, positions) can also be changed live in the in-app **Settings** screen (see the hint in the top-right of the UI). Press the search key (`/` by default) there to fuzzy-filter the rows by name or by their key in this file, so you can reach a setting without scrolling for it. Structured config — `format:` templates, `tables:` columns, and `playbar_control_labels` — is file-only. Edit the file while the app is closed: saving from the Settings screen rewrites the `behavior`, `theme`, and `keybindings` sections, but your `format:`, `tables:`, and `plugin_commands:` sections survive in-app saves untouched.
+Simple values (numbers, toggles, icons, positions) can also be changed live in the in-app **Settings** screen (`Alt+,`, or `Ctrl+,` on macOS; the desktop app has a Settings page). Press the search key (`/` by default) there to fuzzy-filter the rows by name or by their key in this file, so you can reach a setting without scrolling for it. Structured config (`format:` templates, `tables:` columns, and `playbar_control_labels`) is file-only. Edit the file while the app is closed: saving from the Settings screen rewrites the `behavior`, `theme`, and `keybindings` sections, but your `format:`, `tables:`, and `plugin_commands:` sections survive in-app saves untouched.
 
 Machine-managed runtime state lives separately in `$XDG_STATE_HOME/spotatui/state.yml` when `XDG_STATE_HOME` is set to an absolute path, or `${HOME}/.local/state/spotatui/state.yml` when it is unset or not absolute. This includes volume, shuffle, active source, the saved Spotify device, seen announcements, resized pane dimensions, and saved radio stations. The local listening history also lives under the app state directory. The Spotify login and the native-streaming audio cache live under `$XDG_CACHE_HOME/spotatui/streaming_cache` when `XDG_CACHE_HOME` is set to an absolute path, or `${HOME}/.cache/spotatui/streaming_cache` when it is unset or not absolute. `sync_token` remains user config and is stored in `config.yml`.
 
@@ -181,7 +181,68 @@ behavior:
 
 This is the requested quality. Qobuz serves some tracks at a lower one, so when a track plays from a Qobuz listing, the playbar shows the format it delivered, for example `FLAC 16/44.1`.
 
-Environment variables: `SPOTATUI_QOBUZ_TOKEN` overrides the saved token. `SPOTATUI_QOBUZ_APP_ID`, `SPOTATUI_QOBUZ_APP_SECRET`, and `SPOTATUI_QOBUZ_OAUTH_KEY` (all three together) replace the constants spotatui otherwise reads from the Qobuz web player at runtime.
+Environment variables: `SPOTATUI_QOBUZ_TOKEN` overrides the saved token. `SPOTATUI_QOBUZ_APP_ID`, `SPOTATUI_QOBUZ_APP_SECRET`, and `SPOTATUI_QOBUZ_OAUTH_KEY` (all three together) replace the constants spotatui otherwise reads from the Qobuz web player at runtime. Set them when Qobuz changes its web player and the login stops working, instead of waiting for a release.
+
+Each track plays while it downloads: the encrypted stream is decrypted and rebuilt as a temporary file in the delivered format (FLAC, or MP3 at quality 5), playback starts after the first segments arrive, and a seek past the downloaded part continues the download from there.
+
+## Apple Music
+
+macOS only (`apple-music` feature, in the macOS release binaries). Unlike the other sources, the audio does not go through spotatui: the Music app plays the songs with your own Apple Music login and library, and spotatui is its remote. Music starts in the background and never comes to the front. The first time, macOS asks if your terminal may control Music; allow it (or later under **System Settings > Privacy & Security > Automation**).
+
+The sidebar lists **All songs** and your playlists, including Apple Music playlists you added to your library; search looks through your library. Play/pause, next, previous, seek, volume, the media keys and the playbar follow Music. Next and previous step through the playlist or search results a song was started from, and follow Music's shuffle setting. Starting a Music song from spotatui pauses Spotify and the other sources, and starting one of those pauses Music first. Pressing play in the Music app itself while another source plays is not detected.
+
+Not available for Apple Music songs: the queue, the shuffle and repeat toggles (change them in Music), likes, and playlist edits. Songs Music cannot play are listed, but choosing one shows a message instead of playing it, and next and previous skip them, because Music would answer them with a dialog that blocks every later start. For the same reason spotatui never lets Music's volume reach 0.
+
+## Resuming the last session
+
+When you quit while a non-Spotify source plays, spotatui restores that track and its position on the next launch, following `behavior.startup_behavior` (`continue`, `play`, or `pause`).
+
+## Discord Rich Presence
+
+On by default with the built-in spotatui application id, so no setup is needed. Optional overrides:
+
+```yaml
+behavior:
+  enable_discord_rpc: true
+  discord_rpc_client_id: "your_client_id"
+```
+
+`SPOTATUI_DISCORD_APP_ID` also overrides the app id. Turn it off in Settings or with `enable_discord_rpc: false`.
+
+## Global song counter
+
+spotatui counts how many songs all users played, for the badge and chart in the README. It is **on by default** and anonymous: it sends no personal information, song names, artists or history, only one increment after a song played for 30 seconds, from any source. Internet radio counts one song for every 2.5 minutes. Turn it off with:
+
+```yaml
+behavior:
+  enable_global_song_count: false
+```
+
+## GitHub profile widget
+
+Show what you listen to as a live card on your GitHub profile. Create an account at [spotatui.com](https://spotatui.com), paste your sync token into Settings (`sync_token`), then pick a public username and turn on the widget on your dashboard. Add this to your profile README:
+
+```markdown
+[![Now playing on spotatui](https://spotatui.com/widget/your-username.svg)](https://spotatui.com)
+```
+
+The card shows cover art, title, artist, a progress bar and an animated equalizer while playing; internet radio gets a LIVE badge. Append `?theme=light` for the light variant. Only your current track is public, and only after you opt in.
+
+## Audio visualizer
+
+Press `v` for the visualizer and `V` to switch between Cava, Bar Graph and Spotify Pitch. Cava and Bar Graph analyse your system audio in real time, so they also react to videos, games and any other sound:
+
+| Platform | Setup |
+|---|---|
+| Windows | None (WASAPI loopback) |
+| Linux | None (PipeWire or PulseAudio monitor devices) |
+| macOS | Install a virtual audio device such as [BlackHole](https://github.com/ExistentialAudio/BlackHole) or [Loopback](https://rogueamoeba.com/loopback/), route system audio through it, and set it as your default input |
+
+While a Spotify track plays, `v` opens **Spotify Pitch**, the visualizer of the original spotify-tui: the strength of the twelve pitch classes (C to B) as bars, with the tempo, key and time signature of the current section, from Spotify's own audio analysis. It needs no audio capture, so it also works when Spotify plays on another device.
+
+## Listening history
+
+spotatui keeps a local play history at `$XDG_STATE_HOME/spotatui/history/listens.jsonl` when `XDG_STATE_HOME` is an absolute path, otherwise `~/.local/state/spotatui/history/listens.jsonl`. It powers the Stats screen and `spotatui history recap`. Short or skipped plays are stored but left out of recap totals.
 
 ## Layout
 

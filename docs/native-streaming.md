@@ -2,6 +2,16 @@
 
 spotatui includes **native Spotify Connect** support, allowing it to play audio directly on your computer without needing an external player like spotifyd.
 
+## Where Spotify plays
+
+spotatui talks to Spotify the way the official app does. Press `d` to pick where the music plays:
+
+- **spotatui itself**, through native streaming (this page). Recommended.
+- **Any Spotify Connect device**: the official app on your computer or phone, or [spotifyd](https://github.com/Spotifyd/spotifyd). Start that device first; it then shows up in the `d` list. If spotifyd does not show up, see [its logging docs](https://github.com/Spotifyd/spotifyd#logging).
+- **Speakers on your network**: Google Cast devices and Spotify Connect speakers on the LAN.
+
+Spotify in spotatui needs a **Premium** account: the login refuses a free account. The other sources (Local Files, Subsonic, Internet Radio, YouTube, Qobuz) play through spotatui's own audio engine and need none of this; Apple Music plays in the Music app.
+
 ## Setup
 
 Native streaming uses the Spotify login, so there is no separate setup. After

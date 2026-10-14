@@ -1,5 +1,5 @@
 {
-  description = "A Spotify client for the terminal written in Rust, powered by Ratatui";
+  description = "Terminal music player for Spotify, local files, Subsonic, radio, YouTube, Qobuz";
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
@@ -55,7 +55,7 @@
             };
             inherit nativeBuildInputs buildInputs;
             meta = with pkgs.lib; {
-              description = "A Spotify client for the terminal written in Rust, powered by Ratatui";
+              description = "Terminal music player for Spotify, local files, Subsonic, radio, YouTube, Qobuz";
               homepage = "https://github.com/LargeModGames/spotatui";
               license = licenses.mit;
               mainProgram = "spotatui";

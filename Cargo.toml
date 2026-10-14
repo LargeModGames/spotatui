@@ -1,11 +1,11 @@
 [package]
 name = "spotatui"
-description = "A Spotify client for the terminal written in Rust, powered by Ratatui"
-homepage = "https://github.com/LargeModGames/spotatui"
-documentation = "https://github.com/LargeModGames/spotatui"
+description = "Terminal music player for Spotify, local files, Subsonic, radio, YouTube, Qobuz"
+homepage = "https://spotatui.com"
+documentation = "https://github.com/LargeModGames/spotatui/tree/main/docs"
 repository = "https://github.com/LargeModGames/spotatui"
-keywords = ["spotify", "tui", "cli", "terminal"]
-categories = ["command-line-utilities"]
+keywords = ["music-player", "spotify", "tui", "terminal", "music"]
+categories = ["command-line-utilities", "multimedia::audio"]
 version = "0.45.0"
 authors = ["LargeModGames <LargeModGames@gmail.com>"]
 edition = "2021"
@@ -19,7 +19,6 @@ exclude = [
     ".github/workflows",
     ".github/ISSUE_TEMPLATE",
     "target/",
-    "snap/",
     "/gui/",
 ]
 

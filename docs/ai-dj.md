@@ -57,6 +57,8 @@ queue immediately.
 
 ## Quick start
 
+Every prebuilt terminal binary includes the DJ; the desktop app does not. When you build from source, add the feature:
+
 ```bash
 cargo run --features ai-dj
 ```

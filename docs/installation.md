@@ -1,13 +1,42 @@
 # Installation
 
+spotatui comes as a terminal app and as a [desktop app](#desktop-app). Both play every source; Spotify is optional and needs Premium.
+
 ## Quick Install
 
-### Cargo (Recommended)
+### One-line installer
+
+The installer downloads the prebuilt binary for your system, checks its checksum, and puts `spotatui` on your `PATH`. No Rust needed.
+
+```bash
+# macOS, Linux, WSL
+curl -fsSL https://spotatui.com/install.sh | bash
+```
+
+```powershell
+# Windows PowerShell
+irm https://spotatui.com/install.ps1 | iex
+```
+
+### Which build has which features
+
+The prebuilt terminal binaries (the installer, GitHub Releases, `cargo binstall`, Homebrew, `spotatui-bin`, winget) include every source (Local Files, Subsonic, Internet Radio, YouTube, Qobuz, and Apple Music on macOS), the MCP server and the AI DJ. A plain `cargo install` and the Nix flake build the smaller default set: Spotify only. Add the sources with:
+
+```bash
+cargo install --locked spotatui --features local-files,subsonic,internet-radio,youtube,qobuz,mcp-server,ai-dj
+# macOS: also add apple-music
+```
+
+YouTube needs [yt-dlp](https://github.com/yt-dlp/yt-dlp) on your `PATH` (ffmpeg recommended).
+
+### Cargo
 
 If you have Rust installed:
 
 ```bash
 cargo install --locked spotatui
+# or fetch the prebuilt binary without compiling
+cargo binstall spotatui
 ```
 
 ### Windows (winget)
@@ -54,6 +83,72 @@ yay -S spotatui
 # or
 paru -S spotatui
 ```
+
+`spotatui-bin` is x86_64 only.
+
+### Void Linux
+
+An unofficial package is in the [blackhole-vl](https://github.com/Event-Horizon-VL/blackhole-vl) repository; follow its README to add the repository, then `sudo xbps-install -S spotatui`.
+
+### NixOS (flake)
+
+Add spotatui to your flake inputs:
+
+```nix
+inputs = {
+  spotatui = {
+    url = "github:LargeModGames/spotatui";
+    inputs.nixpkgs.follows = "nixpkgs";
+  };
+}
+```
+
+Then add the package to your configuration:
+
+```nix
+{ inputs, ... }: {
+  environment.systemPackages = with pkgs; [
+    inputs.spotatui.packages.${pkgs.stdenv.hostPlatform.system}.default
+  ];
+}
+```
+
+The flake brings every dependency except the audio backend. With ALSA, set `hardware.alsa.enable = true;`. With PipeWire:
+
+```nix
+services.pipewire = {
+  enable = true;
+  alsa.enable = true;
+};
+```
+
+The flake provides `x86_64-linux`, `aarch64-linux` and `aarch64-darwin`. nixpkgs 26.11 dropped Intel Macs, so on those use Homebrew, the one-line installer, or a release tarball.
+
+---
+
+## Desktop app
+
+The desktop app is the same player in its own window, with a Spotify-style layout (Home, album and artist pages, Your Library, lyrics). It uses the same login, settings and history as the terminal app, and only one of the two runs at a time. Closing the window quits it. It is a preview.
+
+Download it from [GitHub Releases](https://github.com/LargeModGames/spotatui/releases/latest):
+
+| System | File |
+|---|---|
+| Windows 10/11 (64-bit) | `spotatui-desktop_<version>_x64-setup.exe` |
+| macOS, Apple Silicon | `spotatui_<version>_aarch64.dmg` |
+| macOS, Intel | `spotatui_<version>_x64.dmg` |
+| Debian/Ubuntu | `spotatui-desktop_<version>_amd64.deb` or `_arm64.deb` |
+| Fedora | `spotatui-desktop-<version>-1.x86_64.rpm` or `.aarch64.rpm` |
+| Other Linux | `spotatui-desktop_<version>_amd64.AppImage` or `_aarch64.AppImage` |
+
+The installers are not signed yet, so your system warns on the first start:
+
+- **Windows:** SmartScreen says "Windows protected your PC". Click **More info**, then **Run anyway**.
+- **macOS:** macOS refuses to open the app the first time. Close the dialog, open **System Settings > Privacy & Security**, click **Open Anyway** next to the spotatui message, and confirm. If macOS says the app is damaged, run `xattr -dr com.apple.quarantine /Applications/spotatui.app` once.
+
+On Linux the app needs glibc 2.39 and WebKitGTK 4.1 (`webkit2gtk-4.1`): Ubuntu 24.04 or newer, Debian 13, Fedora 40 or newer, or Arch. If the window stays blank on Wayland with an NVIDIA GPU, start it with `GDK_BACKEND=x11 spotatui-desktop`. The app already sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` unless you set it yourself.
+
+To drive the desktop app from a coding agent over MCP, also install the terminal `spotatui`: the agent starts `spotatui mcp`, which only the terminal binary has.
 
 ---
 
@@ -121,7 +216,7 @@ cd spotatui
 
 **macOS:**
 ```bash
-cargo install --path . --no-default-features --features telemetry,streaming,discord-rpc,cover-art,self-update,scripting,portaudio-backend,audio-viz-cpal,macos-media,local-files,subsonic,internet-radio,youtube,qobuz,apple-music
+cargo install --path . --no-default-features --features telemetry,tui,streaming,discord-rpc,cover-art,self-update,scripting,portaudio-backend,audio-viz-cpal,macos-media,local-files,subsonic,internet-radio,youtube,qobuz,apple-music
 ```
 
 **Linux/Windows:**
@@ -131,8 +226,15 @@ cargo install --path .
 
 **Nix:**
 ```bash
-nix-build
+nix build        # or `nix develop` for a shell with every build dependency
 ```
+
+**WSL:** if the build fails to link, install the clipboard dependencies:
+```bash
+sudo apt-get install -y pkg-config libssl-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
+```
+
+The PipeWire visualizer backend (`--features audio-viz`, Linux only) also needs `libpipewire-0.3-dev libspa-0.2-dev` (Debian/Ubuntu), `pipewire` (Arch) or `pipewire-devel` (Fedora).
 
 ---
 
@@ -166,3 +268,20 @@ spotatui talks to Spotify the way the official app does. It needs no Spotify dev
 To log in, pick Spotify on the first run, or press `d` and pick Spotify later. spotatui shows a short code and opens Spotify's pairing page in your browser. Confirm the code there; the login is cached, so this happens once. Run `spotatui --reconfigure-auth` to forget the login and log in again, for example with another account.
 
 A `client.yml` from an older version stays on disk and is no longer used for the login. spotatui copies its native-streaming settings and saved device into `config.yml` and `state.yml` once.
+
+---
+
+## Coming from spotify-tui
+
+The binary is `spotatui` instead of `spt`, and the config moved from `~/.config/spotify-tui/` to the spotatui config directory (`$XDG_CONFIG_HOME/spotatui/` when `XDG_CONFIG_HOME` is an absolute path, otherwise `~/.config/spotatui/`). You can copy your old config:
+
+```bash
+case "${XDG_CONFIG_HOME:-}" in
+  /*) config_home="$XDG_CONFIG_HOME" ;;
+  *) config_home="$HOME/.config" ;;
+esac
+mkdir -p "$config_home/spotatui"
+cp -r ~/.config/spotify-tui/* "$config_home/spotatui/"
+```
+
+You log in to Spotify again the first time.

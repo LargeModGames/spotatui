@@ -71,7 +71,9 @@ spotatui mcp status
   cargo install --locked --path . --features mcp-server
   ```
 
-  The feature is not in `default`, so a plain `cargo build` omits it. Do not
+  Every prebuilt terminal binary (the one-line installer, GitHub Releases,
+  Homebrew, `spotatui-bin`, winget) has it. The feature is not in `default`,
+  so a plain `cargo build` omits it. Do not
   assume any particular binary has it — the `spotatui mcp status` check above is
   the way to tell.
 

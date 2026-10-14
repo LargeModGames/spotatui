@@ -1,8 +1,11 @@
 blank_issues_enabled: false
 contact_links:
-  - name: Discord community
+  - name: Questions and help
     url: https://spotatui.com/discord
-    about: Questions, install help, feature chat, and listening parties. Come say hi.
+    about: Install help, questions, feature chat and listening parties on the Discord. Discussions work too.
   - name: Security reports
-    url: https://github.com/LargeModGames/spotatui/blob/master/SECURITY.md
-    about: Please report vulnerabilities privately per our security policy.
+    url: https://github.com/LargeModGames/spotatui/security/policy
+    about: Report vulnerabilities privately, as the security policy says.
+  - name: A bug in the librespot fork
+    url: https://github.com/LargeModGames/spotatui-librespot/issues
+    about: Only when you know the bug is in the library code. Report what you see in spotatui here.

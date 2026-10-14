@@ -1,0 +1,90 @@
+name: Bug report
+description: Something in spotatui does not work as it should.
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you saw, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Start spotatui
+        2. Press ...
+        3. See ...
+    validations:
+      required: true
+  - type: dropdown
+    id: frontend
+    attributes:
+      label: Frontend
+      options:
+        - Terminal app
+        - Desktop app
+        - Browser GUI (spotatui-gui)
+        - A CLI subcommand
+    validations:
+      required: true
+  - type: dropdown
+    id: source
+    attributes:
+      label: Source
+      multiple: true
+      options:
+        - Spotify
+        - Local Files
+        - Subsonic / Navidrome
+        - Internet Radio
+        - YouTube
+        - Qobuz
+        - Apple Music
+        - Not about a source
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: spotatui version
+      description: The output of `spotatui --version`.
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS
+      placeholder: Arch Linux, Windows 11, macOS 26 ...
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How you installed spotatui
+      options:
+        - One-line installer
+        - Download from GitHub Releases
+        - Desktop app installer
+        - Homebrew
+        - AUR
+        - winget
+        - cargo install / cargo binstall
+        - Nix
+        - Built from source
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: terminal
+    attributes:
+      label: Terminal
+      description: For the terminal app.
+      placeholder: kitty, Windows Terminal, iTerm2 ...
+  - type: textarea
+    id: log
+    attributes:
+      label: Debug log
+      description: Run `spotatui --debug`, make the bug happen, and attach the log file whose path spotatui prints when it exits. After a crash, attach `spotatui_panic.log` from the state directory. Skim it first; a log can contain your display name.
