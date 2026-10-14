@@ -198,6 +198,7 @@ const GUI_SETTINGS: &[(&str, &str, Option<&str>)] = &[
   ("behavior.streaming_bitrate", "streaming", None),
   ("behavior.streaming_audio_cache", "streaming", None),
   ("behavior.streaming_autoplay", "streaming", None),
+  #[cfg(feature = "discord-rpc")]
   ("behavior.enable_discord_rpc", "integrations", None),
   ("behavior.enable_global_song_count", "integrations", None),
   ("behavior.enable_lyrics", "integrations", None),
@@ -220,6 +221,14 @@ const GUI_SETTINGS: &[(&str, &str, Option<&str>)] = &[
     "updates",
     Some("How long a release must be out before it downloads: '0' for at once, or for example '10m', '2h', '7d'"),
   ),
+];
+
+/// The page's rows a phone leaves out: keyboard steps, a desktop sleep lock, and the player it always runs.
+const PHONE_HIDDEN_SETTINGS: &[&str] = &[
+  "behavior.seek_milliseconds",
+  "behavior.volume_increment",
+  "behavior.keepawake_enabled",
+  "behavior.enable_streaming",
 ];
 
 #[derive(Serialize)]
@@ -257,6 +266,8 @@ pub(crate) struct NowPlaying {
   repeat: String,
   /// The Spotify play context (album, playlist or artist); `null` for a raw list, a queue slot or another source.
   context_uri: Option<String>,
+  /// The play context's name for "Playing from": Spotify's own, else the library playlist, the album, Liked Songs or the context's artist; `null` when unknown or when `context_uri` is `null`.
+  context_name: Option<String>,
   /// The delivered Qobuz stream quality, such as `FLAC 24/96`; `null` for every other source.
   quality: Option<String>,
 }
@@ -830,11 +841,16 @@ fn show(app: &App) -> ShowPayload {
 }
 
 fn settings(app: &App) -> Vec<SettingRow> {
+  settings_for(app, cfg!(target_os = "android"))
+}
+
+fn settings_for(app: &App, phone: bool) -> Vec<SettingRow> {
   use crate::core::app::SettingValue;
   let items = app.behavior_setting_items();
   GUI_SETTINGS
     .iter()
     .filter(|(_, group, _)| *group != "updates" || app.update_status().is_some())
+    .filter(|(id, _, _)| !(phone && PHONE_HIDDEN_SETTINGS.contains(id)))
     .filter_map(|(id, group, description)| {
       let item = items
         .iter()
@@ -1156,7 +1172,7 @@ fn saved_albums(app: &App) -> Vec<AlbumInfo> {
 }
 
 fn playback(app: &App) -> PlaybackPayload {
-  let (snapshot, volume, device, liked, quality) = app.playback_view();
+  let (snapshot, volume, device, liked, quality, context_name) = app.playback_view();
   PlaybackPayload {
     item: snapshot.as_ref().map(|snapshot| NowPlaying {
       title: snapshot.metadata.title.clone(),
@@ -1178,6 +1194,7 @@ fn playback(app: &App) -> PlaybackPayload {
       } else {
         snapshot.context_uri.clone()
       },
+      context_name: context_name.clone(),
       quality: quality.clone(),
     }),
     volume: *volume,
@@ -2109,6 +2126,24 @@ mod tests {
       .any(|row| row["id"] == "behavior.disable_auto_update"
         && row["group"] == "updates"
         && row["value"]["kind"] == "bool"));
+  }
+
+  #[test]
+  fn a_phone_settings_page_leaves_out_the_rows_a_phone_cannot_use() {
+    let (app, _rx) = app();
+    let ids = |phone| -> Vec<String> {
+      settings_for(&app, phone)
+        .iter()
+        .map(|row| row.id.clone())
+        .collect()
+    };
+
+    assert!(ids(false).contains(&"behavior.seek_milliseconds".to_string()));
+    let phone = ids(true);
+    assert!(!phone
+      .iter()
+      .any(|id| PHONE_HIDDEN_SETTINGS.contains(&id.as_str())));
+    assert!(phone.contains(&"behavior.stop_after_current_track".to_string()));
   }
 
   #[test]

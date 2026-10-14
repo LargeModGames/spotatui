@@ -165,6 +165,7 @@ fn worker(
     closed,
     updates: Some(updates),
     window: Some(Box::new(move |mode| set_window(&window_app, mode, &restore))),
+    media: None,
   };
   let result = runtime.block_on(spotatui::run_gui_hosted(host));
   // Before `done`: a quit from the window ends the process right after it.

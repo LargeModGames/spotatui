@@ -354,7 +354,11 @@ impl App {
         is_private_session: false,
         is_restricted: false,
         name: device_name,
-        _type: DeviceType::Computer,
+        _type: if cfg!(target_os = "android") {
+          DeviceType::Smartphone
+        } else {
+          DeviceType::Computer
+        },
         volume_percent: Some(u32::from(volume_percent)),
       },
       repeat_state: RepeatState::Off,

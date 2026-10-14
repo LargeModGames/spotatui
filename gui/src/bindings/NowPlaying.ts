@@ -6,6 +6,10 @@ export type NowPlaying = { title: string, artists: Array<string>, album: string,
  */
 context_uri: string | null, 
 /**
+ * The play context's name for "Playing from": Spotify's own, else the library playlist, the album, Liked Songs or the context's artist; `null` when unknown or when `context_uri` is `null`.
+ */
+context_name: string | null, 
+/**
  * The delivered Qobuz stream quality, such as `FLAC 24/96`; `null` for every other source.
  */
 quality: string | null, };

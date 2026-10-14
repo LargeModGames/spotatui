@@ -1062,6 +1062,14 @@ fn current_playback_poll_is_transient(err: &anyhow::Error) -> bool {
   is_transient_network_error(err)
 }
 
+/// The `me/player` context's uri and its non-empty name.
+fn player_context_name(value: &Value) -> Option<(String, String)> {
+  let context = value.get("context")?;
+  let uri = context.get("uri")?.as_str()?;
+  let name = context.get("name")?.as_str()?.trim();
+  (!name.is_empty()).then(|| (uri.to_string(), name.to_string()))
+}
+
 impl PlaybackNetwork for Network {
   async fn get_current_playback(&mut self) {
     // When using native streaming, the Spotify API returns stale server-side state
@@ -1097,12 +1105,22 @@ impl PlaybackNetwork for Network {
         None
       };
 
-    let context = self
-      .spotify_get_typed::<Option<rspotify::model::CurrentPlaybackContext>>(
+    // Read the context's name before the typed parse: rspotify's Context has no name.
+    let response = self
+      .spotify_api_request_json(
+        Method::GET,
         "me/player",
         &[("additional_types", "episode,track".to_string())],
+        None,
       )
       .await;
+    let context_name = response.as_ref().ok().and_then(player_context_name);
+    let context = response.and_then(|mut value| {
+      super::requests::normalize_spotify_payload(&mut value);
+      Ok(serde_json::from_value::<
+        Option<rspotify::model::CurrentPlaybackContext>,
+      >(value)?)
+    });
 
     let mut app = self.app.lock().await;
 
@@ -1263,6 +1281,7 @@ impl PlaybackNetwork for Network {
           // Cover art (Spotify album/episode image) is fetched by the shared
           // track-change detector in `core/driver/`, from the snapshot's image URL.
           app.current_playback_context = Some(c);
+          app.set_spotify_context_name(context_name);
         }
 
         // Update is_streaming_active based on whether the current device matches native streaming
@@ -2887,6 +2906,22 @@ mod tests {
 
   fn playable_track(id: &str) -> PlayableId<'static> {
     PlayableId::Track(TrackId::from_id(id).unwrap().into_static())
+  }
+
+  #[test]
+  fn player_context_name_reads_the_named_context() {
+    let named = json!({ "context": { "uri": "spotify:playlist:x", "name": " Mix " } });
+    assert_eq!(
+      player_context_name(&named),
+      Some(("spotify:playlist:x".to_string(), "Mix".to_string()))
+    );
+    for value in [
+      json!({ "context": { "uri": "spotify:playlist:x", "name": null } }),
+      json!({ "context": { "uri": "spotify:playlist:x", "name": "  " } }),
+      json!({ "context": null }),
+    ] {
+      assert_eq!(player_context_name(&value), None, "{value}");
+    }
   }
 
   #[test]

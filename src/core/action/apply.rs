@@ -82,6 +82,7 @@ impl App {
       Action::MoveQueueItem { uri, from, to } => {
         self.move_queue_item(&uri, from, to);
       }
+      Action::ClearQueue => self.clear_native_queue(),
       Action::RefreshQueue => self.dispatch_without_spinner(IoEvent::GetQueue),
       Action::RefreshDevices => self.dispatch_without_spinner(IoEvent::GetDevicesSilent),
       Action::Search(query) => {

@@ -263,6 +263,20 @@ async fn observer(session: &SpotifySession) -> anyhow::Result<Arc<Observer>> {
   session.observer().await
 }
 
+/// The Web API's `context` object, plus Spotify's own `name` for it when the cluster has one.
+fn context_json(cluster: &Cluster) -> Option<Value> {
+  let state = &cluster.player_state;
+  (!state.context_uri.is_empty()).then(|| {
+    json!({
+      "uri": state.context_uri,
+      "href": "",
+      "external_urls": {},
+      "type": context_kind(&state.context_uri),
+      "name": state.context_metadata.get("context_description"),
+    })
+  })
+}
+
 /// `GET me/player`: no body when no device is active, as the Web API answers 204.
 pub async fn playback_state(session: &SpotifySession) -> anyhow::Result<Value> {
   let cluster = observer(session).await?.cluster();
@@ -277,14 +291,7 @@ pub async fn playback_state(session: &SpotifySession) -> anyhow::Result<Value> {
   } else {
     "track"
   };
-  let context = (!state.context_uri.is_empty()).then(|| {
-    json!({
-      "uri": state.context_uri,
-      "href": "",
-      "external_urls": {},
-      "type": context_kind(&state.context_uri),
-    })
-  });
+  let context = context_json(&cluster);
   Ok(json!({
     "device": device_json(&cluster.active_device_id, device, true),
     "repeat_state": repeat_state(&cluster),
@@ -734,6 +741,23 @@ mod tests {
     cluster.player_state.mut_or_insert_default().is_paused = false;
     assert_eq!(progress_ms(&cluster, 3000), 4000);
     assert_eq!(progress_ms(&cluster, 9000), 5000, "capped at the duration");
+  }
+
+  #[test]
+  fn the_context_carries_spotifys_description() {
+    let mut cluster = Cluster::new();
+    assert!(
+      context_json(&cluster).is_none(),
+      "no context uri, no context"
+    );
+    let state = cluster.player_state.mut_or_insert_default();
+    state.context_uri = "spotify:playlist:x".to_string();
+    state
+      .context_metadata
+      .insert("context_description".to_string(), "Mix".to_string());
+    let context = context_json(&cluster).expect("a context");
+    assert_eq!(context["name"], "Mix");
+    assert_eq!(context["uri"], "spotify:playlist:x");
   }
 
   fn device(name: &str, device_type: DeviceType, hidden: bool) -> DeviceInfo {

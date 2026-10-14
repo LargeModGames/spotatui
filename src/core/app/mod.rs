@@ -46,7 +46,21 @@ use std::{
 use std::time::SystemTime;
 use unicode_width::UnicodeWidthStr;
 
+#[cfg(not(target_os = "android"))]
 use arboard::Clipboard;
+/// arboard has no Android backend, so the clipboard is never available there.
+#[cfg(target_os = "android")]
+pub enum Clipboard {}
+#[cfg(target_os = "android")]
+impl Clipboard {
+  fn new() -> Result<Self, ()> {
+    Err(())
+  }
+
+  fn set_text(&mut self, _text: String) -> Result<(), std::convert::Infallible> {
+    match *self {}
+  }
+}
 #[cfg(any(test, feature = "streaming"))]
 use chrono::Utc;
 use log::info;
@@ -148,6 +162,16 @@ pub use settings_schema::*;
 pub use status::*;
 pub use view::*;
 
+/// What the Playback revision counts: snapshot without position, volume, device, liked, Qobuz quality, context name.
+pub(crate) type PlaybackView = (
+  Option<crate::infra::media_metadata::PlaybackSnapshot>,
+  u32,
+  Option<String>,
+  bool,
+  Option<String>,
+  Option<String>,
+);
+
 pub struct App {
   /// What the user actually wants the volume to be. We keep this around until
   /// Spotify's API comes back with the same value — otherwise a slow poll
@@ -193,6 +217,8 @@ pub struct App {
   /// consumed by `App::expire_api_error` on the tick. `None` means none is live.
   api_error_expires_at: Option<Instant>,
   pub current_playback_context: Option<CurrentPlaybackContext>,
+  /// Spotify's name for a play context, with that context's uri.
+  spotify_context_name: Option<(String, String)>,
   pub last_track_id: Option<String>,
   /// Set to true when a track ends naturally and stop_after_current_track is enabled.
   /// The next Playing event will see this flag and immediately pause.
@@ -402,6 +428,7 @@ pub struct App {
   #[cfg(feature = "streaming")]
   native_shuffle_generation: u64,
   /// Prevent idle/sleep during playback
+  #[cfg(not(target_os = "android"))]
   keepawake: Option<keepawake::KeepAwake>,
   /// Timestamp of the last native device activation
   #[allow(dead_code)]
@@ -634,14 +661,8 @@ pub struct App {
   /// only the scripting engine reads them.
   pub plugin_data_generations: PluginDataGenerations,
   display_revisions: DisplayRevisions,
-  /// The playback view the Playback revision last counted: snapshot without position, volume, device, liked, Qobuz quality.
-  playback_view: (
-    Option<crate::infra::media_metadata::PlaybackSnapshot>,
-    u32,
-    Option<String>,
-    bool,
-    Option<String>,
-  ),
+  /// The playback view the Playback revision last counted.
+  playback_view: PlaybackView,
   /// The queue view the Queue revision last counted: the Spotify mirror, the native queue, the playing slot.
   queue_view: (Option<QueueState>, Vec<TrackInfo>, Option<TrackInfo>),
   /// Retained content of plugin-registered custom screens, keyed by screen

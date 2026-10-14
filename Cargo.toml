@@ -102,10 +102,11 @@ rodio = { version = "0.22", optional = true }
 # - upstream 0.8 cannot be substituted). The `package =` rename keeps `librespot_*` imports and
 # `librespot-*/feature` refs unchanged; `=`-pinned so all seven crates upgrade in
 # lockstep. See SPOTATUI_FORK.md in the fork repo for the carried patches.
-librespot-core = { version = "=0.8.5", package = "spotatui-librespot-core", optional = true }
-librespot-connect = { version = "=0.8.5", package = "spotatui-librespot-connect", optional = true }
-librespot-oauth = { version = "=0.8.5", package = "spotatui-librespot-oauth", optional = true }
-librespot-metadata = { version = "=0.8.5", package = "spotatui-librespot-metadata", optional = true }
+# No default features: the TLS stack is chosen per target below.
+librespot-core = { version = "=0.8.5", package = "spotatui-librespot-core", optional = true, default-features = false }
+librespot-connect = { version = "=0.8.5", package = "spotatui-librespot-connect", optional = true, default-features = false }
+librespot-oauth = { version = "=0.8.5", package = "spotatui-librespot-oauth", optional = true, default-features = false }
+librespot-metadata = { version = "=0.8.5", package = "spotatui-librespot-metadata", optional = true, default-features = false }
 librespot-protocol = { version = "=0.8.5", package = "spotatui-librespot-protocol", optional = true, default-features = false }
 protobuf = { version = "3.7", optional = true }
 # Google Cast speakers on the local network: the mDNS browse and the CASTV2 TLS link.
@@ -117,7 +118,19 @@ tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
 # The GUI page server's request-head parser.
 httparse = { version = "1.10", optional = true }
 url = "2.5"
+
+# librespot's TLS: native-tls on desktops, rustls on Android, where native-tls
+# would mean an OpenSSL build with the NDK. The two are mutually exclusive.
+[target.'cfg(not(target_os = "android"))'.dependencies]
+# Android has no backend; there the media session's foreground service keeps playback alive.
 keepawake = "0.6"
+librespot-core = { version = "=0.8.5", package = "spotatui-librespot-core", optional = true, default-features = false, features = ["native-tls"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+librespot-core = { version = "=0.8.5", package = "spotatui-librespot-core", optional = true, default-features = false, features = ["rustls-tls-webpki-roots"] }
+librespot-playback = { version = "=0.8.5", package = "spotatui-librespot-playback", optional = true, default-features = false, features = ["rodio-backend"] }
+# The phone model, for the default Connect name.
+libc = "0.2"
 
 [target.'cfg(all(target_os = "linux", not(target_env = "musl")))'.dependencies]
 arboard = { version = "3.4", features = ["wayland-data-control"] }

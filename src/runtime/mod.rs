@@ -20,7 +20,10 @@ mod startup;
 mod streaming;
 
 #[cfg(feature = "gui")]
-pub use gui::{run_gui, run_gui_hosted, GuiHost, SetWindow, UpdateLink, WindowMode};
+pub use gui::{
+  run_gui, run_gui_hosted, GuiHost, MediaCommand, MediaLink, MediaState, SetWindow, UpdateLink,
+  WindowMode,
+};
 
 use crate::core::migrations::apply_legacy_state_file_migrations;
 use anyhow::{anyhow, Result};

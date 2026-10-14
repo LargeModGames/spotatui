@@ -3668,6 +3668,16 @@ fn remove_from_queue_and_move_queue_item_edit_the_queue() {
   assert!(rx.try_recv().is_err(), "queue edits dispatch nothing");
 }
 
+#[test]
+fn clear_queue_empties_the_native_queue_and_dispatches_nothing() {
+  let (mut app, rx) = app_with_three_queued();
+
+  app.apply(Action::ClearQueue);
+
+  assert!(queue_names(&app).is_empty());
+  assert!(rx.try_recv().is_err());
+}
+
 // --- the DJ screen's own actions (no-ops without ai-dj) ---
 
 #[cfg(feature = "ai-dj")]

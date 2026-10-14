@@ -127,7 +127,11 @@ mod tests {
       is_private_session: false,
       is_restricted: false,
       name: name.to_string(),
-      _type: DeviceType::Computer,
+      _type: if cfg!(target_os = "android") {
+        DeviceType::Smartphone
+      } else {
+        DeviceType::Computer
+      },
       volume_percent: Some(50),
     }
   }

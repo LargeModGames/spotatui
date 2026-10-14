@@ -52,6 +52,7 @@ const item: NowPlaying = {
   shuffle: false,
   repeat: "off",
   context_uri: "spotify:album:21",
+  context_name: null,
   quality: null,
 };
 

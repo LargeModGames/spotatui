@@ -140,6 +140,8 @@ pub enum Action {
     from: usize,
     to: usize,
   },
+  /// Empty the native queue; the track playing now keeps playing.
+  ClearQueue,
   /// Fetch the Spotify queue again without a route change or the spinner.
   RefreshQueue,
   /// Fetch the Spotify Connect devices without a route change, whatever the browse source.

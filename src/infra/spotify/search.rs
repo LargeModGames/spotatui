@@ -1,4 +1,5 @@
-//! Search through Pathfinder's persisted `searchDesktop` query. Pathfinder
+//! Search through Pathfinder's persisted search queries: one per type, with
+//! `searchDesktop` (every type in one answer) as the fallback. Pathfinder
 //! ranks; the catalogue objects come from extended-metadata.
 
 use super::catalog::{full_artists, full_tracks};
@@ -24,13 +25,55 @@ const SEARCH_DESKTOP_HASHES: &[&str] = &[
   "3c9d3f60dac5dea3876b6db3f534192b1c1d90032c4233c1bbaba526db41eb31",
   "4801118d4a100f756e833d33984436a3899cff359c532f8fd3aaf174b60b3b49",
 ];
-/// The five parallel calls of one search share one Pathfinder answer.
+/// A repeated search within this time is answered from memory.
 const RESULT_TTL: Duration = Duration::from_secs(15);
 const MAX_LIMIT: usize = 50;
 
 static WORKING_HASH: AtomicUsize = AtomicUsize::new(0);
 
-type Cache = HashMap<(String, usize, usize), (Value, Instant)>;
+/// A persisted Pathfinder search query.
+struct SearchQuery {
+  operation: &'static str,
+  /// Newest first; only `searchDesktop` keeps older ones to fall back on.
+  hashes: &'static [&'static str],
+}
+
+/// Every type in one large answer: the fallback when a type's own query fails.
+const DESKTOP: SearchQuery = SearchQuery {
+  operation: "searchDesktop",
+  hashes: SEARCH_DESKTOP_HASHES,
+};
+
+/// The query of one search type. Its answer is a tenth of `searchDesktop`'s
+/// and comes in about half the time, with the same items in the same section.
+fn type_query(kind: &str) -> Option<SearchQuery> {
+  let (operation, hashes): (_, &'static [&'static str]) = match kind {
+    "track" => (
+      "searchTracks",
+      &["b02683192a98dde7966b5e6655a79eeb62713eab703eda9902c932818dd52751"],
+    ),
+    "artist" => (
+      "searchArtists",
+      &["7bf95d754fdbe32c8b161fbbe54d1ae50974900df4dce4c8f1afcbcad153224d"],
+    ),
+    "album" => (
+      "searchAlbums",
+      &["202cb3305e31e5a0767ba7925f28bd728cf8f8b0217e6da43909056071cd70e9"],
+    ),
+    "playlist" => (
+      "searchPlaylists",
+      &["d520014e748f9ea44f7707d8df1819867ac1205e8b7f3e28f22fe5fc858921b1"],
+    ),
+    "show" => (
+      "searchPodcasts",
+      &["0195d9f61b43606d490bca64c3456e3593528cea6cc05c7e822c7c42beed0f4e"],
+    ),
+    _ => return None,
+  };
+  Some(SearchQuery { operation, hashes })
+}
+
+type Cache = HashMap<(&'static str, String, usize, usize), (Value, Instant)>;
 
 fn cache() -> &'static Mutex<Cache> {
   static CACHE: OnceLock<Mutex<Cache>> = OnceLock::new();
@@ -58,15 +101,24 @@ fn search_term(query: &str) -> String {
 
 async fn search_v2(
   session: &SpotifySession,
+  query: &SearchQuery,
   term: &str,
   offset: usize,
   limit: usize,
 ) -> anyhow::Result<Value> {
-  let mut cache = cache().lock().await;
-  cache.retain(|_, (_, at)| at.elapsed() < RESULT_TTL);
-  let key = (term.to_string(), offset, limit);
-  if let Some((value, _)) = cache.get(&key) {
-    return Ok(value.clone());
+  // The parallel calls of a search that falls back share one searchDesktop answer.
+  static DESKTOP_FETCH: OnceLock<Mutex<()>> = OnceLock::new();
+  let _shared = match query.operation == DESKTOP.operation {
+    true => Some(DESKTOP_FETCH.get_or_init(|| Mutex::new(())).lock().await),
+    false => None,
+  };
+  let key = (query.operation, term.to_string(), offset, limit);
+  {
+    let mut cache = cache().lock().await;
+    cache.retain(|_, (_, at)| at.elapsed() < RESULT_TTL);
+    if let Some((value, _)) = cache.get(&key) {
+      return Ok(value.clone());
+    }
   }
   let variables = json!({
     "searchTerm": term,
@@ -79,30 +131,38 @@ async fn search_v2(
     "includeLocalConcertsField": false,
     "includeAuthors": false,
   });
-  let start = WORKING_HASH.load(Ordering::Relaxed);
-  for step in 0..SEARCH_DESKTOP_HASHES.len() {
-    let index = (start + step) % SEARCH_DESKTOP_HASHES.len();
+  // Only searchDesktop has older hashes, so only its working one is remembered.
+  let rotates = query.hashes.len() > 1;
+  let start = if rotates {
+    WORKING_HASH.load(Ordering::Relaxed)
+  } else {
+    0
+  };
+  for step in 0..query.hashes.len() {
+    let index = (start + step) % query.hashes.len();
     match session
       .session()
       .spclient()
-      .pathfinder_query(
-        "searchDesktop",
-        SEARCH_DESKTOP_HASHES[index],
-        variables.clone(),
-      )
+      .pathfinder_query(query.operation, query.hashes[index], variables.clone())
       .await
     {
       Ok(answer) if answer["data"]["searchV2"].is_object() => {
-        WORKING_HASH.store(index, Ordering::Relaxed);
+        if rotates {
+          WORKING_HASH.store(index, Ordering::Relaxed);
+        }
         let result = answer["data"]["searchV2"].clone();
-        cache.insert(key, (result.clone(), Instant::now()));
+        cache()
+          .lock()
+          .await
+          .insert(key, (result.clone(), Instant::now()));
         return Ok(result);
       }
-      Ok(answer) => log::warn!("searchDesktop gave no result: {}", answer["errors"]),
+      Ok(answer) => log::warn!("{} gave no result: {}", query.operation, answer["errors"]),
       Err(e) if e.kind == ErrorKind::FailedPrecondition => {
         log::warn!(
-          "searchDesktop hash {} is retired",
-          &SEARCH_DESKTOP_HASHES[index][..8]
+          "{} hash {} is retired",
+          query.operation,
+          &query.hashes[index][..8]
         );
       }
       Err(e) => return Err(super::router::upstream_error(e)),
@@ -110,7 +170,10 @@ async fn search_v2(
   }
   Err(api_error(
     StatusCode::SERVICE_UNAVAILABLE,
-    "Search is unavailable: every known searchDesktop hash is retired",
+    format!(
+      "Search is unavailable: every known {} hash is retired",
+      query.operation
+    ),
   ))
 }
 
@@ -162,6 +225,26 @@ fn playlist(data: &Value) -> Option<Value> {
   }))
 }
 
+/// The answer of the type's own query, else of searchDesktop.
+async fn type_result(
+  session: &SpotifySession,
+  kind: &str,
+  term: &str,
+  offset: usize,
+  limit: usize,
+) -> anyhow::Result<Value> {
+  if let Some(query) = type_query(kind) {
+    match search_v2(session, &query, term, offset, limit).await {
+      Ok(result) => return Ok(result),
+      Err(e) => log::warn!(
+        "{} failed, searching with searchDesktop: {e:#}",
+        query.operation
+      ),
+    }
+  }
+  search_v2(session, &DESKTOP, term, offset, limit).await
+}
+
 /// `GET search`: one Web API page per requested type.
 pub async fn search(session: &SpotifySession, query: &[(&str, String)]) -> anyhow::Result<Value> {
   let term = search_term(query_value(query, "q").unwrap_or_default());
@@ -170,12 +253,12 @@ pub async fn search(session: &SpotifySession, query: &[(&str, String)]) -> anyho
   }
   let paging = Paging::from_query(query, 20);
   let limit = paging.limit.min(MAX_LIMIT);
-  let result = search_v2(session, &term, paging.offset, limit).await?;
   let page =
     |items: Vec<Value>, section: &Value| json::page(items, paging.offset, limit, total(section));
 
   let mut answer = serde_json::Map::new();
   for kind in query_value(query, "type").unwrap_or("track").split(',') {
+    let result = type_result(session, kind, &term, paging.offset, limit).await?;
     match kind {
       "track" => {
         let section = &result["tracksV2"];

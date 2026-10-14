@@ -133,6 +133,11 @@ impl App {
     self.native_queue.insert(to, item);
   }
 
+  /// Empty the native queue; the playing slot and a suspended context stay.
+  pub(crate) fn clear_native_queue(&mut self) {
+    self.native_queue.clear();
+  }
+
   /// Whether the native queue's playback slot currently owns the output (either a
   /// decoded queued track or a native-streamed Spotify one). The single gated
   /// entry point for every queue-ownership check; reduces to `false` in a build

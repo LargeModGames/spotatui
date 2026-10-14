@@ -247,6 +247,7 @@ impl App {
     }
 
     self.poll_current_playback();
+    #[cfg_attr(target_os = "android", allow(unused_variables))]
     let playing_now = self.user_config.behavior.keepawake_enabled
       && if self.apple_music_owns_playback() {
         self
@@ -261,6 +262,7 @@ impl App {
           self.current_playback_context.as_ref().map(|c| c.is_playing),
         )
       };
+    #[cfg(not(target_os = "android"))]
     match (playing_now, self.keepawake.is_some()) {
       (true, false) => {
         self.keepawake = keepawake::Builder::default()

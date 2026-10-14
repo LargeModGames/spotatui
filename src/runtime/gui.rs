@@ -4,6 +4,7 @@
 use super::bootstrap::{self, BootOptions};
 use super::instance;
 use super::startup::{prepare_frontend, shutdown_frontend, FrontendHandles};
+use crate::core::action::Action;
 use crate::core::app::{App, PlaybackOwner};
 use crate::core::driver::{Driver, TickEnv};
 use crate::core::onboarding::Onboarding;
@@ -33,6 +34,7 @@ pub struct GuiHost {
   pub updates: Option<UpdateLink>,
   /// Resizes the shell's window when the page asks for the mini player.
   pub window: Option<SetWindow>,
+  pub media: Option<MediaLink>,
 }
 
 /// Sets the shell's window to a mode the page asked for.
@@ -43,6 +45,38 @@ pub struct UpdateLink {
   pub status: tokio::sync::watch::Receiver<UpdateStatus>,
   pub requests: UnboundedSender<UpdateRequest>,
 }
+
+/// The app's half of a shell's system media controls, such as a phone's lock screen.
+pub struct MediaLink {
+  /// The track this process plays, or `None` while it plays nothing here.
+  pub state: tokio::sync::watch::Sender<Option<MediaState>>,
+  pub commands: UnboundedReceiver<MediaCommand>,
+}
+
+/// What the system media controls show.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MediaState {
+  pub title: String,
+  pub artists: Vec<String>,
+  pub album: String,
+  pub artwork_url: Option<String>,
+  pub duration_ms: u64,
+  pub position_ms: u64,
+  pub playing: bool,
+}
+
+/// A press on the system media controls.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MediaCommand {
+  Play,
+  Pause,
+  Next,
+  Previous,
+  SeekTo(u64),
+}
+
+/// How far the position may move from where the controls extrapolate it before it is sent again.
+const MEDIA_POSITION_DRIFT_MS: u64 = 2000;
 
 /// How often a running app looks for an update.
 const UPDATE_CHECK_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
@@ -80,15 +114,23 @@ async fn launch_gui(host: Option<GuiHost>) -> Result<()> {
   if hosted {
     crate::infra::macos_media::HOST_OWNS_NSAPP.store(true, std::sync::atomic::Ordering::SeqCst);
   }
-  let (show, serving, closed, updates, window) = match host {
+  let (show, serving, closed, updates, window, media) = match host {
     Some(GuiHost {
       show,
       serving,
       closed,
       updates,
       window,
-    }) => (Some(show), Some(serving), Some(closed), updates, window),
-    None => (None, None, None, None, None),
+      media,
+    }) => (
+      Some(show),
+      Some(serving),
+      Some(closed),
+      updates,
+      window,
+      media,
+    ),
+    None => (None, None, None, None, None, None),
   };
   let mut instance_lock = instance::acquire()?;
   if let Err(e) = crate::core::migrations::apply_legacy_state_file_migrations() {
@@ -157,6 +199,7 @@ async fn launch_gui(host: Option<GuiHost>) -> Result<()> {
       closed,
       updates,
       window,
+      media,
     },
   )
   .await;
@@ -173,6 +216,7 @@ struct ShellLinks {
   closed: Option<tokio::sync::watch::Receiver<bool>>,
   updates: Option<UpdateLink>,
   window: Option<SetWindow>,
+  media: Option<MediaLink>,
 }
 
 /// Ticks the driver, pushes to the page and applies its actions until a quit.
@@ -188,7 +232,13 @@ async fn serve_until_quit(
     closed,
     updates,
     window,
+    media,
   } = shell;
+  let (media_state, mut media_commands) = match media {
+    Some(MediaLink { state, commands }) => (Some(state), Some(commands)),
+    None => (None, None),
+  };
+  let mut media_sent_at = Instant::now();
   // A shell's window owns the page's life, so a page gone a minute is no reason to quit.
   let hosted = closed.is_some();
   let window_closed = async {
@@ -256,6 +306,17 @@ async fn serve_until_quit(
         last_tick = now;
         publisher.publish(&app);
         publisher.tick(&app, now);
+        if let Some(state) = &media_state {
+          let next = media_state_of(&app);
+          state.send_if_modified(|shown| {
+            let changed = media_changed(shown.as_ref(), next.as_ref(), now - media_sent_at);
+            if changed {
+              *shown = next;
+              media_sent_at = now;
+            }
+            changed
+          });
+        }
         if !hosted && publisher.abandoned(now, plays_here(&app)) {
           log::info!("no page connected and nothing played here for a minute; quitting");
           break;
@@ -281,6 +342,25 @@ async fn serve_until_quit(
         // The shell dropped its updater.
         None => update_status = None,
       },
+      command = async {
+        match media_commands.as_mut() {
+          Some(commands) => commands.recv().await,
+          None => std::future::pending().await,
+        }
+      } => match command {
+        Some(command) => {
+          let mut app = app.lock().await;
+          if app.user_config.behavior.enable_media_keys {
+            app.apply(media_action(command));
+            publisher.publish(&app);
+          }
+        }
+        None => media_commands = None,
+      },
+      // A page that asked for something sees the answer when the pump has it.
+      _ = super::pump::events_handled().notified() => {
+        publisher.publish(&*app.lock().await);
+      }
       message = inbox.recv() => match message {
         Some(ClientMessage::Action { action }) => {
           let mut app = app.lock().await;
@@ -324,14 +404,68 @@ async fn serve_until_quit(
 
 /// Whether this process makes the sound, so closing the last tab must not stop it.
 fn plays_here(app: &App) -> bool {
+  owns_sound(app)
+    && app
+      .playback_view()
+      .0
+      .as_ref()
+      .is_some_and(|snapshot| snapshot.is_playing)
+}
+
+/// Whether a player in this process owns playback, not another Connect device.
+fn owns_sound(app: &App) -> bool {
   matches!(
     app.playback_owner(),
     PlaybackOwner::Queue | PlaybackOwner::Decoded | PlaybackOwner::NativeSpotify
-  ) && app
-    .playback_view()
-    .0
-    .as_ref()
-    .is_some_and(|snapshot| snapshot.is_playing)
+  )
+}
+
+/// The media controls' view: only a track this process plays, so a phone that is a remote shows none.
+fn media_state_of(app: &App) -> Option<MediaState> {
+  if !owns_sound(app) {
+    return None;
+  }
+  let snapshot = app.playback_view().0.as_ref()?;
+  let metadata = &snapshot.metadata;
+  Some(MediaState {
+    title: metadata.title.clone(),
+    artists: metadata.artists.clone(),
+    album: metadata.album.clone(),
+    artwork_url: metadata.image_url.clone(),
+    duration_ms: u64::from(metadata.duration_ms),
+    position_ms: app.playback_position_ms().unwrap_or(snapshot.progress_ms) as u64,
+    playing: snapshot.is_playing,
+  })
+}
+
+/// Whether the controls must hear of `next`: anything but the position changed, or the
+/// position left the line they extrapolate from what they were sent `since` ago.
+fn media_changed(shown: Option<&MediaState>, next: Option<&MediaState>, since: Duration) -> bool {
+  let (Some(shown), Some(next)) = (shown, next) else {
+    return shown.is_some() != next.is_some();
+  };
+  let moved = if shown.playing {
+    since.as_millis() as u64
+  } else {
+    0
+  };
+  shown.title != next.title
+    || shown.artists != next.artists
+    || shown.album != next.album
+    || shown.artwork_url != next.artwork_url
+    || shown.duration_ms != next.duration_ms
+    || shown.playing != next.playing
+    || next.position_ms.abs_diff(shown.position_ms + moved) > MEDIA_POSITION_DRIFT_MS
+}
+
+fn media_action(command: MediaCommand) -> Action {
+  match command {
+    MediaCommand::Play => Action::Play,
+    MediaCommand::Pause => Action::Pause,
+    MediaCommand::Next => Action::NextTrack,
+    MediaCommand::Previous => Action::PreviousTrack,
+    MediaCommand::SeekTo(ms) => Action::SeekTo(u32::try_from(ms).unwrap_or(u32::MAX)),
+  }
 }
 
 /// The check the user's auto-update settings ask for.
@@ -397,5 +531,79 @@ mod tests {
   #[test]
   fn the_launch_url_carries_the_code_in_the_fragment() {
     assert_eq!(launch_url(40513, "abc"), "http://127.0.0.1:40513/#code=abc");
+  }
+
+  fn media(position_ms: u64, playing: bool) -> MediaState {
+    MediaState {
+      title: "Song".into(),
+      artists: vec!["Artist".into()],
+      album: "Album".into(),
+      artwork_url: None,
+      duration_ms: 200_000,
+      position_ms,
+      playing,
+    }
+  }
+
+  #[test]
+  fn a_playing_position_that_moves_with_the_clock_is_not_sent_again() {
+    let shown = media(10_000, true);
+    let next = media(15_000, true);
+    assert!(!media_changed(
+      Some(&shown),
+      Some(&next),
+      Duration::from_secs(5)
+    ));
+  }
+
+  #[test]
+  fn a_seek_or_a_paused_position_change_is_sent() {
+    let shown = media(10_000, true);
+    assert!(media_changed(
+      Some(&shown),
+      Some(&media(60_000, true)),
+      Duration::from_secs(5)
+    ));
+    let paused = media(10_000, false);
+    assert!(media_changed(
+      Some(&paused),
+      Some(&media(15_000, false)),
+      Duration::from_secs(5)
+    ));
+  }
+
+  #[test]
+  fn a_new_track_a_pause_or_the_end_of_local_playback_is_sent() {
+    let shown = media(10_000, true);
+    let other = MediaState {
+      title: "Other".into(),
+      ..media(10_000, true)
+    };
+    assert!(media_changed(Some(&shown), Some(&other), Duration::ZERO));
+    assert!(media_changed(
+      Some(&shown),
+      Some(&media(10_000, false)),
+      Duration::ZERO
+    ));
+    assert!(media_changed(Some(&shown), None, Duration::ZERO));
+    assert!(!media_changed(None, None, Duration::ZERO));
+  }
+
+  #[test]
+  fn media_buttons_become_the_page_actions() {
+    assert!(matches!(media_action(MediaCommand::Play), Action::Play));
+    assert!(matches!(media_action(MediaCommand::Pause), Action::Pause));
+    assert!(matches!(
+      media_action(MediaCommand::Next),
+      Action::NextTrack
+    ));
+    assert!(matches!(
+      media_action(MediaCommand::Previous),
+      Action::PreviousTrack
+    ));
+    assert!(matches!(
+      media_action(MediaCommand::SeekTo(u64::MAX)),
+      Action::SeekTo(u32::MAX)
+    ));
   }
 }

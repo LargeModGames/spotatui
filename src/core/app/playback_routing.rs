@@ -608,6 +608,47 @@ impl App {
     }
   }
 
+  pub(crate) fn set_spotify_context_name(&mut self, name: Option<(String, String)>) {
+    self.spotify_context_name = name;
+  }
+
+  /// The "Playing from" name of the context the snapshot plays; none for a queue slot.
+  fn playback_context_name(
+    &self,
+    snapshot: Option<&crate::infra::media_metadata::PlaybackSnapshot>,
+  ) -> Option<String> {
+    if self.queue_owns_playback() {
+      return None;
+    }
+    let snapshot = snapshot?;
+    context_display_name(
+      snapshot.context_uri.as_deref()?,
+      self.spotify_context_name.as_ref(),
+      self.all_playlists(),
+      &snapshot.metadata.album,
+      &self.polled_track_artists(snapshot.item_uri.as_deref()),
+    )
+  }
+
+  /// The polled track's artists as (uri, name), when that track is the one playing.
+  fn polled_track_artists(&self, item_uri: Option<&str>) -> Vec<(String, String)> {
+    let Some(PlayableItem::Track(track)) = self
+      .current_playback_context
+      .as_ref()
+      .and_then(|context| context.item.as_ref())
+    else {
+      return Vec::new();
+    };
+    if track.id.as_ref().map(|id| id.uri()).as_deref() != item_uri {
+      return Vec::new();
+    }
+    track
+      .artists
+      .iter()
+      .filter_map(|artist| Some((artist.id.as_ref()?.uri(), artist.name.clone())))
+      .collect()
+  }
+
   /// Bump the Playback and Queue revisions when what a frontend shows of them
   /// changed; the playback position is not part of it.
   pub(crate) fn note_display_changes(&mut self) {
@@ -629,7 +670,15 @@ impl App {
       .and_then(|snapshot| snapshot.item_uri.as_deref())
       .filter(|uri| uri.starts_with("qobuz:"))
       .and_then(|_| self.qobuz_quality_label());
-    let view = (snapshot, self.desired_volume(), device, liked, quality);
+    let context_name = self.playback_context_name(snapshot.as_ref());
+    let view = (
+      snapshot,
+      self.desired_volume(),
+      device,
+      liked,
+      quality,
+      context_name,
+    );
     if view != self.playback_view {
       self.playback_view = view;
       self.display_revisions.bump(DisplayDomain::Playback);
@@ -652,10 +701,96 @@ impl App {
     self.note_liked_marks_changes();
   }
 }
+
+/// A context's name: Spotify's own for the same uri, else the library playlist,
+/// Liked Songs, the album, or the credited artist (uri, name) whose uri it is.
+pub(crate) fn context_display_name(
+  uri: &str,
+  described: Option<&(String, String)>,
+  playlists: &[PlaylistInfo],
+  album: &str,
+  artists: &[(String, String)],
+) -> Option<String> {
+  if let Some((_, name)) = described.filter(|(described_uri, _)| described_uri == uri) {
+    return Some(name.clone());
+  }
+  if uri.contains(":collection") {
+    return Some("Liked Songs".to_string());
+  }
+  match uri.split(':').nth(1)? {
+    "playlist" => playlists
+      .iter()
+      .find(|p| p.uri == uri)
+      .map(|p| p.name.clone()),
+    "album" => (!album.is_empty()).then(|| album.to_string()),
+    "artist" => artists
+      .iter()
+      .find(|(artist_uri, _)| artist_uri == uri)
+      .map(|(_, name)| name.clone()),
+    _ => None,
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
   use crate::core::app::test_support::*;
+
+  #[test]
+  fn context_display_name_prefers_spotifys_description_for_the_same_uri() {
+    let described = ("spotify:playlist:p1".to_string(), "Daily Mix 1".to_string());
+    let playlists = [crate::core::test_helpers::playlist_info(
+      "p1", "Road", "me", false,
+    )];
+    assert_eq!(
+      context_display_name("spotify:playlist:p1", Some(&described), &playlists, "", &[]),
+      Some("Daily Mix 1".to_string())
+    );
+  }
+
+  #[test]
+  fn a_description_of_another_context_is_ignored() {
+    let described = ("spotify:playlist:other".to_string(), "Old".to_string());
+    let playlists = [crate::core::test_helpers::playlist_info(
+      "p1", "Road", "me", false,
+    )];
+    assert_eq!(
+      context_display_name("spotify:playlist:p1", Some(&described), &playlists, "", &[]),
+      Some("Road".to_string())
+    );
+  }
+
+  #[test]
+  fn the_fallbacks_name_the_album_liked_songs_and_the_context_artist() {
+    let artists = [
+      ("spotify:artist:a".to_string(), "First".to_string()),
+      ("spotify:artist:x".to_string(), "Second".to_string()),
+    ];
+    let name = |uri| context_display_name(uri, None, &[], "Album", &artists);
+    assert_eq!(name("spotify:album:a"), Some("Album".to_string()));
+    assert_eq!(
+      name("spotify:user:me:collection"),
+      Some("Liked Songs".to_string())
+    );
+    assert_eq!(name("spotify:artist:x"), Some("Second".to_string()));
+    assert_eq!(
+      name("spotify:artist:z"),
+      None,
+      "an uncredited context artist"
+    );
+  }
+
+  #[test]
+  fn an_unknown_context_kind_has_no_name() {
+    assert_eq!(
+      context_display_name("spotify:show:s", None, &[], "Album", &[]),
+      None
+    );
+    assert_eq!(
+      context_display_name("spotify:playlist:p9", None, &[], "", &[]),
+      None
+    );
+  }
 
   #[cfg(feature = "streaming")]
   #[test]

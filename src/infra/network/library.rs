@@ -41,6 +41,8 @@ use librespot_metadata::{
 // Spotify's `me/library` endpoints (contains, save, remove) accept at most 40
 // uris per request; anything larger fails with a 400 "Too many uris".
 const LIBRARY_CONTAINS_MAX_URIS: usize = 40;
+/// Contains batches in flight at once; the answers keep the order of the uris.
+const LIBRARY_CONTAINS_PARALLEL: usize = 4;
 
 const EXTERNAL_PLAYLIST_UNAVAILABLE_STATUS: &str = concat!(
   "Spotify Development Mode blocks playlist contents owned by another user. ",
@@ -640,6 +642,10 @@ fn uri_batches(uris: &[String]) -> impl Iterator<Item = &[String]> {
   uris.chunks(LIBRARY_CONTAINS_MAX_URIS)
 }
 
+async fn contains_batch(uris: String) -> anyhow::Result<Vec<bool>> {
+  spotify_get_typed_for::<Vec<bool>>("me/library/contains", &[("uris", uris)]).await
+}
+
 fn populate_liked_song_ids_from_saved_tracks(
   liked_song_ids_set: &mut std::collections::HashSet<String>,
   page: &Page<SavedTrack>,
@@ -884,12 +890,13 @@ impl Network {
       return Ok(Vec::new());
     }
 
+    let batches: Vec<String> = uri_batches(uris).map(|batch| batch.join(",")).collect();
     let mut all_results = Vec::with_capacity(uris.len());
-    for batch in uri_batches(uris) {
-      let batch_results =
-        spotify_get_typed_for::<Vec<bool>>("me/library/contains", &[("uris", batch.join(","))])
+    for group in batches.chunks(LIBRARY_CONTAINS_PARALLEL) {
+      let answers =
+        futures::future::try_join_all(group.iter().map(|batch| contains_batch(batch.clone())))
           .await?;
-      all_results.extend(batch_results);
+      all_results.extend(answers.into_iter().flatten());
     }
 
     Ok(all_results)
@@ -2467,6 +2474,57 @@ mod tests {
       .collect::<Vec<_>>();
 
     assert_eq!(batches, vec![40, 40, 40]);
+  }
+
+  #[tokio::test]
+  async fn library_contains_sends_its_batches_together_and_keeps_the_uri_order() {
+    use crate::infra::network::metadata::tests::{fake_spotify_login, read_http_request};
+    use tokio::io::AsyncWriteExt;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}/v1/", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+      // All three batches must be in flight before any is answered.
+      let mut held = Vec::new();
+      for _ in 0..3 {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let request = read_http_request(&mut stream).await;
+        let request_line = request.lines().next().unwrap_or_default().to_string();
+        let answers: Vec<bool> = request_line
+          .split("spotify%3Atrack%3A")
+          .skip(1)
+          .map(|id| {
+            let digits: String = id.chars().take_while(char::is_ascii_digit).collect();
+            digits.parse::<u32>().unwrap() % 3 == 0
+          })
+          .collect();
+        held.push((stream, serde_json::to_string(&answers).unwrap()));
+      }
+      for (mut stream, body) in held {
+        let response = format!(
+          "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+          body.len()
+        );
+        stream.write_all(response.as_bytes()).await.unwrap();
+      }
+    });
+    let app = Arc::new(Mutex::new(App::default()));
+    let (spotify, _fake) = fake_spotify_login(base_url);
+    let network = Network::new(Some(spotify), &app);
+    let uris = (0..100)
+      .map(|index| format!("spotify:track:{index:022}"))
+      .collect::<Vec<_>>();
+
+    let answers = tokio::time::timeout(
+      Duration::from_secs(10),
+      network.library_contains_uris(&uris),
+    )
+    .await
+    .expect("the batches must not wait for each other")
+    .unwrap();
+
+    server.await.unwrap();
+    let expected: Vec<bool> = (0..100).map(|index| index % 3 == 0).collect();
+    assert_eq!(answers, expected);
   }
 
   #[test]

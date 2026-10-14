@@ -67,6 +67,7 @@ impl Default for App {
       api_error: String::new(),
       api_error_expires_at: None,
       current_playback_context: None,
+      spotify_context_name: None,
       last_track_id: None,
       pending_stop_after_track: false,
       devices: None,
@@ -140,6 +141,7 @@ impl Default for App {
       native_spotify_shuffle: None,
       #[cfg(feature = "streaming")]
       native_shuffle_generation: 0,
+      #[cfg(not(target_os = "android"))]
       keepawake: None,
       last_device_activation: None,
       native_activation_pending: false,
@@ -242,7 +244,7 @@ impl Default for App {
       pending_plugin_commands: Vec::new(),
       plugin_data_generations: PluginDataGenerations::default(),
       display_revisions: DisplayRevisions::default(),
-      playback_view: (None, 0, None, false, None),
+      playback_view: (None, 0, None, false, None, None),
       queue_view: Default::default(),
       plugin_screens: std::collections::BTreeMap::new(),
       pending_plugin_screen_keys: Vec::new(),

@@ -6,7 +6,7 @@ use crate::core::app::{
 use crate::core::plugin_api::{AlbumInfo, ArtistInfo, EpisodeInfo, ShowInfo, TrackInfo};
 use crate::infra::network::mapping::{self, map_page};
 use crate::infra::network::requests::{
-  is_forbidden_error, is_not_found_error, spotify_api_request_json_for,
+  is_forbidden_error, is_not_found_error, spotify_api_request_json_for, spotify_get_typed_for,
 };
 use anyhow::anyhow;
 use reqwest::Method;
@@ -33,6 +33,8 @@ pub(super) struct MetadataTtlCache<T> {
 
 const METADATA_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(300);
 const METADATA_CACHE_CAP: usize = 32;
+/// Albums per request on an artist page; the pages after the first load in parallel.
+const ARTIST_ALBUM_PAGE: u32 = 50;
 
 impl<T> Default for MetadataTtlCache<T> {
   fn default() -> Self {
@@ -146,6 +148,83 @@ pub trait MetadataNetwork {
   async fn get_album_for_track(&mut self, track_id: TrackId<'static>);
 }
 
+/// An artist page from Spotify, and whether its portrait came back (only then is it cached).
+async fn fetch_artist_data(
+  artist_id: &str,
+  country: Option<Country>,
+) -> anyhow::Result<(CachedArtistData, bool)> {
+  let artist_path = format!("artists/{artist_id}");
+  let top_tracks_path = format!("{}/top-tracks", artist_path);
+  let related_artists_path = format!("{}/related-artists", artist_path);
+  let albums_path = format!("{}/albums", artist_path);
+  let mut top_tracks_query = Vec::new();
+  if let Some(country) = country {
+    top_tracks_query.push(("market", country_code(country)));
+  }
+  let albums_query = |offset: u32| {
+    let mut query = vec![
+      ("limit", ARTIST_ALBUM_PAGE.to_string()),
+      ("offset", offset.to_string()),
+    ];
+    if let Some(country) = country {
+      query.push(("market", country_code(country)));
+    }
+    query
+  };
+  let first_albums_query = albums_query(0);
+
+  // A refused or missing half leaves its list empty and keeps the other.
+  let (artist_res, top_tracks_res, related_artists_res, first_albums_res) = tokio::join!(
+    spotify_get_typed_for::<FullArtist>(&artist_path, &[]),
+    spotify_get_typed_for::<ArtistTopTracksResponse>(&top_tracks_path, &top_tracks_query),
+    spotify_get_typed_for::<RelatedArtistsResponse>(&related_artists_path, &[]),
+    spotify_get_typed_for::<Page<SimplifiedAlbum>>(&albums_path, &first_albums_query)
+  );
+  let portrait_fetched = artist_res.is_ok();
+  let image_url = artist_res
+    .ok()
+    .and_then(|artist| ArtistInfo::from(&artist).image_url);
+  let top_tracks = match top_tracks_res {
+    Ok(res) => res.tracks,
+    Err(e) if is_not_found_error(&e) || is_forbidden_error(&e) => Vec::new(),
+    Err(e) => return Err(e),
+  };
+  let related_artists = match related_artists_res {
+    Ok(res) => res.artists,
+    Err(e) if is_not_found_error(&e) || is_forbidden_error(&e) => Vec::new(),
+    Err(e) => return Err(e),
+  };
+
+  let first_albums = first_albums_res?;
+  // The first page gives the total, so the rest load at the same time.
+  let rest_queries: Vec<_> = if first_albums.next.is_some() {
+    (ARTIST_ALBUM_PAGE..first_albums.total)
+      .step_by(ARTIST_ALBUM_PAGE as usize)
+      .map(albums_query)
+      .collect()
+  } else {
+    Vec::new()
+  };
+  let rest_pages = futures::future::try_join_all(
+    rest_queries
+      .iter()
+      .map(|query| spotify_get_typed_for::<Page<SimplifiedAlbum>>(&albums_path, query)),
+  )
+  .await?;
+  let mut album_items = first_albums.items;
+  for page in rest_pages {
+    album_items.extend(page.items);
+  }
+
+  let data = CachedArtistData {
+    image_url,
+    top_tracks,
+    related_artists,
+    album_items,
+  };
+  Ok((data, portrait_fetched))
+}
+
 impl MetadataNetwork for Network {
   async fn get_artist(
     &mut self,
@@ -157,90 +236,36 @@ impl MetadataNetwork for Network {
     let cache_key = format!("{}:{:?}", artist_id_str, country);
 
     let cached = self.artist_cache.get(&cache_key);
+    let fetch_id = artist_id_str.clone();
+    let fetch = async move {
+      match cached {
+        Some(data) => Ok((data, false)),
+        None => fetch_artist_data(&fetch_id, country).await,
+      }
+    };
+    // The follow button is right on the first paint, on a cache hit too.
+    let artist_uri = artist_id.uri();
+    let (fetched, follows) = tokio::join!(
+      fetch,
+      self.library_contains_uris(std::slice::from_ref(&artist_uri))
+    );
+    let (data, portrait_fetched) = match fetched {
+      Ok(fetched) => fetched,
+      Err(e) => {
+        self.handle_error(e).await;
+        return;
+      }
+    };
+    // The portrait is decoration: a failed fetch only leaves it out, and is not cached.
+    if portrait_fetched {
+      self.artist_cache.put(cache_key, data.clone());
+    }
     let CachedArtistData {
       image_url,
       top_tracks,
       related_artists,
       album_items,
-    } = if let Some(data) = cached {
-      data
-    } else {
-      let artist_path = format!("artists/{}", artist_id.id());
-      let top_tracks_path = format!("{}/top-tracks", artist_path);
-      let related_artists_path = format!("{}/related-artists", artist_path);
-      let mut top_tracks_query = Vec::new();
-      if let Some(country) = country {
-        top_tracks_query.push(("market", country_code(country)));
-      }
-
-      // A refused or missing half leaves its list empty and keeps the other.
-      let (artist_res, top_tracks_res, related_artists_res) = tokio::join!(
-        self.spotify_get_typed::<FullArtist>(&artist_path, &[]),
-        self.spotify_get_typed::<ArtistTopTracksResponse>(&top_tracks_path, &top_tracks_query),
-        self.spotify_get_typed::<RelatedArtistsResponse>(&related_artists_path, &[])
-      );
-      // The portrait is decoration: a failed fetch only leaves it out, and is not cached.
-      let artist_fetched = artist_res.is_ok();
-      let image_url = artist_res
-        .ok()
-        .and_then(|artist| ArtistInfo::from(&artist).image_url);
-
-      let top_tracks = match top_tracks_res {
-        Ok(res) => res.tracks,
-        Err(e) if is_not_found_error(&e) || is_forbidden_error(&e) => Vec::new(),
-        Err(e) => {
-          self.handle_error(anyhow!(e)).await;
-          return;
-        }
-      };
-
-      let related_artists = match related_artists_res {
-        Ok(res) => res.artists,
-        Err(e) if is_not_found_error(&e) || is_forbidden_error(&e) => Vec::new(),
-        Err(e) => {
-          self.handle_error(e).await;
-          return;
-        }
-      };
-
-      let mut album_items = Vec::new();
-      let mut offset = 0u32;
-      // Spotify rejects a limit above 10 here with 400 "Invalid limit".
-      let limit = 10u32;
-      loop {
-        let mut query = vec![("limit", limit.to_string()), ("offset", offset.to_string())];
-        if let Some(country) = country {
-          query.push(("market", country_code(country)));
-        }
-        let page = match self
-          .spotify_get_typed::<Page<SimplifiedAlbum>>(&format!("{}/albums", artist_path), &query)
-          .await
-        {
-          Ok(page) => page,
-          Err(e) => {
-            self.handle_error(anyhow!(e)).await;
-            return;
-          }
-        };
-        let next = page.next.is_some();
-        album_items.extend(page.items);
-        if !next {
-          break;
-        }
-        offset += limit;
-      }
-
-      let data = CachedArtistData {
-        image_url,
-        top_tracks,
-        related_artists,
-        album_items,
-      };
-      if artist_fetched {
-        self.artist_cache.put(cache_key, data.clone());
-      }
-      data
-    };
+    } = data;
 
     // Convert rspotify types to domain types before storing — conversion stays
     // inside infra/network per the multi-source boundary contract.
@@ -276,15 +301,27 @@ impl MetadataNetwork for Network {
       app.dispatch(IoEvent::CurrentUserSavedAlbumsContains(album_check));
     }
 
-    // Check if the artist and the related artists are followed.
-    let follow_check: Vec<String> = std::iter::once(artist_id_str.clone())
-      .chain(
-        related_artists
-          .iter()
-          .map(|artist| artist.id.id().to_string()),
-      )
+    match follows.as_deref() {
+      Ok([follows]) => {
+        let followed = app.followed_artist_ids_set_mut();
+        if *follows {
+          followed.insert(artist_id_str.clone());
+        } else {
+          followed.remove(&artist_id_str);
+        }
+      }
+      // A failed check keeps the last known state, as the follow check does.
+      _ => log::debug!("artist follow check failed: {follows:?}"),
+    }
+
+    // Check if the related artists are followed.
+    let follow_check: Vec<String> = related_artists
+      .iter()
+      .map(|artist| artist.id.id().to_string())
       .collect();
-    app.dispatch(IoEvent::UserArtistFollowCheck(follow_check));
+    if !follow_check.is_empty() {
+      app.dispatch(IoEvent::UserArtistFollowCheck(follow_check));
+    }
 
     app.artist = Some(Artist {
       artist_id: artist_id_str,
@@ -690,11 +727,13 @@ pub(crate) mod tests {
       let base_url = format!("http://{local_addr}/v1/");
 
       let server = tokio::spawn(async move {
-        for _ in 0..4 {
+        for _ in 0..5 {
           let (mut stream, _) = listener.accept().await.unwrap();
           let request = read_http_request(&mut stream).await;
 
-          let (status, body) = if request.contains("/top-tracks") {
+          let (status, body) = if request.contains("/me/library/contains") {
+            ("200 OK", "[false]".to_string())
+          } else if request.contains("/top-tracks") {
             ("200 OK", r#"{"tracks":[]}"#.to_string())
           } else if request.contains("/related-artists") {
             (
@@ -793,18 +832,21 @@ pub(crate) mod tests {
   }
 
   #[tokio::test]
-  async fn get_artist_pages_albums_ten_at_a_time_and_keeps_every_album() {
+  async fn get_artist_loads_album_pages_in_parallel_and_keeps_every_album_in_order() {
     tokio::time::timeout(Duration::from_secs(10), async {
       let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
       let base_url = format!("http://{}/v1/", listener.local_addr().unwrap());
 
       let server = tokio::spawn(async move {
-        for _ in 0..5 {
+        let mut held = Vec::new();
+        for _ in 0..7 {
           let (mut stream, _) = listener.accept().await.unwrap();
           let request = read_http_request(&mut stream).await;
           let request_line = request.lines().next().unwrap_or_default().to_string();
 
-          let (status, body) = if request_line.contains("/top-tracks") {
+          let (status, body) = if request_line.contains("/me/library/contains") {
+            ("200 OK", "[true]".to_string())
+          } else if request_line.contains("/top-tracks") {
             ("200 OK", r#"{"tracks":[]}"#.to_string())
           } else if request_line.contains("/related-artists") {
             ("200 OK", r#"{"artists":[]}"#.to_string())
@@ -820,22 +862,25 @@ pub(crate) mod tests {
                 .find_map(|pair| pair.strip_prefix(key)?.strip_prefix('='))
             };
             match (param("limit"), param("offset")) {
-              (Some("10"), Some("0")) => {
-                let items: Vec<String> = (0..10).map(album_json).collect();
+              (Some("50"), Some("0")) => {
+                let items: Vec<String> = (0..50).map(album_json).collect();
                 (
                   "200 OK",
                   format!(
-                    r#"{{"items":[{}],"total":12,"limit":10,"offset":0,"href":"","next":"more","previous":null}}"#,
+                    r#"{{"items":[{}],"total":120,"limit":50,"offset":0,"href":"","next":"more","previous":null}}"#,
                     items.join(",")
                   ),
                 )
               }
-              (Some("10"), Some("10")) => {
-                let items: Vec<String> = (10..12).map(album_json).collect();
+              (Some("50"), Some(offset @ ("50" | "100"))) => {
+                let start: u32 = offset.parse().unwrap();
+                let end = (start + 50).min(120);
+                let next = if end < 120 { r#""more""# } else { "null" };
+                let items: Vec<String> = (start..end).map(album_json).collect();
                 (
                   "200 OK",
                   format!(
-                    r#"{{"items":[{}],"total":12,"limit":10,"offset":10,"href":"","next":null,"previous":null}}"#,
+                    r#"{{"items":[{}],"total":120,"limit":50,"offset":{start},"href":"","next":{next},"previous":null}}"#,
                     items.join(",")
                   ),
                 )
@@ -855,7 +900,17 @@ pub(crate) mod tests {
             "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
             body.len()
           );
-          stream.write_all(response.as_bytes()).await.unwrap();
+          // Both later pages must be in flight before either is answered.
+          if request_line.contains("offset=50") || request_line.contains("offset=100") {
+            held.push((stream, response));
+            if held.len() == 2 {
+              for (mut stream, response) in held.drain(..) {
+                stream.write_all(response.as_bytes()).await.unwrap();
+              }
+            }
+          } else {
+            stream.write_all(response.as_bytes()).await.unwrap();
+          }
         }
       });
 
@@ -881,7 +936,13 @@ pub(crate) mod tests {
         .artist
         .as_ref()
         .expect("the artist page must open");
-      assert_eq!(artist.albums.items.len(), 12);
+      let names: Vec<&str> = artist.albums.items.iter().map(|album| album.name.as_str()).collect();
+      let expected: Vec<String> = (0..120).map(|n| format!("Album {n}")).collect();
+      assert_eq!(names, expected);
+      assert!(
+        app_guard.followed_artist_ids_set().contains("artist"),
+        "the follow state must be known when the page opens"
+      );
     })
     .await
     .expect("test timed out");

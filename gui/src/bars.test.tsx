@@ -20,6 +20,7 @@ const song: NowPlaying = {
   shuffle: false,
   repeat: "off",
   context_uri: null,
+  context_name: null,
   quality: null,
 };
 

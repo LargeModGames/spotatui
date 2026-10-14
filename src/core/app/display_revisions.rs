@@ -179,15 +179,7 @@ impl App {
 
   /// The playback view the Playback revision counted.
   #[cfg(feature = "gui")]
-  pub(crate) fn playback_view(
-    &self,
-  ) -> &(
-    Option<crate::infra::media_metadata::PlaybackSnapshot>,
-    u32,
-    Option<String>,
-    bool,
-    Option<String>,
-  ) {
+  pub(crate) fn playback_view(&self) -> &super::PlaybackView {
     &self.playback_view
   }
 

@@ -584,6 +584,7 @@ pub fn default_binding(action: &Action) -> Exposure<TuiSurface> {
     Action::PlayQueueItem { .. } => literal(ENTER, "Queue"),
     Action::RemoveFromQueue { .. } => binding(|k| k.remove_from_queue),
     Action::MoveQueueItem { .. } => literal("J / K", "Queue"),
+    Action::ClearQueue => Unbound("the terminal queue removes one item at a time"),
     Action::RefreshQueue => Unbound("the terminal refreshes the queue by opening it"),
     Action::RefreshDevices => Unbound("the terminal fetches devices by opening the device picker"),
     Action::Search(_) => Unbound("the search box is source-scoped and produces SearchActiveSource"),
@@ -921,6 +922,7 @@ mod tests {
   const UNBOUND: &[&str] = &[
     "AddToQueue",
     "Back",
+    "ClearQueue",
     "CloseScreen",
     "GenerateStatsRecap",
     "Notify",
@@ -1133,6 +1135,7 @@ mod tests {
         from: 0,
         to: 0,
       },
+      Action::ClearQueue,
       Action::RefreshQueue,
       Action::RefreshDevices,
       Action::Search(text()),

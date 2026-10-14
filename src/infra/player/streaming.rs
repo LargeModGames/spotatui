@@ -720,7 +720,11 @@ impl StreamingPlayer {
     // Create Connect configuration
     let connect_config = ConnectConfig {
       name: config.device_name.clone(),
-      device_type: DeviceType::Computer,
+      device_type: if cfg!(target_os = "android") {
+        DeviceType::Smartphone
+      } else {
+        DeviceType::Computer
+      },
       initial_volume: volume_u16,
       is_group: false,
       disable_volume: false,

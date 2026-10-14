@@ -21,4 +21,7 @@ mod tui;
 pub use crate::core::update::{UpdateRequest, UpdateStatus};
 pub use runtime::run_cli;
 #[cfg(feature = "gui")]
-pub use runtime::{run_gui, run_gui_hosted, GuiHost, SetWindow, UpdateLink, WindowMode};
+pub use runtime::{
+  run_gui, run_gui_hosted, GuiHost, MediaCommand, MediaLink, MediaState, SetWindow, UpdateLink,
+  WindowMode,
+};

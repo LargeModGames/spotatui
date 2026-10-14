@@ -10,6 +10,32 @@ use std::collections::HashMap;
 use std::{fs, path::PathBuf};
 
 const FILE_NAME: &str = "config.yml";
+
+/// The Connect name of a fresh install; on Android with the phone's model, so a
+/// phone and a desktop spotatui on one account have different names.
+fn default_device_name() -> String {
+  #[cfg(target_os = "android")]
+  if let Some(model) = android_model() {
+    return format!("spotatui ({model})");
+  }
+  "spotatui".to_string()
+}
+
+#[cfg(target_os = "android")]
+fn android_model() -> Option<String> {
+  let mut value = [0 as libc::c_char; libc::PROP_VALUE_MAX as usize];
+  // SAFETY: the buffer holds PROP_VALUE_MAX bytes, the most the call writes.
+  let len =
+    unsafe { libc::__system_property_get(c"ro.product.model".as_ptr(), value.as_mut_ptr()) };
+  let bytes = value[..usize::try_from(len).ok()?]
+    .iter()
+    .map(|&c| c as u8)
+    .collect();
+  String::from_utf8(bytes)
+    .ok()
+    .filter(|model| !model.trim().is_empty())
+}
+
 pub const DEFAULT_TICK_RATE_MILLISECONDS: u64 = 250;
 pub const DEFAULT_ANIMATION_TICK_RATE_MILLISECONDS: u64 = 16;
 pub const MAX_TICK_RATE_MILLISECONDS: u64 = 999;
@@ -1268,7 +1294,7 @@ impl UserConfig {
         keepawake_enabled: true,
         enable_media_keys: true,
         enable_streaming: cfg!(feature = "streaming"),
-        streaming_device_name: "spotatui".to_string(),
+        streaming_device_name: default_device_name(),
         streaming_bitrate: STREAMING_BITRATE_DEFAULT,
         streaming_audio_cache: false,
         streaming_autoplay: true,

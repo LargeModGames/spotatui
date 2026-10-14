@@ -7,6 +7,14 @@ use crate::core::queue::{
 };
 use crate::infra::network::{IoEvent, Network};
 
+/// Signalled after the pump runs an event, so a frontend that pushes its
+/// changes (the GUI) does not wait for its next tick to show the result.
+#[cfg_attr(not(feature = "tui"), allow(dead_code))]
+pub(super) fn events_handled() -> &'static tokio::sync::Notify {
+  static HANDLED: std::sync::OnceLock<tokio::sync::Notify> = std::sync::OnceLock::new();
+  HANDLED.get_or_init(tokio::sync::Notify::new)
+}
+
 /// The URI a `StartPlayback` addresses: the context, or the head of the list.
 #[cfg_attr(not(feature = "tui"), allow(dead_code))]
 fn start_playback_uri(event: &IoEvent) -> Option<&str> {
@@ -67,6 +75,7 @@ fn dropped_start_status(event: &IoEvent) -> String {
 async fn run_spotify_lane(mut lane_rx: tokio::sync::mpsc::UnboundedReceiver<(IoEvent, Network)>) {
   while let Some((io_event, mut lane)) = lane_rx.recv().await {
     lane.handle_network_event(io_event).await;
+    events_handled().notify_one();
     // A window that opened on the way: the pump holds these back and flushes
     // them to this lane again when it ends.
     lane.flush_deferred().await;
@@ -133,6 +142,7 @@ pub(super) async fn start_tokio(io_rx: std::sync::mpsc::Receiver<IoEvent>, netwo
       let mut service_network = Network::new(None, &network.app);
       tokio::spawn(async move {
         service_network.handle_network_event(io_event).await;
+        events_handled().notify_one();
       });
       continue;
     }
@@ -255,6 +265,7 @@ pub(super) async fn start_tokio(io_rx: std::sync::mpsc::Receiver<IoEvent>, netwo
       }
     }
     network.process_party_messages().await;
+    events_handled().notify_one();
   }
 }
 
