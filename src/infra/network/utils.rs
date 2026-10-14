@@ -505,7 +505,8 @@ fn pick_search_result(results: Vec<LrcResponse>, duration: f64) -> Option<LrcRes
 
 /// Parse LRC-format synced lyrics (`[mm:ss.xx] text` lines) into `(ms, line)`
 /// pairs. A line may carry several leading timestamps (`[00:12.00][00:45.30]x`);
-/// it is emitted once per timestamp. The result is sorted by time. Lines without
+/// it is emitted once per timestamp, and whitespace between (or before) the tags
+/// is ignored. The result is sorted by time. Lines without
 /// a valid leading timestamp are dropped, so a body of plain (unsynced) lyrics
 /// parses to an empty vec.
 fn parse_synced_lyrics(text: &str) -> Vec<(u128, String)> {
@@ -513,7 +514,7 @@ fn parse_synced_lyrics(text: &str) -> Vec<(u128, String)> {
   for line in text.lines() {
     let mut rest = line;
     let mut stamps = Vec::new();
-    while let Some(inner) = rest.strip_prefix('[') {
+    while let Some(inner) = rest.trim_start().strip_prefix('[') {
       let Some(end) = inner.find(']') else { break };
       let Some(ms) = parse_lrc_timestamp(&inner[..end]) else {
         break;
@@ -875,7 +876,6 @@ mod tests {
       "[1234]x",
       "[00:01.]x",
       "[offset:+500][00:02.00]x",
-      " [00:03.00]indented",
     ]
     .join("\n");
     assert_eq!(parse_synced_lyrics(&text), Vec::<(u128, String)>::new());
@@ -886,6 +886,59 @@ mod tests {
     assert_eq!(
       parse_synced_lyrics("[01:02.03] Hello [there]"),
       vec![(62_030u128, "Hello [there]".to_string())]
+    );
+  }
+
+  #[test]
+  fn spaces_between_lrc_timestamps_are_ignored() {
+    assert_eq!(
+      parse_synced_lyrics("[00:12.00]   [00:45.30] Chorus"),
+      vec![
+        (12_000u128, "Chorus".to_string()),
+        (45_300u128, "Chorus".to_string()),
+      ]
+    );
+  }
+
+  #[test]
+  fn tabs_between_lrc_timestamps_are_ignored() {
+    assert_eq!(
+      parse_synced_lyrics("[00:12.00]\t[00:45.30]\tChorus"),
+      vec![
+        (12_000u128, "Chorus".to_string()),
+        (45_300u128, "Chorus".to_string()),
+      ]
+    );
+  }
+
+  #[test]
+  fn mixed_whitespace_between_and_before_lrc_timestamps_is_ignored() {
+    assert_eq!(
+      parse_synced_lyrics(" \t[00:12.00]   [00:45.30]\t[01:10.00] Chorus line"),
+      vec![
+        (12_000u128, "Chorus line".to_string()),
+        (45_300u128, "Chorus line".to_string()),
+        (70_000u128, "Chorus line".to_string()),
+      ]
+    );
+  }
+
+  #[test]
+  fn an_indented_single_timestamp_lrc_line_is_parsed() {
+    assert_eq!(
+      parse_synced_lyrics("  [00:03.00] indented"),
+      vec![(3_000u128, "indented".to_string())]
+    );
+  }
+
+  #[test]
+  fn a_spaced_non_timestamp_tag_stays_in_the_text() {
+    assert_eq!(
+      parse_synced_lyrics("[00:12.00] [ar:x] text\n[00:13.00] \t[00:xx] more"),
+      vec![
+        (12_000u128, "[ar:x] text".to_string()),
+        (13_000u128, "[00:xx] more".to_string()),
+      ]
     );
   }
 }
