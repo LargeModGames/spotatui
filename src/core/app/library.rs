@@ -676,10 +676,10 @@ impl App {
     let unsorted_artists = self.saved_artists_flattened();
 
     // Grab the ID of the target artist before sorting
-    let target_artist_id = self
-      .pending_artist_selection
-      .take()
-      .and_then(|target| unsorted_artists.get(target).and_then(|a| a.id.clone()));
+    let target_artist_id = self.pending_artist_selection.take().and_then(|target| {
+      let clamped = target.min(unsorted_artists.len().saturating_sub(1));
+      unsorted_artists.get(clamped).and_then(|a| a.id.clone())
+    });
 
     self.artists = unsorted_artists;
     self.sort_saved_artists();
