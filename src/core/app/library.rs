@@ -672,19 +672,30 @@ impl App {
   pub fn set_saved_artists_to_table_continuous(&mut self) {
     self.saved_artists_prefetch_in_flight = None;
 
-    self.artists = self.saved_artists_flattened();
+    let unsorted_artists = self.saved_artists_flattened();
 
+    // Grab the ID of the target artist before sorting
+    let target_artist_id = self
+      .pending_artist_selection
+      .take()
+      .and_then(|target| unsorted_artists.get(target).and_then(|a| a.id.clone()));
+
+    self.artists = unsorted_artists;
     self.sort_saved_artists();
 
     self.display_revisions.bump(DisplayDomain::Artist);
 
     let max_idx = self.artists.len().saturating_sub(1);
-    let target = self
-      .pending_artist_selection
-      .take()
-      .unwrap_or(self.view.artists_list_index);
 
-    self.view.artists_list_index = target.min(max_idx);
+    // Resolve landing by artist ID after sorting
+    if let Some(target_id) = target_artist_id {
+      if let Some(pos) = self.artists.iter().position(|a| a.id.as_deref() == Some(&target_id)) {
+        self.view.artists_list_index = pos;
+        return;
+      }
+    }
+
+    self.view.artists_list_index = self.view.artists_list_index.min(max_idx);
   }
 
   pub fn get_current_user_saved_artists_next(&mut self) {
