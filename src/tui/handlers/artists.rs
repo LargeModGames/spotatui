@@ -135,6 +135,8 @@ mod tests {
   use std::sync::mpsc::{channel, Receiver};
   use std::time::SystemTime;
 
+  type Ev = IoEvent;
+
   fn app_with_saved_artists() -> (App, Receiver<IoEvent>) {
     let (tx, rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
@@ -268,7 +270,7 @@ mod tests {
 
     // Check if correct GetFollowedArtists event was dispatched
     match rx.try_recv() {
-      Ok(IoEvent::GetFollowedArtists(Some(cursor))) => {
+      Ok(Ev::GetFollowedArtists(Some(cursor))) => {
         assert_eq!(cursor, "artist2");
       }
       _ => panic!("expected GetFollowedArtists with cursor"),
