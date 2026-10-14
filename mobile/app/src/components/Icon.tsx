@@ -33,6 +33,8 @@ const ICONS = {
   volume: { ios: 'speaker.wave.2', android: 'volume_up' },
   mute: { ios: 'speaker.slash', android: 'volume_off' },
   add: { ios: 'plus', android: 'add' },
+  addCircle: { ios: 'plus.circle', android: 'add_circle' },
+  saved: { ios: 'checkmark.circle.fill', android: 'check_circle' },
   forward: { ios: 'chevron.right', android: 'chevron_right' },
   back: { ios: 'chevron.left', android: 'arrow_back' },
   playing: { ios: 'waveform', android: 'graphic_eq' },

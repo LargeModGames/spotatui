@@ -1,9 +1,12 @@
 import { router } from 'expo-router';
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import type { AlbumInfo } from '@gui/bindings/AlbumInfo';
+import type { ArtistInfo } from '@gui/bindings/ArtistInfo';
 import type { SearchPayload } from '@gui/bindings/SearchPayload';
+import { sourceOf } from '@gui/format';
 import { playRequest } from '@gui/libraryModel';
 import { tabHasResults, TABS, type Tab } from '@gui/searchModel';
 
@@ -19,6 +22,8 @@ import { colors, fonts, type } from '@/theme';
 
 /** Songs shown under All; the Songs chip shows every hit. */
 const ALL_SONGS = 4;
+/** How long the field stays still before a search starts. */
+const TYPE_PAUSE_MS = 350;
 
 export default function SearchScreen() {
   const { channels } = useCore();
@@ -28,14 +33,26 @@ export default function SearchScreen() {
   const [asked, setAsked] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>('All');
   const search = channels.search?.payload;
-  // Results of an older query are not shown while a new one runs.
-  const results = search && search.query === asked ? search : null;
+  const query = text.trim();
+  // As in Spotify's app, the last results stay while a newer search runs.
+  const results = query && search?.query ? search : null;
+  const ask = useCallback(
+    (next: string) => {
+      setAsked(next);
+      send({ SearchActiveSource: next });
+    },
+    [send],
+  );
+  // A pause in typing starts the search, as in Spotify's app.
+  useEffect(() => {
+    if (!query || query === asked) return;
+    const timer = setTimeout(() => ask(query), TYPE_PAUSE_MS);
+    return () => clearTimeout(timer);
+  }, [query, asked, ask]);
   const submit = () => {
-    const query = text.trim();
     if (!query) return;
-    setAsked(query);
     setTab('All');
-    send({ SearchActiveSource: query });
+    if (query !== asked) ask(query);
   };
   return (
     <View style={styles.screen}>
@@ -68,7 +85,7 @@ export default function SearchScreen() {
             </ScrollView>
           )}
         </SafeAreaView>
-        {asked && !results && <Text style={[type.small, styles.status]}>Searching…</Text>}
+        {query && !results && <Text style={[type.small, styles.status]}>Searching…</Text>}
         {results && <Results results={results} tab={tab} playingUri={item?.uri ?? null} />}
       </ScrollView>
       <StatusScrim />
@@ -90,7 +107,7 @@ function Results({ results, tab, playingUri }: { results: SearchPayload; tab: Ta
       {tab === 'All' && top && (
         <View style={styles.section}>
           <Text style={[type.heading, styles.heading]}>Top result</Text>
-          <View style={styles.topCard}>
+          <Pressable style={styles.topCard} onPress={() => openArtist(top, play)} accessibilityRole="button" accessibilityLabel={top.name}>
             <Cover uri={top.image_url} size={92} radius={46} fallback="speaker" />
             <View style={styles.topWords}>
               <Text style={styles.topName} numberOfLines={2}>
@@ -101,7 +118,7 @@ function Results({ results, tab, playingUri }: { results: SearchPayload; tab: Ta
             <Pressable style={styles.playRound} onPress={() => play(top.uri)} accessibilityLabel={`Play ${top.name}`}>
               <Icon name="play" size={24} color={colors.onAccent} />
             </Pressable>
-          </View>
+          </Pressable>
         </View>
       )}
       {(tab === 'All' || tab === 'Songs') && songs.length > 0 && (
@@ -127,7 +144,7 @@ function Results({ results, tab, playingUri }: { results: SearchPayload; tab: Ta
           <Text style={[type.heading, styles.heading]}>Albums</Text>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.cards}>
             {results.albums.map((album, index) => (
-              <Pressable key={`${index}-${album.uri}`} style={styles.card} onPress={() => play(album.uri)} accessibilityLabel={`Play ${album.name}`}>
+              <Pressable key={`${index}-${album.uri}`} style={styles.card} onPress={() => openAlbum(album, play)} accessibilityLabel={album.name}>
                 <Cover uri={album.image_url} size={136} />
                 <Text style={type.bodyBold} numberOfLines={1}>
                   {album.name}
@@ -142,7 +159,7 @@ function Results({ results, tab, playingUri }: { results: SearchPayload; tab: Ta
       )}
       {tab === 'Artists' &&
         results.artists.map((artist, index) => (
-          <TrackRow key={`${index}-${artist.uri}`} image={artist.image_url} title={artist.name} subtitle="Artist" round fallback="speaker" onPress={() => play(artist.uri)} />
+          <TrackRow key={`${index}-${artist.uri}`} image={artist.image_url} title={artist.name} subtitle="Artist" round fallback="speaker" onPress={() => openArtist(artist, play)} />
         ))}
       {tab === 'Albums' &&
         results.albums.map((album, index) => (
@@ -151,7 +168,7 @@ function Results({ results, tab, playingUri }: { results: SearchPayload; tab: Ta
             image={album.image_url}
             title={album.name}
             subtitle={`Album · ${album.artists.map((artist) => artist.name).join(', ')}`}
-            onPress={() => play(album.uri)}
+            onPress={() => openAlbum(album, play)}
           />
         ))}
       {tab === 'Playlists' &&
@@ -172,6 +189,22 @@ function Results({ results, tab, playingUri }: { results: SearchPayload; tab: Ta
   );
 }
 
+/** The page id of a Spotify hit; other sources have no artist or album page, so their hits play. */
+function spotifyId(id: string | null, uri: string | null): string | null {
+  return id !== null && sourceOf(uri) === 'Spotify' ? id : null;
+}
+
+function openArtist(artist: ArtistInfo, play: (uri: string | null) => void) {
+  const id = spotifyId(artist.id, artist.uri);
+  if (id) router.push({ pathname: '/artist/[id]', params: { id, name: artist.name, image: artist.image_url ?? '' } });
+  else play(artist.uri);
+}
+
+function openAlbum(album: AlbumInfo, play: (uri: string | null) => void) {
+  const id = spotifyId(album.id, album.uri);
+  if (id) router.push({ pathname: '/album/[id]', params: { id, name: album.name, image: album.image_url ?? '' } });
+  else play(album.uri);
+}
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.background },
   top: { gap: 14, paddingHorizontal: 16, paddingTop: 12 },

@@ -47,3 +47,4 @@ modules/spotatui-core/android/src/main/jniLibs/
 
 # Gradle output of the local modules
 modules/*/android/build/
+modules/*/android/.gradle/

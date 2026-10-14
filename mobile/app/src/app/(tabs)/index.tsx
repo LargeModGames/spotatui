@@ -8,6 +8,7 @@ import { asksDiscover, greeting, madeForYou, recentAlbums, SHELF_MAX } from '@gu
 import { Cover } from '@/components/Cover';
 import { Icon } from '@/components/Icon';
 import { MINI_PLAYER_SPACE, MiniPlayer } from '@/components/MiniPlayer';
+import { Card, Shelf } from '@/components/Shelf';
 import { StatusScrim } from '@/components/StatusScrim';
 import { useCore, useSend } from '@/core-context';
 import { colors, fonts, type } from '@/theme';
@@ -76,7 +77,7 @@ export default function HomeScreen() {
                 image={track.image_url}
                 title={track.album}
                 subtitle={track.artists.join(', ')}
-                onPress={() => send({ PlayContext: { uri: `spotify:album:${track.album_id}`, offset: null } })}
+                onPress={() => router.push({ pathname: '/album/[id]', params: { id: track.album_id!, name: track.album, image: track.image_url ?? '' } })}
               />
             ))}
           </Shelf>
@@ -103,41 +104,6 @@ export default function HomeScreen() {
       <StatusScrim />
       <MiniPlayer />
     </View>
-  );
-}
-
-function Shelf({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <View style={styles.shelf}>
-      <Text style={[type.heading, styles.shelfTitle]}>{title}</Text>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.cards}>
-        {children}
-      </ScrollView>
-    </View>
-  );
-}
-
-function Card({
-  image,
-  title,
-  subtitle,
-  onPress,
-}: {
-  image: string | null;
-  title: string;
-  subtitle: string;
-  onPress: () => void;
-}) {
-  return (
-    <Pressable style={styles.card} onPress={onPress} accessibilityRole="button" accessibilityLabel={title}>
-      <Cover uri={image} size={136} />
-      <Text style={type.bodyBold} numberOfLines={1}>
-        {title}
-      </Text>
-      <Text style={type.small} numberOfLines={2}>
-        {subtitle}
-      </Text>
-    </Pressable>
   );
 }
 
@@ -194,8 +160,4 @@ const styles = StyleSheet.create({
     experimental_backgroundImage: 'linear-gradient(135deg, #4b3a8f, #a7c4c8)',
   },
   tileTitle: { flex: 1, paddingRight: 8, fontFamily: fonts.bold, fontSize: 13, color: colors.text },
-  shelf: { gap: 12, marginTop: 28 },
-  shelfTitle: { paddingHorizontal: 16 },
-  cards: { gap: 12, paddingHorizontal: 16 },
-  card: { width: 136, gap: 6 },
 });
