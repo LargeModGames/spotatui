@@ -18,4 +18,4 @@ git tag vX.Y.Z
 git push origin vX.Y.Z
 ```
 
-The tag push runs `cd.yml`. Check the release page once it finishes: the download links resolve and both `.deb` rows are present.
+The tag push runs `cd.yml`. The release stays a draft until the `publish` job has written `checksums.txt` and checked every download link in the notes. If that job fails, read which link has no file.

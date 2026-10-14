@@ -1,0 +1,5 @@
+# The "What's Changed" list GitHub generates for each release (cd.yml).
+changelog:
+  exclude:
+    authors:
+      - allcontributors[bot]

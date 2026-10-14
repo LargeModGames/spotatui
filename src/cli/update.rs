@@ -88,10 +88,47 @@ fn platform_prefix(os: &str, arch: &str) -> Option<&'static str> {
   }
 }
 
+/// The release file that lists the SHA-256 of every download, in `sha256sum` format.
+const CHECKSUMS_ASSET: &str = "checksums.txt";
+
+/// Finds the hash of `asset_name` in a `sha256sum` listing, text or binary mode.
+fn checksum_for(listing: &str, asset_name: &str) -> Option<String> {
+  listing.lines().find_map(|line| {
+    let (hash, name) = line.trim_end().split_once(char::is_whitespace)?;
+    let name = name.trim_start().trim_start_matches('*');
+    (name == asset_name && hash.len() == 64 && hash.chars().all(|c| c.is_ascii_hexdigit()))
+      .then(|| hash.to_ascii_lowercase())
+  })
+}
+
+/// The pinned update skips self_update's own version check, so an rc or dev build must not be downgraded.
+fn is_newer(current: &str, latest: &str) -> bool {
+  self_update::version::bump_is_greater(current, latest).unwrap_or(false)
+}
+
+/// Pinned to `tag`, because an unpinned self_update can pick a prerelease nobody checked.
+fn pinned_updater(
+  tag: &str,
+  current_version: &str,
+  interactive: bool,
+) -> Result<Box<dyn self_update::update::ReleaseUpdate>> {
+  Ok(
+    self_update::backends::github::Update::configure()
+      .repo_owner("LargeModGames")
+      .repo_name("spotatui")
+      .bin_name("spotatui")
+      .show_download_progress(interactive)
+      .no_confirm(!interactive)
+      .current_version(current_version)
+      .target_version_tag(&format!("v{}", tag.trim_start_matches('v')))
+      .build()?,
+  )
+}
+
 /// Downloads the release asset for this platform, verifies its SHA-256 against the
-/// published `.sha256` sidecar, and returns `Err` if the hash does not match or the
-/// sidecar is missing.  Called before `status.update()` so a compromised asset is
-/// rejected before the binary is replaced.
+/// release's `checksums.txt`, and returns `Err` if the hash does not match or is not
+/// listed.  Called before the update so a compromised asset is rejected before the
+/// binary is replaced.
 fn verify_release_checksum(release: &self_update::update::Release) -> Result<()> {
   use sha2::Digest;
 
@@ -100,7 +137,6 @@ fn verify_release_checksum(release: &self_update::update::Release) -> Result<()>
 
   let ext = if cfg!(windows) { "zip" } else { "tar.gz" };
   let asset_name = format!("spotatui-{}.{}", prefix, ext);
-  let checksum_name = format!("{}.sha256", asset_name);
 
   let asset = release
     .assets
@@ -111,13 +147,8 @@ fn verify_release_checksum(release: &self_update::update::Release) -> Result<()>
   let checksum_asset = release
     .assets
     .iter()
-    .find(|a| a.name == checksum_name)
-    .ok_or_else(|| {
-      anyhow!(
-        "checksum asset '{}' not found — skipping update",
-        checksum_name
-      )
-    })?;
+    .find(|a| a.name == CHECKSUMS_ASSET)
+    .ok_or_else(|| anyhow!("'{}' not found, skipping update", CHECKSUMS_ASSET))?;
 
   // GitHub's API rejects requests without a User-Agent with 403, and asset URLs
   // return JSON metadata instead of the file unless Accept is application/octet-stream.
@@ -133,19 +164,8 @@ fn verify_release_checksum(release: &self_update::update::Release) -> Result<()>
     .error_for_status()?
     .text()?;
 
-  // Extract the hex digest: shasum/sha256sum produces "<hash>  <filename>",
-  // certutil (Windows) produces just the hash on a line by itself.
-  let expected_hash = checksum_text
-    .lines()
-    .find_map(|line| {
-      let token = line.split_whitespace().next()?;
-      if token.len() == 64 && token.chars().all(|c| c.is_ascii_hexdigit()) {
-        Some(token.to_string())
-      } else {
-        None
-      }
-    })
-    .ok_or_else(|| anyhow!("could not parse SHA-256 hash from checksum file"))?;
+  let expected_hash = checksum_for(&checksum_text, &asset_name)
+    .ok_or_else(|| anyhow!("'{}' has no SHA-256 for '{}'", CHECKSUMS_ASSET, asset_name))?;
 
   let binary_bytes = client
     .get(&asset.download_url)
@@ -195,7 +215,7 @@ pub fn install_update_silent(delay_secs: u64) -> Result<UpdateOutcome> {
   let latest = status.get_latest_release()?;
   let latest_version = latest.version.trim_start_matches('v').to_string();
 
-  if latest_version == current_version {
+  if !is_newer(current_version, &latest_version) {
     // Up to date — clear any stale pending state
     if let Some(path) = update_state_file_path() {
       let _ = std::fs::remove_file(path);
@@ -207,7 +227,7 @@ pub fn install_update_silent(delay_secs: u64) -> Result<UpdateOutcome> {
   if delay_secs == 0 {
     // No delay: verify checksum then install immediately
     verify_release_checksum(&latest)?;
-    let result = status.update()?;
+    let result = pinned_updater(&latest.version, current_version, false)?.update()?;
     return Ok(status_to_outcome(result));
   }
 
@@ -256,7 +276,7 @@ pub fn install_update_silent(delay_secs: u64) -> Result<UpdateOutcome> {
   if elapsed >= delay_secs {
     // Delay elapsed — verify checksum then install
     verify_release_checksum(&latest)?;
-    let result = status.update()?;
+    let result = pinned_updater(&latest.version, current_version, false)?.update()?;
     // Clean up state file
     if let Some(ref path) = state_path {
       let _ = std::fs::remove_file(path);
@@ -292,7 +312,7 @@ pub fn check_for_update(do_update: bool) -> Result<()> {
   // Remove 'v' prefix if present for comparison
   let latest_version = latest.version.trim_start_matches('v');
 
-  if latest_version == current_version {
+  if !is_newer(current_version, latest_version) {
     println!("✓ You are already running the latest version!");
     return Ok(());
   }
@@ -303,7 +323,7 @@ pub fn check_for_update(do_update: bool) -> Result<()> {
     println!("\nVerifying checksum and installing update...");
 
     verify_release_checksum(&latest)?;
-    let result = status.update()?;
+    let result = pinned_updater(&latest.version, current_version, true)?.update()?;
     match result {
       self_update::Status::UpToDate(_) => {
         println!("✓ Already up to date!");
@@ -322,7 +342,49 @@ pub fn check_for_update(do_update: bool) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-  use super::platform_prefix;
+  use super::{checksum_for, is_newer, platform_prefix};
+
+  #[test]
+  fn an_rc_or_dev_build_ahead_of_the_latest_release_is_not_downgraded() {
+    assert!(is_newer("0.45.0", "0.46.0"));
+    assert!(!is_newer("0.46.0", "0.46.0"));
+    assert!(!is_newer("0.47.0-rc1", "0.46.0"));
+    assert!(!is_newer("0.47.0", "0.46.0"));
+  }
+
+  const A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  const B: &str = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
+
+  #[test]
+  fn checksum_for_picks_the_line_of_the_named_asset_not_the_first_hash() {
+    let listing =
+      format!("{A}  spotatui-linux-aarch64.tar.gz\n{B}  spotatui-linux-x86_64.tar.gz\n");
+    assert_eq!(
+      checksum_for(&listing, "spotatui-linux-x86_64.tar.gz"),
+      Some(B.to_ascii_lowercase())
+    );
+  }
+
+  #[test]
+  fn checksum_for_reads_binary_mode_and_crlf_lines() {
+    let listing = format!("{A} *spotatui-windows-x86_64.zip\r\n");
+    assert_eq!(
+      checksum_for(&listing, "spotatui-windows-x86_64.zip"),
+      Some(A.to_string())
+    );
+  }
+
+  #[test]
+  fn checksum_for_rejects_a_missing_asset_and_a_name_that_only_starts_the_same() {
+    let listing = format!(
+      "{A}  spotatui-linux-x86_64.tar.gz.sha256\nnot-a-hash  spotatui-linux-x86_64.tar.gz\n"
+    );
+    assert_eq!(checksum_for(&listing, "spotatui-linux-x86_64.tar.gz"), None);
+    assert_eq!(
+      checksum_for(&listing, "spotatui-macos-aarch64.tar.gz"),
+      None
+    );
+  }
 
   #[test]
   fn every_published_release_target_resolves_a_checksum_prefix() {

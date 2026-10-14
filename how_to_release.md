@@ -1,6 +1,6 @@
 # To create a release
 
-Releases are automated via GitHub Actions using [`.github/workflows/cd.yml`](https://github.com/LargeModGames/spotatui/blob/master/.github/workflows/cd.yml).
+Releases are automated via GitHub Actions using [`.github/workflows/cd.yml`](https://github.com/LargeModGames/spotatui/blob/main/.github/workflows/cd.yml).
 
 The workflow runs when you push a tag.
 
@@ -11,14 +11,14 @@ The workflow runs when you push a tag.
    - Refresh the desktop lock: `cargo metadata --manifest-path desktop/Cargo.toml --format-version 1 > $null` (in bash, `> /dev/null`). Commit `Cargo.lock` and `desktop/Cargo.lock` together.
 2. Update the "Unreleased" header for the new version in `CHANGELOG.md` (`### Added/Fixed/Changed` as appropriate).
 3. Commit and push your changes.
-4. Create an annotated tag with a message (the tag message is shown on the GitHub release page):
+4. Create an annotated tag:
    - `git tag -a v0.7.0 -m "Release v0.7.0"`
 5. Push that specific tag:
    - `git push origin v0.7.0`
-6. Wait for the build on the [Actions page](https://github.com/LargeModGames/spotatui/actions).
-7. Stable tags (no suffix) also trigger publish jobs (crates.io, AUR, winget, Homebrew).
-8. The `desktop` job then builds the desktop installers (Windows `.exe`, macOS `.dmg`, Linux `.deb`, `.rpm` and `.AppImage`) and attaches them to the release with `.sha256` files. It never blocks the release or the publish jobs; re-run a failed row on its own from the Actions page.
-9. The same rows attach the signed update bundles: a `.sig` next to the Windows `-setup.exe` and each `.AppImage`, and `spotatui_<version>_x64.app.tar.gz` / `_aarch64.app.tar.gz` with their `.sig`. Once every row passed, the `desktop-manifest` job uploads `latest.json`, which installed desktop apps read to find the update. A failed row skips it; re-running that row runs it again.
+6. Wait for the build on the [Actions page](https://github.com/LargeModGames/spotatui/actions). The `release` job creates the release as a draft with the terminal builds and the notes. Nobody sees it yet.
+7. The `desktop` job builds the desktop installers (Windows `.exe`, macOS `.dmg`, Linux `.deb`, `.rpm` and `.AppImage`) and the signed update bundles, and attaches them to the draft. Re-run a failed row on its own from the Actions page.
+8. When every row passed, `desktop-manifest` writes `latest.json` from the `.sig` files. Installed desktop apps read it to find the update.
+9. `publish` writes `checksums.txt`, fails if a download link in the notes has no file, deletes the `.sig` files (latest.json has them), and makes the release public. Only then do the publish jobs run (crates.io, AUR, winget, Homebrew) and Discord gets the announcement.
 
 ## Desktop app
 
@@ -40,16 +40,17 @@ The desktop app installs an update only when its signature matches the public ke
 
 Without the secrets the `desktop` job fails, because the build refuses to make updater bundles it cannot sign.
 
-## Pre-release (recommended for canary testing)
+## Pre-release (a maintainer smoke test that stays a draft)
 
 Use a SemVer pre-release tag like `v0.7.0-rc1` / `v0.7.0-beta.1`.
 
-1. Create an annotated pre-release tag with tester notes:
+1. Create an annotated pre-release tag:
    - `git tag -a v0.7.0-rc1 -m "RC1: canary build for Spotify API migration"`
 2. Push that specific tag:
    - `git push origin v0.7.0-rc1`
-3. The workflow will automatically mark the GitHub release as `prerelease: true`.
+3. The workflow marks the release as `prerelease: true` and leaves it a draft. Only people with write access to the repository can see the draft and download its builds.
 4. Pre-release tags skip ecosystem publishing jobs (crates.io, AUR, winget, Homebrew). The `desktop` job still runs and attaches the desktop installers, but `desktop-manifest` does not, so installed desktop apps never update to a pre-release.
+5. Never publish a pre-release draft by hand: the self-update in v0.45 and older installs a public pre-release without checking it.
 
 ### Homebrew Packaging
 

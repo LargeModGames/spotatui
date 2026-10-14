@@ -14,6 +14,8 @@
 
 ### Changed
 
+- **A cleaner release page**: every download, terminal and desktop, is a link in the release notes, and one `checksums.txt` lists the SHA-256 of every file. The desktop installers and `.deb` packages no longer get a `.sha256` file of their own. A release goes public only when all its files are on it. The terminal app's self-update checks its download against `checksums.txt` and installs exactly the release it checked; before, it could install a newer pre-release that it never checked.
+
 - **Discover shows Spotify's Made For You playlists**: the Discover page in the terminal and the desktop app now lists the shelves of Spotify's own Made For You page, such as daylist, On Repeat, your Daily Mixes, Release Radar, Discover Weekly and your genre and mood mixes, also the ones you do not follow. In the terminal, Enter opens a playlist, `e` plays it and `w` saves it to your library. The desktop Home page has a Made For You shelf in place of Your top tracks and Artists mix. Top Tracks, its time range and the Top Artists Mix are gone; the Stats screen still ranks your top tracks and artists from your listening history.
 
 - **`behavior.disable_auto_update` stops the desktop app's update check too**: before, the desktop app still asked GitHub for a new release at launch and every 6 hours and only skipped the download. Now those timed checks stop and Check for updates on the Settings page looks on demand, as the terminal app already skipped its check at start. Turning auto-update back on checks at once.

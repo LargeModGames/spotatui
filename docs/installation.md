@@ -39,7 +39,7 @@ Download from [GitHub Releases](https://github.com/LargeModGames/spotatui/releas
 | macOS (Intel) | `spotatui-macos-x86_64.tar.gz` |
 | macOS (Apple Silicon M1/M2/M3) | `spotatui-macos-aarch64.tar.gz` |
 
-Checksums (`.sha256`) are provided if you want to verify the download.
+Every release has a `checksums.txt` with the SHA-256 of each file. To check your downloads, run `sha256sum -c --ignore-missing checksums.txt` in the download folder.
 
 ### Arch Linux (AUR)
 
@@ -138,7 +138,7 @@ nix-build
 
 ## Updating
 
-When you start the terminal UI, spotatui checks GitHub Releases. If a newer version is available, it verifies the download against its `.sha256`, installs it, and restarts. Running a subcommand never triggers the check, and neither does the `spotatui-gui` build.
+When you start the terminal UI, spotatui checks GitHub Releases. If a newer version is available, it verifies the download against the release's `checksums.txt`, installs it, and restarts. Running a subcommand never triggers the check, and neither does the `spotatui-gui` build.
 
 The default `auto_update_delay` is `0`, so an available update installs immediately. You can delay installation with values such as `30s`, `10m`, `2h`, or `7d`. The first launch that sees a new version records the notice; while it waits, the terminal prints `Update vX detected — will install in …`. Once the delay has passed, the next launch installs it. A newer release restarts the wait.
 

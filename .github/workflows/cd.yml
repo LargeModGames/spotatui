@@ -96,6 +96,7 @@ jobs:
           RELEASE_NAME=${{ env.BINARY_NAME }}-${{ matrix.artifact_prefix }}
           tar czvf ../../../$RELEASE_NAME.tar.gz $BINARY
           cd ../../..
+          # Self-update up to v0.45 refuses to update without this exact file. Never remove it.
           shasum -a 256 $RELEASE_NAME.tar.gz > $RELEASE_NAME.tar.gz.sha256
 
       - name: Package Debian (.deb)
@@ -105,7 +106,6 @@ jobs:
           cargo deb --no-build --target ${{ matrix.target }}
           DEB_PATH=$(ls target/${{ matrix.target }}/debian/*.deb)
           cp "$DEB_PATH" .
-          sha256sum "$(basename "$DEB_PATH")" > "$(basename "$DEB_PATH").sha256"
 
       - name: Package binary (Windows)
         if: runner.os == 'Windows'
@@ -116,6 +116,7 @@ jobs:
           RELEASE_NAME=${{ env.BINARY_NAME }}-${{ matrix.artifact_prefix }}
           7z a ../../../$RELEASE_NAME.zip $BINARY
           cd ../../..
+          # Self-update up to v0.45 refuses to update without this exact file. Never remove it.
           certutil -hashfile $RELEASE_NAME.zip sha256 | grep -E [A-Fa-f0-9]{64} > $RELEASE_NAME.zip.sha256
 
       - name: Upload artifact (Unix)
@@ -132,9 +133,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: ${{ env.BINARY_NAME }}-${{ matrix.artifact_prefix }}-deb
-          path: |
-            *.deb
-            *.deb.sha256
+          path: "*.deb"
 
       - name: Upload artifact (Windows)
         if: runner.os == 'Windows'
@@ -145,12 +144,17 @@ jobs:
             ${{ env.BINARY_NAME }}-${{ matrix.artifact_prefix }}.zip
             ${{ env.BINARY_NAME }}-${{ matrix.artifact_prefix }}.zip.sha256
 
+  # Creates the release as a draft. The `publish` job makes it public after the
+  # desktop installers and checksums.txt are on it, so every link works from the
+  # start, and installed self-updaters never see a half-built release.
   release:
     name: Create GitHub Release
     needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      BASE: ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}
 
     steps:
       - name: Checkout sources
@@ -160,6 +164,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           path: artifacts
+          pattern: spotatui-*
           merge-multiple: true
 
       - name: Resolve .deb file names
@@ -176,39 +181,63 @@ jobs:
             echo "${arch}=$(basename "$f")" >> "$GITHUB_OUTPUT"
           done
 
+      # Tauri names the installers from desktop/Cargo.toml, which the release commit keeps equal to Cargo.toml.
+      - name: Read the desktop version
+        id: desktop
+        run: echo "version=$(grep -m1 '^version' desktop/Cargo.toml | cut -d'"' -f2)" >> "$GITHUB_OUTPUT"
+
+      # Pins the generated change list to the last public release, so a release
+      # never repeats the one before it (v0.45.0 repeated v0.44.0).
+      - name: Find the previous release
+        id: prev
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: echo "tag=$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases --limit 1 --json tagName --jq '.[0].tagName // ""')" >> "$GITHUB_OUTPUT"
+
       - name: Create Release
         uses: softprops/action-gh-release@v3
         with:
           files: artifacts/*
+          draft: true
           generate_release_notes: true
+          previous_tag: ${{ steps.prev.outputs.tag }}
           prerelease: ${{ contains(github.ref_name, '-') }}
           body: |
-            ## Downloads
+            **Install:** `curl -fsSL https://spotatui.com/install.sh | bash` on macOS and Linux, or `irm https://spotatui.com/install.ps1 | iex` on Windows. Already installed? Run `spotatui update --install`, or update with your package manager.
 
-            - **Windows 10/11 (64-bit)** → [Download spotatui-windows-x86_64.zip](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/spotatui-windows-x86_64.zip)
-            - **Linux (Ubuntu, Arch, Fedora, etc.)** → [Download spotatui-linux-x86_64.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/spotatui-linux-x86_64.tar.gz)
-            - **Linux ARM64 (Raspberry Pi 4/5, ARM servers)** → [Download spotatui-linux-aarch64.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/spotatui-linux-aarch64.tar.gz)
-            - **Debian/Ubuntu (amd64)** → [Download .deb](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/${{ steps.deb.outputs.amd64 }})
-            - **Debian/Ubuntu (arm64)** → [Download .deb](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/${{ steps.deb.outputs.arm64 }})
-            - **macOS with Intel CPU** → [Download spotatui-macos-x86_64.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/spotatui-macos-x86_64.tar.gz)
-            - **macOS with Apple Silicon (M1/M2/M3)** → [Download spotatui-macos-aarch64.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/spotatui-macos-aarch64.tar.gz)
+            ## Terminal app
 
-            Or just run the one-line installer: `curl -fsSL https://spotatui.com/install.sh | bash` (macOS/Linux) or `irm https://spotatui.com/install.ps1 | iex` (Windows).
+            | | Download |
+            |---|---|
+            | **Windows** 10/11 | [64-bit .zip](${{ env.BASE }}/spotatui-windows-x86_64.zip) |
+            | **macOS** | [Apple Silicon](${{ env.BASE }}/spotatui-macos-aarch64.tar.gz) · [Intel](${{ env.BASE }}/spotatui-macos-x86_64.tar.gz) |
+            | **Linux** | [x86_64](${{ env.BASE }}/spotatui-linux-x86_64.tar.gz) · [ARM64](${{ env.BASE }}/spotatui-linux-aarch64.tar.gz) (Raspberry Pi 4/5) |
+            | **Debian, Ubuntu** | [.deb amd64](${{ env.BASE }}/${{ steps.deb.outputs.amd64 }}) · [.deb arm64](${{ env.BASE }}/${{ steps.deb.outputs.arm64 }}) |
 
-            Checksums (`.sha256`) are optional and only needed if you want to verify the download.
+            ## Desktop app (preview)
 
-            The Linux, macOS, and Windows builds include the extra music sources (Local Files, Subsonic, Internet Radio, YouTube, Qobuz). The YouTube source needs [yt-dlp](https://github.com/yt-dlp/yt-dlp) installed (ffmpeg recommended).
+            | | Download |
+            |---|---|
+            | **Windows** 10/11 | [Installer .exe](${{ env.BASE }}/spotatui-desktop_${{ steps.desktop.outputs.version }}_x64-setup.exe) |
+            | **macOS** | [Apple Silicon .dmg](${{ env.BASE }}/spotatui_${{ steps.desktop.outputs.version }}_aarch64.dmg) · [Intel .dmg](${{ env.BASE }}/spotatui_${{ steps.desktop.outputs.version }}_x64.dmg) |
+            | **Linux x86_64** | [AppImage](${{ env.BASE }}/spotatui-desktop_${{ steps.desktop.outputs.version }}_amd64.AppImage) · [.deb](${{ env.BASE }}/spotatui-desktop_${{ steps.desktop.outputs.version }}_amd64.deb) · [.rpm](${{ env.BASE }}/spotatui-desktop-${{ steps.desktop.outputs.version }}-1.x86_64.rpm) |
+            | **Linux ARM64** | [AppImage](${{ env.BASE }}/spotatui-desktop_${{ steps.desktop.outputs.version }}_aarch64.AppImage) · [.deb](${{ env.BASE }}/spotatui-desktop_${{ steps.desktop.outputs.version }}_arm64.deb) · [.rpm](${{ env.BASE }}/spotatui-desktop-${{ steps.desktop.outputs.version }}-1.aarch64.rpm) |
 
-            To update use "spotatui update --install" or use your package manager of choice.
+            The Windows installer, the macOS app and the AppImage update themselves. A .deb or .rpm install updates with a new download from this page. Linux needs glibc 2.39 and WebKitGTK 4.1 (Ubuntu 24.04+, Debian 13, Fedora 40+, Arch).
 
-            ## Desktop app (preview, unsigned)
+            <details>
+            <summary>First launch on Windows and macOS</summary>
 
-            spotatui in its own window, with the same player, login and settings as the terminal app. The preview plays Spotify (Premium) and the same extra music sources as the builds above, plus Apple Music on macOS; YouTube needs yt-dlp installed here too. Its installers are added to this release a few minutes after it is published. The Windows installer, the macOS app and the AppImage update themselves from then on; a `.deb` or `.rpm` install updates with a new download from this page.
+            - **Windows:** the installer is not signed yet, so SmartScreen warns. Click **More info**, then **Run anyway**.
+            - **macOS:** the app is not notarized, so macOS blocks the first launch. Close the dialog, open **System Settings > Privacy & Security**, click **Open Anyway** next to the spotatui message, and confirm.
 
-            - **Windows 10/11 (64-bit)** → `spotatui-desktop_*_x64-setup.exe`. The installer is not signed, so SmartScreen warns: click **More info**, then **Run anyway**.
-            - **macOS** → `spotatui_*_aarch64.dmg` (Apple Silicon) or `spotatui_*_x64.dmg` (Intel). Drag spotatui to Applications and open it. The app is not notarized, so macOS refuses the first launch: close that dialog, open **System Settings > Privacy & Security**, click **Open Anyway** next to the spotatui message, and confirm.
-            - **Linux (amd64, arm64)** → `.deb` (Debian/Ubuntu), `.rpm` (Fedora) or `.AppImage`. Needs glibc 2.39 and WebKitGTK 4.1: Ubuntu 24.04+, Debian 13, Fedora 40+, Arch.
-          draft: false
+            </details>
+
+            Both apps play Spotify (Premium), Local Files, Subsonic, Internet Radio, YouTube and Qobuz, plus Apple Music on macOS. YouTube needs [yt-dlp](https://github.com/yt-dlp/yt-dlp) (ffmpeg recommended).
+
+            **Verify a download:** [checksums.txt](${{ env.BASE }}/checksums.txt) has the SHA-256 of every file: `sha256sum -c --ignore-missing checksums.txt`.
+
+            [Full changelog](${{ github.server_url }}/${{ github.repository }}/blob/${{ github.ref_name }}/CHANGELOG.md) · [Code signing policy](${{ github.server_url }}/${{ github.repository }}#code-signing-policy)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -221,9 +250,8 @@ jobs:
           echo "Version: $NEW_VERSION"
           sed -i "s/version *= *\"$OLD_VERSION\"/version = \"$NEW_VERSION\"/" flake.nix
 
-  # The Tauri desktop app (desktop/), attached to the release the job above
-  # created. It runs after the release so a failed installer never holds up the
-  # console binaries or the publish jobs; a failed row can be re-run alone.
+  # The Tauri desktop app (desktop/), attached to the draft the job above
+  # created. A failed row can be re-run alone; `publish` waits for every row.
   # The installer names carry no OS word, so self-update's OS+arch fallback and
   # the .deb, winget and Homebrew lookups never pick one up.
   # The updater bundles (.AppImage, -setup.exe, .app.tar.gz) are signed with the
@@ -351,13 +379,8 @@ jobs:
             echo "::error::No installers found under desktop/target/release/bundle"
             exit 1
           fi
-          upload=()
-          for f in "${files[@]}"; do
-            (cd "$(dirname "$f")" && if command -v sha256sum >/dev/null; then sha256sum "$(basename "$f")"; else shasum -a 256 "$(basename "$f")"; fi) > "$f.sha256"
-            upload+=("$f" "$f.sha256")
-          done
-          # The updater checks the .sig against the key in the app instead of a .sha256.
-          upload+=(appimage/*.AppImage.sig nsis/*-setup.exe.sig macos/*.app.tar.gz macos/*.app.tar.gz.sig)
+          # desktop-manifest copies each .sig into latest.json; publish then deletes them from the release.
+          upload=("${files[@]}" appimage/*.AppImage.sig nsis/*-setup.exe.sig macos/*.app.tar.gz macos/*.app.tar.gz.sig)
           gh release upload "$GITHUB_REF_NAME" "${upload[@]}" --clobber --repo "$GITHUB_REPOSITORY"
 
   # latest.json, the file the desktop updater reads from the latest release.
@@ -422,9 +445,57 @@ jobs:
           cat latest.json
           gh release upload "$TAG" latest.json --clobber --repo "$GITHUB_REPOSITORY"
 
+  # Writes checksums.txt, checks every link in the notes, then makes a stable
+  # release public. A release candidate stays a draft: installed self-updaters
+  # up to v0.45 install a public prerelease without checking it.
+  publish:
+    name: Checksums and publish
+    needs: [release, desktop, desktop-manifest]
+    if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/') && needs.release.result == 'success' && needs.desktop.result == 'success' && needs.desktop-manifest.result != 'failure' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - name: Write checksums.txt
+        run: |
+          gh release download "$TAG" --pattern 'spotatui*' --dir dl
+          rm -f dl/*.sha256 dl/*.sig
+          (cd dl && sha256sum * | sort -k2) > checksums.txt
+          cat checksums.txt
+          gh release upload "$TAG" checksums.txt --clobber
+
+      - name: Check every download link
+        run: |
+          assets=$(gh release view "$TAG" --json assets --jq '.assets[].name')
+          missing=0
+          for name in $(gh release view "$TAG" --json body --jq .body | grep -oE "releases/download/$TAG/[^)]+" | sed "s|.*/||" | sort -u); do
+            if ! grep -qxF "$name" <<<"$assets"; then
+              echo "::error::The notes link $name, which is not on the release"
+              missing=1
+            fi
+          done
+          exit $missing
+
+      # latest.json carries the signatures, so the .sig files leave the page just
+      # before it goes public. Here, so desktop-manifest can still be re-run.
+      - name: Publish the release
+        run: |
+          if [[ "$TAG" == *-* ]]; then
+            echo "::notice::$TAG is a release candidate, so it stays a draft."
+            exit 0
+          fi
+          for name in $(gh release view "$TAG" --json assets --jq '.assets[].name | select(endswith(".sig"))'); do
+            gh release delete-asset "$TAG" "$name" --yes || echo "::warning::Could not delete $name"
+          done
+          gh release edit "$TAG" --draft=false --latest
+
   announce-discord:
     name: Announce on Discord
-    needs: release
+    needs: publish
     runs-on: ubuntu-latest
     if: ${{ startsWith(github.ref, 'refs/tags/') && !contains(github.ref_name, '-') }}
     steps:
@@ -450,7 +521,7 @@ jobs:
 
   publish-cargo:
     name: Publish to crates.io
-    needs: release
+    needs: publish
     runs-on: ubuntu-latest
     if: ${{ !contains(github.ref_name, '-') }}
     steps:
@@ -470,7 +541,7 @@ jobs:
 
   publish-aur:
     name: Publish to AUR
-    needs: release
+    needs: publish
     runs-on: ubuntu-latest
     if: ${{ !contains(github.ref_name, '-') }}
     steps:
@@ -537,7 +608,7 @@ jobs:
 
   publish-aur-bin:
     name: Publish to AUR (spotatui-bin)
-    needs: release
+    needs: publish
     runs-on: ubuntu-latest
     if: ${{ !contains(github.ref_name, '-') }}
     steps:
@@ -634,7 +705,7 @@ jobs:
 
   publish-winget:
     name: Publish to winget
-    needs: release
+    needs: publish
     runs-on: windows-latest
     if: ${{ !contains(github.ref_name, '-') }}
     steps:
@@ -673,7 +744,7 @@ jobs:
 
   publish-homebrew:
     name: Publish to Homebrew
-    needs: release
+    needs: publish
     runs-on: ubuntu-latest
     if: ${{ !contains(github.ref_name, '-') }}
     steps:
