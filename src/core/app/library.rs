@@ -663,9 +663,13 @@ impl App {
     self.artists = self.saved_artists_flattened();
     self.display_revisions.bump(DisplayDomain::Artist);
 
-    if let Some(target) = self.pending_artist_selection.take() {
-      self.view.artists_list_index = target.min(self.artists.len().saturating_sub(1));
-    }
+    let max_idx = self.artists.len().saturating_sub(1);
+    let target = self
+      .pending_artist_selection
+      .take()
+      .unwrap_or(self.view.artists_list_index);
+
+    self.view.artists_list_index = target.min(max_idx);
   }
 
   pub fn get_current_user_saved_artists_next(&mut self) {
