@@ -598,12 +598,7 @@ fn content_table_item_count(active_block: ActiveBlock, app: &App) -> usize {
       .as_ref()
       .map(|recently_played| recently_played.items.len())
       .unwrap_or(0),
-    ActiveBlock::Artists => app
-      .library()
-      .saved_artists
-      .get_results(None)
-      .map(|artists| artists.items.len())
-      .unwrap_or(0),
+    ActiveBlock::Artists => app.artists.len(),
     ActiveBlock::Podcasts => app
       .library()
       .saved_shows
