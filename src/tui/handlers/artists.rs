@@ -162,6 +162,7 @@ mod tests {
       ],
       ..CursorPaged::default()
     });
+    app.set_saved_artists_to_table_continuous();
     app.view.artists_list_index = 1;
     (app, rx)
   }
