@@ -106,7 +106,7 @@ inputs = {
 Then add the package to your configuration:
 
 ```nix
-{ inputs, ... }: {
+{ inputs, pkgs, ... }: {
   environment.systemPackages = with pkgs; [
     inputs.spotatui.packages.${pkgs.stdenv.hostPlatform.system}.default
   ];

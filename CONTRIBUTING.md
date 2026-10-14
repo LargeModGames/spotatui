@@ -107,7 +107,7 @@ cargo test --no-default-features --features telemetry,tui
 
 Also run, when they apply:
 
-- a default `cargo test`, if you changed code behind a feature flag. The slim gate does not compile it.
+- `cargo test` with the features your code is behind, if you changed code behind a feature flag, for example `cargo test --features gui` or `cargo test --features all-sources`. The slim gate does not compile that code, and a default `cargo test` compiles only the default features.
 - in `gui/`: `npm ci`, `npm run lint`, `npm run format:check`, `npm run typecheck`, `npm test` and `npm run build`, if you changed `gui/`.
 - `cargo clippy --manifest-path desktop/Cargo.toml -- -D warnings` and `cargo test --manifest-path desktop/Cargo.toml`, if you changed `desktop/`, `src/gui/` or `src/runtime/gui.rs`.
 - any cargo command after you edit `Cargo.toml`, so `Cargo.lock` updates. CI builds with `--locked` and fails on a stale lock.
