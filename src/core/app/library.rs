@@ -511,7 +511,8 @@ impl App {
       }
       LibraryTarget::Artists => {
         // Bump generation to invalidate any in-flight requests from previous visits
-        self.saved_artists_prefetch_generation = self.saved_artists_prefetch_generation.wrapping_add(1);
+        self.saved_artists_prefetch_generation =
+          self.saved_artists_prefetch_generation.wrapping_add(1);
         self.saved_artists_prefetch_in_flight = None;
         self.forget_pending_artist_selection();
 
@@ -689,7 +690,11 @@ impl App {
 
     // Resolve landing by artist ID after sorting
     if let Some(target_id) = target_artist_id {
-      if let Some(pos) = self.artists.iter().position(|a| a.id.as_deref() == Some(&target_id)) {
+      if let Some(pos) = self
+        .artists
+        .iter()
+        .position(|a| a.id.as_deref() == Some(&target_id))
+      {
         self.view.artists_list_index = pos;
         return;
       }
