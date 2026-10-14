@@ -565,6 +565,15 @@
       "contributions": [
         "doc"
       ]
+    },
+    {
+      "login": "dailyun",
+      "name": "Drying",
+      "avatar_url": "https://avatars.githubusercontent.com/u/144075925?v=4",
+      "profile": "https://github.com/dailyun",
+      "contributions": [
+        "doc"
+      ]
     }
   ],
   "contributorsPerLine": 7,
