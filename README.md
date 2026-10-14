@@ -557,7 +557,7 @@ Free code signing provided by [SignPath.io](https://about.signpath.io), certific
 
 The Windows release files are built from this repository by the [release workflow](.github/workflows/cd.yml) on GitHub-hosted runners. Each signing request is approved by hand.
 
-- Committers and reviewers: [LargeModGames](https://github.com/LargeModGames), [ThatModGames](https://github.com/ThatModGames), [shilicioo](https://github.com/shilicioo), [2570165831](https://github.com/2570165831)
+- Committers and reviewers: [LargeModGames](https://github.com/LargeModGames), [ThatModGames](https://github.com/ThatModGames), [shilicioo](https://github.com/shilicioo), [2570165831](https://github.com/2570165831), [Oud](https://github.com/Oud-Idk)
 - Approvers: [LargeModGames](https://github.com/LargeModGames)
 
 Privacy: see the [privacy policy](https://spotatui.com/privacy) for the data spotatui sends and how to turn each part off.
