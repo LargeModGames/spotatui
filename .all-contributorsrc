@@ -25,6 +25,36 @@
       ]
     },
     {
+      "login": "shilicioo",
+      "name": "shilicioo",
+      "avatar_url": "https://avatars.githubusercontent.com/u/56956072?v=4",
+      "profile": "https://github.com/shilicioo",
+      "contributions": [
+        "code",
+        "maintenance"
+      ]
+    },
+    {
+      "login": "2570165831",
+      "name": "2570165831",
+      "avatar_url": "https://avatars.githubusercontent.com/u/200382837?v=4",
+      "profile": "https://github.com/2570165831",
+      "contributions": [
+        "code",
+        "maintenance"
+      ]
+    },
+    {
+      "login": "Oud-Idk",
+      "name": "Oud",
+      "avatar_url": "https://avatars.githubusercontent.com/u/80905197?v=4",
+      "profile": "https://github.com/Oud-Idk",
+      "contributions": [
+        "code",
+        "maintenance"
+      ]
+    },
+    {
       "login": "MysteriousWolf",
       "name": "MysteriousWolf",
       "avatar_url": "https://avatars.githubusercontent.com/u/5306409?v=4",
@@ -243,15 +273,6 @@
       ]
     },
     {
-      "login": "shilicioo",
-      "name": "shilicioo",
-      "avatar_url": "https://avatars.githubusercontent.com/u/56956072?v=4",
-      "profile": "https://github.com/shilicioo",
-      "contributions": [
-        "code"
-      ]
-    },
-    {
       "login": "Moaht",
       "name": "Thomas Allan",
       "avatar_url": "https://avatars.githubusercontent.com/u/93605688?v=4",
@@ -373,15 +394,6 @@
       ]
     },
     {
-      "login": "Oud-Idk",
-      "name": "Oud",
-      "avatar_url": "https://avatars.githubusercontent.com/u/80905197?v=4",
-      "profile": "https://github.com/Oud-Idk",
-      "contributions": [
-        "code"
-      ]
-    },
-    {
       "login": "yvoolab",
       "name": "Yvoo",
       "avatar_url": "https://avatars.githubusercontent.com/u/202315522?v=4",
@@ -395,15 +407,6 @@
       "name": "Maurice Schmicking",
       "avatar_url": "https://avatars.githubusercontent.com/u/17197791?v=4",
       "profile": "https://github.com/mschmicking",
-      "contributions": [
-        "code"
-      ]
-    },
-    {
-      "login": "2570165831",
-      "name": "2570165831",
-      "avatar_url": "https://avatars.githubusercontent.com/u/200382837?v=4",
-      "profile": "https://github.com/2570165831",
       "contributions": [
         "code"
       ]
