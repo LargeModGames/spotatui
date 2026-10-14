@@ -254,7 +254,7 @@ native streaming fast paths (librespot) when the native player is active.
 - `spotatui.create_playlist(name, uris?)` - create a playlist, optionally seeded with track uris.
 - `spotatui.playlist_add_track(playlist, track)` - add a track to a playlist (ids or uris).
 - `spotatui.playlist_remove_track(playlist, track, position)` - remove the track occurrence at
-  the given 0-based position (required, like the Web API).
+  the given 0-based position (required).
 - `spotatui.follow_playlist(playlist)` / `spotatui.unfollow_playlist(playlist)`.
 - `spotatui.toggle_save_track(uri)` - like/unlike a track.
 - `spotatui.save_album(id)` / `spotatui.unsave_album(id)`.
@@ -290,8 +290,9 @@ tick. If the app stalls past several interval periods, the interval fires once a
   `artist`, `artists`, `recently_played`, `devices`, `queue`, `settings`, `help`, `lyrics`,
   `cover_art`, `miniplayer`, `analysis`, `discover`, `podcasts`, `podcast_episodes`,
   `recommendations`, `party`, `friends`, `local_browser`, `create_playlist`, `dialog`,
-  `announcement`, `recap_prompt`, `exit_prompt`, `error`, `stats`, and `plugin:<name>` for
-  plugin screens.
+  `announcement`, `recap_prompt`, `exit_prompt`, `error`, `stats`, `playlist_sync`,
+  `community_pin_prompt`, `ai_dj` (only in builds with the `ai-dj` feature), and
+  `plugin:<name>` for plugin screens.
 
 ### Persistent storage
 
@@ -387,7 +388,8 @@ the response arrives. Only `http://` and `https://` URLs are accepted.
 Callbacks receive `callback(resp, err)`:
 
 - Success: `resp = { status = number, ok = bool, body = string }`, `err = nil`.
-- Transport failure such as DNS, timeout, or connection failure: `resp = nil`, `err = string`.
+- Transport failure such as DNS, a timeout (requests time out after 30 seconds), or a
+  connection failure: `resp = nil`, `err = string`.
 - HTTP 4xx and 5xx responses are not transport failures. They call the success path with
   `resp.ok = false`.
 

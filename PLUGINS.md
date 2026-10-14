@@ -45,6 +45,9 @@ These ship in this repo under [`examples/plugins/`](examples/plugins):
 - **accent-cycler** - a command that rotates the theme accent color.
 - **now-playing-webhook** - POSTs a JSON payload to a webhook on track change.
 - **session-stats** - a directory plugin (with a `require`-d helper) that tracks session plays.
+- **queue-browser** - a custom queue screen demonstrating async data reads, timers, and storage.
+- **now-playing** - a custom screen with cover art and synced lyrics in a row layout.
+  Art only draws in builds with the `cover-art` feature.
 
 ## Sharing your own plugin
 
