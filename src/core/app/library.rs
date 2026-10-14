@@ -647,7 +647,12 @@ impl App {
     if !self.current_saved_artists_has_more() {
       return None;
     }
-    self.artists.last().and_then(|artist| artist.id.clone())
+    self
+      .library
+      .saved_artists
+      .pages
+      .last()
+      .and_then(|page| page.cursor_after.clone())
   }
 
   /// Replace `self.artists` with all cached pages and apply any pending landing selection.
