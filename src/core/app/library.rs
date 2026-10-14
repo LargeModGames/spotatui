@@ -658,7 +658,6 @@ impl App {
   /// Replace `self.artists` with all cached pages and apply any pending landing selection.
   pub fn set_saved_artists_to_table_continuous(&mut self) {
     self.saved_artists_prefetch_in_flight = None;
-    self.pending_artist_selection = None;
 
     self.artists = self.saved_artists_flattened();
 
@@ -693,6 +692,7 @@ impl App {
 
   pub fn clear_saved_artists_in_flight(&mut self) {
     self.saved_artists_prefetch_in_flight = None;
+    self.pending_artist_selection = None;
   }
 
   pub fn get_current_user_saved_tracks_next(&mut self) {
