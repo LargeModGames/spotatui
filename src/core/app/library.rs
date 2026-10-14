@@ -1534,4 +1534,130 @@ mod tests {
       Ok(IoEvent::GetCurrentSavedTracks(None))
     ));
   }
+
+  fn saved_artist_page(ids: &[&str], has_next: bool) -> CursorPaged<ArtistInfo> {
+    CursorPaged {
+      items: ids
+        .iter()
+        .map(|id| ArtistInfo {
+          id: Some(id.to_string()),
+          name: format!("Artist {id}"),
+          ..Default::default()
+        })
+        .collect(),
+      limit: ids.len() as u32,
+      total: None,
+      next: has_next.then(|| {
+        format!(
+          "https://example.com/me/following?after={}",
+          ids.last().unwrap_or(&"")
+        )
+      }),
+      cursor_after: has_next.then(|| ids.last().unwrap_or(&"").to_string()),
+    }
+  }
+
+  #[test]
+  fn current_saved_artists_has_more_and_cursor_reflect_cached_pages() {
+    let mut app = App::default();
+
+    // Empty pages: no more, no cursor
+    assert!(!app.current_saved_artists_has_more());
+    assert_eq!(app.next_saved_artists_cursor(), None);
+
+    // Final page (has_next = false): no more, no cursor
+    app
+      .library_mut()
+      .saved_artists
+      .add_pages(saved_artist_page(&["a1", "a2"], false));
+    assert!(!app.current_saved_artists_has_more());
+    assert_eq!(app.next_saved_artists_cursor(), None);
+
+    // Page with more following: reports true and returns cursor_after
+    let mut app_with_more = App::default();
+    app_with_more
+      .library_mut()
+      .saved_artists
+      .add_pages(saved_artist_page(&["a1", "a2"], true));
+    assert!(app_with_more.current_saved_artists_has_more());
+    assert_eq!(
+      app_with_more.next_saved_artists_cursor(),
+      Some("a2".to_string())
+    );
+  }
+
+  #[test]
+  fn saved_artists_next_dispatches_with_cursor_and_guards_in_flight() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app
+      .library_mut()
+      .saved_artists
+      .add_pages(saved_artist_page(&["a1", "a2"], true));
+
+    // First fetch: dispatches event and sets in-flight marker
+    app.get_current_user_saved_artists_next();
+
+    assert_eq!(app.saved_artists_prefetch_in_flight.as_deref(), Some("a2"));
+    assert!(matches!(
+      rx.try_recv(),
+      Ok(IoEvent::GetFollowedArtists(Some(cursor))) if cursor == "a2"
+    ));
+
+    // Second immediate fetch with same cursor: ignored by in-flight guard!
+    app.get_current_user_saved_artists_next();
+    assert!(
+      rx.try_recv().is_err(),
+      "duplicate in-flight fetch must be ignored"
+    );
+  }
+
+  #[test]
+  fn saved_artists_next_on_final_page_does_nothing() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app
+      .library_mut()
+      .saved_artists
+      .add_pages(saved_artist_page(&["a1", "a2"], false));
+
+    app.get_current_user_saved_artists_next();
+
+    assert!(rx.try_recv().is_err());
+    assert!(app.saved_artists_prefetch_in_flight.is_none());
+  }
+
+  #[test]
+  fn clear_saved_artists_in_flight_resets_guard_and_pending_selection() {
+    let mut app = App::default();
+    app.saved_artists_prefetch_in_flight = Some("cursor_token".to_string());
+    app.pending_artist_selection = Some(15);
+
+    app.clear_saved_artists_in_flight();
+
+    assert!(app.saved_artists_prefetch_in_flight.is_none());
+    assert!(app.pending_artist_selection.is_none());
+  }
+
+  #[test]
+  fn saved_artists_flattened_deduplicates_by_artist_id() {
+    let mut app = App::default();
+    // Page 1 has ["a1", "a2"]
+    app
+      .library_mut()
+      .saved_artists
+      .add_pages(saved_artist_page(&["a1", "a2"], true));
+    // Page 2 has ["a2", "a3"] (duplicate "a2"!)
+    app
+      .library_mut()
+      .saved_artists
+      .add_pages(saved_artist_page(&["a2", "a3"], false));
+
+    app.set_saved_artists_to_table_continuous();
+
+    // Verifies the `continue; // Skip duplicate` line was executed
+    assert_eq!(app.artists.len(), 3);
+    let ids: Vec<&str> = app.artists.iter().filter_map(|a| a.id.as_deref()).collect();
+    assert_eq!(ids, vec!["a1", "a2", "a3"]);
+  }
 }
