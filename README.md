@@ -93,7 +93,7 @@ A community-maintained, actively developed fork of [spotify-tui](https://github.
 curl -fsSL https://spotatui.com/install.sh | bash
 
 # Homebrew (macOS only)
-brew tap LargeModGames/spotatui
+brew tap LargeModGames/spotatui && brew trust --tap LargeModGames/spotatui
 brew install spotatui
 
 # Cargo — compile from crates.io …
