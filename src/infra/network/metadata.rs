@@ -537,6 +537,13 @@ impl MetadataNetwork for Network {
           return;
         }
 
+        if let Some(after) = after.as_ref() {
+          // The list was reloaded after this request was queued.
+          if app.next_saved_artists_cursor().as_deref() != Some(after.id()) {
+            return;
+          }
+        }
+
         let domain_page =
           crate::infra::network::mapping::map_cursor_page(&res.artists, |a| ArtistInfo::from(a));
         let artists = &mut app.library_mut().saved_artists;
