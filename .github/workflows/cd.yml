@@ -462,7 +462,11 @@ jobs:
     steps:
       - name: Write checksums.txt
         run: |
-          gh release download "$TAG" --pattern 'spotatui*' --dir dl
+          patterns=(--pattern 'spotatui*')
+          if [[ "$TAG" != *-* ]]; then
+            patterns+=(--pattern 'latest.json')
+          fi
+          gh release download "$TAG" "${patterns[@]}" --dir dl
           rm -f dl/*.sha256 dl/*.sig
           (cd dl && sha256sum * | sort -k2) > checksums.txt
           cat checksums.txt
