@@ -35,6 +35,8 @@ const METADATA_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(3
 const METADATA_CACHE_CAP: usize = 32;
 /// Albums per request on an artist page; the pages after the first load in parallel.
 const ARTIST_ALBUM_PAGE: u32 = 50;
+/// Album pages in flight at once after the first.
+const ARTIST_ALBUM_PAGES_PARALLEL: usize = 4;
 
 impl<T> Default for MetadataTtlCache<T> {
   fn default() -> Self {
@@ -205,15 +207,17 @@ async fn fetch_artist_data(
   } else {
     Vec::new()
   };
-  let rest_pages = futures::future::try_join_all(
-    rest_queries
-      .iter()
-      .map(|query| spotify_get_typed_for::<Page<SimplifiedAlbum>>(&albums_path, query)),
-  )
-  .await?;
   let mut album_items = first_albums.items;
-  for page in rest_pages {
-    album_items.extend(page.items);
+  for group in rest_queries.chunks(ARTIST_ALBUM_PAGES_PARALLEL) {
+    let pages = futures::future::try_join_all(
+      group
+        .iter()
+        .map(|query| spotify_get_typed_for::<Page<SimplifiedAlbum>>(&albums_path, query)),
+    )
+    .await?;
+    for page in pages {
+      album_items.extend(page.items);
+    }
   }
 
   let data = CachedArtistData {

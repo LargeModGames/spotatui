@@ -306,17 +306,7 @@ async fn serve_until_quit(
         last_tick = now;
         publisher.publish(&app);
         publisher.tick(&app, now);
-        if let Some(state) = &media_state {
-          let next = media_state_of(&app);
-          state.send_if_modified(|shown| {
-            let changed = media_changed(shown.as_ref(), next.as_ref(), now - media_sent_at);
-            if changed {
-              *shown = next;
-              media_sent_at = now;
-            }
-            changed
-          });
-        }
+        send_media(media_state.as_ref(), &app, &mut media_sent_at);
         if !hosted && publisher.abandoned(now, plays_here(&app)) {
           log::info!("no page connected and nothing played here for a minute; quitting");
           break;
@@ -353,13 +343,16 @@ async fn serve_until_quit(
           if app.user_config.behavior.enable_media_keys {
             app.apply(media_action(command));
             publisher.publish(&app);
+            send_media(media_state.as_ref(), &app, &mut media_sent_at);
           }
         }
         None => media_commands = None,
       },
       // A page that asked for something sees the answer when the pump has it.
       _ = super::pump::events_handled().notified() => {
-        publisher.publish(&*app.lock().await);
+        let app = app.lock().await;
+        publisher.publish(&app);
+        send_media(media_state.as_ref(), &app, &mut media_sent_at);
       }
       message = inbox.recv() => match message {
         Some(ClientMessage::Action { action }) => {
@@ -420,9 +413,31 @@ fn owns_sound(app: &App) -> bool {
   )
 }
 
-/// The media controls' view: only a track this process plays, so a phone that is a remote shows none.
+/// Send the media controls `app`'s state when they must hear of it.
+fn send_media(
+  state: Option<&tokio::sync::watch::Sender<Option<MediaState>>>,
+  app: &App,
+  sent_at: &mut Instant,
+) {
+  let Some(state) = state else {
+    return;
+  };
+  let now = Instant::now();
+  let next = media_state_of(app);
+  state.send_if_modified(|shown| {
+    let changed = media_changed(shown.as_ref(), next.as_ref(), now - *sent_at);
+    if changed {
+      *shown = next;
+      *sent_at = now;
+    }
+    changed
+  });
+}
+
+/// The media controls' view: only a track this process plays, so a phone that is a remote shows none,
+/// and none while the media keys setting is off.
 fn media_state_of(app: &App) -> Option<MediaState> {
-  if !owns_sound(app) {
+  if !app.user_config.behavior.enable_media_keys || !owns_sound(app) {
     return None;
   }
   let snapshot = app.playback_view().0.as_ref()?;
