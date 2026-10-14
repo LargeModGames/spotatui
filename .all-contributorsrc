@@ -574,6 +574,15 @@
       "contributions": [
         "doc"
       ]
+    },
+    {
+      "login": "jadhavgaurav",
+      "name": "Gaurav Vijay Jadhav",
+      "avatar_url": "https://avatars.githubusercontent.com/u/134488140?v=4",
+      "profile": "https://jadhavgaurav.github.io",
+      "contributions": [
+        "code"
+      ]
     }
   ],
   "contributorsPerLine": 7,
