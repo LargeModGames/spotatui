@@ -363,6 +363,8 @@ export function Shell({
         lyrics={channels.lyrics?.payload ?? null}
         position={state.position}
         active={page === "lyrics"}
+        connected={state.connected}
+        send={send}
       />
     ),
     session: (

@@ -1,0 +1,13 @@
+/* A seek button that looks exactly like the lyric text it replaces. */
+.lyric-seek {
+  padding: 0;
+  border: 0;
+  background: none;
+  letter-spacing: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.lyric-seek:hover {
+  text-decoration: underline;
+}

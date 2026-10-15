@@ -7,6 +7,7 @@ import type { TrackInfo } from "./bindings/TrackInfo";
 import type { Position } from "./connection";
 import { clock, sourceOf } from "./format";
 import { Glyph } from "./Icon";
+import { LyricText } from "./LyricText";
 import "./Room.css";
 import {
   activeLyric,
@@ -193,7 +194,7 @@ export function Room({
           </span>
         </div>
         {showLyrics ? (
-          <Lyrics lyrics={lyrics} ms={ms} />
+          <Lyrics lyrics={lyrics} ms={ms} connected={connected} send={send} />
         ) : tracks.length > 0 ? (
           <Sides
             tracks={tracks}
@@ -303,7 +304,17 @@ function Sides({
   );
 }
 
-function Lyrics({ lyrics, ms }: { lyrics: LyricsPayload | null; ms: number }) {
+function Lyrics({
+  lyrics,
+  ms,
+  connected,
+  send,
+}: {
+  lyrics: LyricsPayload | null;
+  ms: number;
+  connected: boolean;
+  send: (action: Action) => void;
+}) {
   const synced = lyrics?.synced ?? false;
   const lines = lyrics?.lines ?? [];
   const current = synced ? activeLyric(lines, ms) : -1;
@@ -333,7 +344,13 @@ function Lyrics({ lyrics, ms }: { lyrics: LyricsPayload | null; ms: number }) {
             aria-current={row === current ? "true" : undefined}
             className={row < current ? "sung" : undefined}
           >
-            {line.text || "♪"}
+            <LyricText
+              line={line}
+              synced={synced}
+              tabStop={row === Math.max(current, 0)}
+              connected={connected}
+              send={send}
+            />
           </li>
         ))}
       </ol>

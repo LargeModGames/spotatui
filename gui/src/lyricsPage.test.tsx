@@ -33,16 +33,28 @@ const render = (lyrics: LyricsPayload | null, playing: NowPlaying | null) =>
       lyrics={lyrics}
       position={{ ms: 5_000, at: 0 }}
       active={false}
+      connected
+      send={() => {}}
     />,
   );
 
 describe("LyricsPage", () => {
   it("marks the sung line, the current line and the lines to come", () => {
     const html = render({ status: "found", synced: true, lines }, item);
-    expect(html).toContain('<li class="past">There&#x27;s a fire');
-    expect(html).toContain('<li aria-current="true">Reaching a fever pitch');
-    expect(html).toContain('<li class="future">♪</li>');
+    expect(html).toContain('<li class="past"><button');
+    expect(html).toContain(
+      '<li aria-current="true"><button type="button" class="lyric-seek" tabindex="0">',
+    );
+    expect(html).toContain('<li class="future"><button');
     expect(html).not.toContain("not synced");
+  });
+
+  it("puts the one tab stop on the sung line", () => {
+    const html = render({ status: "found", synced: true, lines }, item);
+    expect(html.match(/tabindex="0"/g)).toHaveLength(1);
+    expect(html).toContain(
+      '<li aria-current="true"><button type="button" class="lyric-seek" tabindex="0">Reaching a fever pitch</button>',
+    );
   });
 
   it("shows unsynced lyrics plain with a note", () => {
@@ -50,6 +62,7 @@ describe("LyricsPage", () => {
     expect(html).toContain("These lyrics are not synced");
     expect(html).not.toContain("aria-current");
     expect(html).not.toContain("past");
+    expect(html).not.toContain("<button");
   });
 
   it("says when nothing plays, lyrics load or none exist", () => {

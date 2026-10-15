@@ -129,4 +129,21 @@ describe("Room", () => {
       }),
     ).toContain("No lyrics for this song.");
   });
+
+  it("lets you click synced lyrics in the Room", () => {
+    const html = render({
+      showLyrics: true,
+      lyrics: {
+        status: "found",
+        synced: true,
+        lines: [
+          { at_ms: 0, text: "Close enough to start a war" },
+          { at_ms: 4_000, text: "All that I have is on the floor" },
+        ],
+      },
+    });
+    expect(html).toContain('class="lyric-seek"');
+    expect(html).toContain("All that I have is on the floor");
+    expect(html).not.toContain("Timing estimated");
+  });
 });

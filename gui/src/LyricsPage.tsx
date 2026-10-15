@@ -1,8 +1,10 @@
 import { useLayoutEffect, useRef } from "react";
+import type { Action } from "./bindings/Action";
 import type { LyricsPayload } from "./bindings/LyricsPayload";
 import type { NowPlaying } from "./bindings/NowPlaying";
 import type { Position } from "./connection";
 import "./LyricsPage.css";
+import { LyricText } from "./LyricText";
 import { activeLyric } from "./roomModel";
 import { usePosition } from "./usePosition";
 
@@ -12,11 +14,15 @@ export function LyricsPage({
   lyrics,
   position,
   active,
+  connected,
+  send,
 }: {
   item: NowPlaying | null;
   lyrics: LyricsPayload | null;
   position: Position | null;
   active: boolean;
+  connected: boolean;
+  send: (action: Action) => void;
 }) {
   // A hidden page keeps no animation frame running.
   const ms = usePosition(position, (item?.is_playing ?? false) && active);
@@ -66,7 +72,13 @@ export function LyricsPage({
                       : "future"
                 }
               >
-                {line.text || "♪"}
+                <LyricText
+                  line={line}
+                  synced={synced}
+                  tabStop={row === Math.max(current, 0)}
+                  connected={connected}
+                  send={send}
+                />
               </li>
             ))}
           </ol>

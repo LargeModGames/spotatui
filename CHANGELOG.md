@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **Click a synced lyric line to jump there** in the desktop app, on the Lyrics page and in full screen. Lines that are only estimates stay plain text, and Tab reaches the line being sung.
+
 ## [v0.46.0] 2026-10-14
 
 ### Added
