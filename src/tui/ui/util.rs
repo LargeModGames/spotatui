@@ -66,7 +66,7 @@ pub fn draw_selectable_list<S>(
   title: &str,
   items: &[S],
   highlight_state: (bool, bool),
-  state: &mut ListState, 
+  state: &mut ListState,
 ) where
   S: std::convert::AsRef<str>,
 {

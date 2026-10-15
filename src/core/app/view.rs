@@ -260,7 +260,10 @@ impl ViewState {
     self.search_playlists_list_state.borrow_mut()
   }
   pub fn select_search_playlists_list(&self, selected: Option<usize>) {
-    self.search_playlists_list_state.borrow_mut().select(selected);
+    self
+      .search_playlists_list_state
+      .borrow_mut()
+      .select(selected);
   }
 
   pub fn search_shows_list_state(&self) -> RefMut<'_, ListState> {
@@ -295,7 +298,10 @@ impl ViewState {
     self.artist_top_tracks_list_state.borrow_mut()
   }
   pub fn select_artist_top_tracks_list(&self, selected: Option<usize>) {
-    self.artist_top_tracks_list_state.borrow_mut().select(selected);
+    self
+      .artist_top_tracks_list_state
+      .borrow_mut()
+      .select(selected);
   }
 
   pub fn artist_albums_list_state(&self) -> RefMut<'_, ListState> {
@@ -309,7 +315,10 @@ impl ViewState {
     self.artist_related_artists_list_state.borrow_mut()
   }
   pub fn select_artist_related_artists_list(&self, selected: Option<usize>) {
-    self.artist_related_artists_list_state.borrow_mut().select(selected);
+    self
+      .artist_related_artists_list_state
+      .borrow_mut()
+      .select(selected);
   }
 
   pub fn playlist_sync_list_state(&self) -> RefMut<'_, ListState> {

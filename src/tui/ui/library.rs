@@ -60,7 +60,9 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
         .map(|p| format!("\u{1F4C1} {}", p.name))
         .collect()
     };
-    app.view.select_playlist_list(app.view.selected_playlist_index);
+    app
+      .view
+      .select_playlist_list(app.view.selected_playlist_index);
     draw_selectable_list(
       f,
       app,
@@ -88,7 +90,9 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
         .map(|p| format!("\u{1F3B5} {}", p.name))
         .collect()
     };
-    app.view.select_playlist_list(app.view.selected_playlist_index);
+    app
+      .view
+      .select_playlist_list(app.view.selected_playlist_index);
     draw_selectable_list(
       f,
       app,
@@ -116,7 +120,9 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
         .map(|p| format!("\u{1F3B5} {}", p.name))
         .collect()
     };
-    app.view.select_playlist_list(app.view.selected_playlist_index);
+    app
+      .view
+      .select_playlist_list(app.view.selected_playlist_index);
     draw_selectable_list(
       f,
       app,
@@ -144,7 +150,9 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
         .map(|p| p.name.clone())
         .collect()
     };
-    app.view.select_playlist_list(app.view.selected_playlist_index);
+    app
+      .view
+      .select_playlist_list(app.view.selected_playlist_index);
     draw_selectable_list(
       f,
       app,
@@ -169,7 +177,9 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
         .map(|s| format!("\u{1F4FB} {}", s.name))
         .collect()
     };
-    app.view.select_playlist_list(app.view.selected_playlist_index);
+    app
+      .view
+      .select_playlist_list(app.view.selected_playlist_index);
     draw_selectable_list(
       f,
       app,
@@ -192,7 +202,9 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       .map(|p| format!("\u{1F4FC} {} ({})", p.name, p.track_count))
       .collect();
     items.push("+ New Playlist".to_string());
-    app.view.select_playlist_list(app.view.selected_playlist_index);
+    app
+      .view
+      .select_playlist_list(app.view.selected_playlist_index);
     draw_selectable_list(
       f,
       app,
@@ -245,7 +257,9 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   let mut display_list = vec!["+ Add Playlist".to_string()];
   display_list.extend(playlist_items);
 
-  app.view.select_playlist_list(app.view.selected_playlist_index);
+  app
+    .view
+    .select_playlist_list(app.view.selected_playlist_index);
   draw_selectable_list(
     f,
     app,

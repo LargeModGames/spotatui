@@ -70,7 +70,9 @@ pub fn draw_artist_albums(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
           name
         })
         .collect::<Vec<String>>();
-      app.view.select_artist_top_tracks_list(Some(artist.selected_top_track_index));
+      app
+        .view
+        .select_artist_top_tracks_list(Some(artist.selected_top_track_index));
       draw_selectable_list(
         f,
         app,
@@ -98,7 +100,9 @@ pub fn draw_artist_albums(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       })
       .collect::<Vec<String>>();
 
-    app.view.select_artist_albums_list(Some(artist.selected_album_index));
+    app
+      .view
+      .select_artist_albums_list(Some(artist.selected_album_index));
     draw_selectable_list(
       f,
       app,
@@ -125,7 +129,9 @@ pub fn draw_artist_albums(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
         })
         .collect::<Vec<String>>();
 
-      app.view.select_artist_related_artists_list(Some(artist.selected_related_artist_index));
+      app
+        .view
+        .select_artist_related_artists_list(Some(artist.selected_related_artist_index));
       draw_selectable_list(
         f,
         app,

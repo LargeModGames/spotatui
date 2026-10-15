@@ -156,7 +156,9 @@ fn draw_radio_station_results(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) 
     None => vec![],
   };
 
-  app.view.select_search_tracks_list(app.view.search_selected_tracks_index);
+  app
+    .view
+    .select_search_tracks_list(app.view.search_selected_tracks_index);
   draw_selectable_list(
     f,
     app,
@@ -221,7 +223,9 @@ pub fn draw_search_results(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       None => vec![],
     };
 
-    app.view.select_search_tracks_list(app.view.search_selected_tracks_index);
+    app
+      .view
+      .select_search_tracks_list(app.view.search_selected_tracks_index);
     draw_selectable_list(
       f,
       app,
@@ -250,7 +254,9 @@ pub fn draw_search_results(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       None => vec![],
     };
 
-    app.view.select_search_artists_list(app.view.search_selected_artists_index);
+    app
+      .view
+      .select_search_artists_list(app.view.search_selected_artists_index);
     draw_selectable_list(
       f,
       app,
@@ -291,7 +297,9 @@ pub fn draw_search_results(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       None => vec![],
     };
 
-    app.view.select_search_albums_list(app.view.search_selected_album_index);
+    app
+      .view
+      .select_search_albums_list(app.view.search_selected_album_index);
     draw_selectable_list(
       f,
       app,
@@ -333,7 +341,9 @@ pub fn draw_search_results(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
         );
       f.render_widget(warning_paragraph, playlist_area);
     } else {
-      app.view.select_search_playlists_list(app.view.search_selected_playlists_index);
+      app
+        .view
+        .select_search_playlists_list(app.view.search_selected_playlists_index);
       draw_selectable_list(
         f,
         app,
@@ -347,7 +357,9 @@ pub fn draw_search_results(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   }
 
   {
-    app.view.select_search_shows_list(app.view.search_selected_shows_index);
+    app
+      .view
+      .select_search_shows_list(app.view.search_selected_shows_index);
     draw_selectable_list(
       f,
       app,

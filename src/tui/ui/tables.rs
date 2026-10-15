@@ -295,7 +295,9 @@ pub fn draw_local_browser(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     "Local Files"
   };
 
-  app.view.select_local_files_list(Some(app.view.local_playlists_index));
+  app
+    .view
+    .select_local_files_list(Some(app.view.local_playlists_index));
   super::util::draw_selectable_list(
     f,
     app,
