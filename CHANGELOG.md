@@ -10,6 +10,8 @@
 
 ### Fixed
 
+- **A clear hint when ALSA has no default device**: with PipeWire but no ALSA bridge, pressing play used to show a cut-off "Connection Refused" error. The status line now says ALSA has no default device and suggests installing `pipewire-alsa`, and the native streaming docs have a No sound section ([#848](https://github.com/LargeModGames/spotatui/issues/848)).
+
 - **Subsonic usernames with special characters can log in**: a username with `+`, `&`, `#`, `%`, `=` or a space is now percent-encoded in every request, so the server no longer answers with error 40 ([#814](https://github.com/LargeModGames/spotatui/issues/814)).
 
 ## [v0.46.0] 2026-10-14

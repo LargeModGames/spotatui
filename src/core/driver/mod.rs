@@ -279,7 +279,7 @@ impl Driver {
     if let Some(player) = app.streaming_player.clone() {
       if let Some(error) = player.take_audio_backend_error() {
         app.pause_native_playback();
-        app.set_status_message(format!("Audio backend failed: {error}"), 15);
+        app.set_status_message(error, 15);
       }
     }
 

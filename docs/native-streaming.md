@@ -48,6 +48,14 @@ directory, for example `$XDG_CACHE_HOME/spotatui/streaming_cache` when
 - Native streaming is **enabled by default** when built with the `streaming` feature
 - Premium account is required
 
+## No sound
+
+If the playbar stays on "Paused" with `Audio backend failed` (or `No audio output: ALSA has no default device`) and the log shows `snd_pcm_open ... No such file or directory`, ALSA has no `default` device. Run `aplay -L` to list the ALSA devices; if `default` is missing, that's the problem.
+
+On PipeWire this usually means the ALSA bridge isn't installed. Install `pipewire-alsa` (same package name on Arch, Debian/Ubuntu and Fedora) and restart spotatui. On NixOS, see the PipeWire block in [installation.md](installation.md#nixos-flake).
+
+To use a different ALSA device, set `SPOTATUI_STREAMING_AUDIO_DEVICE` to a name from `aplay -L`, for example `SPOTATUI_STREAMING_AUDIO_DEVICE=pipewire spotatui` or `plughw:0,0`. This only applies to Spotify playback; the other sources use the system default output.
+
 ---
 
 ## MPRIS D-Bus Integration (Linux)
