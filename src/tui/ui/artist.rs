@@ -70,6 +70,7 @@ pub fn draw_artist_albums(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
           name
         })
         .collect::<Vec<String>>();
+      app.view.select_artist_top_tracks_list(Some(artist.selected_top_track_index));
       draw_selectable_list(
         f,
         app,
@@ -77,7 +78,7 @@ pub fn draw_artist_albums(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
         &format!("{} - Top Tracks", artist.artist_name),
         &top_tracks,
         get_artist_highlight_state(app, ArtistBlock::TopTracks),
-        Some(artist.selected_top_track_index),
+        &mut app.view.artist_top_tracks_list_state(),
       );
     };
 
@@ -97,6 +98,7 @@ pub fn draw_artist_albums(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       })
       .collect::<Vec<String>>();
 
+    app.view.select_artist_albums_list(Some(artist.selected_album_index));
     draw_selectable_list(
       f,
       app,
@@ -104,7 +106,7 @@ pub fn draw_artist_albums(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       "Albums",
       albums,
       get_artist_highlight_state(app, ArtistBlock::Albums),
-      Some(artist.selected_album_index),
+      &mut app.view.artist_albums_list_state(),
     );
 
     if let Some(related_artists_area) = related_artists_area {
@@ -123,6 +125,7 @@ pub fn draw_artist_albums(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
         })
         .collect::<Vec<String>>();
 
+      app.view.select_artist_related_artists_list(Some(artist.selected_related_artist_index));
       draw_selectable_list(
         f,
         app,
@@ -130,7 +133,7 @@ pub fn draw_artist_albums(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
         "Related artists",
         &related_artists,
         get_artist_highlight_state(app, ArtistBlock::RelatedArtists),
-        Some(artist.selected_related_artist_index),
+        &mut app.view.artist_related_artists_list_state(),
       );
     }
   };

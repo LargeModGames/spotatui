@@ -66,13 +66,10 @@ pub fn draw_selectable_list<S>(
   title: &str,
   items: &[S],
   highlight_state: (bool, bool),
-  selected_index: Option<usize>,
+  state: &mut ListState, 
 ) where
   S: std::convert::AsRef<str>,
 {
-  let mut state = ListState::default();
-  state.select(selected_index);
-
   let lst_items: Vec<ListItem> = items
     .iter()
     .map(|i| ListItem::new(Span::raw(i.as_ref())))
@@ -98,7 +95,7 @@ pub fn draw_selectable_list<S>(
       Line::from(format!("{} ", app.user_config.behavior.list_highlight_icon))
         .style(get_color(highlight_state, app.user_config.theme)),
     );
-  f.render_stateful_widget(list, layout_chunk, &mut state);
+  f.render_stateful_widget(list, layout_chunk, state);
 }
 
 pub fn create_artist_string(artists: &[SimplifiedArtist]) -> String {

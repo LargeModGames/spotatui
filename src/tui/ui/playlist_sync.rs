@@ -45,6 +45,7 @@ pub fn draw_playlist_sync(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     f.render_widget(empty, links_area);
   } else {
     let rows: Vec<String> = links.iter().map(link_row).collect();
+    app.view.select_playlist_sync_list(Some(app.view.playlist_sync_selected_link.min(rows.len() - 1)));
     draw_selectable_list(
       f,
       app,
@@ -52,7 +53,7 @@ pub fn draw_playlist_sync(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       &title,
       &rows,
       highlight_state,
-      Some(app.view.playlist_sync_selected_link.min(rows.len() - 1)),
+      &mut app.view.playlist_sync_list_state(),
     );
   }
 
