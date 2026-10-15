@@ -20,10 +20,10 @@ irm https://spotatui.com/install.ps1 | iex
 
 ### Which build has which features
 
-The prebuilt terminal binaries (the installer, GitHub Releases, `cargo binstall`, Homebrew, `spotatui-bin`, winget) include every source (Local Files, Subsonic, Internet Radio, YouTube, Qobuz, and Apple Music on macOS), the MCP server and the AI DJ. A plain `cargo install` and the Nix flake build the smaller default set: Spotify only. Add the sources with:
+The prebuilt terminal binaries (the installer, GitHub Releases, `cargo binstall`, Homebrew, `spotatui-bin`, winget) include every source (Local Files, Subsonic, Internet Radio, YouTube, Qobuz, and Apple Music on macOS), the MCP server and the AI DJ. A plain `cargo install` and the Nix flake build the smaller default set: Spotify only, without album art. Add the sources and album art with:
 
 ```bash
-cargo install --locked spotatui --features local-files,subsonic,internet-radio,youtube,qobuz,mcp-server,ai-dj
+cargo install --locked spotatui --features local-files,subsonic,internet-radio,youtube,qobuz,cover-art,mcp-server,ai-dj
 # macOS: also add apple-music
 ```
 
@@ -38,6 +38,8 @@ cargo install --locked spotatui
 # or fetch the prebuilt binary without compiling
 cargo binstall spotatui
 ```
+
+`cargo install` builds the Spotify-only default. For the other sources, album art, the MCP server and the AI DJ, use the `--features` line from [Which build has which features](#which-build-has-which-features). `cargo binstall` fetches the release binary, which already has all of them.
 
 ### Windows (winget)
 
@@ -179,6 +181,10 @@ spotatui uses the `portaudio` backend for better stability and bluetooth device 
 brew install portaudio
 ```
 
+### YouTube source
+
+The YouTube source needs the [`yt-dlp`](https://github.com/yt-dlp/yt-dlp) binary on your `PATH` (`ffmpeg` recommended). The prebuilt binaries don't bundle it. If YouTube playback stops working after a change on YouTube's side, update it with `yt-dlp -U`.
+
 ---
 
 ## Building from Source
@@ -216,12 +222,15 @@ cd spotatui
 
 **macOS:**
 ```bash
-cargo install --path . --no-default-features --features telemetry,tui,streaming,discord-rpc,cover-art,self-update,scripting,portaudio-backend,audio-viz-cpal,macos-media,local-files,subsonic,internet-radio,youtube,qobuz,apple-music
+cargo install --path . --no-default-features --features telemetry,tui,streaming,discord-rpc,cover-art,self-update,scripting,mcp-server,ai-dj,portaudio-backend,audio-viz-cpal,macos-media,local-files,subsonic,internet-radio,youtube,qobuz,apple-music
 ```
 
 **Linux/Windows:**
 ```bash
+# Spotify only (the default features)
 cargo install --path .
+# every source, album art, MCP server and AI DJ, like the release build
+cargo install --path . --features local-files,subsonic,internet-radio,youtube,qobuz,cover-art,mcp-server,ai-dj
 ```
 
 **Nix:**
