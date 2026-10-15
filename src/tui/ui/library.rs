@@ -452,4 +452,41 @@ mod tests {
       "pin must be suppressed when already following: {content}"
     );
   }
+
+
+  #[test]
+  fn list_shrinking_after_scrolling_resets_offset_and_renders_items() {
+    let mut app = App::default_connected();
+    app.active_source = Source::Local;
+    let area = Rect::new(0, 0, 32, 10);
+
+    // Populate with 20 items and scroll down
+    *app.local_playlists_mut() = (0..20).map(|i| folder(&format!("Folder {i}"))).collect();
+    app.view.selected_playlist_index = Some(15);
+    rendered(&app, area);
+    assert!(
+      app.view.local_files_scroll_offset.get() > 0,
+      "offset should be scrolled down"
+    );
+
+    // Shrink the list to 2 items
+    *app.local_playlists_mut() = vec![folder("ShrunkA"), folder("ShrunkB")];
+    app.view.selected_playlist_index = Some(0);
+    let content = rendered(&app, area);
+
+    // Offset must clamp to 0 and render the remaining items instead of blank space
+    assert_eq!(
+      app.view.local_files_scroll_offset.get(),
+      0,
+      "offset must clamp back to 0"
+    );
+    assert!(
+      content.contains("ShrunkA"),
+      "shrunken list must render top item: {content}"
+    );
+    assert!(
+      content.contains("ShrunkB"),
+      "shrunken list must render second item: {content}"
+    );
+  }
 }

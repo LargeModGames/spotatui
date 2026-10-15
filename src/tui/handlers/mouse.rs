@@ -2365,4 +2365,75 @@ mod tests {
     assert_eq!(first, Some(9));
     assert_eq!(second, Some(10));
   }
+
+  #[test]
+  fn click_after_scrolling_back_up_resolves_correct_row() {
+    use crate::core::source::Source;
+    use crate::tui::ui::draw_user_block;
+    use ratatui::{backend::TestBackend, Terminal};
+
+    let mut app = App::default_connected();
+    app.active_source = Source::Local;
+    app.view.size = Viewport {
+      width: 80,
+      height: 20,
+    };
+    app.push_navigation_stack(RouteId::Home, ActiveBlock::Home);
+
+    // Populate with 50 folders
+    *app.local_playlists_mut() = (0..50)
+      .map(|i| crate::core::plugin_api::PlaylistInfo {
+        uri: format!("file:///music/folder_{i}"),
+        name: format!("Folder {i}"),
+        owner: "local".to_string(),
+        track_count: 0,
+        id: None,
+        owner_id: None,
+        collaborative: false,
+        public: None,
+        image_url: None,
+      })
+      .collect();
+
+    let areas = main_layout_areas(&app).expect("layout areas");
+    let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+
+    // Move selection down deep so the list scrolls down
+    app.view.selected_playlist_index = Some(35);
+    terminal
+      .draw(|f| draw_user_block(f, &app, areas.sidebar))
+      .unwrap();
+    let scrolled_offset = app.view.playlist_scroll_offset.get();
+    assert!(
+      scrolled_offset > 0,
+      "list must have scrolled down (got offset {scrolled_offset})"
+    );
+
+    // Move selection back UP (sticky scrolling retains the offset)
+    app.view.selected_playlist_index = Some(scrolled_offset + 1);
+    terminal
+      .draw(|f| draw_user_block(f, &app, areas.sidebar))
+      .unwrap();
+    assert_eq!(
+      app.view.playlist_scroll_offset.get(),
+      scrolled_offset,
+      "viewport offset must remain sticky when moving selection up"
+    );
+
+    // Click the first visible inner row in the playlists panel
+    let click_x = areas.playlists.x + 1;
+    let click_y = areas.playlists.y + 1;
+    handler(
+      mouse_event(MouseEventKind::Down(MouseButton::Left), click_x, click_y),
+      &mut app,
+    );
+
+    // The clicked row must resolve to the visible item at `scrolled_offset`,
+    // NOT an offset re-derived from the selection!
+    assert_eq!(
+      app.view.selected_playlist_index,
+      Some(scrolled_offset),
+      "click must resolve to the visible row anchored by scroll offset"
+    );
+  }
 }
