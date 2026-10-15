@@ -270,6 +270,7 @@ impl App {
     if self.active_source != source {
       self.cancel_apple_music_browse();
       self.display_revisions.bump(DisplayDomain::Source);
+      self.view.playlist_scroll_offset.set(0);
     }
     self.active_source = source;
     self.runtime_state.active_source = source;
