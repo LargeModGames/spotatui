@@ -453,7 +453,6 @@ mod tests {
     );
   }
 
-
   #[test]
   fn list_shrinking_after_scrolling_resets_offset_and_renders_items() {
     let mut app = App::default_connected();
@@ -465,7 +464,7 @@ mod tests {
     app.view.selected_playlist_index = Some(15);
     rendered(&app, area);
     assert!(
-      app.view.local_files_scroll_offset.get() > 0,
+      app.view.playlist_scroll_offset.get() > 0,
       "offset should be scrolled down"
     );
 
@@ -476,7 +475,7 @@ mod tests {
 
     // Offset must clamp to 0 and render the remaining items instead of blank space
     assert_eq!(
-      app.view.local_files_scroll_offset.get(),
+      app.view.playlist_scroll_offset.get(),
       0,
       "offset must clamp back to 0"
     );
