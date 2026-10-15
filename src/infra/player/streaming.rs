@@ -513,6 +513,7 @@ impl audio_backend::Sink for RecoveringSink {
         *self.error.lock().unwrap_or_else(|e| e.into_inner()) = None;
       }
       Err(err) => {
+        error!("Audio sink failed to start: {}", err);
         *self.error.lock().unwrap_or_else(|e| e.into_inner()) = Some(err.to_string());
         self.failed = true;
       }
