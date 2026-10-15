@@ -327,6 +327,11 @@ impl ViewState {
   pub fn select_playlist_sync_list(&self, selected: Option<usize>) {
     self.playlist_sync_list_state.borrow_mut().select(selected);
   }
+
+  pub fn with_search_hovered_block(mut self, block: SearchResultBlock) -> Self {
+    self.search_hovered_block = block;
+    self
+  }
 }
 
 #[derive(Clone, Debug, PartialEq)]
