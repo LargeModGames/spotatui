@@ -203,10 +203,6 @@ pub struct ViewState {
   /// Scroll offset for the plugin popup.
   pub plugin_popup_scroll: u16,
 
-  // Encapsulated scroll state for selectable lists rendered with
-  // `draw_selectable_list`. These stay private so rendering frames can mutate
-  // them through the getter/setter methods below instead of discarding a
-  // locally constructed `ListState` each frame.
   #[cfg(feature = "tui")]
   search_tracks_list_state: RefCell<ListState>,
   #[cfg(feature = "tui")]
