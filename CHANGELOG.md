@@ -6,6 +6,10 @@
 
 - **Click a synced lyric line to jump there** in the desktop app, on the Lyrics page and in full screen. Lines that are only estimates stay plain text, and Tab reaches the line being sung.
 
+### Fixed
+
+- **Subsonic usernames with special characters can log in**: a username with `+`, `&`, `#`, `%`, `=` or a space is now percent-encoded in every request, so the server no longer answers with error 40 ([#814](https://github.com/LargeModGames/spotatui/issues/814)).
+
 ## [v0.46.0] 2026-10-14
 
 ### Added

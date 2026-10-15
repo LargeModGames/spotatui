@@ -210,7 +210,13 @@ impl SubsonicSource {
     let token = self.compute_token(&salt);
     format!(
       "{}/rest/{}?u={}&t={}&s={}&v={}&c={}&f=json",
-      self.base_url, view, self.username, token, salt, API_VERSION, CLIENT_NAME,
+      self.base_url,
+      view,
+      url_encode(&self.username),
+      token,
+      salt,
+      API_VERSION,
+      CLIENT_NAME,
     )
   }
 
@@ -1206,6 +1212,27 @@ mod tests {
     let t1 = src.compute_token("salt1");
     let t2 = src.compute_token("salt2");
     assert_ne!(t1, t2);
+  }
+
+  #[test]
+  fn a_username_with_query_characters_is_percent_encoded() {
+    let src = SubsonicSource::new("http://localhost", "jay+music@x.com&a b", "pw");
+    let url = src.endpoint_url("ping.view");
+    assert!(url.starts_with("http://localhost/rest/ping.view?u=jay%2Bmusic%40x.com%26a+b&t="));
+  }
+
+  #[test]
+  fn username_with_hash_percent_and_equals_is_percent_encoded() {
+    let src = SubsonicSource::new("http://localhost", "x#y%z=", "pw");
+    let url = src.endpoint_url("ping.view");
+    assert!(url.starts_with("http://localhost/rest/ping.view?u=x%23y%25z%3D&t="));
+  }
+
+  #[test]
+  fn plain_username_is_left_unchanged() {
+    let src = SubsonicSource::new("http://localhost", "alice", "pw");
+    let url = src.endpoint_url("ping.view");
+    assert!(url.starts_with("http://localhost/rest/ping.view?u=alice&t="));
   }
 
   #[test]
