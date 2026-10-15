@@ -20,7 +20,7 @@ irm https://spotatui.com/install.ps1 | iex
 
 ### Which build has which features
 
-The prebuilt terminal binaries (the installer, GitHub Releases, `cargo binstall`, Homebrew, `spotatui-bin`, winget) include every source (Local Files, Subsonic, Internet Radio, YouTube, Qobuz, and Apple Music on macOS), the MCP server and the AI DJ. A plain `cargo install` and the Nix flake build the smaller default set: Spotify only, without album art. Add the sources and album art with:
+The prebuilt terminal binaries (the installer, GitHub Releases, Homebrew, `spotatui-bin`, winget) include every source (Local Files, Subsonic, Internet Radio, YouTube, Qobuz, and Apple Music on macOS), the MCP server and the AI DJ. A plain `cargo install` and the Nix flake build the smaller default set: Spotify only, without album art. `cargo binstall` gets the full build only when a release artifact matches your platform; otherwise it falls back to `cargo install` and you get the default set. Add the sources and album art with:
 
 ```bash
 cargo install --locked spotatui --features local-files,subsonic,internet-radio,youtube,qobuz,cover-art,mcp-server,ai-dj
@@ -183,7 +183,7 @@ brew install portaudio
 
 ### YouTube source
 
-The YouTube source needs the [`yt-dlp`](https://github.com/yt-dlp/yt-dlp) binary on your `PATH` (`ffmpeg` recommended). The prebuilt binaries don't bundle it. If YouTube playback stops working after a change on YouTube's side, update it with `yt-dlp -U`.
+The YouTube source needs the [`yt-dlp`](https://github.com/yt-dlp/yt-dlp) binary on your `PATH` (`ffmpeg` recommended). The prebuilt binaries don't bundle it. If YouTube playback stops working after a change on YouTube's side, update it with `yt-dlp -U` if you use the standalone binary, or through pip/pipx or your package manager if you installed it that way.
 
 ---
 
