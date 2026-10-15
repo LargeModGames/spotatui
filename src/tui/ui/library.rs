@@ -68,7 +68,7 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       &items,
       highlight_state,
       app.view.selected_playlist_index,
-      &app.view.local_files_scroll_offset,
+      &app.view.playlist_scroll_offset,
     );
     return;
   }
