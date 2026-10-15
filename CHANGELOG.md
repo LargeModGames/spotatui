@@ -8,6 +8,8 @@
 
 - **Click a synced lyric line to jump there** in the desktop app, on the Lyrics page and in full screen. Lines that are only estimates stay plain text, and Tab reaches the line being sung.
 
+- **An E badge on explicit songs** in the track lists: a song the server marks explicit shows a small E at the start of its artist line, in playlists, Liked Songs, albums, an artist's Popular songs, song radio and Recently played ([#838](https://github.com/LargeModGames/spotatui/issues/838)).
+
 ### Fixed
 
 - **Subsonic usernames with special characters can log in**: a username with `+`, `&`, `#`, `%`, `=` or a space is now percent-encoded in every request, so the server no longer answers with error 40 ([#814](https://github.com/LargeModGames/spotatui/issues/814)).

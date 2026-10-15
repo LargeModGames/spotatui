@@ -352,4 +352,26 @@ describe("TrackTable", () => {
     expect(bare).not.toContain("cover-art");
     expect(bare).toContain('aria-activedescendant="album-0"');
   });
+
+  it("marks only the explicit rows with an E badge, whatever the source", () => {
+    const html = renderToStaticMarkup(
+      <TrackTable
+        label="Songs"
+        idPrefix="mix"
+        tracks={[
+          { ...track("Rude", "spotify:track:r"), explicit: true },
+          { ...track("Hello", "qobuz:track:h"), explicit: true },
+          track("Clean", "spotify:track:c"),
+        ]}
+        cursor={0}
+        playingUri={null}
+        onKeyDown={() => {}}
+        onPick={() => {}}
+        onPlay={() => {}}
+        open={() => {}}
+      />,
+    );
+    expect(html.match(/class="explicit"/g)).toHaveLength(2);
+    expect(html).toContain('<span class="sr-only">Explicit</span>');
+  });
 });

@@ -773,6 +773,7 @@ export const filmScores: ServerMessage[] = [
         album_id: "interstellar",
         artist_refs: [{ id: "zimmer", name: artist as string }],
         is_local: false,
+        explicit: index === 1,
       })),
       has_more: false,
       positions: [0, 1, 2, 3],

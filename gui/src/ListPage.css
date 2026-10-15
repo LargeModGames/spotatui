@@ -223,6 +223,18 @@
   font-size: 9px;
 }
 
+.track-row .explicit {
+  flex-shrink: 0;
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 2px;
+  background: var(--sub);
+  color: var(--panel);
+  font: 700 10px var(--mono);
+}
+
 .track-row .time {
   display: flex;
   align-items: center;
