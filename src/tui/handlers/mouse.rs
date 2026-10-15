@@ -2373,7 +2373,7 @@ mod tests {
     use ratatui::{backend::TestBackend, Terminal};
 
     let mut app = App::default_connected();
-    app.active_source = Source::Local;
+    app.set_active_source(Source::Local);
     app.view.size = Viewport {
       width: 80,
       height: 20,
