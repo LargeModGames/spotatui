@@ -19,7 +19,6 @@ pub fn draw_library_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     .iter()
     .map(|target| target.name())
     .collect();
-  app.view.select_library_list(Some(app.library_cursor()));
   draw_selectable_list(
     f,
     app,
@@ -27,7 +26,8 @@ pub fn draw_library_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     "Library",
     &rows,
     highlight_state,
-    &mut app.view.library_list_state(),
+    Some(app.library_cursor()),
+    &app.view.library_scroll_offset,
   );
 }
 
@@ -60,9 +60,6 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
         .map(|p| format!("\u{1F4C1} {}", p.name))
         .collect()
     };
-    app
-      .view
-      .select_playlist_list(app.view.selected_playlist_index);
     draw_selectable_list(
       f,
       app,
@@ -70,7 +67,8 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       "Local Files",
       &items,
       highlight_state,
-      &mut app.view.playlist_list_state(),
+      app.view.selected_playlist_index,
+      &app.view.local_files_scroll_offset,
     );
     return;
   }
@@ -90,9 +88,6 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
         .map(|p| format!("\u{1F3B5} {}", p.name))
         .collect()
     };
-    app
-      .view
-      .select_playlist_list(app.view.selected_playlist_index);
     draw_selectable_list(
       f,
       app,
@@ -100,7 +95,8 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       "Apple Music",
       &items,
       highlight_state,
-      &mut app.view.playlist_list_state(),
+      app.view.selected_playlist_index,
+      &app.view.playlist_scroll_offset,
     );
     return;
   }
@@ -120,9 +116,6 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
         .map(|p| format!("\u{1F3B5} {}", p.name))
         .collect()
     };
-    app
-      .view
-      .select_playlist_list(app.view.selected_playlist_index);
     draw_selectable_list(
       f,
       app,
@@ -130,7 +123,8 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       "Subsonic",
       &items,
       highlight_state,
-      &mut app.view.playlist_list_state(),
+      app.view.selected_playlist_index,
+      &app.view.playlist_scroll_offset,
     );
     return;
   }
@@ -150,9 +144,6 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
         .map(|p| p.name.clone())
         .collect()
     };
-    app
-      .view
-      .select_playlist_list(app.view.selected_playlist_index);
     draw_selectable_list(
       f,
       app,
@@ -160,7 +151,8 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       "Qobuz",
       &items,
       highlight_state,
-      &mut app.view.playlist_list_state(),
+      app.view.selected_playlist_index,
+      &app.view.playlist_scroll_offset,
     );
     return;
   }
@@ -177,9 +169,7 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
         .map(|s| format!("\u{1F4FB} {}", s.name))
         .collect()
     };
-    app
-      .view
-      .select_playlist_list(app.view.selected_playlist_index);
+
     draw_selectable_list(
       f,
       app,
@@ -187,7 +177,8 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       "Radio Stations",
       &items,
       highlight_state,
-      &mut app.view.playlist_list_state(),
+      app.view.selected_playlist_index,
+      &app.view.playlist_scroll_offset,
     );
     return;
   }
@@ -202,9 +193,6 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       .map(|p| format!("\u{1F4FC} {} ({})", p.name, p.track_count))
       .collect();
     items.push("+ New Playlist".to_string());
-    app
-      .view
-      .select_playlist_list(app.view.selected_playlist_index);
     draw_selectable_list(
       f,
       app,
@@ -212,7 +200,8 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       "YouTube Playlists",
       &items,
       highlight_state,
-      &mut app.view.playlist_list_state(),
+      app.view.selected_playlist_index,
+      &app.view.playlist_scroll_offset,
     );
     return;
   }
@@ -257,9 +246,6 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   let mut display_list = vec!["+ Add Playlist".to_string()];
   display_list.extend(playlist_items);
 
-  app
-    .view
-    .select_playlist_list(app.view.selected_playlist_index);
   draw_selectable_list(
     f,
     app,
@@ -267,7 +253,8 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     "Playlists",
     &display_list,
     highlight_state,
-    &mut app.view.playlist_list_state(),
+    app.view.selected_playlist_index,
+    &app.view.playlist_scroll_offset,
   );
 }
 

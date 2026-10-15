@@ -156,9 +156,6 @@ fn draw_radio_station_results(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) 
     None => vec![],
   };
 
-  app
-    .view
-    .select_search_tracks_list(app.view.search_selected_tracks_index);
   draw_selectable_list(
     f,
     app,
@@ -166,7 +163,8 @@ fn draw_radio_station_results(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) 
     "Radio Stations",
     &stations,
     get_search_results_highlight_state(app, SearchResultBlock::SongSearch),
-    &mut app.view.search_tracks_list_state(),
+    app.view.search_selected_tracks_index,
+    &app.view.search_tracks_scroll_offset,
   );
 }
 
@@ -223,9 +221,6 @@ pub fn draw_search_results(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       None => vec![],
     };
 
-    app
-      .view
-      .select_search_tracks_list(app.view.search_selected_tracks_index);
     draw_selectable_list(
       f,
       app,
@@ -233,7 +228,8 @@ pub fn draw_search_results(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       "Songs",
       &songs,
       get_search_results_highlight_state(app, SearchResultBlock::SongSearch),
-      &mut app.view.search_tracks_list_state(),
+      app.view.search_selected_tracks_index,
+      &app.view.search_tracks_scroll_offset,
     );
 
     let artists = match &app.search_results().artists {
@@ -254,9 +250,6 @@ pub fn draw_search_results(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       None => vec![],
     };
 
-    app
-      .view
-      .select_search_artists_list(app.view.search_selected_artists_index);
     draw_selectable_list(
       f,
       app,
@@ -264,7 +257,8 @@ pub fn draw_search_results(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       "Artists",
       &artists,
       get_search_results_highlight_state(app, SearchResultBlock::ArtistSearch),
-      &mut app.view.search_artists_list_state(),
+      app.view.search_selected_artists_index,
+      &app.view.search_artists_scroll_offset,
     );
   }
 
@@ -297,9 +291,6 @@ pub fn draw_search_results(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       None => vec![],
     };
 
-    app
-      .view
-      .select_search_albums_list(app.view.search_selected_album_index);
     draw_selectable_list(
       f,
       app,
@@ -307,7 +298,8 @@ pub fn draw_search_results(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       "Albums",
       &albums,
       get_search_results_highlight_state(app, SearchResultBlock::AlbumSearch),
-      &mut app.view.search_albums_list_state(),
+      app.view.search_selected_album_index,
+      &app.view.search_albums_scroll_offset,
     );
 
     let playlists = match &app.search_results().playlists {
@@ -341,9 +333,6 @@ pub fn draw_search_results(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
         );
       f.render_widget(warning_paragraph, playlist_area);
     } else {
-      app
-        .view
-        .select_search_playlists_list(app.view.search_selected_playlists_index);
       draw_selectable_list(
         f,
         app,
@@ -351,15 +340,13 @@ pub fn draw_search_results(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
         "Playlists",
         &playlists,
         get_search_results_highlight_state(app, SearchResultBlock::PlaylistSearch),
-        &mut app.view.search_playlists_list_state(),
+        app.view.search_selected_playlists_index,
+        &app.view.search_playlists_scroll_offset,
       );
     }
   }
 
   {
-    app
-      .view
-      .select_search_shows_list(app.view.search_selected_shows_index);
     draw_selectable_list(
       f,
       app,
@@ -383,7 +370,8 @@ pub fn draw_search_results(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
         None => vec![],
       },
       get_search_results_highlight_state(app, SearchResultBlock::ShowSearch),
-      &mut app.view.search_shows_list_state(),
+      app.view.search_selected_shows_index,
+      &app.view.search_shows_scroll_offset,
     );
   }
 }

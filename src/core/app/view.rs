@@ -1,8 +1,4 @@
 use super::*;
-#[cfg(feature = "tui")]
-use ratatui::widgets::ListState;
-#[cfg(feature = "tui")]
-use std::cell::{RefCell, RefMut};
 /// Presentation state of the terminal frontend, grouped on [`App::view`].
 ///
 /// Everything in here is a cursor, a scroll offset, an edit buffer, a focus
@@ -203,127 +199,22 @@ pub struct ViewState {
   /// Scroll offset for the plugin popup.
   pub plugin_popup_scroll: u16,
 
-  #[cfg(feature = "tui")]
-  search_tracks_list_state: RefCell<ListState>,
-  #[cfg(feature = "tui")]
-  search_artists_list_state: RefCell<ListState>,
-  #[cfg(feature = "tui")]
-  search_albums_list_state: RefCell<ListState>,
-  #[cfg(feature = "tui")]
-  search_playlists_list_state: RefCell<ListState>,
-  #[cfg(feature = "tui")]
-  search_shows_list_state: RefCell<ListState>,
-  #[cfg(feature = "tui")]
-  library_list_state: RefCell<ListState>,
-  #[cfg(feature = "tui")]
-  playlist_list_state: RefCell<ListState>,
-  #[cfg(feature = "tui")]
-  local_files_list_state: RefCell<ListState>,
-  #[cfg(feature = "tui")]
-  artist_top_tracks_list_state: RefCell<ListState>,
-  #[cfg(feature = "tui")]
-  artist_albums_list_state: RefCell<ListState>,
-  #[cfg(feature = "tui")]
-  artist_related_artists_list_state: RefCell<ListState>,
-  #[cfg(feature = "tui")]
-  playlist_sync_list_state: RefCell<ListState>,
+  pub search_tracks_scroll_offset: Cell<usize>,
+  pub search_artists_scroll_offset: Cell<usize>,
+  pub search_albums_scroll_offset: Cell<usize>,
+  pub search_playlists_scroll_offset: Cell<usize>,
+  pub search_shows_scroll_offset: Cell<usize>,
+  pub library_scroll_offset: Cell<usize>,
+  pub playlist_scroll_offset: Cell<usize>,
+  pub local_files_scroll_offset: Cell<usize>,
+  pub artist_top_tracks_scroll_offset: Cell<usize>,
+  pub artist_albums_scroll_offset: Cell<usize>,
+  pub artist_related_artists_scroll_offset: Cell<usize>,
+  pub playlist_sync_scroll_offset: Cell<usize>,
 }
 
-#[cfg(feature = "tui")]
 impl ViewState {
-  pub fn search_tracks_list_state(&self) -> RefMut<'_, ListState> {
-    self.search_tracks_list_state.borrow_mut()
-  }
-  pub fn select_search_tracks_list(&self, selected: Option<usize>) {
-    self.search_tracks_list_state.borrow_mut().select(selected);
-  }
-
-  pub fn search_artists_list_state(&self) -> RefMut<'_, ListState> {
-    self.search_artists_list_state.borrow_mut()
-  }
-  pub fn select_search_artists_list(&self, selected: Option<usize>) {
-    self.search_artists_list_state.borrow_mut().select(selected);
-  }
-
-  pub fn search_albums_list_state(&self) -> RefMut<'_, ListState> {
-    self.search_albums_list_state.borrow_mut()
-  }
-  pub fn select_search_albums_list(&self, selected: Option<usize>) {
-    self.search_albums_list_state.borrow_mut().select(selected);
-  }
-
-  pub fn search_playlists_list_state(&self) -> RefMut<'_, ListState> {
-    self.search_playlists_list_state.borrow_mut()
-  }
-  pub fn select_search_playlists_list(&self, selected: Option<usize>) {
-    self
-      .search_playlists_list_state
-      .borrow_mut()
-      .select(selected);
-  }
-
-  pub fn search_shows_list_state(&self) -> RefMut<'_, ListState> {
-    self.search_shows_list_state.borrow_mut()
-  }
-  pub fn select_search_shows_list(&self, selected: Option<usize>) {
-    self.search_shows_list_state.borrow_mut().select(selected);
-  }
-
-  pub fn library_list_state(&self) -> RefMut<'_, ListState> {
-    self.library_list_state.borrow_mut()
-  }
-  pub fn select_library_list(&self, selected: Option<usize>) {
-    self.library_list_state.borrow_mut().select(selected);
-  }
-
-  pub fn playlist_list_state(&self) -> RefMut<'_, ListState> {
-    self.playlist_list_state.borrow_mut()
-  }
-  pub fn select_playlist_list(&self, selected: Option<usize>) {
-    self.playlist_list_state.borrow_mut().select(selected);
-  }
-
-  pub fn local_files_list_state(&self) -> RefMut<'_, ListState> {
-    self.local_files_list_state.borrow_mut()
-  }
-  pub fn select_local_files_list(&self, selected: Option<usize>) {
-    self.local_files_list_state.borrow_mut().select(selected);
-  }
-
-  pub fn artist_top_tracks_list_state(&self) -> RefMut<'_, ListState> {
-    self.artist_top_tracks_list_state.borrow_mut()
-  }
-  pub fn select_artist_top_tracks_list(&self, selected: Option<usize>) {
-    self
-      .artist_top_tracks_list_state
-      .borrow_mut()
-      .select(selected);
-  }
-
-  pub fn artist_albums_list_state(&self) -> RefMut<'_, ListState> {
-    self.artist_albums_list_state.borrow_mut()
-  }
-  pub fn select_artist_albums_list(&self, selected: Option<usize>) {
-    self.artist_albums_list_state.borrow_mut().select(selected);
-  }
-
-  pub fn artist_related_artists_list_state(&self) -> RefMut<'_, ListState> {
-    self.artist_related_artists_list_state.borrow_mut()
-  }
-  pub fn select_artist_related_artists_list(&self, selected: Option<usize>) {
-    self
-      .artist_related_artists_list_state
-      .borrow_mut()
-      .select(selected);
-  }
-
-  pub fn playlist_sync_list_state(&self) -> RefMut<'_, ListState> {
-    self.playlist_sync_list_state.borrow_mut()
-  }
-  pub fn select_playlist_sync_list(&self, selected: Option<usize>) {
-    self.playlist_sync_list_state.borrow_mut().select(selected);
-  }
-
+  /// A fresh search screen hovers Songs before any result lands.
   pub fn with_search_hovered_block(mut self, block: SearchResultBlock) -> Self {
     self.search_hovered_block = block;
     self
