@@ -1,4 +1,6 @@
-use super::analyzer::{create_shared_analyzer, spectrum_for, SharedAnalyzer, SpectrumData};
+use super::analyzer::{
+  create_shared_analyzer, recent_audio, spectrum_for, RecentAudio, SharedAnalyzer, SpectrumData,
+};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 #[cfg(not(target_os = "windows"))]
 use cpal::BufferSize;
@@ -56,6 +58,15 @@ impl AudioCaptureManager {
     }
 
     spectrum_for(&self.analyzer, desired_bars)
+  }
+
+  /// The newest tenth of a second as a mono mix, while the stream lives.
+  pub fn recent_audio(&self) -> Option<RecentAudio> {
+    if !self.active.load(Ordering::Relaxed) {
+      return None;
+    }
+
+    recent_audio(&self.analyzer)
   }
 
   /// Check if audio capture is currently active

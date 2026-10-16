@@ -72,6 +72,8 @@ pub struct SettingsStrings {
   pub behavior_streaming_autoplay_description: &'static str,
   pub behavior_startup_behavior_name: &'static str,
   pub behavior_startup_behavior_description: &'static str,
+  pub behavior_player_bar_visualizer_name: &'static str,
+  pub behavior_player_bar_visualizer_description: &'static str,
   pub behavior_startup_route_name: &'static str,
   pub behavior_startup_route_description: &'static str,
   pub behavior_default_sort_playlist_tracks_name: &'static str,
@@ -335,6 +337,8 @@ pub struct SettingsStrings {
   pub option_hidden: &'static str,
   pub option_bottom: &'static str,
   pub option_top: &'static str,
+  pub option_spectrum: &'static str,
+  pub option_waveform: &'static str,
   pub option_custom: &'static str,
   pub delay_days: &'static str,
   pub delay_hours: &'static str,
@@ -494,6 +498,10 @@ impl SettingsStrings {
       "behavior.startup_behavior" => (
         self.behavior_startup_behavior_name,
         self.behavior_startup_behavior_description,
+      ),
+      "behavior.player_bar_visualizer" => (
+        self.behavior_player_bar_visualizer_name,
+        self.behavior_player_bar_visualizer_description,
       ),
       "behavior.startup_route" => (
         self.behavior_startup_route_name,
@@ -827,6 +835,9 @@ impl SettingsStrings {
       ("behavior.sidebar_position", "hidden") => self.option_hidden,
       ("behavior.playbar_position", "bottom") => self.option_bottom,
       ("behavior.playbar_position", "top") => self.option_top,
+      ("behavior.player_bar_visualizer", "Off") => self.off,
+      ("behavior.player_bar_visualizer", "Spectrum") => self.option_spectrum,
+      ("behavior.player_bar_visualizer", "Waveform") => self.option_waveform,
       ("theme.preset", "Custom") => self.option_custom,
       (
         "behavior.default_sort_playlist_tracks"

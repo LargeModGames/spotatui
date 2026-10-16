@@ -3,6 +3,7 @@ import type { ClientMessage } from "./bindings/ClientMessage";
 import type { OnboardingView } from "./bindings/OnboardingView";
 import type { ServerMessage } from "./bindings/ServerMessage";
 import { applyChannel, type Channels } from "./store";
+import type { Frame } from "./visualizerModel";
 
 const TOKEN_KEY = "spotatui.token";
 const RECONNECT_MS = 1000;
@@ -130,6 +131,8 @@ export class Connection {
   /** The last item the playback channel named, kept across a blank update. */
   private lastUri: string | null = null;
   private readonly listeners = new Set<() => void>();
+  /** Visualizer frames skip the state: dozens a second must not re-render the page. */
+  private readonly viewers = new Set<(frame: Frame) => void>();
   private code: string | null;
   private readonly open: Open;
   private readonly storage: Pick<Storage, "getItem" | "setItem">;
@@ -179,6 +182,16 @@ export class Connection {
 
   getState = (): State => this.state;
 
+  /** Hands visualizer frames to `listener`; the server sends them while one listens. */
+  watchVisualizer = (listener: (frame: Frame) => void): (() => void) => {
+    this.viewers.add(listener);
+    if (this.viewers.size === 1) this.send({ type: "visualizer", on: true });
+    return () => {
+      this.viewers.delete(listener);
+      if (this.viewers.size === 0) this.send({ type: "visualizer", on: false });
+    };
+  };
+
   private receive(text: string): void {
     const message = JSON.parse(text) as ServerMessage;
     switch (message.kind) {
@@ -186,7 +199,7 @@ export class Connection {
         if (message.payload.token)
           this.storage.setItem(TOKEN_KEY, message.payload.token);
         // A token resumes the same process, whose revisions only rise, so the resync overwrites the store.
-        return this.update({
+        this.update({
           connected: true,
           version: message.payload.version,
           window: message.payload.window,
@@ -195,6 +208,14 @@ export class Connection {
             strings: message.payload.strings,
           },
         });
+        // The server keeps the ask per socket, so a new socket asks again.
+        if (this.viewers.size > 0) this.send({ type: "visualizer", on: true });
+        return;
+      case "visualizer": {
+        const frame = { payload: message.payload, at: this.now() };
+        this.viewers.forEach((viewer) => viewer(frame));
+        return;
+      }
       case "onboarding":
         return this.update({ onboarding: message.payload });
       case "tick":

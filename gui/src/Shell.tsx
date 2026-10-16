@@ -44,6 +44,7 @@ import { NowPlayingPanel } from "./NowPlayingPanel";
 import { Party } from "./Party";
 import { PodcastPage } from "./PodcastPage";
 import { PlayerBar, type Panel } from "./PlayerBar";
+import type { WatchVisualizer } from "./PlayerBarVisualizer";
 import { QueueDrawer } from "./QueueDrawer";
 import { RadioPage } from "./RadioPage";
 import { RecentlyPlayed } from "./RecentlyPlayed";
@@ -55,6 +56,7 @@ import { Stats } from "./Stats";
 import { Toast } from "./Toast";
 import { TopBar } from "./TopBar";
 import { TrackActionsContext, type TrackActions } from "./TrackMenu";
+import { VISUALIZER_SETTING } from "./visualizerModel";
 
 const NO_DEVICES: DeviceInfo[] = [];
 /** A search that got no answer stops showing "Searching…" after this long. */
@@ -71,6 +73,7 @@ export function Shell({
   onUpdate,
   onWindow,
   onQuit,
+  watchVisualizer,
 }: {
   s?: GuiStrings;
   state: State;
@@ -79,6 +82,7 @@ export function Shell({
   /** Resizes the desktop shell's window; null without one. */
   onWindow: ((mode: WindowMode) => void) | null;
   onQuit: () => void;
+  watchVisualizer?: WatchVisualizer;
 }) {
   const { channels } = state;
   const [history, setHistory] = useState<History>(HOME);
@@ -661,6 +665,9 @@ export function Shell({
           onRoom={() => setRoom(true)}
           onMini={() => showMini(true)}
           send={send}
+          visualizer={choice(VISUALIZER_SETTING)}
+          watchVisualizer={watchVisualizer}
+          covered={room}
         />
         {room && (
           <div className="room-layer">

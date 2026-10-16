@@ -19,7 +19,8 @@ anyhow = "1"
 log = "0.4"
 serde_json = "1"
 # Every source ships. apple-music compiles only on macOS; YouTube needs a
-# user-installed yt-dlp and ffmpeg.
+# user-installed yt-dlp and ffmpeg. The player bar's visualizer captures through
+# PipeWire on Linux and cpal elsewhere; macOS leaves it off at runtime.
 spotatui = { path = "..", default-features = false, features = [
   "telemetry",
   "gui",
@@ -37,6 +38,8 @@ spotatui = { path = "..", default-features = false, features = [
   "youtube",
   "qobuz",
   "apple-music",
+  "audio-viz",
+  "audio-viz-cpal",
 ] }
 
 # Profiles do not inherit from the root package.

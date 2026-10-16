@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 use super::cavacore::{
@@ -24,6 +25,16 @@ pub struct SpectrumData {
   pub bands: Vec<f32>,
 }
 
+/// The newest samples of the capture as a mono mix from -1 to 1, oldest first,
+/// for a frontend that runs its own analysis.
+#[cfg_attr(not(feature = "gui"), allow(dead_code))]
+pub struct RecentAudio {
+  pub samples: Vec<f32>,
+  pub sample_rate: u32,
+  /// How many frames came in so far: unchanged means no new audio.
+  pub written: u64,
+}
+
 /// Audio analyzer wrapping the vendored cavacore engine: log-spaced per-bar
 /// cutoffs over bass/mid/treble FFTs, integral smoothing, gravity fall-off and
 /// autosens (one persistent gain, fast duck / slow recovery). Runs in stereo
@@ -38,6 +49,9 @@ pub struct AudioAnalyzer {
   /// Raw engine output: [left 0..bpc][right bpc..2bpc], each bass to treble.
   output: Box<[f64]>,
   spectrum: SpectrumData,
+  /// The newest tenth of a second as a mono mix, read by `recent_audio`.
+  recent: VecDeque<f32>,
+  written: u64,
 }
 
 impl AudioAnalyzer {
@@ -65,6 +79,8 @@ impl AudioAnalyzer {
       cava,
       sample_rate,
       bars_per_channel,
+      recent: VecDeque::with_capacity(recent_len(sample_rate)),
+      written: 0,
     }
   }
 
@@ -99,7 +115,14 @@ impl AudioAnalyzer {
       let right = if channels > 1 { frame[1] } else { left };
       self.pending.push(f64::from(left) * SAMPLE_SCALE);
       self.pending.push(f64::from(right) * SAMPLE_SCALE);
+      self.recent.push_back((left + right) / 2.0);
+      self.written += 1;
     }
+    let excess = self
+      .recent
+      .len()
+      .saturating_sub(recent_len(self.sample_rate));
+    self.recent.drain(..excess);
 
     // Keep only the newest samples, matching cavacore's own sliding window, so
     // a stalled UI cannot grow the backlog. Whole frames in means the cap (an
@@ -123,6 +146,19 @@ impl AudioAnalyzer {
 
     self.spectrum.clone()
   }
+
+  #[cfg_attr(not(feature = "gui"), allow(dead_code))]
+  pub fn recent(&self) -> RecentAudio {
+    RecentAudio {
+      samples: self.recent.iter().copied().collect(),
+      sample_rate: self.sample_rate,
+      written: self.written,
+    }
+  }
+}
+
+fn recent_len(sample_rate: u32) -> usize {
+  sample_rate as usize / 10
 }
 
 /// cava.c's default stereo display order (its `p.stereo` mirroring loop with
@@ -180,6 +216,12 @@ pub fn spectrum_for(analyzer: &SharedAnalyzer, desired_bars: usize) -> Option<Sp
   let mut analyzer = analyzer.lock().ok()?;
   analyzer.set_bars(desired_bars);
   Some(analyzer.process())
+}
+
+/// The newest tenth of a second, without running cava.
+#[cfg_attr(not(feature = "gui"), allow(dead_code))]
+pub fn recent_audio(analyzer: &SharedAnalyzer) -> Option<RecentAudio> {
+  Some(analyzer.lock().ok()?.recent())
 }
 
 #[cfg(test)]
@@ -265,6 +307,31 @@ mod tests {
       analyzer.set_sample_rate(5);
       let _ = analyzer.process();
     }
+  }
+
+  #[test]
+  fn recent_audio_is_a_mono_mix_oldest_first_with_a_count_of_frames() {
+    let mut analyzer = AudioAnalyzer::new(48_000, 12);
+    analyzer.push_frames(&[1.0, 0.0, -0.5, -0.5], 2);
+    analyzer.push_frames(&[0.25, 0.25], 2);
+
+    let recent = analyzer.recent();
+
+    assert_eq!(recent.samples, vec![0.5, -0.5, 0.25]);
+    assert_eq!(recent.sample_rate, 48_000);
+    assert_eq!(recent.written, 3);
+  }
+
+  #[test]
+  fn recent_audio_keeps_only_the_newest_tenth_of_a_second() {
+    let mut analyzer = AudioAnalyzer::new(8_000, 12);
+    analyzer.push_frames(&vec![1.0; 2 * 900], 2);
+    analyzer.push_frames(&[0.25, 0.25], 2);
+
+    let recent = analyzer.recent();
+
+    assert_eq!(recent.samples.len(), 800);
+    assert_eq!(recent.samples.last(), Some(&0.25));
   }
 
   #[test]

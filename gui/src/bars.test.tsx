@@ -65,6 +65,31 @@ describe("PlayerBar", () => {
     expect(tag(html, "Play")).toContain("<button");
   });
 
+  it("draws the visualizer behind the bar only where the build can capture", () => {
+    const bar = (visualizer: string | null) =>
+      renderToStaticMarkup(
+        <PlayerBar
+          playback={null}
+          position={null}
+          connected
+          devices={[]}
+          panel={null}
+          onPanel={() => {}}
+          lyricsOpen={false}
+          onLyrics={() => {}}
+          onRoom={() => {}}
+          onMini={() => {}}
+          send={() => {}}
+          visualizer={visualizer}
+        />,
+      );
+
+    expect(bar("Spectrum")).toContain(
+      '<footer class="playerbar"><canvas class="playerbar-viz" aria-hidden="true">',
+    );
+    expect(bar(null)).not.toContain("playerbar-viz");
+  });
+
   it("exposes seek and volume as focusable sliders", () => {
     const html = player(song);
     expect(tag(html, "Seek")).toContain('role="slider"');

@@ -854,6 +854,55 @@ function setting(
   return { id: `behavior.${id}`, group, name, description, value };
 }
 
+function visualizerRow(mode: "Spectrum" | "Waveform"): SettingRow {
+  const options = ["Off", "Spectrum", "Waveform"];
+  return setting(
+    "player_bar_visualizer",
+    "interface",
+    "Player Bar Visualizer",
+    "What the desktop app draws behind its player bar while this computer plays; a click on empty space in the bar changes it",
+    { kind: "choice", value: mode, options, labels: options },
+  );
+}
+
+/** Only the visualizer row, set to `mode`. */
+export const visualizerSetting = (
+  mode: "Spectrum" | "Waveform",
+): ServerMessage => ({
+  kind: "settings",
+  rev: 1,
+  payload: { language: "en", strings: strings.EN, rows: [visualizerRow(mode)] },
+});
+
+/** A loud bass and a quieter treble, as most music has. */
+export const spectrumFrame: ServerMessage = {
+  kind: "visualizer",
+  payload: {
+    levels: Array.from({ length: 75 }, (_, band) =>
+      Math.round(
+        255 *
+          Math.min(
+            1,
+            Math.max(0, 0.85 - band / 110 + 0.12 * Math.sin(band / 2.5)),
+          ),
+      ),
+    ),
+    wave: [],
+  },
+};
+
+export const waveFrame: ServerMessage = {
+  kind: "visualizer",
+  payload: {
+    levels: [],
+    wave: Array.from({ length: 320 }, (_, point) =>
+      Math.round(
+        127 * (0.55 * Math.sin(point / 6) + 0.25 * Math.sin(point / 1.7)),
+      ),
+    ),
+  },
+};
+
 /** The desktop app's settings rows, with a downloaded update waiting to install. */
 export const settings: ServerMessage[] = [
   {
@@ -891,6 +940,7 @@ export const settings: ServerMessage[] = [
           "Let OS media keys, headphone buttons, and remote controls (playerctl, Now Playing) control playback",
           { kind: "bool", value: true },
         ),
+        visualizerRow("Spectrum"),
         setting(
           "enable_streaming",
           "streaming",

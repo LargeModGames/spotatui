@@ -4,4 +4,4 @@ import type { OnboardingReply } from "./OnboardingReply";
 import type { UpdateAsk } from "./UpdateAsk";
 import type { WindowMode } from "./WindowMode";
 
-export type ClientMessage = { "type": "action", action: Action, } | { "type": "onboarding", reply: OnboardingReply, } | { "type": "update", ask: UpdateAsk, } | { "type": "window", mode: WindowMode, } | { "type": "quit" };
+export type ClientMessage = { "type": "action", action: Action, } | { "type": "onboarding", reply: OnboardingReply, } | { "type": "update", ask: UpdateAsk, } | { "type": "window", mode: WindowMode, } | { "type": "visualizer", on: boolean, } | { "type": "quit" };

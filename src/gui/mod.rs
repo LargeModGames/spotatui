@@ -4,3 +4,4 @@ pub(crate) mod bridge;
 pub(crate) mod onboarding;
 pub(crate) mod protocol;
 pub(crate) mod server;
+pub(crate) mod visualizer;

@@ -239,6 +239,40 @@ impl VisualizerStyle {
   }
 }
 
+/// What the desktop app draws behind its player bar while this computer plays.
+#[derive(Clone, Copy, Debug, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlayerBarVisualizer {
+  Off,
+  #[default]
+  Spectrum,
+  Waveform,
+}
+
+// The settings row exists only where the desktop app captures.
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), allow(dead_code))]
+impl PlayerBarVisualizer {
+  pub fn name(self) -> &'static str {
+    match self {
+      PlayerBarVisualizer::Off => "Off",
+      PlayerBarVisualizer::Spectrum => "Spectrum",
+      PlayerBarVisualizer::Waveform => "Waveform",
+    }
+  }
+
+  pub fn options() -> &'static [&'static str] {
+    &["Off", "Spectrum", "Waveform"]
+  }
+
+  pub fn from_name(name: &str) -> Self {
+    match name {
+      "Off" => PlayerBarVisualizer::Off,
+      "Waveform" => PlayerBarVisualizer::Waveform,
+      _ => PlayerBarVisualizer::Spectrum,
+    }
+  }
+}
+
 /// Controls the playback state on startup, both for Spotify and for a persisted
 /// non-Spotify session (local/Subsonic/radio/YouTube) that spotatui resumes on
 /// launch.
@@ -576,6 +610,7 @@ pub struct BehaviorConfigString {
   pub paused_icon: Option<String>,
   pub set_window_title: Option<bool>,
   pub visualizer_style: Option<VisualizerStyle>,
+  pub player_bar_visualizer: Option<PlayerBarVisualizer>,
   pub relay_server_url: Option<String>,
   pub stop_after_current_track: Option<bool>,
   pub startup_behavior: Option<StartupBehavior>,
@@ -706,6 +741,7 @@ pub struct BehaviorConfig {
   pub paused_icon: String,
   pub set_window_title: bool,
   pub visualizer_style: VisualizerStyle,
+  pub player_bar_visualizer: PlayerBarVisualizer,
   pub relay_server_url: String,
   pub stop_after_current_track: bool,
   pub startup_behavior: StartupBehavior,
@@ -1238,6 +1274,7 @@ impl UserConfig {
         paused_icon: "⏸".to_string(),
         set_window_title: true,
         visualizer_style: VisualizerStyle::default(),
+        player_bar_visualizer: PlayerBarVisualizer::default(),
         relay_server_url: "wss://spotatui-party.spotatui.workers.dev/ws".to_string(),
         stop_after_current_track: false,
         startup_behavior: StartupBehavior::Continue,
@@ -1718,6 +1755,10 @@ impl UserConfig {
 
     if let Some(startup_behavior) = behavior_config.startup_behavior {
       self.behavior.startup_behavior = startup_behavior;
+    }
+
+    if let Some(player_bar_visualizer) = behavior_config.player_bar_visualizer {
+      self.behavior.player_bar_visualizer = player_bar_visualizer;
     }
 
     if let Some(disable_auto_update) = behavior_config.disable_auto_update {
@@ -2352,6 +2393,7 @@ impl UserConfig {
       },
       stop_after_current_track: Some(self.behavior.stop_after_current_track),
       startup_behavior: Some(self.behavior.startup_behavior),
+      player_bar_visualizer: Some(self.behavior.player_bar_visualizer),
       disable_auto_update: Some(self.behavior.disable_auto_update),
       auto_update_delay: Some(self.behavior.auto_update_delay.clone()),
       #[cfg(feature = "art-decode")]

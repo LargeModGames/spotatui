@@ -674,7 +674,7 @@ pub async fn start_ui(
           TickEnv {
             now: Instant::now(),
             #[cfg(any(feature = "audio-viz", feature = "audio-viz-cpal"))]
-            viz_bars,
+            viz: viz_bars.map(crate::core::driver::VizNeed::Bars),
             #[cfg(feature = "art-decode")]
             cover_art_full_image_support: cover_art_full_image_support(),
           },

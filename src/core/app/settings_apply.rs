@@ -233,6 +233,12 @@ impl App {
               crate::core::user_config::StartupBehavior::from_name(v);
           }
         }
+        "behavior.player_bar_visualizer" => {
+          if let SettingValue::Cycle(v, _) = &setting.value {
+            self.user_config.behavior.player_bar_visualizer =
+              crate::core::user_config::PlayerBarVisualizer::from_name(v);
+          }
+        }
         "behavior.startup_route" => {
           if let SettingValue::Cycle(v, _) = &setting.value {
             self.user_config.behavior.startup_route = v.clone();

@@ -49,6 +49,7 @@ pub struct GuiStrings {
   pub unmute: &'static str,
   pub live: &'static str,
   pub nothing_playing: &'static str,
+  pub change_visualizer: &'static str,
   pub nothing_is_playing: &'static str,
   pub nothing_queued: &'static str,
   pub now_playing: &'static str,

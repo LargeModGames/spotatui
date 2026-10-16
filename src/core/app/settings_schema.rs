@@ -496,6 +496,24 @@ impl App {
           crate::core::user_config::StartupBehavior::options(),
         ),
       },
+      // The desktop app, which shares this config, captures only on these.
+      #[cfg(any(target_os = "linux", target_os = "windows"))]
+      SettingItem {
+        id: "behavior.player_bar_visualizer".to_string(),
+        name: strings.behavior_player_bar_visualizer_name.to_string(),
+        description: strings
+          .behavior_player_bar_visualizer_description
+          .to_string(),
+        value: SettingValue::Cycle(
+          self
+            .user_config
+            .behavior
+            .player_bar_visualizer
+            .name()
+            .to_string(),
+          crate::core::user_config::PlayerBarVisualizer::options(),
+        ),
+      },
       SettingItem {
         id: "behavior.startup_route".to_string(),
         name: strings.behavior_startup_route_name.to_string(),

@@ -76,7 +76,7 @@ jobs:
           # MPRIS, self-update, MCP and the five sources without the terminal
           # frontend.
           - name: gui
-            args: "--locked --no-default-features --features telemetry,gui,streaming,discord-rpc,self-update,scripting,mcp-server,mpris,local-files,subsonic,internet-radio,youtube,qobuz"
+            args: "--locked --no-default-features --features telemetry,gui,streaming,discord-rpc,self-update,scripting,mcp-server,mpris,local-files,subsonic,internet-radio,youtube,qobuz,audio-viz,audio-viz-cpal"
     env:
       RUSTFLAGS: "-C linker-features=-lld"
     steps:
@@ -120,7 +120,7 @@ jobs:
             args: "--locked --no-default-features --features telemetry"
           # See the check job for why the gui leg exists.
           - name: gui
-            args: "--locked --no-default-features --features telemetry,gui,streaming,discord-rpc,self-update,scripting,mcp-server,mpris,local-files,subsonic,internet-radio,youtube,qobuz"
+            args: "--locked --no-default-features --features telemetry,gui,streaming,discord-rpc,self-update,scripting,mcp-server,mpris,local-files,subsonic,internet-radio,youtube,qobuz,audio-viz,audio-viz-cpal"
     env:
       RUSTFLAGS: "-C linker-features=-lld"
     steps:
@@ -225,7 +225,7 @@ jobs:
             args: "--locked --no-default-features --features telemetry,streaming"
           # See the check job for why the gui leg exists.
           - name: gui
-            args: "--locked --no-default-features --features telemetry,gui,streaming,discord-rpc,self-update,scripting,mcp-server,mpris,local-files,subsonic,internet-radio,youtube,qobuz"
+            args: "--locked --no-default-features --features telemetry,gui,streaming,discord-rpc,self-update,scripting,mcp-server,mpris,local-files,subsonic,internet-radio,youtube,qobuz,audio-viz,audio-viz-cpal"
     env:
       RUSTFLAGS: "-C linker-features=-lld"
     steps:

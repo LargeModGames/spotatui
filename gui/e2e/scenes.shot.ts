@@ -1,5 +1,5 @@
 import { test } from "@playwright/test";
-import { openWith, shot } from "./bridge";
+import { openWith, openWithVisualizer, shot } from "./bridge";
 import {
   artist,
   discover,
@@ -24,7 +24,10 @@ import {
   session,
   settings,
   songRadio,
+  spectrumFrame,
   stats,
+  visualizerSetting,
+  waveFrame,
 } from "./fixtures";
 
 test("expired", async ({ page }) => {
@@ -355,6 +358,24 @@ test("settings search", async ({ page }) => {
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("searchbox", { name: "Search settings" }).fill("stream");
   await shot(page, "settings-search");
+});
+
+test("visualizer spectrum", async ({ page }) => {
+  await openWithVisualizer(
+    page,
+    [...playing, ...library, visualizerSetting("Spectrum")],
+    spectrumFrame,
+  );
+  await shot(page, "visualizer-spectrum");
+});
+
+test("visualizer waveform", async ({ page }) => {
+  await openWithVisualizer(
+    page,
+    [...playing, ...library, visualizerSetting("Waveform")],
+    waveFrame,
+  );
+  await shot(page, "visualizer-waveform");
 });
 
 test("library folders", async ({ page }) => {

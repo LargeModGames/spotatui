@@ -44,7 +44,7 @@ across an **eight-leg** feature matrix, plus one `macos-latest` job (below):
 | `slim` | `telemetry,tui` |
 | `headless` | `telemetry` - one of three legs without `tui`. `mod tui` is feature-gated, so this leg turns any `crate::tui` import from core/infra/cli into a compile error - what keeps a second frontend from silently re-coupling to the terminal one |
 | `headless-streaming` | `telemetry,streaming` - `check` + `clippy` only, no `test` job. Proves native-streaming startup (`runtime/streaming/`) and the player-event wiring type-check and pass clippy with no terminal frontend in scope. Its two entry points carry `allow(dead_code)` there, so the leg does not prove they are live |
-| `gui` | `telemetry,gui,streaming,discord-rpc,self-update,scripting,mcp-server,mpris,local-files,subsonic,internet-radio,youtube,qobuz` - the third leg without `tui`: the Linux feature set a `spotatui-gui` build carries, the five sources included. `check`, `clippy` and `test` |
+| `gui` | `telemetry,gui,streaming,discord-rpc,self-update,scripting,mcp-server,mpris,local-files,subsonic,internet-radio,youtube,qobuz,audio-viz,audio-viz-cpal` - the third leg without `tui`: the Linux feature set a `spotatui-gui` build carries, the five sources and the player bar's visualizer included. `check`, `clippy` and `test` |
 
 - Every CI leg passes `--locked`; the local commands do not. Regenerate
   `Cargo.lock` after any `Cargo.toml` edit or all legs fail at once.

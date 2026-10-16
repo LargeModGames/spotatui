@@ -20,6 +20,37 @@ pub use player::Reopen;
 #[cfg(any(feature = "audio-viz", feature = "audio-viz-cpal"))]
 mod analyzer;
 
+// The GUI player bar's spectrum.
+#[cfg(all(
+  feature = "gui",
+  any(feature = "audio-viz", feature = "audio-viz-cpal")
+))]
+mod winamp;
+#[cfg(all(
+  feature = "gui",
+  any(feature = "audio-viz", feature = "audio-viz-cpal")
+))]
+pub use winamp::{scope, WinampSpectrum};
+
+/// The gain for a volume percent: librespot's `VolumeCtrl::Log` mapping over
+/// a 60 dB range (`1000^(p/100 - 1)`), which the native player uses by default.
+/// 0% is silence, 100% is the file level, and 80% is about -12 dB.
+#[cfg(any(
+  feature = "audio-decode",
+  all(
+    feature = "gui",
+    any(feature = "audio-viz", feature = "audio-viz-cpal")
+  )
+))]
+pub fn volume_gain(percent: u8) -> f32 {
+  const DB_RATIO: f64 = 1000.0;
+  match percent {
+    0 => 0.0,
+    p if p >= 100 => 1.0,
+    p => ((f64::from(p) / 100.0 - 1.0) * DB_RATIO.ln()).exp() as f32,
+  }
+}
+
 // Vendored cava DSP engine (see cavacore/mod.rs for provenance and the local
 // patches). Lint allowances instead of cleanups keep it diffable against
 // upstream: it carries items our integration never constructs.
@@ -48,6 +79,8 @@ pub use pipewire_capture::PipeWireCapture as AudioCaptureManager;
 pub use capture::AudioCaptureManager;
 
 // Re-export SpectrumData
+#[cfg(any(feature = "audio-viz", feature = "audio-viz-cpal"))]
+pub use analyzer::RecentAudio;
 #[cfg(any(feature = "audio-viz", feature = "audio-viz-cpal"))]
 #[allow(unused_imports)]
 pub use analyzer::SpectrumData;
@@ -86,5 +119,37 @@ impl AudioCaptureManager {
 
   pub fn is_active(&self) -> bool {
     false
+  }
+}
+
+#[cfg(all(
+  test,
+  any(
+    feature = "audio-decode",
+    all(
+      feature = "gui",
+      any(feature = "audio-viz", feature = "audio-viz-cpal")
+    )
+  )
+))]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn volume_gain_follows_the_native_log_curve() {
+    assert_eq!(volume_gain(0), 0.0);
+    assert_eq!(volume_gain(100), 1.0);
+    assert_eq!(volume_gain(150), 1.0);
+    let at_80 = volume_gain(80);
+    assert!(
+      (at_80 - 0.251).abs() < 0.001,
+      "80% is about -12 dB: {at_80}"
+    );
+    let at_50 = volume_gain(50);
+    assert!(
+      (at_50 - 0.0316).abs() < 0.001,
+      "50% is about -30 dB: {at_50}"
+    );
+    assert!(volume_gain(20) < at_50 && at_50 < at_80);
   }
 }

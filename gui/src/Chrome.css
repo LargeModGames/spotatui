@@ -216,12 +216,29 @@
 
 /* Player bar: on the black frame, three columns of 30, 40 and 30 percent. */
 .playerbar {
+  position: relative;
   display: grid;
   grid-template-columns: minmax(0, 3fr) minmax(0, 4fr) minmax(0, 3fr);
   align-items: center;
   gap: 16px;
   padding: 0 8px;
   background: var(--frame);
+}
+
+/* Behind the controls and out to the window's edges. */
+.playerbar-viz {
+  position: absolute;
+  top: 0;
+  left: -8px;
+  width: calc(100% + 16px);
+  height: 100%;
+  pointer-events: none;
+}
+
+/* Positioned without a z-index, so they paint over the visualizer and the
+   devices popover still stacks above the panels' sticky headers. */
+.playerbar > :not(.playerbar-viz) {
+  position: relative;
 }
 
 .now-track {

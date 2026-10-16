@@ -33,6 +33,10 @@ pub(crate) enum ServerMessage {
   Tick {
     payload: Option<u64>,
   },
+  /// A frame of the player bar's visualizer, sent only to a page that asked for them.
+  Visualizer {
+    payload: VisualizerFrame,
+  },
   Playback {
     rev: u64,
     payload: PlaybackPayload,
@@ -206,6 +210,12 @@ const GUI_SETTINGS: &[(&str, &str)] = &[
   ("behavior.keepawake_enabled", "playback"),
   ("behavior.enable_media_keys", "playback"),
   ("behavior.language", "interface"),
+  // Same gate as `gui::visualizer::AVAILABLE`.
+  #[cfg(any(
+    all(target_os = "linux", feature = "audio-viz"),
+    all(target_os = "windows", feature = "audio-viz-cpal")
+  ))]
+  ("behavior.player_bar_visualizer", "interface"),
   ("behavior.enable_streaming", "streaming"),
   ("behavior.streaming_device_name", "streaming"),
   ("behavior.streaming_bitrate", "streaming"),
@@ -620,7 +630,36 @@ pub(crate) enum ClientMessage {
   Window {
     mode: WindowMode,
   },
+  /// Whether this page shows the player bar's visualizer and wants its frames.
+  Visualizer {
+    on: bool,
+  },
   Quit,
+}
+
+/// Both lists are empty when the sound stops, so the page lets the bars fall.
+#[derive(Serialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
+pub(crate) struct VisualizerFrame {
+  /// The spectrum's 75 bands from bass to treble, 0 to 255; empty for the waveform.
+  levels: Vec<u8>,
+  /// The waveform from oldest to newest, -127 to 127; empty for the spectrum.
+  wave: Vec<i8>,
+}
+
+pub(crate) fn visualizer(levels: &[f32], wave: &[f32]) -> ServerMessage {
+  ServerMessage::Visualizer {
+    payload: VisualizerFrame {
+      levels: levels
+        .iter()
+        .map(|level| (level.clamp(0.0, 1.0) * 255.0).round() as u8)
+        .collect(),
+      wave: wave
+        .iter()
+        .map(|value| (value.clamp(-1.0, 1.0) * 127.0).round() as i8)
+        .collect(),
+    },
+  }
 }
 
 pub(crate) fn hello(
@@ -2891,6 +2930,26 @@ mod tests {
       serde_json::json!({ "kind": "tick", "payload": 1234 })
     );
   }
+
+  #[test]
+  fn a_visualizer_frame_carries_levels_as_bytes_and_the_wave_as_signed_bytes() {
+    assert_eq!(
+      serde_json::to_value(visualizer(&[0.0, 0.5, 1.0, 1.5], &[-1.0, 0.25, -2.0])).unwrap(),
+      serde_json::json!({
+        "kind": "visualizer",
+        "payload": { "levels": [0, 128, 255, 255], "wave": [-127, 32, -127] }
+      })
+    );
+  }
+
+  #[test]
+  fn a_page_asking_for_the_visualizer_parses() {
+    let message: ClientMessage =
+      serde_json::from_str(r#"{ "type": "visualizer", "on": true }"#).unwrap();
+
+    assert!(matches!(message, ClientMessage::Visualizer { on: true }));
+  }
+
   #[test]
   fn typescript_bindings_are_written_to_the_frontend_source_tree() {
     use crate::core::plugin_api::{EpisodeInfo, ResumePointInfo};
@@ -2953,6 +3012,7 @@ mod tests {
     written::<PodcastPage>(&dir, &cfg);
     written::<ShowInfo>(&dir, &cfg);
     written::<WindowMode>(&dir, &cfg);
+    written::<VisualizerFrame>(&dir, &cfg);
     std::fs::write(
       dir.join("strings.json"),
       serde_json::to_string_pretty(&serde_json::json!({

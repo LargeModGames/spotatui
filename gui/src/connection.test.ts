@@ -358,3 +358,54 @@ describe("showsOnboarding", () => {
     expect(showsOnboarding(base)).toBe(false);
   });
 });
+
+describe("watchVisualizer", () => {
+  const ask = (on: boolean) => JSON.stringify({ type: "visualizer", on });
+  const frame = JSON.stringify({
+    kind: "visualizer",
+    payload: { levels: [255], wave: [] },
+  });
+
+  it("asks for frames with the first listener and stops with the last", () => {
+    const { connection, sockets } = harness("abc");
+    sockets[0].handlers.message(hello("t1"));
+
+    const first = connection.watchVisualizer(() => {});
+    const second = connection.watchVisualizer(() => {});
+    first();
+    expect(sockets[0].sent).toEqual([ask(true)]);
+    second();
+    expect(sockets[0].sent).toEqual([ask(true), ask(false)]);
+  });
+
+  it("asks again on every new socket, which starts without the ask", () => {
+    const { connection, sockets, retries } = harness("abc");
+    connection.watchVisualizer(() => {});
+    sockets[0].handlers.message(hello("t1"));
+    sockets[0].handlers.close();
+    retries[0]();
+    sockets[1].handlers.message(hello("t1"));
+
+    expect(sockets[0].sent).toEqual([ask(true)]);
+    expect(sockets[1].sent).toEqual([ask(true)]);
+  });
+
+  it("hands frames to the listeners and leaves the state alone", () => {
+    const { connection, sockets } = harness("abc");
+    sockets[0].handlers.message(hello("t1"));
+    const listener = vi.fn();
+    const rendered = vi.fn();
+    connection.watchVisualizer(listener);
+    connection.subscribe(rendered);
+    const state = connection.getState();
+
+    sockets[0].handlers.message(frame);
+
+    expect(listener).toHaveBeenCalledWith({
+      payload: { levels: [255], wave: [] },
+      at: 42,
+    });
+    expect(rendered).not.toHaveBeenCalled();
+    expect(connection.getState()).toBe(state);
+  });
+});

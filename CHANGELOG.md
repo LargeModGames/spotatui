@@ -4,6 +4,8 @@
 
 ### Added
 
+- **A visualizer behind the player bar** of the desktop app and the browser GUI: while this computer plays, the bar shows a 75-band spectrum (bars that drop with gravity, peak caps and a bass glow) or a waveform, in colours from the accent. A click on empty space in the bar moves through Spectrum, Waveform and Off, and the Interface settings have it as Player Bar Visualizer (`behavior.player_bar_visualizer`: `spectrum` by default, `waveform` or `off`). Down to about a third of spotatui's volume, the bars do not shrink with it. Windows and Linux only: on Linux it captures through PipeWire, so the deb and rpm packages now depend on the PipeWire library.
+
 - **Search settings in the desktop app and browser GUI**: filter by section, setting name or description, and press Escape to clear the search ([#840](https://github.com/LargeModGames/spotatui/issues/840)).
 
 - **The Shuffle button on Liked Songs and playlist pages works**: in the desktop app and the browser GUI, it plays the songs the page shows in a random order, only the matching ones when you filter.

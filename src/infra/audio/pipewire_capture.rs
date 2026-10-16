@@ -1,7 +1,9 @@
 // PipeWire-native audio capture for Linux
 // This provides direct access to PipeWire's audio graph for monitor capture
 
-use super::analyzer::{create_shared_analyzer, spectrum_for, SharedAnalyzer, SpectrumData};
+use super::analyzer::{
+  create_shared_analyzer, recent_audio, spectrum_for, RecentAudio, SharedAnalyzer, SpectrumData,
+};
 use pipewire as pw;
 use pw::spa::param::audio::AudioInfoRaw;
 use pw::spa::pod::Pod;
@@ -21,8 +23,12 @@ const INIT_TIMEOUT: Duration = Duration::from_secs(2);
 pub struct PipeWireCapture {
   analyzer: SharedAnalyzer,
   active: Arc<AtomicBool>,
+  /// Ends the capture thread's main loop, which disconnects the stream.
+  quit: pw::channel::Sender<()>,
   _thread: thread::JoinHandle<()>,
 }
+
+type Ready = Box<dyn FnOnce() + Send>;
 
 impl PipeWireCapture {
   /// Create a new PipeWire audio capture manager sized for `display_bars`
@@ -37,14 +43,21 @@ impl PipeWireCapture {
   /// Runs `run` on the capture thread and waits for it to report whether
   /// setup succeeded: `run` calls its ready callback just before it blocks
   /// in the main loop, and returning without calling it is a failed setup.
+  /// `run` must end its main loop when the quit receiver hears from `drop`.
   fn start<F>(analyzer: SharedAnalyzer, run: F) -> Option<Self>
   where
-    F: FnOnce(SharedAnalyzer, Arc<AtomicBool>, Box<dyn FnOnce() + Send>) -> Result<(), pw::Error>
+    F: FnOnce(
+        SharedAnalyzer,
+        Arc<AtomicBool>,
+        Ready,
+        pw::channel::Receiver<()>,
+      ) -> Result<(), pw::Error>
       + Send
       + 'static,
   {
     let active = Arc::new(AtomicBool::new(true));
     let (ready_tx, ready_rx) = mpsc::sync_channel::<()>(1);
+    let (quit, quit_rx) = pw::channel::channel();
 
     let analyzer_clone = analyzer.clone();
     let active_clone = active.clone();
@@ -54,7 +67,7 @@ impl PipeWireCapture {
       let ready = Box::new(move || {
         let _ = ready_tx.send(());
       });
-      if let Err(e) = run(analyzer_clone, active_clone.clone(), ready) {
+      if let Err(e) = run(analyzer_clone, active_clone.clone(), ready, quit_rx) {
         log::error!("[audio-viz] PipeWire capture error: {:?}", e);
       }
       // Setup failed or the main loop ended: either way nothing is captured.
@@ -66,6 +79,8 @@ impl PipeWireCapture {
     if ready_rx.recv_timeout(INIT_TIMEOUT).is_err() {
       log::warn!("[audio-viz] PipeWire capture did not start; visualizer has no audio");
       active.store(false, Ordering::Relaxed);
+      // Waits in the channel, so a setup that finishes late quits at once.
+      let _ = quit.send(());
       return None;
     }
 
@@ -73,6 +88,7 @@ impl PipeWireCapture {
       Some(Self {
         analyzer,
         active,
+        quit,
         _thread: thread,
       })
     } else {
@@ -90,6 +106,16 @@ impl PipeWireCapture {
     spectrum_for(&self.analyzer, desired_bars)
   }
 
+  /// The newest tenth of a second as a mono mix, while the stream lives.
+  #[cfg_attr(not(feature = "gui"), allow(dead_code))]
+  pub fn recent_audio(&self) -> Option<RecentAudio> {
+    if !self.active.load(Ordering::Relaxed) {
+      return None;
+    }
+
+    recent_audio(&self.analyzer)
+  }
+
   /// Check if audio capture is currently active
   pub fn is_active(&self) -> bool {
     self.active.load(Ordering::Relaxed)
@@ -99,7 +125,17 @@ impl PipeWireCapture {
 impl Drop for PipeWireCapture {
   fn drop(&mut self) {
     self.active.store(false, Ordering::Relaxed);
+    let _ = self.quit.send(());
   }
+}
+
+/// Quits `mainloop` when the capture is dropped.
+fn quit_on(
+  mainloop: &pw::main_loop::MainLoopRc,
+  quit: pw::channel::Receiver<()>,
+) -> pw::channel::AttachedReceiver<'_, ()> {
+  let target = mainloop.clone();
+  quit.attach(mainloop.loop_(), move |()| target.quit())
 }
 
 /// User data passed to the stream callbacks
@@ -132,10 +168,12 @@ fn silences_libpipewire_log(pipewire_debug: Option<&std::ffi::OsStr>) -> bool {
 fn run_pipewire_capture(
   analyzer: SharedAnalyzer,
   active: Arc<AtomicBool>,
-  ready: Box<dyn FnOnce() + Send>,
+  ready: Ready,
+  quit: pw::channel::Receiver<()>,
 ) -> Result<(), pw::Error> {
   quiet_libpipewire_log(std::env::var_os("PIPEWIRE_DEBUG").as_deref());
-  let mainloop = pw::main_loop::MainLoopBox::new(None)?;
+  let mainloop = pw::main_loop::MainLoopRc::new(None)?;
+  let _quit = quit_on(&mainloop, quit);
   let context = pw::context::ContextBox::new(mainloop.loop_(), None)?;
   let core = context.connect(None)?;
 
@@ -260,7 +298,7 @@ fn run_pipewire_capture(
 
   ready();
 
-  // Run the main loop - this blocks until quit is called
+  // Blocks until the capture is dropped.
   mainloop.run();
 
   Ok(())
@@ -272,7 +310,7 @@ mod tests {
 
   #[test]
   fn new_returns_none_when_pipewire_setup_fails() {
-    let capture = PipeWireCapture::start(create_shared_analyzer(48000, 32), |_, _, _| {
+    let capture = PipeWireCapture::start(create_shared_analyzer(48000, 32), |_, _, _, _| {
       Err(pw::Error::CreationFailed)
     });
 
@@ -280,15 +318,37 @@ mod tests {
   }
 
   #[test]
+  fn dropping_the_capture_ends_its_main_loop() {
+    let (ended_tx, ended_rx) = mpsc::channel();
+    let capture = PipeWireCapture::start(
+      create_shared_analyzer(48000, 32),
+      move |_, _, ready, quit| {
+        let mainloop = pw::main_loop::MainLoopRc::new(None)?;
+        let _quit = quit_on(&mainloop, quit);
+        ready();
+        mainloop.run();
+        let _ = ended_tx.send(());
+        Ok(())
+      },
+    );
+    assert!(capture.is_some());
+
+    drop(capture);
+
+    assert!(ended_rx.recv_timeout(Duration::from_secs(2)).is_ok());
+  }
+
+  #[test]
   fn new_returns_an_active_capture_once_setup_reports_ready() {
-    let capture = PipeWireCapture::start(create_shared_analyzer(48000, 32), |_, active, ready| {
-      ready();
-      // Stand-in for the main loop: block until the capture is dropped.
-      while active.load(Ordering::Relaxed) {
-        thread::sleep(Duration::from_millis(5));
-      }
-      Ok(())
-    });
+    let capture =
+      PipeWireCapture::start(create_shared_analyzer(48000, 32), |_, active, ready, _| {
+        ready();
+        // Stand-in for the main loop: block until the capture is dropped.
+        while active.load(Ordering::Relaxed) {
+          thread::sleep(Duration::from_millis(5));
+        }
+        Ok(())
+      });
 
     assert!(capture.as_ref().is_some_and(PipeWireCapture::is_active));
   }

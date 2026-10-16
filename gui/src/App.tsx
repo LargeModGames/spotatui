@@ -64,6 +64,7 @@ export function App({ connection }: { connection: Connection }) {
         onUpdate={ask}
         onWindow={state.window ? resize : null}
         onQuit={() => connection.send({ type: "quit" })}
+        watchVisualizer={connection.watchVisualizer}
       />
     </StringsReaderContext.Provider>
   );

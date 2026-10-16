@@ -130,15 +130,26 @@ pub struct TickEnv {
   /// Wall-clock instant of this tick; injected so the driver's throttling
   /// decisions stay deterministic under test.
   pub now: Instant,
-  /// Visualizer bar count resolved from the frontend's geometry, or `None`
-  /// while the analysis view is not showing (which releases the capture).
+  /// What the frontend's visualizer reads from the capture, or `None` while
+  /// no visualizer shows (which releases the capture).
   #[cfg(any(feature = "audio-viz", feature = "audio-viz-cpal"))]
-  pub viz_bars: Option<usize>,
+  pub viz: Option<VizNeed>,
   /// Whether the frontend renders real pixels for cover art (the terminal
   /// image-protocol probe); false in a decode-only build, where art is
   /// fetched solely for the adaptive theme.
   #[cfg(feature = "art-decode")]
   pub cover_art_full_image_support: bool,
+}
+
+#[cfg(any(feature = "audio-viz", feature = "audio-viz-cpal"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VizNeed {
+  /// cava's bands, as many as the frontend's geometry fits, into `App::spectrum_data`.
+  Bars(usize),
+  /// Only the capture: the frontend reads `Driver::recent_audio`, analyses it
+  /// itself and closes a failed capture to try again; no status message.
+  #[cfg_attr(not(feature = "gui"), allow(dead_code))]
+  Samples,
 }
 
 /// The scheduler's own state: everything that used to live as locals of the
@@ -825,19 +836,31 @@ impl Driver {
       app.step_pitch_levels(env.now, elapsed);
     }
 
-    // The pitch view draws Spotify's analysis, so it needs no capture.
+    // The terminal's pitch view draws Spotify's analysis, so its bars need no capture.
     #[cfg(any(feature = "audio-viz", feature = "audio-viz-cpal"))]
-    match env.viz_bars.filter(|_| !app.pitch_view_shows()) {
-      Some(desired_bars) => {
+    match env
+      .viz
+      .filter(|need| *need == VizNeed::Samples || !app.pitch_view_shows())
+    {
+      Some(need) => {
         // Built at the count we are about to ask for, so the first frame
-        // does not immediately throw the fresh cavacore plan away.
-        let capture = self
-          .audio_capture
-          .poll(app, move || audio::AudioCaptureManager::new(desired_bars));
+        // does not immediately throw the fresh cavacore plan away. Samples
+        // alone need the smallest plan.
+        let desired_bars = match need {
+          VizNeed::Bars(bars) => bars,
+          VizNeed::Samples => 2,
+        };
+        // A frontend that reads samples retries a failed capture by itself, quietly.
+        let report = matches!(need, VizNeed::Bars(_));
+        let capture = self.audio_capture.poll(app, report, move || {
+          audio::AudioCaptureManager::new(desired_bars)
+        });
         match capture {
           Some(capture) => {
-            if let Some(spectrum) = capture.get_spectrum(desired_bars) {
-              app.spectrum_data = Some(spectrum);
+            if let VizNeed::Bars(bars) = need {
+              if let Some(spectrum) = capture.get_spectrum(bars) {
+                app.spectrum_data = Some(spectrum);
+              }
             }
             // Kept outside the spectrum arm: a dead stream must drop the
             // "Capturing audio" status instead of freezing it on.
@@ -855,6 +878,13 @@ impl Driver {
     }
 
     app.note_display_changes();
+  }
+
+  /// The open capture's newest tenth of a second, for `VizNeed::Samples`.
+  #[cfg(any(feature = "audio-viz", feature = "audio-viz-cpal"))]
+  #[cfg_attr(not(feature = "gui"), allow(dead_code))]
+  pub fn recent_audio(&self) -> Option<audio::RecentAudio> {
+    self.audio_capture.current()?.recent_audio()
   }
 
   /// The one-shot startup dispatch, fired by the frontend right after its

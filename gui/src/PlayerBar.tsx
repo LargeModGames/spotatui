@@ -7,16 +7,24 @@ import type { Position } from "./connection";
 import { DevicesPopover } from "./DevicesPopover";
 import { sourceOf } from "./format";
 import { Glyph } from "./Icon";
+import {
+  PlayerBarVisualizer,
+  type WatchVisualizer,
+} from "./PlayerBarVisualizer";
+import { setSetting } from "./settingsModel";
 import { SourceBadge } from "./SourceBadge";
 import { Meter, Progress, Transport } from "./Transport";
 import { Cover } from "./ui";
 import { usePosition } from "./usePosition";
+import { isEmptySpace, nextMode, VISUALIZER_SETTING } from "./visualizerModel";
 
 /** What the right panel shows; null hides it. */
 export type Panel = "now" | "queue" | null;
 
 /** The volume an unmute restores when the mute happened elsewhere. */
 const UNMUTE_VOLUME = 50;
+
+const NO_FRAMES: WatchVisualizer = () => () => {};
 
 export function PlayerBar({
   s = EN,
@@ -31,6 +39,9 @@ export function PlayerBar({
   onRoom,
   onMini,
   send,
+  visualizer = null,
+  watchVisualizer = NO_FRAMES,
+  covered = false,
 }: {
   s?: GuiStrings;
   playback: PlaybackPayload | null;
@@ -45,6 +56,11 @@ export function PlayerBar({
   /** Switches to the mini player. */
   onMini: () => void;
   send: (action: Action) => void;
+  /** The visualizer setting's value; null where this build cannot capture. */
+  visualizer?: string | null;
+  watchVisualizer?: WatchVisualizer;
+  /** Something opaque, such as the Room, hides the bar. */
+  covered?: boolean;
 }) {
   const item = playback?.item ?? null;
   const playing = item?.is_playing ?? false;
@@ -55,6 +71,11 @@ export function PlayerBar({
 
   const [unmuteTo, setUnmuteTo] = useState(UNMUTE_VOLUME);
   const [devicesOpen, setDevicesOpen] = useState(false);
+  const [overEmptySpace, setOverEmptySpace] = useState(false);
+  // The bar takes a click only when its press started on the same empty space
+  // and closed no popup: a press that slid over a control, or that dismissed a
+  // menu, is no click on the bar.
+  const pressed = useRef<EventTarget | null>(null);
   const devicesBox = useRef<HTMLDivElement>(null);
   const closeDevices = useCallback(() => {
     setDevicesOpen(false);
@@ -65,7 +86,52 @@ export function PlayerBar({
   }, []);
 
   return (
-    <footer className="playerbar">
+    <footer
+      className="playerbar"
+      // Only over the empty space: a title would also show over the controls.
+      title={overEmptySpace ? s.change_visualizer : undefined}
+      onMouseOver={
+        visualizer === null
+          ? undefined
+          : (event) => setOverEmptySpace(isEmptySpace(event.target as Element))
+      }
+      onMouseLeave={() => setOverEmptySpace(false)}
+      onPointerDown={(event) => {
+        const popupOpen =
+          devicesOpen || document.querySelector('[role="menu"]') !== null;
+        pressed.current = popupOpen ? null : event.target;
+      }}
+      onPointerUp={(event) => {
+        // A release on another element sends the click to their common parent.
+        if (event.target !== pressed.current) pressed.current = null;
+      }}
+      onClick={
+        visualizer === null
+          ? undefined
+          : (event) => {
+              if (
+                event.target === pressed.current &&
+                isEmptySpace(event.target as Element)
+              )
+                send(
+                  setSetting(VISUALIZER_SETTING, {
+                    Text: nextMode(visualizer),
+                  }),
+                );
+            }
+      }
+    >
+      {visualizer !== null && (
+        <PlayerBarVisualizer
+          mode={
+            visualizer === "Spectrum" || visualizer === "Waveform"
+              ? visualizer
+              : "Off"
+          }
+          watch={watchVisualizer}
+          covered={covered}
+        />
+      )}
       <div className="now-track">
         <Cover src={item?.image_url} size={56} />
         <div className="titles">

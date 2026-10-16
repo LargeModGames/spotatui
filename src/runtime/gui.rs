@@ -16,6 +16,7 @@ use crate::gui::onboarding::BrowserOnboarding;
 use crate::gui::protocol::ClientMessage;
 pub use crate::gui::protocol::WindowMode;
 use crate::gui::server;
+use crate::gui::visualizer::{Feed, FRAME_EVERY};
 use anyhow::Result;
 use std::path::Path;
 use std::sync::Arc;
@@ -280,6 +281,9 @@ async fn serve_until_quit(
   let mut ticks = tokio::time::interval(tick_rate);
   ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
   let mut last_tick = Instant::now();
+  let mut visualizer = Feed::new();
+  let mut frame_clock = tokio::time::interval(FRAME_EVERY);
+  frame_clock.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
   // Never completes when the handler cannot register: a completed future must not be polled again.
   let ctrl_c = async {
     if let Err(e) = tokio::signal::ctrl_c().await {
@@ -324,11 +328,15 @@ async fn serve_until_quit(
           TickEnv {
             now,
             #[cfg(any(feature = "audio-viz", feature = "audio-viz-cpal"))]
-            viz_bars: None,
+            viz: visualizer
+              .wants_capture(now)
+              .then_some(crate::core::driver::VizNeed::Samples),
             #[cfg(feature = "art-decode")]
             cover_art_full_image_support: true,
           },
         );
+        // After the tick, which opens, polls or closes the capture.
+        visualizer.note(&app, plays_here(&app), publisher.visualizer_watched(), now);
         last_tick = now;
         publisher.publish(&app);
         publisher.tick(&app, now);
@@ -336,6 +344,11 @@ async fn serve_until_quit(
         if !hosted && publisher.abandoned(now, plays_here(&app)) {
           log::info!("no page connected and nothing played here for a minute; quitting");
           break;
+        }
+      }
+      _ = frame_clock.tick(), if visualizer.streams(publisher.visualizer_watched(), Instant::now()) => {
+        if let Some(frame) = visualizer.frame(driver, Instant::now()) {
+          publisher.frame(&frame);
         }
       }
       _ = update_checks.tick(), if update_requests.is_some() => {
@@ -386,6 +399,8 @@ async fn serve_until_quit(
           app.apply(*action);
           driver.run_pending_script_commands(&mut app);
           publisher.publish(&app);
+          // A click on the bar changes the visualizer's mode at once.
+          visualizer.note(&app, plays_here(&app), publisher.visualizer_watched(), Instant::now());
           // A changed auto-update setting reaches the updater at once.
           if let Some(check) = changed_check(last_check, &app.user_config.behavior) {
             last_check = Some(check);
@@ -393,7 +408,7 @@ async fn serve_until_quit(
           }
         }
         // The socket answers these itself; boot is over by now.
-        Some(ClientMessage::Onboarding { .. }) => {}
+        Some(ClientMessage::Onboarding { .. } | ClientMessage::Visualizer { .. }) => {}
         Some(ClientMessage::Update { ask }) => match ask {
           UpdateAsk::Check => {
             let check = update_check(&app.lock().await.user_config.behavior);

@@ -40,6 +40,7 @@ pub const EN: GuiStrings = GuiStrings {
   unmute: "Unmute",
   live: "live",
   nothing_playing: "Nothing playing",
+  change_visualizer: "Click to change the visualizer",
   nothing_is_playing: "Nothing is playing.",
   nothing_queued: "Nothing is queued.",
   now_playing: "Now playing",
