@@ -1097,6 +1097,12 @@ fn render_local_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect, view: 
     };
     title_spans.push(Span::styled(format!(" | {}", message), msg_style));
   }
+  for seg in app.plugin_playbar_segments.values() {
+    title_spans.push(Span::styled(
+      format!(" | {}", seg),
+      Style::default().fg(app.user_config.theme.playbar_text.into()),
+    ));
+  }
 
   let title_block = Block::default()
     .borders(Borders::ALL)
@@ -2250,6 +2256,48 @@ mod tests {
     assert!(
       !content.contains('/') || !content.contains("1/1"),
       "a single-track session should not show a queue indicator: {content}"
+    );
+  }
+
+  /// `set_playbar` text has to survive on every source playbar. The local
+  /// renderer shares this path with Subsonic, Qobuz, radio, YouTube, the
+  /// queue, and Apple Music.
+  #[cfg(feature = "local-files")]
+  #[test]
+  fn local_playbar_renders_stored_plugin_segment() {
+    use ratatui::{backend::TestBackend, Terminal};
+
+    let mut app = App::default();
+    app
+      .plugin_playbar_segments
+      .insert("clock".to_string(), "plugin-clock".to_string());
+    let view = LocalPlaybarView {
+      source_label: "Local",
+      name: "Track".to_string(),
+      artists: "Artist".to_string(),
+      is_playing: true,
+      position_ms: 0,
+      duration_ms: 200_000,
+      volume_percent: 50,
+      queue_position: None,
+      live: false,
+      show_modes: true,
+      quality: None,
+    };
+    let area = Rect::new(0, 0, 160, 6);
+    let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+    terminal
+      .draw(|f| render_local_playbar(f, &app, area, &view))
+      .unwrap();
+    let buffer = terminal.backend().buffer();
+    let content: String = (0..area.height)
+      .flat_map(|y| (0..area.width).map(move |x| (x, y)))
+      .filter_map(|(x, y)| buffer.cell((x, y)).map(|c| c.symbol().to_string()))
+      .collect();
+
+    assert!(
+      content.contains(" | plugin-clock"),
+      "plugin playbar text should follow the title: {content}"
     );
   }
 
