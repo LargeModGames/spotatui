@@ -1,5 +1,6 @@
 #[cfg(feature = "cover-art")]
 pub mod cover_art;
+pub mod dev_inspect;
 pub mod event;
 pub mod first_run;
 pub mod fuzzy;

@@ -483,6 +483,8 @@ pub async fn start_ui(
   }
 
   let events = event::Events::new(user_config.behavior.tick_rate_milliseconds);
+  let inspector = crate::tui::dev_inspect::Inspector::from_env(events.sender());
+  let mut pending_snapshot = None;
 
   let mut is_first_render = true;
 
@@ -557,7 +559,7 @@ pub async fn start_ui(
       // position after the write.
       terminal.hide_cursor()?;
 
-      terminal.draw(|f| {
+      let frame = terminal.draw(|f| {
         use ratatui::{prelude::Style, widgets::Block};
         f.render_widget(
           Block::default().style(Style::default().bg(app.user_config.theme.background.into())),
@@ -609,6 +611,10 @@ pub async fn start_ui(
           f.set_cursor_position(position);
         }
       })?;
+      if let (Some(inspector), Some(snapshot)) = (&inspector, pending_snapshot.take()) {
+        let route = format!("{:?}/{:?}", current_route.id, current_route.active_block);
+        inspector.write_frame(&snapshot, &route, frame.buffer);
+      }
 
       driver.next_window_title(&app)
     };
@@ -631,6 +637,7 @@ pub async fn start_ui(
         }
         driver.run_pending_script_commands(&mut app);
       }
+      event::Event::Snapshot(snapshot) => pending_snapshot = Some(snapshot),
       event::Event::Mouse(mouse) => {
         let mut app = app.lock().await;
         if !app.user_config.behavior.disable_mouse_inputs {

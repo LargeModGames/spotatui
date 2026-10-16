@@ -39,6 +39,8 @@ pub enum Event {
   Mouse(MouseEvent),
   /// A tick event occurred.
   Tick(Duration),
+  /// The dev inspector asks for the next frame.
+  Snapshot(crate::tui::dev_inspect::Snapshot),
 }
 
 /// Whether the reader thread hands a mouse event to the UI loop. Every
@@ -132,6 +134,11 @@ impl Events {
       tick_rate_milliseconds,
       _tx: tx,
     }
+  }
+
+  /// A sender into the channel the terminal reader feeds.
+  pub fn sender(&self) -> mpsc::Sender<Event> {
+    self._tx.clone()
   }
 
   pub fn set_tick_rate(&self, tick_rate: u64) {
