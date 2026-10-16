@@ -1,9 +1,10 @@
 name: Issue Triage
 
-# Auto-triages every opened issue with DeepSeek V4-Flash: applies a category label
-# and posts a summary + possible-duplicate comment, acting as spotatui[bot]. No
-# maintainer approval step — the run generates and applies in one pass. See
-# .github/scripts/triage.mjs.
+# Auto-triages every opened issue with Claude, which reads the repository through
+# read-only tools: applies a category label and posts a summary, code pointers and
+# possible duplicates, acting as spotatui[bot]. A `good first issue` also gets
+# step-by-step start instructions for new contributors. No maintainer approval
+# step: the run generates and applies in one pass. See .github/scripts/triage.mjs.
 
 on:
   issues:
@@ -23,8 +24,13 @@ concurrency:
 
 jobs:
   triage:
+    # id-token lets the script exchange a GitHub OIDC token for a short-lived
+    # Anthropic token (workload identity federation), so no API key is stored.
+    permissions:
+      contents: read
+      id-token: write
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
         with:
@@ -32,6 +38,9 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 20
+      - name: Install the Anthropic SDK
+        working-directory: .github/scripts
+        run: npm ci --ignore-scripts
       - name: Mint spotatui[bot] token (issues:write only)
         id: app-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
@@ -45,18 +54,21 @@ jobs:
         env:
           ISSUE_NUMBER: ${{ github.event.issue.number || github.event.inputs.issue_number }}
         run: echo "number=${ISSUE_NUMBER}" >> "$GITHUB_OUTPUT"
-      - name: Gather issue + open issues
+      - name: Gather issue + open and closed issues
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
           N: ${{ steps.n.outputs.number }}
         run: |
-          gh issue view "$N" --repo "$REPO" --json number,title,body > issue.json
-          gh issue list --repo "$REPO" --state open --limit 100 --json number,title > open-issues.json
-      - name: Triage with DeepSeek
+          gh issue view "$N" --repo "$REPO" --json number,title,body,labels > issue.json
+          gh issue list --repo "$REPO" --state open --limit 100 --json number,title,body > open-issues.json
+          gh issue list --repo "$REPO" --state closed --limit 100 --json number,title,body > closed-issues.json
+      - name: Triage with Claude
         shell: bash
         env:
-          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          ANTHROPIC_FEDERATION_RULE_ID: ${{ vars.ANTHROPIC_FEDERATION_RULE_ID }}
+          ANTHROPIC_ORGANIZATION_ID: ${{ vars.ANTHROPIC_ORGANIZATION_ID }}
+          ANTHROPIC_SERVICE_ACCOUNT_ID: ${{ vars.ANTHROPIC_SERVICE_ACCOUNT_ID }}
         # tee also echoes the triage JSON into the step log for easy inspection.
         run: node .github/scripts/triage.mjs | tee triage.json
       - name: Apply label + comment as spotatui[bot]
