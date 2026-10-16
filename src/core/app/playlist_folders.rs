@@ -139,6 +139,12 @@ impl App {
     items
   }
 
+  /// Changes current playlist and resets playlist scroll offset
+  pub fn open_playlist_folder(&mut self, target_id: usize) {
+    self.current_playlist_folder_id = target_id;
+    self.view.playlist_scroll_offset.set(0);
+  }
+
   /// Get the playlist for a PlaylistFolderItem::Playlist variant
   #[allow(dead_code)]
   pub fn get_playlist_for_item(&self, item: &PlaylistFolderItem) -> Option<&PlaylistInfo> {

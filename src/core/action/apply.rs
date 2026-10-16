@@ -212,8 +212,7 @@ impl App {
         }
         super::OpenTarget::SourcePlaylist(uri) => self.open_source_playlist_tracks(uri),
         super::OpenTarget::PlaylistFolder(target_id) => {
-          self.current_playlist_folder_id = target_id;
-          self.view.playlist_scroll_offset.set(0);
+          self.open_playlist_folder(target_id);
         }
         super::OpenTarget::Show(id) => self.dispatch(IoEvent::GetShow(id)),
         super::OpenTarget::TrackAlbum(track_id) => {
