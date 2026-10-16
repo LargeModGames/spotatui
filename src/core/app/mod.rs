@@ -422,6 +422,9 @@ pub struct App {
   /// Native playback state - updated by player events, used when streaming is active
   /// This is more reliable than current_playback_context.is_playing during native streaming
   pub native_is_playing: Option<bool>,
+  /// librespot's last reported position, which the tick moves on between reports.
+  #[cfg(feature = "streaming")]
+  native_clock: Option<NativeClock>,
   /// Tracks whether the current native playback was started from a Spotify context
   /// or from a raw URI-list/native-only route.
   pub native_playback_origin: Option<NativePlaybackOrigin>,

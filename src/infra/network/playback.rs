@@ -2341,11 +2341,7 @@ impl PlaybackNetwork for Network {
     #[cfg(feature = "streaming")]
     if let PlaybackBackend::Native(player) = symmetric_playback_backend(self).await {
       player.seek(position_ms);
-      self
-        .app
-        .lock()
-        .await
-        .set_native_recovery_position(position_ms);
+      self.app.lock().await.record_native_seek(position_ms);
       return;
     }
 

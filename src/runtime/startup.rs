@@ -31,7 +31,7 @@ use crate::tui::runner;
 #[cfg(feature = "tui")]
 use anyhow::Result;
 use log::info;
-use std::sync::{atomic::AtomicU64, Arc};
+use std::sync::Arc;
 // Used by `restore_playback_session`'s per-source position seeks.
 #[cfg(any(feature = "local-files", feature = "subsonic", feature = "youtube"))]
 use std::time::Duration;
@@ -204,7 +204,6 @@ fn update_windows_metadata(
 pub(super) struct FrontendHandles {
   pub(super) app: Arc<Mutex<App>>,
   pub(super) user_config: UserConfig,
-  pub(super) shared_position: Option<Arc<AtomicU64>>,
   pub(super) mpris: MprisHandle,
   pub(super) discord: DiscordRpcHandle,
   pub(super) history_collector: crate::infra::history::HistoryCollectorHandle,
@@ -293,11 +292,9 @@ pub(super) async fn prepare_frontend(boot: Boot) -> FrontendHandles {
   // This avoids lock contention - the player event handler can update position
   // without needing to acquire the app mutex
   #[cfg(any(feature = "streaming", all(feature = "mpris", target_os = "linux")))]
-  let shared_position = Arc::new(AtomicU64::new(0));
+  let shared_position = Arc::new(std::sync::atomic::AtomicU64::new(0));
   #[cfg(feature = "streaming")]
   let shared_position_for_events = Arc::clone(&shared_position);
-  #[cfg(feature = "streaming")]
-  let shared_position_for_ui = Arc::clone(&shared_position);
 
   // Create shared atomic for playing state (lock-free for MPRIS toggle)
   #[cfg(any(feature = "streaming", all(feature = "mpris", target_os = "linux")))]
@@ -632,10 +629,6 @@ pub(super) async fn prepare_frontend(boot: Boot) -> FrontendHandles {
   FrontendHandles {
     app: cloned_app,
     user_config,
-    #[cfg(feature = "streaming")]
-    shared_position: Some(shared_position_for_ui),
-    #[cfg(not(feature = "streaming"))]
-    shared_position: None,
     #[cfg(all(feature = "mpris", target_os = "linux"))]
     mpris: mpris_for_ui,
     #[cfg(not(all(feature = "mpris", target_os = "linux")))]
@@ -652,7 +645,6 @@ pub(super) async fn launch_ui(boot: Boot) -> Result<()> {
   let FrontendHandles {
     app,
     user_config,
-    shared_position,
     mpris,
     discord,
     history_collector,
@@ -663,7 +655,7 @@ pub(super) async fn launch_ui(boot: Boot) -> Result<()> {
   // The driver owns everything the app must do on a timer (see
   // `core::driver`); the terminal loop's job shrinks to drawing frames,
   // reading events, and calling `driver.tick` at the configured tick rate.
-  let mut driver = Driver::new(shared_position, mpris, discord);
+  let mut driver = Driver::new(mpris, discord);
   let ui_result = match runner::start_ui(user_config, &app, &mut driver).await {
     Ok(session) => {
       shutdown_frontend(&app, &mut driver, history_collector, |driver| {
@@ -1010,7 +1002,7 @@ async fn restore_playback_session(
 async fn handle_mpris_events(
   mut event_rx: tokio::sync::mpsc::UnboundedReceiver<mpris::MprisEvent>,
   shared_is_playing: Arc<std::sync::atomic::AtomicBool>,
-  shared_position: Arc<AtomicU64>,
+  shared_position: Arc<std::sync::atomic::AtomicU64>,
   mpris_manager: Arc<mpris::MprisManager>,
   app: Arc<Mutex<App>>,
 ) {
@@ -1111,7 +1103,7 @@ async fn handle_mpris_events(
           shared_position.store(new_position_ms as u64, Ordering::Relaxed);
           if let Ok(mut app_lock) = app.try_lock() {
             app_lock.song_progress_ms = new_position_ms as u128;
-            app_lock.set_native_recovery_position(new_position_ms);
+            app_lock.record_native_seek(new_position_ms);
           }
           mpris_manager.emit_seeked(new_position_ms as u64);
           continue;
@@ -1135,7 +1127,7 @@ async fn handle_mpris_events(
           shared_position.store(new_position_ms as u64, Ordering::Relaxed);
           if let Ok(mut app_lock) = app.try_lock() {
             app_lock.song_progress_ms = new_position_ms as u128;
-            app_lock.set_native_recovery_position(new_position_ms);
+            app_lock.record_native_seek(new_position_ms);
           }
           mpris_manager.emit_seeked(new_position_ms as u64);
           continue;

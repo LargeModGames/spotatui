@@ -35,7 +35,6 @@ use crate::infra::network::IoEvent;
 use crate::infra::scripting::ScriptEngine;
 #[cfg(feature = "scripting")]
 use log::info;
-use std::sync::{atomic::AtomicU64, Arc};
 use std::time::{Duration, Instant};
 
 #[cfg(feature = "discord-rpc")]
@@ -44,7 +43,7 @@ pub type DiscordRpcHandle = Option<discord_rpc::DiscordRpcManager>;
 pub type DiscordRpcHandle = Option<()>;
 
 #[cfg(all(feature = "mpris", target_os = "linux"))]
-pub type MprisHandle = Option<Arc<mpris::MprisManager>>;
+pub type MprisHandle = Option<std::sync::Arc<mpris::MprisManager>>;
 #[cfg(not(all(feature = "mpris", target_os = "linux")))]
 pub type MprisHandle = Option<()>;
 
@@ -145,9 +144,6 @@ pub struct TickEnv {
 /// The scheduler's own state: everything that used to live as locals of the
 /// terminal event loop, one instance per frontend session.
 pub struct Driver {
-  /// Real-time position updates from the native player's event handler,
-  /// read lock-free instead of waiting on the polled Spotify context.
-  shared_position: Option<Arc<AtomicU64>>,
   #[cfg(all(feature = "mpris", target_os = "linux"))]
   mpris_manager: MprisHandle,
   #[cfg(feature = "discord-rpc")]
@@ -205,11 +201,7 @@ fn fetch_startup_route(app: &mut App) {
 }
 
 impl Driver {
-  pub fn new(
-    shared_position: Option<Arc<AtomicU64>>,
-    mpris_manager: MprisHandle,
-    discord_rpc_manager: DiscordRpcHandle,
-  ) -> Self {
+  pub fn new(mpris_manager: MprisHandle, discord_rpc_manager: DiscordRpcHandle) -> Self {
     #[cfg(not(all(feature = "mpris", target_os = "linux")))]
     let _ = mpris_manager;
     #[cfg(not(feature = "discord-rpc"))]
@@ -243,7 +235,6 @@ impl Driver {
     };
 
     Driver {
-      shared_position,
       #[cfg(all(feature = "mpris", target_os = "linux"))]
       mpris_manager,
       #[cfg(feature = "discord-rpc")]
@@ -554,7 +545,7 @@ impl Driver {
       use crate::infra::queue::QueueNowPlaying;
       let lost = match app.queue_now.as_ref() {
         Some(QueueNowPlaying::Decoded(d)) if d.player.device_lost() => Some((
-          Arc::clone(&d.player),
+          std::sync::Arc::clone(&d.player),
           d.player.device_removed() || d.player.is_paused(),
         )),
         _ => None,
@@ -731,6 +722,7 @@ impl Driver {
     // the (paused) librespot position below clobber it. Music's position was
     // set by `update_on_tick`.
     #[allow(unused_mut)]
+    #[cfg_attr(not(feature = "streaming"), allow(unused_variables))]
     let mut source_owns_playback = app.apple_music_owns_playback();
     // The native queue slot owns the sink when playing a decoded track; read
     // progress from its player first (it may share the suspended context's
@@ -823,31 +815,9 @@ impl Driver {
     self.session_was_present = has_session;
 
     #[cfg(feature = "streaming")]
-    if !source_owns_playback {
-      if let Some(ref pos) = self.shared_position {
-        if app.is_streaming_active {
-          let recently_seeked = app
-            .last_native_seek
-            .is_some_and(|t| t.elapsed().as_millis() < crate::core::app::SEEK_POSITION_IGNORE_MS);
-
-          if !recently_seeked {
-            let position_ms = pos.load(std::sync::atomic::Ordering::Relaxed);
-            if position_ms > 0 {
-              app.song_progress_ms = position_ms as u128;
-            }
-          }
-        }
-      }
-    }
-    #[cfg(not(feature = "streaming"))]
-    if !source_owns_playback {
-      if let Some(ref pos) = self.shared_position {
-        if app.is_streaming_active {
-          let position_ms = pos.load(std::sync::atomic::Ordering::Relaxed);
-          if position_ms > 0 {
-            app.song_progress_ms = position_ms as u128;
-          }
-        }
+    if !source_owns_playback && app.is_streaming_active {
+      if let Some(position_ms) = app.native_position_ms(env.now) {
+        app.song_progress_ms = position_ms as u128;
       }
     }
     app.note_analysis_clock(playing, env.now);

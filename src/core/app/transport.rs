@@ -277,7 +277,7 @@ impl App {
           player.seek(0);
           self.song_progress_ms = 0;
           self.seek_ms = None;
-          self.set_native_recovery_position(0);
+          self.record_native_seek(0);
           return;
         }
       }

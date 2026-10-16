@@ -8,13 +8,8 @@ impl App {
   pub(super) fn apply_seek(&mut self, seek_ms: u32) {
     // The audible track's duration decides between a seek and a skip; a
     // decoded owner seeks through its own latch and gets nothing here.
-    let duration_ms = match self.playing_item() {
-      PlayingItem::Spotify(PlayableItem::Track(track)) => track.duration.num_milliseconds() as u32,
-      PlayingItem::Spotify(PlayableItem::Episode(episode)) => {
-        episode.duration.num_milliseconds() as u32
-      }
-      PlayingItem::QueuedSpotify(track) => u32::try_from(track.duration_ms).unwrap_or(u32::MAX),
-      PlayingItem::Spotify(_) | PlayingItem::NotSpotify | PlayingItem::Nothing => return,
+    let Some(duration_ms) = self.playing_duration_ms() else {
+      return;
     };
 
     let event = if seek_ms < duration_ms {
@@ -24,6 +19,22 @@ impl App {
     };
 
     self.dispatch(event);
+  }
+
+  /// The length of the Spotify item that plays, or `None` under another owner.
+  pub(super) fn playing_duration_ms(&self) -> Option<u32> {
+    match self.playing_item() {
+      PlayingItem::Spotify(PlayableItem::Track(track)) => {
+        Some(track.duration.num_milliseconds() as u32)
+      }
+      PlayingItem::Spotify(PlayableItem::Episode(episode)) => {
+        Some(episode.duration.num_milliseconds() as u32)
+      }
+      PlayingItem::QueuedSpotify(track) => {
+        Some(u32::try_from(track.duration_ms).unwrap_or(u32::MAX))
+      }
+      PlayingItem::Spotify(_) | PlayingItem::NotSpotify | PlayingItem::Nothing => None,
+    }
   }
 
   pub fn seek_forwards(&mut self) {
@@ -344,7 +355,7 @@ impl App {
       player.seek(position_ms);
       self.last_native_seek = Some(Instant::now());
       self.pending_native_seek = None;
-      self.set_native_recovery_position(position_ms);
+      self.record_native_seek(position_ms);
 
       // Notify MPRIS clients that position jumped
       #[cfg(all(feature = "mpris", target_os = "linux"))]

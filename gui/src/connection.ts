@@ -40,6 +40,62 @@ export interface State {
   window: boolean;
 }
 
+/** A tick this far behind the shown position is a jump (a seek, a new track), not jitter. */
+const JUMP_MS = 1000;
+
+/** The item that plays and whether it runs, as the playback channel says. */
+export interface Playing {
+  uri: string | null;
+  playing: boolean;
+}
+
+function playingOf(channels: Channels): Playing {
+  const item = channels.playback?.payload.item;
+  return { uri: item?.uri ?? null, playing: item?.is_playing ?? false };
+}
+
+function shownAt(
+  position: Position | null,
+  playing: boolean,
+  now: number,
+): number | null {
+  if (!position || position.ms === null) return null;
+  return playing ? position.ms + Math.max(0, now - position.at) : position.ms;
+}
+
+/** The anchor for a tick: while playing, one a little behind the shown position holds it until the ticks catch up, never a step back. */
+export function positionAfterTick(
+  previous: Position | null,
+  ms: number | null,
+  playing: boolean,
+  now: number,
+): Position {
+  const shown = shownAt(previous, playing, now);
+  if (
+    !playing ||
+    ms === null ||
+    shown === null ||
+    shown <= ms ||
+    shown - ms >= JUMP_MS
+  )
+    return { ms, at: now };
+  return { ms: shown, at: now + (shown - ms) };
+}
+
+/** The anchor after a playback update: a new item starts at 0 until its first tick, and a start or stop keeps the shown position. */
+export function positionAfterChannel(
+  previous: Position | null,
+  before: Playing,
+  after: Playing,
+  now: number,
+): Position | null {
+  if (!previous) return previous;
+  if (before.uri !== null && after.uri !== null && after.uri !== before.uri)
+    return { ms: 0, at: now };
+  if (after.playing === before.playing) return previous;
+  return { ms: shownAt(previous, before.playing, now), at: now };
+}
+
 /** Reads the one-time launch code from the fragment and removes it from the address bar. */
 export function takeLaunchCode(
   location: Pick<Location, "hash" | "pathname">,
@@ -141,7 +197,12 @@ export class Connection {
         return this.update({ onboarding: message.payload });
       case "tick":
         return this.update({
-          position: { ms: message.payload, at: this.now() },
+          position: positionAfterTick(
+            this.state.position,
+            message.payload,
+            playingOf(this.state.channels).playing,
+            this.now(),
+          ),
         });
       case "settings": {
         const channels = applyChannel(this.state.channels, message);
@@ -153,11 +214,19 @@ export class Connection {
             : {}),
         });
       }
-      default:
+      default: {
+        const channels = applyChannel(this.state.channels, message);
         return this.update({
-          channels: applyChannel(this.state.channels, message),
+          channels,
           booted: this.state.booted || message.kind === "route",
+          position: positionAfterChannel(
+            this.state.position,
+            playingOf(this.state.channels),
+            playingOf(channels),
+            this.now(),
+          ),
         });
+      }
     }
   }
 

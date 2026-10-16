@@ -383,9 +383,278 @@ impl App {
   }
 }
 
+/// librespot reports about once a second; past this gap the clock waits for the next report.
+#[cfg(feature = "streaming")]
+const NATIVE_CLOCK_REACH: Duration = Duration::from_secs(2);
+
+/// A position librespot reported, and when; `running` is librespot's own play state,
+/// never the optimistic `native_is_playing`.
+#[cfg(feature = "streaming")]
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct NativeClock {
+  ms: u32,
+  at: Instant,
+  running: bool,
+}
+
+/// A report this far from the clock is a jump (a seek elsewhere, a stall), not jitter.
+#[cfg(feature = "streaming")]
+const NATIVE_CLOCK_JUMP_MS: i64 = 1_500;
+
+/// The clock after librespot reports `report_ms`. The decoder works in bursts, so a
+/// report near the clock is jitter: half of it is taken, and never as a backward step.
+#[cfg(feature = "streaming")]
+fn observed_clock(
+  clock: Option<NativeClock>,
+  report_ms: u32,
+  running: bool,
+  now: Instant,
+) -> NativeClock {
+  let at_report = NativeClock {
+    ms: report_ms,
+    at: now,
+    running,
+  };
+  let Some(clock) = clock else {
+    return at_report;
+  };
+  let shown = native_position_at(clock, now, 0);
+  let error = i64::from(report_ms) - i64::from(shown);
+  if error.abs() >= NATIVE_CLOCK_JUMP_MS {
+    return at_report;
+  }
+  let (ms, at) = if !(running && clock.running) || error == 0 {
+    (shown, now)
+  } else if error > 0 {
+    (shown.saturating_add((error / 2) as u32), now)
+  } else {
+    (shown, now + Duration::from_millis((-error / 2) as u64))
+  };
+  NativeClock { ms, at, running }
+}
+
+/// The native position at `now`: the report plus the time since it while audio runs.
+#[cfg(feature = "streaming")]
+fn native_position_at(clock: NativeClock, now: Instant, duration_ms: u32) -> u32 {
+  let ms = if clock.running {
+    let ahead = now
+      .saturating_duration_since(clock.at)
+      .min(NATIVE_CLOCK_REACH);
+    clock.ms.saturating_add(ahead.as_millis() as u32)
+  } else {
+    clock.ms
+  };
+  if duration_ms > 0 {
+    ms.min(duration_ms)
+  } else {
+    ms
+  }
+}
+
+#[cfg(feature = "streaming")]
+impl App {
+  /// Records that librespot is at `position_ms` now.
+  pub(crate) fn anchor_native_position(&mut self, position_ms: u32, running: bool) {
+    self.native_clock = Some(NativeClock {
+      ms: position_ms,
+      at: Instant::now(),
+      running,
+    });
+  }
+
+  /// Takes a librespot position report in the play state it gives.
+  pub(crate) fn observe_native_position(&mut self, position_ms: u32, running: bool) {
+    self.native_clock = Some(observed_clock(
+      self.native_clock,
+      position_ms,
+      running,
+      Instant::now(),
+    ));
+  }
+
+  /// A local seek: librespot plays from `position_ms` now, and its reports for a moment are older.
+  pub(crate) fn record_native_seek(&mut self, position_ms: u32) {
+    self.last_native_seek = Some(Instant::now());
+    self.set_native_recovery_position(position_ms);
+    self.jump_native_position(position_ms);
+  }
+
+  /// Moves the clock to `position_ms` at once, in the play state it had.
+  pub(crate) fn jump_native_position(&mut self, position_ms: u32) {
+    let running = self.native_clock.is_some_and(|clock| clock.running);
+    self.anchor_native_position(position_ms, running);
+  }
+
+  /// Whether a local seek is recent enough that a librespot report can predate it.
+  pub(crate) fn native_seek_settling(&self) -> bool {
+    self
+      .last_native_seek
+      .is_some_and(|at| at.elapsed().as_millis() < SEEK_POSITION_IGNORE_MS)
+  }
+
+  pub(crate) fn clear_native_position(&mut self) {
+    self.native_clock = None;
+  }
+
+  /// The native position at `now`, or `None` before librespot reported one.
+  /// A seek the throttle still holds is where the playbar already is.
+  pub(crate) fn native_position_ms(&self, now: Instant) -> Option<u32> {
+    let clock = self.native_clock?;
+    if let Some(pending) = self.pending_native_seek {
+      return Some(pending);
+    }
+    let duration_ms = self
+      .native_track_info
+      .as_ref()
+      .map(|info| info.duration_ms)
+      .or_else(|| self.playing_duration_ms())
+      .unwrap_or(0);
+    Some(native_position_at(clock, now, duration_ms))
+  }
+}
+
 #[cfg(all(test, feature = "streaming"))]
 mod tests {
   use super::*;
+
+  fn clock(ms: u32, at: Instant, running: bool) -> NativeClock {
+    NativeClock { ms, at, running }
+  }
+
+  #[test]
+  fn a_repeated_native_report_still_advances_the_position() {
+    let t0 = Instant::now();
+    let report = clock(37_900, t0, true);
+    let shown: Vec<u32> = [0, 250, 500, 750]
+      .map(|ms| native_position_at(report, t0 + Duration::from_millis(ms), 180_000))
+      .to_vec();
+    assert_eq!(shown, vec![37_900, 38_150, 38_400, 38_650]);
+  }
+
+  #[test]
+  fn the_native_position_holds_until_librespot_runs() {
+    let t0 = Instant::now();
+    let later = t0 + Duration::from_millis(900);
+    assert_eq!(
+      native_position_at(clock(37_900, t0, false), later, 180_000),
+      37_900
+    );
+  }
+
+  #[test]
+  fn the_native_position_stops_two_seconds_past_the_last_report() {
+    let t0 = Instant::now();
+    let later = t0 + Duration::from_secs(10);
+    assert_eq!(
+      native_position_at(clock(37_900, t0, true), later, 180_000),
+      39_900
+    );
+  }
+
+  #[test]
+  fn the_native_position_never_passes_the_track_duration() {
+    let t0 = Instant::now();
+    let later = t0 + Duration::from_millis(1_500);
+    assert_eq!(
+      native_position_at(clock(179_000, t0, true), later, 180_000),
+      180_000
+    );
+  }
+
+  #[test]
+  fn a_report_a_little_behind_holds_the_clock_instead_of_stepping_back() {
+    let t0 = Instant::now();
+    let now = t0 + Duration::from_millis(1_000);
+    let clock = observed_clock(Some(clock(10_000, t0, true)), 10_800, true, now);
+    assert_eq!(native_position_at(clock, now, 0), 11_000);
+    assert_eq!(
+      native_position_at(clock, now + Duration::from_millis(100), 0),
+      11_000
+    );
+    assert_eq!(
+      native_position_at(clock, now + Duration::from_millis(300), 0),
+      11_200
+    );
+  }
+
+  #[test]
+  fn a_report_a_little_ahead_moves_the_clock_half_way() {
+    let t0 = Instant::now();
+    let now = t0 + Duration::from_millis(1_000);
+    let clock = observed_clock(Some(clock(10_000, t0, true)), 11_300, true, now);
+    assert_eq!(native_position_at(clock, now, 0), 11_150);
+  }
+
+  #[test]
+  fn a_report_far_from_the_clock_is_taken_at_once() {
+    let t0 = Instant::now();
+    let now = t0 + Duration::from_millis(1_000);
+    let clock = observed_clock(Some(clock(10_000, t0, true)), 60_000, true, now);
+    assert_eq!(native_position_at(clock, now, 0), 60_000);
+  }
+
+  #[test]
+  fn a_pause_report_stops_the_clock_where_it_shows() {
+    let t0 = Instant::now();
+    let now = t0 + Duration::from_millis(1_000);
+    let clock = observed_clock(Some(clock(10_000, t0, true)), 10_900, false, now);
+    assert_eq!(
+      native_position_at(clock, now + Duration::from_secs(5), 0),
+      11_000
+    );
+  }
+
+  #[test]
+  fn a_native_seek_moves_the_clock_the_tick_reads() {
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.anchor_native_position(37_900, true);
+    app.record_native_seek(90_000);
+    let shown = app
+      .native_position_ms(Instant::now() + Duration::from_millis(600))
+      .unwrap();
+    assert!((90_600..92_000).contains(&shown), "{shown}");
+  }
+
+  #[test]
+  fn a_local_seek_settles_before_librespot_reports_count_again() {
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    assert!(!app.native_seek_settling());
+    app.record_native_seek(45_000);
+    assert!(app.native_seek_settling());
+    app.last_native_seek = Some(Instant::now() - Duration::from_secs(1));
+    assert!(!app.native_seek_settling());
+  }
+
+  #[test]
+  fn a_seek_while_paused_keeps_the_clock_still() {
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.anchor_native_position(37_900, false);
+    app.record_native_seek(90_000);
+    let later = Instant::now() + Duration::from_millis(600);
+    assert_eq!(app.native_position_ms(later), Some(90_000));
+  }
+
+  #[test]
+  fn an_optimistic_resume_does_not_run_the_clock_before_librespot_plays() {
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.anchor_native_position(60_000, false);
+    app.native_is_playing = Some(true);
+    let later = Instant::now() + Duration::from_secs(5);
+    assert_eq!(app.native_position_ms(later), Some(60_000));
+  }
+
+  #[test]
+  fn a_throttled_seek_is_the_position_until_it_runs() {
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.anchor_native_position(15_000, true);
+    app.pending_native_seek = Some(20_000);
+    assert_eq!(app.native_position_ms(Instant::now()), Some(20_000));
+  }
 
   #[test]
   fn spotify_startup_play_or_pause_never_reaches_music() {

@@ -205,7 +205,6 @@ async fn launch_gui(host: Option<GuiHost>) -> Result<()> {
   let FrontendHandles {
     app,
     user_config,
-    shared_position,
     mpris,
     discord,
     history_collector,
@@ -215,7 +214,7 @@ async fn launch_gui(host: Option<GuiHost>) -> Result<()> {
     serving();
   }
   let tick_rate = Duration::from_millis(user_config.behavior.tick_rate_milliseconds);
-  let mut driver = Driver::new(shared_position, mpris, discord);
+  let mut driver = Driver::new(mpris, discord);
   serve_until_quit(
     &app,
     &mut driver,

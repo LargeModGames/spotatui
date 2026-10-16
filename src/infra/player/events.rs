@@ -698,6 +698,7 @@ async fn handle_player_events(
         {
           let mut app_lock = app.lock().await;
           app_lock.native_is_playing = Some(true);
+          app_lock.observe_native_position(position_ms, true);
           // A real Playing event proves the session is alive: disarm the load
           // watchdog and drop any request parked for its potential recovery.
           let restore_confirmed =
@@ -769,6 +770,7 @@ async fn handle_player_events(
         {
           let mut app_lock = app.lock().await;
           app_lock.native_is_playing = Some(false);
+          app_lock.observe_native_position(position_ms, false);
           let restore_confirmed =
             app_lock.observe_native_playback_state(track_uri, position_ms, false);
           if app_lock.native_restore_pending.is_none() {
@@ -807,10 +809,15 @@ async fn handle_player_events(
           windows_media.set_position(position_ms as u64);
         }
 
-        if let Ok(mut app) = app.try_lock() {
-          app.song_progress_ms = position_ms as u128;
+        {
+          let mut app = app.lock().await;
           app.seek_ms = None;
-          app.set_native_recovery_position(position_ms);
+          // A newer local seek already moved the clock; a Seeked for an older target must not pull it back.
+          if !app.native_seek_settling() {
+            app.song_progress_ms = position_ms as u128;
+            app.set_native_recovery_position(position_ms);
+            app.jump_native_position(position_ms);
+          }
 
           if let Some(ref mut ctx) = app.current_playback_context {
             ctx.progress = Some(TimeDelta::milliseconds(position_ms as i64));
@@ -908,6 +915,7 @@ async fn handle_player_events(
         });
 
         app.song_progress_ms = 0;
+        app.anchor_native_position(0, false);
         // librespot 0.8's `SpotifyUri` Display is the full `spotify:track:<id>`
         // URI; app-side ids (shuffle index sync, the queue guard,
         // `last_track_id`) are bare base62, so normalize at the event boundary.
@@ -1103,8 +1111,13 @@ async fn handle_player_events(
         position_ms,
       } => {
         shared_position.store(position_ms as u64, Ordering::Relaxed);
-        if let Ok(mut app) = app.try_lock() {
-          app.set_native_recovery_position(position_ms);
+        {
+          let mut app = app.lock().await;
+          // A report decoded before a local seek must not pull the clock back.
+          if !app.native_seek_settling() {
+            app.set_native_recovery_position(position_ms);
+            app.observe_native_position(position_ms, true);
+          }
         }
 
         #[cfg(all(feature = "mpris", target_os = "linux"))]
@@ -1527,6 +1540,7 @@ async fn disconnect_streaming_player(
   app_lock.convert_shuffled_suspension_to_context(None);
   app_lock.clear_native_shuffle_session();
   app_lock.song_progress_ms = 0;
+  app_lock.clear_native_position();
   app_lock.last_track_id = None;
   app_lock.last_device_activation = None;
   app_lock.seek_ms = None;

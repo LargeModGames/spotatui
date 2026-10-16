@@ -312,21 +312,26 @@ impl App {
         return; // Don't overwrite our seek target
       }
 
+      let duration_ms = match item {
+        PlayableItem::Track(track) => track.duration.num_milliseconds() as u128,
+        PlayableItem::Episode(episode) => episode.duration.num_milliseconds() as u128,
+        _ => return,
+      };
+
       // Resync from fresh API data (within 300ms of poll) to correct drift
       if ms_since_poll < 300 {
-        self.song_progress_ms = progress
+        let polled_ms = progress
           .as_ref()
           .map(|p| p.num_milliseconds() as u128)
           .unwrap_or(0);
+        self.song_progress_ms = if *is_playing {
+          (polled_ms + ms_since_poll).min(duration_ms)
+        } else {
+          polled_ms
+        };
       } else if *is_playing {
         // Smooth incremental updates between API polls
         let elapsed_ms = elapsed.as_millis();
-        let duration_ms = match item {
-          PlayableItem::Track(track) => track.duration.num_milliseconds() as u128,
-          PlayableItem::Episode(episode) => episode.duration.num_milliseconds() as u128,
-          _ => return,
-        };
-
         self.song_progress_ms = (self.song_progress_ms + elapsed_ms).min(duration_ms);
       }
       // When paused, keep song_progress_ms unchanged
@@ -606,6 +611,18 @@ mod tests {
 
     app.update_on_tick(Duration::from_millis(500));
     assert!(app.playback_position_ms().is_some());
+  }
+
+  #[test]
+  fn a_resync_after_a_remote_poll_counts_the_time_since_the_poll() {
+    let (mut app, _rx) = app_playing_elsewhere(60_000, Duration::from_millis(100));
+    app.user_config.behavior.keepawake_enabled = false;
+    app.update_on_tick(Duration::from_millis(250));
+    assert!(
+      (60_100..60_300).contains(&app.song_progress_ms),
+      "{}",
+      app.song_progress_ms
+    );
   }
 
   #[cfg(feature = "streaming")]

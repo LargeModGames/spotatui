@@ -139,6 +139,8 @@ impl Default for App {
       native_device_id: None,
       pending_play_file: None,
       native_is_playing: None,
+      #[cfg(feature = "streaming")]
+      native_clock: None,
       native_playback_origin: None,
       #[cfg(feature = "streaming")]
       native_spotify_shuffle: None,
