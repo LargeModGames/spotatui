@@ -647,11 +647,23 @@ fn handle_escape(app: &mut App) {
       }
     }
     ActiveBlock::TrackTable => {
-      if app.is_playlist_track_filter_active() {
-        app.clear_playlist_track_filter();
-      } else if app.is_saved_track_filter_active() {
-        app.clear_saved_track_filter();
-      } else {
+      let cleared = match app.track_table.context {
+        Some(TrackTableContext::SavedTracks) if app.is_saved_track_filter_active() => {
+          app.clear_saved_track_filter();
+          true
+        }
+        _ if app.is_playlist_track_filter_active() => {
+          app.clear_playlist_track_filter();
+          true
+        }
+        _ if app.is_saved_track_filter_active() => {
+          app.clear_saved_track_filter();
+          true
+        }
+        _ => false,
+      };
+
+      if !cleared {
         app.set_current_route_state(Some(ActiveBlock::Empty), None);
       }
     }
