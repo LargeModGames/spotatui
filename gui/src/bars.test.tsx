@@ -176,73 +176,84 @@ describe("PlayerBar", () => {
 describe("Meter", () => {
   type Handler = (event: object) => void;
 
-  const meter = (picks: number[], disabled = false) => {
-    let captured = false;
-    const element = {
-      dataset: {} as Record<string, string>,
-      style: new Map<string, string>(),
-      getBoundingClientRect: () => ({ left: 100, width: 200 }),
-      setPointerCapture: () => (captured = true),
-      hasPointerCapture: () => captured,
-    };
-    const props = byName(
-      <Meter
-        label="Volume"
-        ratio={0.5}
-        text="50%"
-        disabled={disabled}
-        onPick={(ratio) => picks.push(ratio)}
-        onStep={() => {}}
-      />,
-      "Volume",
-    ).props;
-    const fire = (name: string, clientX: number, button = 0) =>
-      (props[name] as Handler)({
+  /** One meter element; each event renders the meter again, so `disabled` can change during a drag. */
+  const meter = (picks: number[]) => {
+    const dataset: Record<string, string> = {};
+    const style = new Map<string, string>();
+    const fire = (
+      name: string,
+      clientX: number,
+      { button = 0, pointerId = 1, disabled = false } = {},
+    ) =>
+      (
+        byName(
+          <Meter
+            label="Volume"
+            ratio={0.5}
+            text="50%"
+            disabled={disabled}
+            onPick={(ratio) => picks.push(ratio)}
+            onStep={() => {}}
+          />,
+          "Volume",
+        ).props[name] as Handler
+      )({
         button,
         clientX,
-        pointerId: 1,
+        pointerId,
         currentTarget: {
-          ...element,
+          dataset,
           style: {
-            setProperty: (key: string, value: string) =>
-              element.style.set(key, value),
+            setProperty: (key: string, value: string) => style.set(key, value),
           },
+          getBoundingClientRect: () => ({ left: 100, width: 200 }),
+          setPointerCapture: () => {},
         },
       });
-    const release = (clientX: number) => {
-      fire("onPointerUp", clientX);
-      captured = false;
-      fire("onLostPointerCapture", clientX);
-    };
-    return { element, fire, release };
+    return { dataset, style, fire };
   };
 
   it("draws a drag at the pointer and picks once, on release", () => {
     const picks: number[] = [];
-    const { element, fire, release } = meter(picks);
+    const { dataset, style, fire } = meter(picks);
     fire("onPointerDown", 150);
     fire("onPointerMove", 250);
-    expect(element.dataset.drag).toBe("");
-    expect(element.style.get("--drag")).toBe("75%");
+    expect(dataset.drag).toBe("1");
+    expect(style.get("--drag")).toBe("75%");
     expect(picks).toEqual([]);
     fire("onPointerMove", 400);
-    release(400);
+    fire("onPointerUp", 400);
+    fire("onLostPointerCapture", 400);
     expect(picks).toEqual([1]);
-    expect(element.dataset.drag).toBeUndefined();
+    expect(dataset.drag).toBeUndefined();
   });
 
-  it("ignores a move without a press, a right button and a disabled meter", () => {
+  it("ignores a move without a press, a right button and a touch on a disabled meter", () => {
     const picks: number[] = [];
-    const idle = meter(picks);
-    idle.fire("onPointerMove", 200);
-    idle.fire("onPointerUp", 200);
-    idle.fire("onPointerDown", 200, 2);
-    idle.fire("onPointerUp", 200);
-    const off = meter(picks, true);
-    off.fire("onPointerDown", 200);
-    off.fire("onPointerUp", 200);
+    const { dataset, fire } = meter(picks);
+    fire("onPointerMove", 200);
+    fire("onPointerUp", 200);
+    fire("onPointerDown", 200, { button: 2 });
+    fire("onPointerUp", 200, { button: 2 });
+    fire("onPointerDown", 200, { disabled: true });
+    fire("onPointerUp", 200, { disabled: true });
     expect(picks).toEqual([]);
-    expect(idle.element.dataset.drag).toBeUndefined();
+    expect(dataset.drag).toBeUndefined();
+  });
+
+  it("picks nothing for another pointer or after the meter turns disabled", () => {
+    const picks: number[] = [];
+    const { dataset, style, fire } = meter(picks);
+    fire("onPointerDown", 150);
+    fire("onPointerMove", 300, { pointerId: 2 });
+    fire("onPointerUp", 300, { pointerId: 2 });
+    fire("onLostPointerCapture", 300, { pointerId: 2 });
+    expect(style.get("--drag")).toBe("25%");
+    expect(dataset.drag).toBe("1");
+    fire("onPointerUp", 250, { disabled: true });
+    fire("onLostPointerCapture", 250, { disabled: true });
+    expect(picks).toEqual([]);
+    expect(dataset.drag).toBeUndefined();
   });
 });
 

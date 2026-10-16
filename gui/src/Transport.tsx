@@ -143,18 +143,18 @@ export function Meter({
       onPointerDown={(event) => {
         if (disabled || event.button !== 0) return;
         event.currentTarget.setPointerCapture(event.pointerId);
+        event.currentTarget.dataset.drag = String(event.pointerId);
         follow(event.currentTarget, pointerRatio(event));
       }}
       onPointerMove={(event) => {
-        if (event.currentTarget.hasPointerCapture(event.pointerId))
+        if (!disabled && dragging(event))
           follow(event.currentTarget, pointerRatio(event));
       }}
       onPointerUp={(event) => {
-        if (event.currentTarget.hasPointerCapture(event.pointerId))
-          onPick(pointerRatio(event));
+        if (!disabled && dragging(event)) onPick(pointerRatio(event));
       }}
       onLostPointerCapture={(event) => {
-        delete event.currentTarget.dataset.drag;
+        if (dragging(event)) delete event.currentTarget.dataset.drag;
       }}
       onKeyDown={(event) => {
         const up = STEP_KEYS[event.key];
@@ -173,9 +173,13 @@ function pointerRatio(event: PointerEvent<HTMLDivElement>): number {
   return clamp((event.clientX - box.left) / box.width);
 }
 
+/** The event comes from the pointer whose press the meter took; a touch the browser captured on its own does not. */
+function dragging(event: PointerEvent<HTMLDivElement>): boolean {
+  return event.currentTarget.dataset.drag === String(event.pointerId);
+}
+
 /** Draws the bar at the pointer outside React, so a playback push during the drag cannot move it back. */
 function follow(meter: HTMLDivElement, ratio: number) {
-  meter.dataset.drag = "";
   meter.style.setProperty("--drag", `${ratio * 100}%`);
 }
 
