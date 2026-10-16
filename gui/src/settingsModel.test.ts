@@ -85,6 +85,75 @@ describe("sections", () => {
   });
 });
 
+describe("sections with a query", () => {
+  const named = (
+    name: string,
+    group: string,
+    description = "",
+  ): SettingRow => ({
+    id: `behavior.${name}`,
+    group,
+    name,
+    description,
+    value: { kind: "bool", value: true },
+  });
+  const all = [
+    named(
+      "Discord Rich Presence",
+      "integrations",
+      "Show your current track in Discord",
+    ),
+    named("Streaming Bitrate", "streaming", "Native streaming quality in kbps"),
+    named(
+      "Media Key Controls",
+      "playback",
+      "Let OS media keys control playback",
+    ),
+    named("Auto-Update Delay", "updates", "How long a release must be out"),
+  ];
+  const shown = (query: string) =>
+    sections(all, true, query).map((section) => [
+      section.heading,
+      section.rows.map((row) => row.name),
+    ]);
+
+  it("keeps the rows whose name or description holds every word, ignoring case", () => {
+    expect(shown("DISCORD")).toEqual([
+      ["Integrations", ["Discord Rich Presence"]],
+    ]);
+    expect(shown("kbps")).toEqual([["Streaming", ["Streaming Bitrate"]]]);
+    expect(shown("media playback")).toEqual([
+      ["Playback", ["Media Key Controls"]],
+    ]);
+  });
+
+  it("a query that names a section keeps that section's rows", () => {
+    expect(shown("integrations")).toEqual([
+      ["Integrations", ["Discord Rich Presence"]],
+    ]);
+  });
+
+  it("hides every section without a match, Updates included", () => {
+    expect(shown("bitrate")).toEqual([["Streaming", ["Streaming Bitrate"]]]);
+    expect(shown("nothing like this")).toEqual([]);
+  });
+
+  it("requires every word to match the same row", () => {
+    expect(shown("discord kbps")).toEqual([]);
+  });
+
+  it("shows matching Updates rows only when there is an updater", () => {
+    expect(shown("auto update")).toEqual([["Updates", ["Auto-Update Delay"]]]);
+    expect(sections(all, false, "updates")).toEqual([]);
+    expect(sections([], true, "updates")).toEqual([]);
+  });
+
+  it("a blank query changes nothing", () => {
+    expect(sections(all, true, "  ")).toEqual(sections(all, true));
+    expect(sections(all, false, "")).toEqual(sections(all, false));
+  });
+});
+
 describe("commitValue", () => {
   it("a number field commits a changed whole number", () => {
     expect(commitValue(seek, " 7500 ")).toEqual({ Number: 7500 });

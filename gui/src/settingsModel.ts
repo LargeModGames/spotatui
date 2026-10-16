@@ -22,15 +22,29 @@ export interface Section {
   rows: SettingRow[];
 }
 
-/** The sections that have rows; Updates shows whenever there is an updater. */
-export function sections(rows: SettingRow[], updater: boolean): Section[] {
+/** The sections with rows that hold every word of `query`; Updates shows with an updater and no query. */
+export function sections(
+  rows: SettingRow[],
+  updater: boolean,
+  query = "",
+): Section[] {
+  const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
   return GROUPS.map(({ group, heading }) => ({
     group,
     heading,
-    rows: rows.filter((row) => row.group === group),
+    rows: rows.filter(
+      (row) => row.group === group && matches(row, heading, terms),
+    ),
   })).filter((section) =>
-    section.group === "updates" ? updater : section.rows.length > 0,
+    section.group === "updates"
+      ? updater && (terms.length === 0 || section.rows.length > 0)
+      : section.rows.length > 0,
   );
+}
+
+function matches(row: SettingRow, heading: string, terms: string[]): boolean {
+  const haystack = `${heading} ${row.name} ${row.description}`.toLowerCase();
+  return terms.every((term) => haystack.includes(term));
 }
 
 const OPTION_LABELS: Record<string, { value: string; label: string }[]> = {

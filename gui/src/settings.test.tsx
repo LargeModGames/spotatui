@@ -1,11 +1,16 @@
 import type { ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { Action } from "./bindings/Action";
 import type { SettingRow } from "./bindings/SettingRow";
 import type { UpdateAsk } from "./bindings/UpdateAsk";
 import type { UpdateStatus } from "./bindings/UpdateStatus";
-import { SettingControl, Settings, UpdateRow } from "./Settings";
+import {
+  SettingControl,
+  Settings,
+  SettingsSearch,
+  UpdateRow,
+} from "./Settings";
 import { byName } from "./testTree";
 
 const rows: SettingRow[] = [
@@ -203,6 +208,60 @@ describe("Settings", () => {
         />,
       ),
     ).toContain("Loading…");
+  });
+
+  it("shows the settings search once the rows arrive", () => {
+    expect(page(null)).toContain('aria-label="Search settings"');
+  });
+
+  it("hides the settings search while the rows are loading", () => {
+    expect(
+      renderToStaticMarkup(
+        <Settings
+          rows={null}
+          update={null}
+          version={null}
+          send={() => {}}
+          onUpdate={() => {}}
+        />,
+      ),
+    ).not.toContain('aria-label="Search settings"');
+  });
+
+  it("Escape in the settings search empties it, and leaves a second Escape to the page", () => {
+    const typed: string[] = [];
+    const escape = (query: string) => {
+      const preventDefault = vi.fn();
+      const input = byName(
+        <SettingsSearch query={query} onQuery={(next) => typed.push(next)} />,
+        "Search settings",
+      );
+      (input.props.onKeyDown as (event: unknown) => void)({
+        key: "Escape",
+        nativeEvent: { isComposing: false },
+        preventDefault,
+      });
+      return preventDefault;
+    };
+    expect(escape("disc")).toHaveBeenCalled();
+    expect(escape("")).not.toHaveBeenCalled();
+    expect(typed).toEqual([""]);
+  });
+
+  it("leaves Escape to the IME while the settings search is composing", () => {
+    const onQuery = vi.fn();
+    const preventDefault = vi.fn();
+    const input = byName(
+      <SettingsSearch query="disc" onQuery={onQuery} />,
+      "Search settings",
+    );
+    (input.props.onKeyDown as (event: unknown) => void)({
+      key: "Escape",
+      nativeEvent: { isComposing: true },
+      preventDefault,
+    });
+    expect(preventDefault).not.toHaveBeenCalled();
+    expect(onQuery).not.toHaveBeenCalled();
   });
 
   it("a switch click sends the flipped value", () => {

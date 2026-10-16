@@ -17,6 +17,29 @@
   letter-spacing: -0.02em;
 }
 
+.settings-search {
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  box-sizing: border-box;
+  margin-bottom: 24px;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: var(--raised);
+  color: var(--text);
+  font: 14px var(--sans);
+}
+
+.settings-search:hover {
+  background: var(--hover);
+}
+
+.settings-search:focus {
+  outline: none;
+  border-color: var(--text);
+}
+
 .settings section + section {
   margin-top: 32px;
 }

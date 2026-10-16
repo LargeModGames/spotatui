@@ -349,6 +349,14 @@ test("settings", async ({ page }) => {
   await shot(page, "settings");
 });
 
+test("settings search", async ({ page }) => {
+  await openWith(page, [...playing, ...library, ...settings]);
+  await page.getByText("Set Fire to the Rain").first().waitFor();
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("searchbox", { name: "Search settings" }).fill("stream");
+  await shot(page, "settings-search");
+});
+
 test("library folders", async ({ page }) => {
   await openWith(page, [...playing, ...libraryFolders]);
   const panel = page.getByRole("navigation", { name: "Your Library" });

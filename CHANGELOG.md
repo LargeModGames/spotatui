@@ -4,6 +4,8 @@
 
 ### Added
 
+- **Search settings in the desktop app and browser GUI**: filter by section, setting name or description, and press Escape to clear the search ([#840](https://github.com/LargeModGames/spotatui/issues/840)).
+
 - **The Shuffle button on Liked Songs and playlist pages works**: in the desktop app and the browser GUI, it plays the songs the page shows in a random order, only the matching ones when you filter.
 
 - **Sort a playlist by release date**: the sort menu on a playlist now offers Release Date (`y`), like Saved Albums, ordered by each track's album release date; tracks without a date come first in ascending order. `default_sort_playlist_tracks` accepts `release_date` and `release_date:desc` ([#854](https://github.com/LargeModGames/spotatui/issues/854)).
