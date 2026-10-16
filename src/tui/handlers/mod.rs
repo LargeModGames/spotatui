@@ -646,6 +646,15 @@ fn handle_escape(app: &mut App) {
         app.pop_navigation_stack();
       }
     }
+    ActiveBlock::TrackTable => {
+      if app.is_playlist_track_filter_active() {
+        app.clear_playlist_track_filter();
+      } else if app.is_saved_track_filter_active() {
+        app.clear_saved_track_filter();
+      } else {
+        app.set_current_route_state(Some(ActiveBlock::Empty), None);
+      }
+    }
     ActiveBlock::Queue => {
       app.pop_navigation_stack();
     }

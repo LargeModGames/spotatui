@@ -113,10 +113,10 @@ pub fn handler(key: Key, app: &mut App) {
     Key::Char('x') => {
       app.apply(Action::OpenRemoveTrackDialog);
     }
-    Key::Char('q') if app.is_playlist_track_filter_active() => {
+    Key::Char('q') | Key::Esc if app.is_playlist_track_filter_active() => {
       app.clear_playlist_track_filter();
     }
-    Key::Char('q') if app.is_saved_track_filter_active() => {
+    Key::Char('q') | Key::Esc if app.is_saved_track_filter_active() => {
       app.clear_saved_track_filter();
     }
     Key::Char('s') => handle_save_track_event(app),
@@ -698,69 +698,73 @@ mod tests {
   }
 
   #[test]
-  fn q_clears_playlist_filter_and_restores_cached_rows() {
-    let (tx, _rx) = channel();
-    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
-    let playlist_id = PlaylistId::from_id("37i9dQZF1DX4WYpdgoIcn6")
-      .unwrap()
-      .into_static();
-    let first_page = Paged {
-      items: vec![
-        playlist_item(0, "0000000000000000000001", "Track 1"),
-        playlist_item(1, "0000000000000000000002", "Track 2"),
-      ],
-      limit: 2,
-      next: None,
-      offset: 0,
-      previous: None,
-      total: 2,
-    };
+  fn q_and_esc_clear_playlist_filter_and_restore_cached_rows() {
+    for key in [Key::Char('q'), Key::Esc] {
+      let (tx, _rx) = channel();
+      let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+      let playlist_id = PlaylistId::from_id("37i9dQZF1DX4WYpdgoIcn6")
+        .unwrap()
+        .into_static();
+      let first_page = Paged {
+        items: vec![
+          playlist_item(0, "0000000000000000000001", "Track 1"),
+          playlist_item(1, "0000000000000000000002", "Track 2"),
+        ],
+        limit: 2,
+        next: None,
+        offset: 0,
+        previous: None,
+        total: 2,
+      };
 
-    app.track_table.context = Some(TrackTableContext::MyPlaylists);
-    app.playlist_track_table_id = Some(playlist_id);
-    app.playlist_track_pages.upsert_page_by_offset(first_page);
-    app.active_playlist_track_filter = Some("track 2".to_string());
-    app.track_table.tracks = vec![TrackInfo::from(&full_track(
-      "0000000000000000000002",
-      "Track 2",
-    ))];
-    app.playlist_track_positions = Some(vec![1]);
+      app.track_table.context = Some(TrackTableContext::MyPlaylists);
+      app.playlist_track_table_id = Some(playlist_id);
+      app.playlist_track_pages.upsert_page_by_offset(first_page);
+      app.active_playlist_track_filter = Some("track 2".to_string());
+      app.track_table.tracks = vec![TrackInfo::from(&full_track(
+        "0000000000000000000002",
+        "Track 2",
+      ))];
+      app.playlist_track_positions = Some(vec![1]);
 
-    handler(Key::Char('q'), &mut app);
+      handler(key, &mut app);
 
-    assert!(app.active_playlist_track_filter.is_none());
-    assert_eq!(app.track_table.tracks.len(), 2);
-    assert_eq!(app.playlist_track_positions, Some(vec![0, 1]));
+      assert!(app.active_playlist_track_filter.is_none());
+      assert_eq!(app.track_table.tracks.len(), 2);
+      assert_eq!(app.playlist_track_positions, Some(vec![0, 1]));
+    }
   }
 
   #[test]
-  fn q_clears_the_saved_track_filter_and_restores_cached_rows() {
-    let (mut app, _rx) = app_with_saved_tracks();
-    let page = saved_tracks_page(
-      0,
-      &["0000000000000000000001", "0000000000000000000002"],
-      false,
-    );
+  fn q_and_esc_clear_the_saved_track_filter_and_restore_cached_rows() {
+    for key in [Key::Char('q'), Key::Esc] {
+      let (mut app, _rx) = app_with_saved_tracks();
+      let page = saved_tracks_page(
+        0,
+        &["0000000000000000000001", "0000000000000000000002"],
+        false,
+      );
 
-    app.library_mut().saved_tracks.upsert_page_by_offset(page);
-    app.set_saved_tracks_to_table_continuous();
-    app.apply_saved_track_search_results(
-      "track 2".to_string(),
-      vec![TrackInfo::from(&full_track(
-        "0000000000000000000002",
-        "Track 2",
-      ))],
-    );
+      app.library_mut().saved_tracks.upsert_page_by_offset(page);
+      app.set_saved_tracks_to_table_continuous();
+      app.apply_saved_track_search_results(
+        "track 2".to_string(),
+        vec![TrackInfo::from(&full_track(
+          "0000000000000000000002",
+          "Track 2",
+        ))],
+      );
 
-    handler(Key::Char('q'), &mut app);
+      handler(key, &mut app);
 
-    assert!(!app.is_saved_track_filter_active());
-    assert_eq!(app.track_table.tracks.len(), 2);
-    assert_eq!(app.view.track_table_index, 0);
-    assert_eq!(
-      app.track_table.context,
-      Some(TrackTableContext::SavedTracks)
-    );
+      assert!(!app.is_saved_track_filter_active());
+      assert_eq!(app.track_table.tracks.len(), 2);
+      assert_eq!(app.view.track_table_index, 0);
+      assert_eq!(
+        app.track_table.context,
+        Some(TrackTableContext::SavedTracks)
+      );
+    }
   }
 
   #[test]
