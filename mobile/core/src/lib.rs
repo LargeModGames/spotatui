@@ -19,20 +19,49 @@ pub struct Dirs {
   pub cache: String,
 }
 
-/// The running core: its launch URL, and the sender of its `closed` signal,
-/// kept because a dropped sender reads as a closed window and stops the core.
-static STARTED: Mutex<Option<(String, watch::Sender<bool>)>> = Mutex::new(None);
+/// Receives the launch URL, or the error of a core that stopped.
+type Urls = mpsc::Receiver<Result<String, String>>;
+
+/// A core that has not sent its launch URL yet, or the URL it serves.
+enum Core {
+  Starting(Urls),
+  Serving(String),
+}
+
+/// The core, with the sender of its `closed` signal, kept because a dropped
+/// sender reads as a closed window and stops the core.
+static CORE: Mutex<Option<(Core, watch::Sender<bool>)>> = Mutex::new(None);
 /// Where the platform's media buttons go: the running core.
 static MEDIA_COMMANDS: Mutex<Option<UnboundedSender<MediaCommand>>> = Mutex::new(None);
 
 /// Starts the core once and returns its launch URL; a later call returns the first URL.
 pub fn start(dirs: &Dirs) -> Result<String> {
-  let mut started = STARTED
-    .lock()
-    .unwrap_or_else(|poisoned| poisoned.into_inner());
-  if let Some((url, _)) = started.as_ref() {
-    return Ok(url.clone());
+  let mut core = CORE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+  let (urls, close) = match core.take() {
+    Some((Core::Serving(url), close)) => {
+      *core = Some((Core::Serving(url.clone()), close));
+      return Ok(url);
+    }
+    // A start that timed out still runs: wait for it again, never start a second core.
+    Some((Core::Starting(urls), close)) => (urls, close),
+    None => spawn_core(dirs)?,
+  };
+  match urls.recv_timeout(START_LIMIT) {
+    Ok(Ok(url)) => {
+      *core = Some((Core::Serving(url.clone()), close));
+      Ok(url)
+    }
+    Ok(Err(e)) => Err(anyhow!(e)),
+    Err(mpsc::RecvTimeoutError::Timeout) => {
+      *core = Some((Core::Starting(urls), close));
+      Err(anyhow!("the spotatui core did not start"))
+    }
+    Err(mpsc::RecvTimeoutError::Disconnected) => Err(anyhow!("the spotatui core stopped")),
   }
+}
+
+/// Starts the core's threads and returns the receiver of its launch URL.
+fn spawn_core(dirs: &Dirs) -> Result<(Urls, watch::Sender<bool>)> {
   set_dirs(dirs);
   let (close, closed) = watch::channel(false);
   let (url_tx, url_rx) = mpsc::channel::<Result<String, String>>();
@@ -74,12 +103,7 @@ pub fn start(dirs: &Dirs) -> Result<String> {
       }
     })
     .context("could not start the spotatui thread")?;
-  let url = url_rx
-    .recv_timeout(START_LIMIT)
-    .map_err(|_| anyhow!("the spotatui core did not start"))?
-    .map_err(|e| anyhow!(e))?;
-  *started = Some((url.clone(), close));
-  Ok(url)
+  Ok((url_rx, close))
 }
 
 /// Passes a press on the platform's media controls to the core.

@@ -44,6 +44,11 @@ object SpotatuiMedia {
     val context = context ?: return
     if (controller != null) return
     val token = SessionToken(context, ComponentName(context, PlaybackService::class.java))
-    controller = MediaController.Builder(context, token).buildAsync()
+    val future = MediaController.Builder(context, token).buildAsync()
+    controller = future
+    // A failed connection is forgotten, so the next update tries again.
+    future.addListener({
+      if (runCatching { future.get() }.isFailure && controller === future) controller = null
+    }, main::post)
   }
 }
