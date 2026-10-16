@@ -3,7 +3,7 @@ import { DarkTheme, Stack, ThemeProvider } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useState, type ReactNode } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import type { Connection } from '@gui/connection';
 import { showsOnboarding } from '@gui/connection';
@@ -11,7 +11,7 @@ import { showsOnboarding } from '@gui/connection';
 import { Onboarding } from '@/components/Onboarding';
 import { connect } from '@/core';
 import { CoreProvider, useConnectionSend, useCoreSelect } from '@/core-context';
-import { colors, fontFiles, type } from '@/theme';
+import { colors, fontFiles, TOUCH, type } from '@/theme';
 
 SplashScreen.preventAutoHideAsync();
 
@@ -24,9 +24,10 @@ export default function RootLayout() {
   const [fontsLoaded] = useFonts(fontFiles);
   const [connection, setConnection] = useState<Connection | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     connect().then(setConnection, (e) => setError(String(e)));
-  }, []);
+  }, [attempt]);
   useEffect(() => {
     if (fontsLoaded) SplashScreen.hideAsync();
   }, [fontsLoaded]);
@@ -35,7 +36,14 @@ export default function RootLayout() {
     <ThemeProvider value={navTheme}>
       <StatusBar style="light" />
       {error ? (
-        <Message text={error} />
+        // A start that timed out keeps its core, so a retry can still reach it.
+        <Message
+          text={error}
+          onRetry={() => {
+            setError(null);
+            setAttempt((n) => n + 1);
+          }}
+        />
       ) : !connection ? (
         <Message text="Starting spotatui…" />
       ) : (
@@ -79,14 +87,21 @@ function Gate({ children }: { children: ReactNode }) {
   return children;
 }
 
-function Message({ text }: { text: string }) {
+function Message({ text, onRetry }: { text: string; onRetry?: () => void }) {
   return (
     <View style={styles.message}>
       <Text style={type.body}>{text}</Text>
+      {onRetry && (
+        <Pressable style={styles.retry} onPress={onRetry} accessibilityRole="button">
+          <Text style={[type.body, styles.retryLabel]}>Try again</Text>
+        </Pressable>
+      )}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   message: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, backgroundColor: colors.background },
+  retry: { minHeight: TOUCH, justifyContent: 'center', marginTop: 12, paddingHorizontal: 16 },
+  retryLabel: { color: colors.accent },
 });
