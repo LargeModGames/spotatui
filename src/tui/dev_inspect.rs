@@ -67,7 +67,9 @@ fn watch(inbox: &Path, tx: &Sender<Event>) {
     if !text.ends_with('\n') {
       continue;
     }
-    let _ = fs::remove_file(inbox);
+    if fs::remove_file(inbox).is_err() {
+      continue;
+    }
     for line in text.lines().filter(|line| !line.is_empty()) {
       let (id, outcome) = parse_request(line);
       let error = match outcome {
@@ -93,7 +95,9 @@ type Parsed = Result<(Duration, Vec<Key>), String>;
 
 fn parse_request(line: &str) -> (u64, Parsed) {
   let mut fields = line.split('\t');
-  let id = fields.next().and_then(|id| id.parse().ok()).unwrap_or(0);
+  let Some(id) = fields.next().and_then(|id| id.parse().ok()) else {
+    return (0, Err(format!("no numeric id in the request {line:?}")));
+  };
   let Some(wait) = fields.next().and_then(|wait| wait.parse().ok()) else {
     return (id, Err(format!("no wait_ms in the request {line:?}")));
   };
@@ -187,6 +191,12 @@ mod tests {
     let (id, parsed) = parse_request("3\t0\tj\tnosuchkey");
     assert_eq!(id, 3);
     assert!(parsed.unwrap_err().contains("nosuchkey"));
+  }
+
+  #[test]
+  fn a_request_with_a_bad_id_types_nothing() {
+    let (_, parsed) = parse_request("bad-id\t0\tenter");
+    assert!(parsed.unwrap_err().contains("no numeric id"));
   }
 
   #[test]
