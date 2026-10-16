@@ -494,7 +494,7 @@ pub(crate) struct AlbumPayload {
 #[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub(crate) struct AnnouncementsPayload {
   active: Option<ActiveAnnouncement>,
-  /// The seen announcements still in the feed, newest first.
+  /// The seen announcements still in the feed, in feed order.
   history: Vec<AnnouncementEntry>,
 }
 

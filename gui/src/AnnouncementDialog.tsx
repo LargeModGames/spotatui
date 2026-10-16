@@ -1,4 +1,10 @@
-import type { KeyboardEvent, MouseEvent } from "react";
+import {
+  useEffect,
+  useRef,
+  type KeyboardEvent,
+  type MouseEvent,
+  type Ref,
+} from "react";
 import type { Action } from "./bindings/Action";
 import type { ActiveAnnouncement } from "./bindings/ActiveAnnouncement";
 import type { AnnouncementLevel } from "./bindings/AnnouncementLevel";
@@ -22,16 +28,43 @@ export function AnnouncementLevelIcon({ level }: { level: AnnouncementLevel }) {
   );
 }
 
-/** The active spotatui announcement in a modal; Escape or Got it dismisses it. */
-export function AnnouncementDialog({
-  s = EN,
-  active,
-  send,
-}: {
+type Props = {
   s?: GuiStrings;
   active: ActiveAnnouncement | null;
   send: (action: Action) => void;
-}) {
+};
+
+/** Focus `target` and return how to give the focus back to `before`. */
+export function holdFocus(
+  target: { focus(): void } | null,
+  before: Element | null,
+): () => void {
+  target?.focus();
+  return () => {
+    const back = before as HTMLElement | null;
+    if (back?.isConnected) back.focus({ preventScroll: true });
+  };
+}
+
+/** The active spotatui announcement in a modal; Escape or Got it dismisses it. */
+export function AnnouncementDialog(props: Props) {
+  const gotIt = useRef<HTMLButtonElement>(null);
+  const open = props.active !== null;
+  // Got it has the focus while a batch shows; the focus goes back after the last one.
+  useEffect(
+    () => (open ? holdFocus(gotIt.current, document.activeElement) : undefined),
+    [open],
+  );
+  return <AnnouncementModal {...props} gotIt={gotIt} />;
+}
+
+/** The modal without state, so a test can walk it. */
+export function AnnouncementModal({
+  s = EN,
+  active,
+  send,
+  gotIt,
+}: Props & { gotIt?: Ref<HTMLButtonElement> }) {
   if (!active) return null;
   const { entry, position, total } = active;
   const dismiss = () => send({ DismissAnnouncement: { id: entry.id } });
@@ -80,8 +113,8 @@ export function AnnouncementDialog({
           )}
           <button
             type="button"
+            ref={gotIt}
             className="dialog-confirm"
-            autoFocus
             onClick={dismiss}
           >
             {s.announcement_got_it}

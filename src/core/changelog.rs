@@ -12,12 +12,13 @@ pub fn changelog() -> &'static str {
     .as_str()
 }
 
-/// A release build drops the `[Unreleased]` heading.
+/// LF line endings; a release build drops the `[Unreleased]` heading.
 fn clean_changelog(changelog: &str, release: bool) -> String {
+  let changelog = changelog.replace("\r\n", "\n");
   if release {
     changelog.replace("\n## [Unreleased]\n", "")
   } else {
-    changelog.to_string()
+    changelog
   }
 }
 
@@ -44,6 +45,13 @@ mod tests {
     assert!(!release.contains("[Unreleased]"));
     assert!(release.contains("## [v1.0.0] 2026-01-01"));
     assert_eq!(clean_changelog(SAMPLE, false), SAMPLE);
+  }
+
+  #[test]
+  fn a_crlf_checkout_is_cleaned_like_an_lf_one() {
+    let crlf = SAMPLE.replace('\n', "\r\n");
+    assert_eq!(clean_changelog(&crlf, true), clean_changelog(SAMPLE, true));
+    assert_eq!(clean_changelog(&crlf, false), SAMPLE);
   }
 
   #[test]

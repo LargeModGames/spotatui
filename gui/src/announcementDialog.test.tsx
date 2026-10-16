@@ -1,9 +1,10 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import type { KeyboardEvent } from "react";
+import { createRef, type KeyboardEvent } from "react";
 import { describe, expect, it } from "vitest";
 import {
-  AnnouncementDialog,
   AnnouncementLevelIcon,
+  AnnouncementModal,
+  holdFocus,
 } from "./AnnouncementDialog";
 import type { Action } from "./bindings/Action";
 import type { ActiveAnnouncement } from "./bindings/ActiveAnnouncement";
@@ -27,8 +28,14 @@ const active = (
   total,
 });
 
+const gotItRef = createRef<HTMLButtonElement>();
+
 const dialog = (value: ActiveAnnouncement | null, sent: Action[] = []) => (
-  <AnnouncementDialog active={value} send={(action) => sent.push(action)} />
+  <AnnouncementModal
+    active={value}
+    send={(action) => sent.push(action)}
+    gotIt={gotItRef}
+  />
 );
 
 const click = (tree: ReturnType<typeof dialog>, name: string) =>
@@ -46,7 +53,7 @@ describe("AnnouncementDialog", () => {
     expect(html).toContain('aria-labelledby="announcement-title"');
     expect(html).toContain('<h2 id="announcement-title">New release</h2>');
     const gotIt = byName(dialog(active()), EN.announcement_got_it);
-    expect(gotIt.props.autoFocus).toBe(true);
+    expect(gotIt.props.ref).toBe(gotItRef);
   });
 
   it("sends the id with Got it, Open and Escape", () => {
@@ -94,5 +101,19 @@ describe("AnnouncementDialog", () => {
     expect(
       renderToStaticMarkup(<AnnouncementLevelIcon level="warning" />),
     ).toContain('class="announcement-icon warning"');
+  });
+
+  it("gives the focus back after the last announcement unless that element left the page", () => {
+    const focused: string[] = [];
+    const element = (name: string, isConnected = true) =>
+      ({ isConnected, focus: () => focused.push(name) }) as unknown as Element;
+    const release = holdFocus(
+      element("got it") as unknown as HTMLElement,
+      element("search"),
+    );
+    release();
+    holdFocus(null, element("gone", false))();
+    holdFocus(null, null)();
+    expect(focused).toEqual(["got it", "search"]);
   });
 });

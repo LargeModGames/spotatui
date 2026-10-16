@@ -4,6 +4,6 @@ import type { AnnouncementEntry } from "./AnnouncementEntry";
 
 export type AnnouncementsPayload = { active: ActiveAnnouncement | null, 
 /**
- * The seen announcements still in the feed, newest first.
+ * The seen announcements still in the feed, in feed order.
  */
 history: Array<AnnouncementEntry>, };
