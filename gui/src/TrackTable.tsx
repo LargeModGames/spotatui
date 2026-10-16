@@ -149,6 +149,12 @@ export const TrackTable = memo(function TrackTable({
                     {source && source !== "Spotify" && (
                       <SourceBadge source={source} />
                     )}
+                    {track.explicit && (
+                      <span className="explicit" title="Explicit">
+                        <span aria-hidden="true">E</span>
+                        <span className="sr-only">Explicit</span>
+                      </span>
+                    )}
                     <Artists track={track} open={open} />
                   </span>
                 </span>

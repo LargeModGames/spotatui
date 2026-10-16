@@ -766,8 +766,9 @@ impl App {
     self.view.album_list_index = 0;
   }
 
-  /// Show a fetched saved-albums page; one whose offset is already cached replaces that copy.
-  pub(crate) fn store_saved_albums_page(&mut self, page: Paged<SavedAlbumInfo>) {
+  /// Show a fetched saved-albums page; `first` starts the list over so a
+  /// refetched first page drops the stale later pages.
+  pub(crate) fn store_saved_albums_page(&mut self, page: Paged<SavedAlbumInfo>, first: bool) {
     // Every album on a saved-albums page is saved, so the album page's
     // heart can show its state without a separate save check.
     for saved_album in &page.items {
@@ -776,6 +777,9 @@ impl App {
       }
     }
     let albums = &mut self.library_mut().saved_albums;
+    if first {
+      *albums = ScrollableResultPages::new();
+    }
     match albums
       .pages
       .iter()
@@ -789,8 +793,9 @@ impl App {
     }
   }
 
-  /// Show a fetched saved-shows page and mark its shows as saved.
-  pub(crate) fn store_saved_shows_page(&mut self, page: Paged<ShowInfo>) {
+  /// Show a fetched saved-shows page and mark its shows as saved; `first`
+  /// starts the list over so a refetched first page drops the stale later pages.
+  pub(crate) fn store_saved_shows_page(&mut self, page: Paged<ShowInfo>, first: bool) {
     let ids: Vec<String> = page
       .items
       .iter()
@@ -798,6 +803,9 @@ impl App {
       .collect();
     self.saved_show_ids_set.extend(ids);
     let shows = &mut self.library_mut().saved_shows;
+    if first {
+      *shows = ScrollableResultPages::new();
+    }
     match shows
       .pages
       .iter()
@@ -1298,8 +1306,8 @@ mod tests {
   #[test]
   fn a_saved_albums_page_marks_its_albums_saved() {
     let mut app = App::default();
-    app.store_saved_albums_page(saved_album_page(0, &["a1", "a2"], true));
-    app.store_saved_albums_page(saved_album_page(2, &["a3"], false));
+    app.store_saved_albums_page(saved_album_page(0, &["a1", "a2"], true), true);
+    app.store_saved_albums_page(saved_album_page(2, &["a3"], false), false);
 
     assert!(app.saved_album_ids_set().contains("a1"));
     assert!(app.saved_album_ids_set().contains("a2"));
@@ -1309,25 +1317,46 @@ mod tests {
   #[test]
   fn a_saved_albums_page_fetched_again_replaces_its_cached_copy() {
     let mut app = App::default();
-    app.store_saved_albums_page(saved_album_page(0, &["a1", "a2"], true));
-    app.store_saved_albums_page(saved_album_page(2, &["a3", "a4"], true));
+    app.store_saved_albums_page(saved_album_page(0, &["a1", "a2"], true), true);
+    app.store_saved_albums_page(saved_album_page(2, &["a3", "a4"], true), false);
 
-    // Reopening Albums fetches the first page again.
-    app.store_saved_albums_page(saved_album_page(0, &["b1", "b2"], true));
+    // Reopening Albums fetches the first page again, which drops the stale
+    // later pages so a save/unsave cannot leave a duplicate or a gap behind.
+    app.store_saved_albums_page(saved_album_page(0, &["b1", "b2"], true), true);
 
     let albums = &app.library.saved_albums;
-    assert_eq!(albums.pages.len(), 2);
+    assert_eq!(albums.pages.len(), 1);
     assert_eq!(albums.index, 0);
     assert_eq!(albums.pages[0].items[0].album.id.as_deref(), Some("b1"));
 
-    // The next page is still one step forward, not stuck behind a duplicate.
+    // The second page is fetched fresh, not read from a stale cached copy.
     app.get_current_user_saved_albums_next();
-    assert_eq!(app.library.saved_albums.index, 1);
-
-    // A second response for the same offset does not append a copy.
-    app.store_saved_albums_page(saved_album_page(2, &["a3", "a4"], true));
+    app.store_saved_albums_page(saved_album_page(2, &["a3", "a4"], true), false);
     assert_eq!(app.library.saved_albums.pages.len(), 2);
     assert_eq!(app.library.saved_albums.index, 1);
+  }
+
+  #[test]
+  fn an_unsave_refetch_of_the_first_page_drops_the_stale_second_page() {
+    let mut app = App::default();
+    // Two cached pages; the user is viewing the second.
+    app.store_saved_albums_page(saved_album_page(0, &["a1", "a2"], true), true);
+    app.store_saved_albums_page(saved_album_page(2, &["a3", "a4"], true), false);
+    app.library.saved_albums.index = 1;
+
+    // Unsaving a1 refetches the first page (now a2, a3) as a fresh first load.
+    app.store_saved_albums_page(saved_album_page(0, &["a2", "a3"], true), true);
+
+    // a3 must no longer linger in a stale second page.
+    let ids: Vec<&str> = app
+      .library
+      .saved_albums
+      .pages
+      .iter()
+      .flat_map(|page| page.items.iter())
+      .filter_map(|saved| saved.album.id.as_deref())
+      .collect();
+    assert_eq!(ids, ["a2", "a3"]);
   }
 
   #[test]

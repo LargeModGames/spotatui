@@ -8,7 +8,11 @@
 
 - **Click a synced lyric line to jump there** in the desktop app, on the Lyrics page and in full screen. Lines that are only estimates stay plain text, and Tab reaches the line being sung.
 
+- **An E badge on explicit songs** in the track lists: a song the server marks explicit shows a small E at the start of its artist line, in playlists, Liked Songs, albums, an artist's Popular songs, song radio and Recently played ([#838](https://github.com/LargeModGames/spotatui/issues/838)).
+
 ### Fixed
+
+- **Saving or unsaving an album, or saving a show, no longer leaves the saved list wrong**: saving or unsaving an album, and saving a show, refetched the first page of saved albums (or shows) but kept the cached later pages, so an album pushed off or pulled into the first page went missing or showed twice, and unsaving the last one left it in the list. The first-page refetch now drops the stale later pages and stores an empty first page too ([#791](https://github.com/LargeModGames/spotatui/issues/791)).
 
 - **A clear hint when ALSA has no default device**: with PipeWire but no ALSA bridge, pressing play used to show a cut-off "Connection Refused" error. The status line now says ALSA has no default device and suggests installing `pipewire-alsa`, and the native streaming docs have a No sound section ([#848](https://github.com/LargeModGames/spotatui/issues/848)).
 

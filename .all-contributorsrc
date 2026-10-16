@@ -592,6 +592,16 @@
       "contributions": [
         "code"
       ]
+    },
+    {
+      "login": "kukirin-ui",
+      "name": "AAA",
+      "avatar_url": "https://avatars.githubusercontent.com/u/325067280?v=4",
+      "profile": "https://xdaforums.com/m/termuxsolutions.13482532/",
+      "contributions": [
+        "doc",
+        "code"
+      ]
     }
   ],
   "contributorsPerLine": 7,
