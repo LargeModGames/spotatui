@@ -10,7 +10,10 @@ impl Default for App {
       analysis_clock: None,
       pitch_levels: [0.0; 12],
       pitch_fall: [0.0; 12],
-      view: ViewState::default().with_search_hovered_block(SearchResultBlock::SongSearch),
+      view: ViewState {
+        search_hovered_block: SearchResultBlock::SongSearch,
+        ..ViewState::default()
+      },
       album_table_context: AlbumTableContext::Full,
       discover_shelves: None,
       discover_loading: false,

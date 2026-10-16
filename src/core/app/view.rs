@@ -213,14 +213,6 @@ pub struct ViewState {
   pub playlist_sync_scroll_offset: Cell<usize>,
 }
 
-impl ViewState {
-  /// A fresh search screen hovers Songs before any result lands.
-  pub fn with_search_hovered_block(mut self, block: SearchResultBlock) -> Self {
-    self.search_hovered_block = block;
-    self
-  }
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlaybarOrigin {
   pub route: RouteId,
