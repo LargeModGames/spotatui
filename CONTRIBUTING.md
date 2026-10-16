@@ -158,13 +158,13 @@ The fork is part of spotatui: **a merged PR there counts as a spotatui contribut
 
 ## Recognition
 
-We use [all-contributors](https://allcontributors.org) to thank everyone who helps, with code or without. After your PR is merged, or after a bug report or another contribution, comment on that PR or issue:
+We use [all-contributors](https://allcontributors.org) to thank everyone who helps, with code or without. After your PR is merged, or after a bug report or another contribution, comment on that PR or issue, or on [#872](https://github.com/LargeModGames/spotatui/issues/872):
 
 ```text
 @all-contributors please add @your-name for code
 ```
 
-Use `code`, `doc`, `bug`, `ideas`, `design`, `platform` (packaging), `test`, or any other [contribution type](https://allcontributors.org/docs/en/emoji-key). The bot opens a PR that adds you to the [contributor list](README.md#spotatui-contributors). For a fork PR, comment on a spotatui issue or PR and link the fork PR. A maintainer can also add you.
+Use `code`, `doc`, `bug`, `ideas`, `design`, `platform` (packaging), `test`, or any other [contribution type](https://allcontributors.org/docs/en/emoji-key). The bot opens a PR that adds you to the [contributor list](README.md#spotatui-contributors). For a fork PR, comment on [#872](https://github.com/LargeModGames/spotatui/issues/872) and link the fork PR. A maintainer can also add you.
 
 ## Questions
 
