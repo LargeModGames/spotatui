@@ -53,9 +53,10 @@ directory, for example `$XDG_CACHE_HOME/spotatui/streaming_cache` when
 If the playbar stays on "Paused" with `Audio backend failed` (or `No audio output: ALSA has no default device`) and the log shows a line like this, ALSA has no `default` device:
 
 ```
-Audio sink failed to start: Audio Sink Error Connection Refused: <AlsaSink> Device default May be Invalid, Busy, or Already in Use, ALSA function 'snd_pcm_open' failed with error 'No such file or directory (2)'
+Audio backend start error: Audio Sink Error Connection Refused: <AlsaSink> Device default May be Invalid, Busy, or Already in Use, ALSA function 'snd_pcm_open' failed with error 'No such file or directory (2)'
 ```
- Run `aplay -L` to list the ALSA devices; if `default` is missing, that's the problem.
+
+Run `aplay -L` to list the ALSA devices; if `default` is missing, that's the problem.
 
 On PipeWire this usually means the ALSA bridge isn't installed. Install `pipewire-alsa` (same package name on Arch, Debian/Ubuntu and Fedora) and restart spotatui. On NixOS, see the PipeWire block in [installation.md](installation.md#nixos-flake).
 
