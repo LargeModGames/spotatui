@@ -7,6 +7,7 @@ import type { Page } from "./nav";
 import { PlayerBar, type Panel } from "./PlayerBar";
 import { byName } from "./testTree";
 import { TopBar } from "./TopBar";
+import { Meter } from "./Transport";
 
 const song: NowPlaying = {
   title: "Set Fire to the Rain",
@@ -169,6 +170,79 @@ describe("PlayerBar", () => {
     expect(tag(html, "Full screen")).not.toContain("disabled");
     expect(tag(html, "Open mini player")).not.toContain("disabled");
     expect(tag(html, "Connect to a device")).toContain('aria-expanded="false"');
+  });
+});
+
+describe("Meter", () => {
+  type Handler = (event: object) => void;
+
+  const meter = (picks: number[], disabled = false) => {
+    let captured = false;
+    const element = {
+      dataset: {} as Record<string, string>,
+      style: new Map<string, string>(),
+      getBoundingClientRect: () => ({ left: 100, width: 200 }),
+      setPointerCapture: () => (captured = true),
+      hasPointerCapture: () => captured,
+    };
+    const props = byName(
+      <Meter
+        label="Volume"
+        ratio={0.5}
+        text="50%"
+        disabled={disabled}
+        onPick={(ratio) => picks.push(ratio)}
+        onStep={() => {}}
+      />,
+      "Volume",
+    ).props;
+    const fire = (name: string, clientX: number, button = 0) =>
+      (props[name] as Handler)({
+        button,
+        clientX,
+        pointerId: 1,
+        currentTarget: {
+          ...element,
+          style: {
+            setProperty: (key: string, value: string) =>
+              element.style.set(key, value),
+          },
+        },
+      });
+    const release = (clientX: number) => {
+      fire("onPointerUp", clientX);
+      captured = false;
+      fire("onLostPointerCapture", clientX);
+    };
+    return { element, fire, release };
+  };
+
+  it("draws a drag at the pointer and picks once, on release", () => {
+    const picks: number[] = [];
+    const { element, fire, release } = meter(picks);
+    fire("onPointerDown", 150);
+    fire("onPointerMove", 250);
+    expect(element.dataset.drag).toBe("");
+    expect(element.style.get("--drag")).toBe("75%");
+    expect(picks).toEqual([]);
+    fire("onPointerMove", 400);
+    release(400);
+    expect(picks).toEqual([1]);
+    expect(element.dataset.drag).toBeUndefined();
+  });
+
+  it("ignores a move without a press, a right button and a disabled meter", () => {
+    const picks: number[] = [];
+    const idle = meter(picks);
+    idle.fire("onPointerMove", 200);
+    idle.fire("onPointerUp", 200);
+    idle.fire("onPointerDown", 200, 2);
+    idle.fire("onPointerUp", 200);
+    const off = meter(picks, true);
+    off.fire("onPointerDown", 200);
+    off.fire("onPointerUp", 200);
+    expect(picks).toEqual([]);
+    expect(idle.element.dataset.drag).toBeUndefined();
   });
 });
 

@@ -432,6 +432,8 @@
   flex-grow: 1;
   height: 16px;
   cursor: pointer;
+  touch-action: none;
+  user-select: none;
 }
 
 .meter::before,
@@ -467,13 +469,20 @@
   box-shadow: 0 2px 4px rgb(0 0 0 / 50%);
 }
 
+/* A drag draws the bar at the pointer until the release. */
+.meter[data-drag] > div {
+  width: var(--drag) !important;
+}
+
 .meter:not([aria-disabled="true"]):hover > div,
-.meter:focus-visible > div {
+.meter:focus-visible > div,
+.meter[data-drag] > div {
   background: var(--accent);
 }
 
 .meter:not([aria-disabled="true"]):hover > div::after,
-.meter:focus-visible > div::after {
+.meter:focus-visible > div::after,
+.meter[data-drag] > div::after {
   display: block;
 }
 

@@ -1,3 +1,4 @@
+import type { PointerEvent } from "react";
 import { EN, type GuiStrings, fmt } from "./i18n";
 import type { Action } from "./bindings/Action";
 import type { NowPlaying } from "./bindings/NowPlaying";
@@ -112,7 +113,7 @@ const STEP_KEYS: Record<string, boolean> = {
   ArrowDown: false,
 };
 
-/** A thin slider: a click picks the fraction of its width left of the pointer, an arrow key steps. */
+/** A thin slider: a press or a drag picks the fraction of its width left of the pointer on release, an arrow key steps. */
 export function Meter({
   label,
   ratio,
@@ -139,10 +140,21 @@ export function Meter({
       aria-valuenow={Math.round(clamp(ratio) * 100)}
       aria-valuetext={text}
       aria-disabled={disabled}
-      onClick={(event) => {
-        if (disabled) return;
-        const box = event.currentTarget.getBoundingClientRect();
-        onPick(clamp((event.clientX - box.left) / box.width));
+      onPointerDown={(event) => {
+        if (disabled || event.button !== 0) return;
+        event.currentTarget.setPointerCapture(event.pointerId);
+        follow(event.currentTarget, pointerRatio(event));
+      }}
+      onPointerMove={(event) => {
+        if (event.currentTarget.hasPointerCapture(event.pointerId))
+          follow(event.currentTarget, pointerRatio(event));
+      }}
+      onPointerUp={(event) => {
+        if (event.currentTarget.hasPointerCapture(event.pointerId))
+          onPick(pointerRatio(event));
+      }}
+      onLostPointerCapture={(event) => {
+        delete event.currentTarget.dataset.drag;
       }}
       onKeyDown={(event) => {
         const up = STEP_KEYS[event.key];
@@ -154,6 +166,17 @@ export function Meter({
       <div style={{ width: `${clamp(ratio) * 100}%` }} />
     </div>
   );
+}
+
+function pointerRatio(event: PointerEvent<HTMLDivElement>): number {
+  const box = event.currentTarget.getBoundingClientRect();
+  return clamp((event.clientX - box.left) / box.width);
+}
+
+/** Draws the bar at the pointer outside React, so a playback push during the drag cannot move it back. */
+function follow(meter: HTMLDivElement, ratio: number) {
+  meter.dataset.drag = "";
+  meter.style.setProperty("--drag", `${ratio * 100}%`);
 }
 
 function clamp(ratio: number): number {
