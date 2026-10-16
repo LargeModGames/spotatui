@@ -8,97 +8,162 @@
   padding-bottom: 32px;
 }
 
-.home-top {
-  padding: 24px 24px 16px;
-  background: linear-gradient(#3a2e1f, var(--panel) 260px);
+.welcome {
+  padding: 24px 24px 32px;
 }
 
-.home-top h1 {
-  margin: 0 0 20px;
-  font-size: 32px;
-  font-weight: 800;
+/* The terminal banner, its gradient running left to right as in the TUI.
+   The bundled mono font has no box-drawing glyphs, so one system font draws them all. */
+.welcome-banner {
+  margin: 0 0 16px;
+  font-family:
+    "Cascadia Mono", Consolas, Menlo, "DejaVu Sans Mono", "Liberation Mono",
+    monospace;
+  font-size: min(16px, 2.2cqi);
+  font-weight: 400;
+  line-height: normal;
+  white-space: pre;
+  color: var(--accent);
 }
 
-.quick-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
+.welcome-banner.animated {
+  background: linear-gradient(
+      100deg,
+      var(--accent),
+      var(--live),
+      var(--soft),
+      var(--accent),
+      var(--live),
+      var(--soft),
+      var(--accent)
+    )
+    0 0 / 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: welcome-gradient 4s linear infinite;
 }
 
-@container (min-width: 860px) {
-  .quick-grid {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+@keyframes welcome-gradient {
+  to {
+    background-position: -100% 0;
   }
 }
 
-.quick-tile {
-  position: relative;
-  min-width: 0;
-  border-radius: 4px;
-  background: rgb(255 255 255 / 7%);
-  transition: background 0.15s;
+.welcome-lines p {
+  margin: 0 0 4px;
 }
 
-.quick-tile:hover,
-.quick-tile:focus-within {
-  background: rgb(255 255 255 / 16%);
-}
-
-.quick-open {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  width: 100%;
-  padding: 0 56px 0 0;
-  border: none;
-  border-radius: 4px;
-  background: transparent;
-  text-align: left;
-}
-
-.quick-open .cover-art {
-  border-radius: 4px 0 0 4px;
-}
-
-.quick-liked {
-  display: grid;
-  place-items: center;
-  width: 56px;
-  height: 56px;
-  flex-shrink: 0;
-  border-radius: 4px 0 0 4px;
-  background: linear-gradient(135deg, #4b3a8f, #a7c4c8);
-}
-
-.quick-name {
-  min-width: 0;
+.welcome-streak {
+  color: var(--accent);
   font-weight: 700;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
-.quick-play {
-  position: absolute;
-  right: 8px;
-  top: 50%;
-  translate: 0 -50%;
-  opacity: 0;
-  transition: opacity 0.15s;
+.welcome-note {
+  color: var(--sub);
+  font-weight: 400;
 }
 
-.quick-play .play-button {
-  width: 32px;
-  height: 32px;
+.welcome a {
+  color: var(--accent);
 }
 
-.quick-tile:hover .quick-play,
-.quick-tile:focus-within .quick-play {
-  opacity: 1;
+.welcome-heading {
+  margin: 32px 0 8px;
+  font-size: 24px;
+}
+
+.release {
+  max-width: 72ch;
+  color: var(--soft);
+  line-height: 1.5;
+}
+
+.release h3 {
+  margin: 24px 0 4px;
+  color: var(--text);
+  font-size: 18px;
+}
+
+.release h4,
+.release h5 {
+  margin: 16px 0 4px;
+  color: var(--sub);
+  font-size: 14px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.release ul {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.release li {
+  margin: 4px 0;
+}
+
+.release li.depth-1 {
+  margin-left: 20px;
+}
+
+.release li.depth-2 {
+  margin-left: 40px;
+}
+
+.release li.depth-3 {
+  margin-left: 60px;
+}
+
+.release code {
+  font-family: var(--mono);
+  font-size: 0.9em;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--raised);
+}
+
+.welcome-older {
+  margin-top: 24px;
+}
+
+.announcement-history {
+  display: grid;
+  gap: 8px;
+  max-width: 72ch;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.announcement-entry {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 16px;
+  border-radius: var(--radius);
+  background: var(--raised);
+}
+
+.announcement-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.announcement-text h3 {
+  margin: 0 0 4px;
+  font-size: 15px;
+}
+
+.announcement-text p {
+  margin: 0;
+  color: var(--soft);
+  line-height: 1.5;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
 }
 
 /* One row of cards per shelf: rows past the first collapse and are clipped. */
-.home .shelf-cards,
 .artist-page .shelf-cards {
   grid-template-rows: min-content;
   grid-auto-rows: 0;

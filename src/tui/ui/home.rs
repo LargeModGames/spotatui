@@ -51,7 +51,6 @@ struct ChangelogCache {
 }
 
 static CHANGELOG_CACHE: OnceLock<Mutex<ChangelogCache>> = OnceLock::new();
-static CLEAN_CHANGELOG: OnceLock<String> = OnceLock::new();
 
 pub fn draw_home(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   let [banner_area, changelog_area] = layout_chunk
@@ -105,51 +104,16 @@ pub fn draw_home(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   let mut changelog_lines = Vec::with_capacity(base_changelog_lines.len() + 4);
 
   // Listening streak strip (cache read only; populated by the history collector)
-  if let Some(streaks) = &app.listening_streaks {
-    if streaks.current_days > 0 {
-      let mut spans = vec![Span::styled(
-        app.strings().screens.listening_streak(streaks.current_days),
+  if let Some((streak, note)) = app.welcome_streak() {
+    changelog_lines.push(Line::from(vec![
+      Span::styled(
+        streak,
         Style::default().fg(app.user_config.theme.active.into()),
-      )];
-      if streaks.today_ms > 0 {
-        spans.push(Span::styled(
-          app
-            .strings()
-            .screens
-            .listened_today(&crate::infra::history::format_duration_with(
-              streaks.today_ms,
-              app.strings(),
-            )),
-          Style::default().fg(app.user_config.theme.hint.into()),
-        ));
-      } else {
-        spans.push(Span::styled(
-          app.strings().screens.streak_keep,
-          Style::default().fg(app.user_config.theme.hint.into()),
-        ));
-      }
-      changelog_lines.push(Line::from(spans));
-    }
+      ),
+      Span::styled(note, Style::default().fg(app.user_config.theme.hint.into())),
+    ]));
   }
-  let counter_message = if cfg!(feature = "telemetry") {
-    if app.user_config.behavior.enable_global_song_count {
-      match app.global_song_count {
-        Some(count) => app.strings().screens.global_counter(&count.to_string()),
-        None if app.global_song_count_failed => {
-          app.strings().screens.global_counter_unavailable.to_string()
-        }
-        None => app.strings().screens.global_counter_loading.to_string(),
-      }
-    } else {
-      app.strings().screens.global_counter_disabled.to_string()
-    }
-  } else {
-    app
-      .strings()
-      .screens
-      .global_counter_build_disabled
-      .to_string()
-  };
+  let counter_message = app.global_counter_line();
 
   let counter_style = Style::default().fg(app.user_config.theme.hint.into());
   changelog_lines.push(Line::from(vec![Span::styled(
@@ -187,19 +151,6 @@ pub fn draw_home(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   f.render_widget(bottom_text, changelog_area);
 }
 
-fn get_clean_changelog() -> &'static str {
-  CLEAN_CHANGELOG
-    .get_or_init(|| {
-      let changelog = include_str!("../../../CHANGELOG.md");
-      if cfg!(debug_assertions) {
-        changelog.to_string()
-      } else {
-        changelog.replace("\n## [Unreleased]\n", "")
-      }
-    })
-    .as_str()
-}
-
 fn get_changelog_cache(
   theme: &crate::core::user_config::Theme,
   changelog_width: u16,
@@ -207,7 +158,7 @@ fn get_changelog_cache(
   strings: &crate::core::i18n::screens::ScreenStrings,
 ) -> Arc<Vec<Line<'static>>> {
   let cache = CHANGELOG_CACHE.get_or_init(|| {
-    let changelog = get_clean_changelog();
+    let changelog = crate::core::changelog::changelog();
     let key = ChangelogCacheKey::from_theme(theme, changelog_width, strings);
     Mutex::new(ChangelogCache {
       changelog_lines: Arc::new(build_changelog_lines(
@@ -223,7 +174,7 @@ fn get_changelog_cache(
   let mut cache = cache.lock().expect("changelog cache lock failed");
   let key = ChangelogCacheKey::from_theme(theme, changelog_width, strings);
   if cache.key != key {
-    let changelog = get_clean_changelog();
+    let changelog = crate::core::changelog::changelog();
     cache.changelog_lines = Arc::new(build_changelog_lines(
       changelog,
       theme,

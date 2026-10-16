@@ -1,144 +1,221 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
-import type { DiscoverPayload } from "./bindings/DiscoverPayload";
-import type { PlaylistInfo } from "./bindings/PlaylistInfo";
-import type { SourcePlaylists } from "./bindings/SourcePlaylists";
-import type { TrackInfo } from "./bindings/TrackInfo";
-import { Home } from "./Home";
+import { describe, expect, it, vi } from "vitest";
+import type { AnnouncementEntry } from "./bindings/AnnouncementEntry";
+import type { WelcomePayload } from "./bindings/WelcomePayload";
+import { AnnouncementHistory, Home, WelcomeView } from "./Home";
+import { EN } from "./i18n";
+import { byName } from "./testTree";
 
-const track = (name: string, album_id: string | null): TrackInfo => ({
-  uri: `spotify:track:${name}`,
-  name,
-  artists: ["Kygo"],
-  album: `Album ${album_id}`,
-  duration_ms: 200_000,
-  id: name,
-  album_id,
-  artist_refs: [],
-  is_playable: true,
-  is_local: false,
-  track_number: 0,
-  explicit: false,
-  image_url: null,
-  release_date: null,
+const welcome = (over: Partial<WelcomePayload> = {}): WelcomePayload => ({
+  streak: { days: "3-day listening streak", note: " · 25m today" },
+  counter: "Global songs played with spotatui: 42",
+  discord: "Join the community on Discord: https://spotatui.com/discord",
+  banner: "\n ███\n ╚═╝\n",
+  banner_gradient: true,
+  ...over,
 });
 
-const playlist = (name: string): PlaylistInfo => ({
-  uri: `spotify:playlist:${name}`,
-  name,
-  owner: "jay",
-  track_count: 3,
-  id: name,
-  owner_id: "jay",
-  collaborative: false,
-  public: true,
-  image_url: null,
-});
-
-const library = (count: number): SourcePlaylists => ({
-  spotify: Array.from({ length: count }, (_, index) => playlist(`P${index}`)),
-  local: [],
-  subsonic: [],
-  qobuz: [],
-  youtube: [],
-  apple_music: [],
-  radio: [],
-  saved_albums: [],
-  saved_albums_has_more: false,
-  followed_artists: [],
-  saved_shows: [],
-  saved_shows_has_more: false,
-  saved_show_ids: [],
-  folders: null,
-  editable: [],
-});
-
-const discover: DiscoverPayload = {
-  available: true,
-  loading: false,
-  shelves: [
-    {
-      title: "Uniquely yours",
-      playlists: [
-        {
-          uri: "spotify:playlist:daylist",
-          name: "daylist",
-          description: "Your day in a playlist.",
-          image_url: null,
-        },
-      ],
-    },
-    { title: "Your Daily Mixes", playlists: [] },
-  ],
-};
+const changelog = [1, 2, 3, 4, 5]
+  .map(
+    (n) =>
+      `## [v0.${n}.0] 2026-0${n}-01\n\n### Added\n\n- **Feature ${n}** ([#${n}](https://github.com/LargeModGames/spotatui/issues/${n})).\n`,
+  )
+  .reverse()
+  .join("\n");
 
 const render = (
-  recent: TrackInfo[] | null,
-  playlists: SourcePlaylists | null,
-  disc: DiscoverPayload | null,
-) =>
+  props: Partial<Parameters<typeof WelcomeView>[0]> = {},
+): string =>
   renderToStaticMarkup(
-    <Home
-      recent={recent}
-      playlists={playlists}
-      discover={disc}
-      connected={false}
-      active={false}
-      playingUri={null}
-      open={() => {}}
-      send={() => {}}
+    <WelcomeView
+      s={EN}
+      welcome={welcome()}
+      animate
+      releases={null}
+      shown={3}
+      onOlder={() => {}}
+      onLink={() => {}}
+      {...props}
     />,
   );
 
 describe("Home", () => {
-  it("greets by the time of day", () => {
-    expect(render(null, null, null)).toMatch(
-      /<h1>Good (morning|afternoon|evening)<\/h1>/,
+  it("needs no Spotify data: the banner and lines come from the welcome message", () => {
+    const html = renderToStaticMarkup(
+      <Home
+        welcome={welcome()}
+        changelog={null}
+        connected={false}
+        active={false}
+        announcements={[]}
+        askChangelog={() => {}}
+        send={() => {}}
+      />,
     );
-  });
-
-  it("puts Liked Songs first in the quick grid, with the page holding the focus", () => {
-    const html = render(null, library(2), null);
     expect(html).toMatch(/<section[^>]*data-focus="true"[^>]*tabindex="-1"/);
-    // No button in the grid carries the focus marker.
-    expect(html).not.toMatch(/<button[^>]*data-focus="true"/);
-    expect(html.indexOf("Liked Songs")).toBeLessThan(html.indexOf("P0"));
+    expect(html).toContain('aria-label="spotatui"');
+    expect(html).toContain("Loading the changelog…");
   });
 
-  it("shows at most seven playlists in the quick grid", () => {
-    const html = render(null, library(10), null);
-    const grid = html.slice(0, html.indexOf('aria-label="Your playlists"'));
-    expect(grid).toContain("Play P6");
-    expect(grid).not.toContain("Play P7");
-  });
-
-  it("shows one recently played card per album", () => {
-    const html = render(
-      [track("One", "a"), track("Two", "a"), track("Three", "b")],
-      null,
-      null,
+  it("draws the banner without its outer blank lines and animates only when asked", () => {
+    expect(render()).toContain(
+      '<h1 class="welcome-banner animated" aria-label="spotatui"> ███\n ╚═╝</h1>',
     );
-    expect(html).toContain('aria-label="Recently played"');
-    expect(html).toContain("Album a");
-    expect(html).toContain("Album b");
-    expect(html.split("Play Album a").length).toBe(2);
-  });
-
-  it("offers Show all on the recently played and Made For You shelves only", () => {
-    const html = render([track("One", "a")], library(1), discover);
-    expect(html).toMatch(
-      /<button[^>]*class="shelf-more"[^>]*aria-label="Show all: Recently played"[^>]*>Show all<\/button>/,
+    expect(render({ animate: false })).toContain(
+      '<h1 class="welcome-banner" aria-label="spotatui">',
     );
-    expect(html).toContain('aria-label="Show all: Made For You"');
-    expect(html.split('class="shelf-more"').length).toBe(3);
   });
 
-  it("draws Made For You from every Discover shelf and skips empty shelves", () => {
-    const html = render(null, null, discover);
-    expect(html).toContain('aria-label="Made For You"');
-    expect(html).toContain("Play daylist");
-    expect(html).toContain("Your day in a playlist.");
-    expect(html).not.toContain('aria-label="Saved albums"');
-    expect(html).not.toContain('aria-label="Recently played"');
+  it("shows the streak, the counter and the Discord link under the banner", () => {
+    const html = render();
+    expect(html).toContain("3-day listening streak");
+    expect(html).toContain(" · 25m today");
+    expect(html).toContain("Global songs played with spotatui: 42");
+    expect(html).toContain(
+      '<a href="https://spotatui.com/discord">https://spotatui.com/discord</a>',
+    );
+  });
+
+  it("leaves the streak out without one", () => {
+    expect(render({ welcome: welcome({ streak: null }) })).not.toContain(
+      "welcome-streak",
+    );
+  });
+
+  it("shows the newest three releases and a Show older button", () => {
+    const html = render({ releases: changelog.split(/\n(?=## )/) });
+    expect(html).toContain("<h3>[v0.5.0] 2026-05-01</h3>");
+    expect(html).toContain("<h3>[v0.3.0] 2026-03-01</h3>");
+    expect(html).not.toContain("v0.2.0");
+    expect(html).toContain("<h4>Added</h4>");
+    expect(html).toContain("<strong>Feature 5</strong>");
+    expect(html).toContain(">Show older</button>");
+  });
+
+  it("drops the Show older button when every release shows", () => {
+    const html = render({
+      releases: changelog.split(/\n(?=## )/),
+      shown: 6,
+    });
+    expect(html).toContain("v0.1.0");
+    expect(html).not.toContain("Show older");
+  });
+
+  it("asks for older releases and sends a link to the server instead of opening it", () => {
+    const onOlder = vi.fn();
+    const onLink = vi.fn();
+    const tree = (
+      <WelcomeView
+        s={EN}
+        welcome={welcome()}
+        animate={false}
+        releases={changelog.split(/\n(?=## )/)}
+        shown={3}
+        onOlder={onOlder}
+        onLink={onLink}
+      />
+    );
+    (byName(tree, "Show older").props.onClick as () => void)();
+    expect(onOlder).toHaveBeenCalledOnce();
+
+    const preventDefault = vi.fn();
+    (
+      byName(tree, "#5").props.onClick as (event: {
+        preventDefault: () => void;
+      }) => void
+    )({ preventDefault });
+    expect(preventDefault).toHaveBeenCalledOnce();
+    expect(onLink).toHaveBeenCalledWith(
+      "https://github.com/LargeModGames/spotatui/issues/5",
+    );
+  });
+});
+
+const entry = (
+  id: string,
+  level: AnnouncementEntry["level"],
+  url: string | null,
+): AnnouncementEntry => ({
+  id,
+  title: `Title ${id}`,
+  body: `Body ${id}\nsecond line`,
+  level,
+  url,
+});
+
+describe("AnnouncementHistory", () => {
+  const history = (
+    entries: AnnouncementEntry[],
+    shown = 3,
+    onOlder = () => {},
+    onOpen = (id: string) => void id,
+  ) => (
+    <AnnouncementHistory
+      s={EN}
+      entries={entries}
+      shown={shown}
+      onOlder={onOlder}
+      onOpen={onOpen}
+    />
+  );
+
+  it("is hidden without past announcements", () => {
+    expect(renderToStaticMarkup(history([]))).toBe("");
+  });
+
+  it("shows each level icon, title, full body and an Open only with a link", () => {
+    const html = renderToStaticMarkup(
+      history([
+        entry("a", "critical", "https://spotatui.com/news"),
+        entry("b", "info", null),
+      ]),
+    );
+    expect(html).toContain('<h2 class="welcome-heading">Announcements</h2>');
+    expect(html).toContain('class="announcement-icon critical"');
+    expect(html).toContain('class="announcement-icon info"');
+    expect(html).toContain("Title a");
+    expect(html).toContain("Body b\nsecond line");
+    expect(html.split(">Open</button>").length).toBe(2);
+  });
+
+  it("keeps the newest three until Show older and opens a link by id only", () => {
+    const onOlder = vi.fn();
+    const onOpen = vi.fn();
+    const entries = ["a", "b", "c", "d"].map((id) =>
+      entry(id, "warning", `https://spotatui.com/${id}`),
+    );
+    const tree = history(entries, 3, onOlder, onOpen);
+    const html = renderToStaticMarkup(tree);
+    expect(html).toContain("Title c");
+    expect(html).not.toContain("Title d");
+    expect(renderToStaticMarkup(history(entries, 6))).not.toContain(
+      "Show older",
+    );
+
+    (byName(tree, "Show older").props.onClick as () => void)();
+    expect(onOlder).toHaveBeenCalledOnce();
+    (byName(tree, "Open").props.onClick as () => void)();
+    expect(onOpen).toHaveBeenCalledWith("a");
+  });
+
+  it("sits between the lines under the banner and the changelog", () => {
+    const html = renderToStaticMarkup(
+      <WelcomeView
+        s={EN}
+        welcome={welcome()}
+        animate={false}
+        releases={null}
+        shown={3}
+        onOlder={() => {}}
+        onLink={() => {}}
+        announcements={history([entry("a", "info", null)])}
+      />,
+    );
+    expect(html.indexOf("spotatui.com/discord")).toBeLessThan(
+      html.indexOf("Announcements"),
+    );
+    expect(html.indexOf("Announcements")).toBeLessThan(
+      html.indexOf(">Changelog<"),
+    );
   });
 });

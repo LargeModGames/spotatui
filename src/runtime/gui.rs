@@ -408,7 +408,11 @@ async fn serve_until_quit(
           }
         }
         // The socket answers these itself; boot is over by now.
-        Some(ClientMessage::Onboarding { .. } | ClientMessage::Visualizer { .. }) => {}
+        Some(
+          ClientMessage::Onboarding { .. }
+          | ClientMessage::Visualizer { .. }
+          | ClientMessage::Changelog,
+        ) => {}
         Some(ClientMessage::Update { ask }) => match ask {
           UpdateAsk::Check => {
             let check = update_check(&app.lock().await.user_config.behavior);

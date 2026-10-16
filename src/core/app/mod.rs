@@ -134,6 +134,7 @@ mod tick;
 mod transport;
 mod view;
 mod volume;
+mod welcome;
 
 #[cfg(test)]
 mod test_support;
@@ -396,6 +397,10 @@ pub struct App {
 
   pub active_announcement: Option<Announcement>,
   pending_announcements: Vec<Announcement>,
+  /// Every announcement of the last fetched feed inside its time window, seen or not.
+  announcement_feed: Vec<Announcement>,
+  /// How many announcements of the batch on screen were dismissed.
+  announcement_batch_dismissed: usize,
   lyrics: Option<Vec<(u128, String)>>,
   lyrics_status: LyricsStatus,
   /// Title/artist pair whose lyrics response is currently desired. Detached

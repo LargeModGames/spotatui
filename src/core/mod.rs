@@ -16,6 +16,8 @@ pub mod app;
 pub mod art;
 pub mod auth;
 pub mod banner;
+#[cfg_attr(not(any(feature = "tui", feature = "gui")), allow(dead_code))]
+pub mod changelog;
 #[cfg(feature = "art-decode")]
 pub mod cover_theme;
 #[cfg_attr(not(feature = "tui"), allow(dead_code))]

@@ -3,7 +3,9 @@
 //! least the last one it applied for that channel. Hello's revisions are informational.
 
 use crate::core::action::Action;
-use crate::core::app::{App, DiscoverShelf, DisplayDomain, DisplayRevisions, SessionPlay};
+use crate::core::app::{
+  AnnouncementLevel, App, DiscoverShelf, DisplayDomain, DisplayRevisions, SessionPlay,
+};
 use crate::core::first_run::compiled_in_sources;
 use crate::core::i18n::{Language, Strings};
 use crate::core::playlist_sync::Unmatched;
@@ -36,6 +38,14 @@ pub(crate) enum ServerMessage {
   /// A frame of the player bar's visualizer, sent only to a page that asked for them.
   Visualizer {
     payload: VisualizerFrame,
+  },
+  /// The Home page's lines under the banner, sent on connect and on every change.
+  Welcome {
+    payload: WelcomePayload,
+  },
+  /// The changelog of the running binary, sent only to a page that asked.
+  Changelog {
+    payload: &'static str,
   },
   Playback {
     rev: u64,
@@ -152,6 +162,11 @@ pub(crate) enum ServerMessage {
   Show {
     rev: u64,
     payload: Box<ShowPayload>,
+  },
+  /// The spotatui announcement to show in a modal, and the ones already seen.
+  Announcement {
+    rev: u64,
+    payload: AnnouncementsPayload,
   },
 }
 
@@ -477,6 +492,46 @@ pub(crate) struct AlbumPayload {
 
 #[derive(Serialize)]
 #[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
+pub(crate) struct AnnouncementsPayload {
+  active: Option<ActiveAnnouncement>,
+  /// The seen announcements still in the feed, newest first.
+  history: Vec<AnnouncementEntry>,
+}
+
+#[derive(Serialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
+pub(crate) struct ActiveAnnouncement {
+  entry: AnnouncementEntry,
+  /// From 1; with `total`, the modal's "1 of 2".
+  position: usize,
+  total: usize,
+}
+
+#[derive(Serialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
+pub(crate) struct AnnouncementEntry {
+  id: String,
+  title: String,
+  body: String,
+  level: AnnouncementLevel,
+  /// An `https://` link; the page opens it with `OpenAnnouncementUrl`.
+  url: Option<String>,
+}
+
+impl From<&crate::core::app::Announcement> for AnnouncementEntry {
+  fn from(announcement: &crate::core::app::Announcement) -> Self {
+    AnnouncementEntry {
+      id: announcement.id.clone(),
+      title: announcement.title.clone(),
+      body: announcement.body.clone(),
+      level: announcement.level,
+      url: announcement.url.clone(),
+    }
+  }
+}
+
+#[derive(Serialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub(crate) struct ShowPayload {
   /// `null` before the first show fetch.
   page: Option<PodcastPage>,
@@ -634,7 +689,56 @@ pub(crate) enum ClientMessage {
   Visualizer {
     on: bool,
   },
+  /// The Home page asks for the changelog once it shows.
+  Changelog,
   Quit,
+}
+
+/// The Home page's lines under the banner, worded in the app's language.
+#[derive(Serialize, Clone, PartialEq)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
+pub(crate) struct WelcomePayload {
+  /// `null` without a listening streak.
+  streak: Option<WelcomeStreak>,
+  /// The global song counter in its current state.
+  counter: String,
+  /// The community invite, with its link as plain text.
+  discord: &'static str,
+  /// The terminal's block-letter spotatui banner.
+  banner: &'static str,
+  /// `behavior.banner_gradient`: the banner animates its gradient.
+  banner_gradient: bool,
+}
+
+#[derive(Serialize, Clone, PartialEq)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
+pub(crate) struct WelcomeStreak {
+  /// "12-day listening streak".
+  days: String,
+  /// Today's listening time, or the hint to listen today.
+  note: String,
+}
+
+pub(crate) fn welcome_payload(app: &App) -> WelcomePayload {
+  WelcomePayload {
+    streak: app
+      .welcome_streak()
+      .map(|(days, note)| WelcomeStreak { days, note }),
+    counter: app.global_counter_line(),
+    discord: app.strings().screens.discord_community,
+    banner: crate::core::banner::BANNER,
+    banner_gradient: app.user_config.behavior.banner_gradient,
+  }
+}
+
+pub(crate) fn welcome(payload: WelcomePayload) -> ServerMessage {
+  ServerMessage::Welcome { payload }
+}
+
+pub(crate) fn changelog() -> ServerMessage {
+  ServerMessage::Changelog {
+    payload: crate::core::changelog::changelog(),
+  }
 }
 
 /// Both lists are empty when the sound stops, so the page lets the bars fall.
@@ -700,12 +804,13 @@ pub(crate) fn diff(sent: &DisplayRevisions, app: &App, language: Language) -> Ve
     .collect()
 }
 
-/// Every channel once.
+/// Every channel once, then the Home page's lines.
 pub(crate) fn resync(app: &App, language: Option<Language>) -> Vec<ServerMessage> {
   let now = app.display_revisions();
   DisplayDomain::ALL
     .into_iter()
     .filter_map(|domain| channel_message(app, domain, now.get(domain), language))
+    .chain([welcome(welcome_payload(app))])
     .collect()
 }
 
@@ -872,6 +977,21 @@ fn channel_message(
     DisplayDomain::Show => ServerMessage::Show {
       rev,
       payload: Box::new(show(app)),
+    },
+    DisplayDomain::Announcement => ServerMessage::Announcement {
+      rev,
+      payload: AnnouncementsPayload {
+        active: app
+          .active_announcement
+          .as_ref()
+          .zip(app.announcement_position())
+          .map(|(announcement, (position, total))| ActiveAnnouncement {
+            entry: announcement.into(),
+            position,
+            total,
+          }),
+        history: app.announcement_history().map(Into::into).collect(),
+      },
     },
   })
 }
@@ -1558,7 +1678,9 @@ mod tests {
         "liked_marks",
         "settings",
         "update",
-        "show"
+        "show",
+        "announcement",
+        "welcome"
       ]
     );
     let revisions = serde_json::to_value(app.display_revisions()).unwrap();
@@ -2951,6 +3073,161 @@ mod tests {
   }
 
   #[test]
+  fn the_changelog_message_carries_the_embedded_changelog_on_request() {
+    let ask: ClientMessage = serde_json::from_str(r#"{ "type": "changelog" }"#).unwrap();
+    assert!(matches!(ask, ClientMessage::Changelog));
+
+    let message = serde_json::to_value(changelog()).unwrap();
+    assert_eq!(message["kind"], "changelog");
+    assert_eq!(message["payload"], crate::core::changelog::changelog());
+  }
+
+  #[test]
+  fn the_welcome_message_follows_the_streak_the_counter_and_the_banner_setting() {
+    let (mut app, _rx) = app();
+    app.user_config.behavior.banner_gradient = false;
+    let quiet = welcome_payload(&app);
+    let message = serde_json::to_value(welcome(quiet.clone())).unwrap();
+    assert_eq!(message["kind"], "welcome");
+    assert_eq!(message["payload"]["streak"], serde_json::Value::Null);
+    assert_eq!(message["payload"]["banner_gradient"], false);
+    assert_eq!(
+      message["payload"]["counter"],
+      app.global_counter_line().as_str()
+    );
+    assert_eq!(
+      message["payload"]["discord"],
+      app.strings().screens.discord_community
+    );
+
+    app.listening_streaks = Some(crate::infra::history::StreakSummary {
+      current_days: 2,
+      longest_days: 2,
+      today_ms: 0,
+    });
+    let streak = welcome_payload(&app);
+    assert!(streak != quiet);
+    assert_eq!(
+      serde_json::to_value(&streak).unwrap()["streak"]["days"],
+      "2-day listening streak"
+    );
+  }
+
+  #[test]
+  fn a_fetched_feed_pushes_the_unseen_one_with_its_place_and_the_seen_ones_as_history() {
+    use crate::core::app::{Announcement, AnnouncementLevel, RouteId};
+    let (mut app, _rx) = app();
+    let dir = tempfile::tempdir().unwrap();
+    app.state_path = Some(dir.path().join("state.yml"));
+    app.runtime_state.seen_announcement_ids = vec!["old".to_string(), "gone".to_string()];
+    let announcement = |id: &str, level, url: Option<&str>| Announcement {
+      id: id.to_string(),
+      title: format!("{id} title"),
+      body: format!("{id} body"),
+      level,
+      url: url.map(str::to_string),
+      received_at: std::time::Instant::now(),
+    };
+    let before = app.display_revisions();
+    app.receive_announcement_feed(vec![
+      announcement(
+        "first",
+        AnnouncementLevel::Warning,
+        Some("https://example.com"),
+      ),
+      announcement("second", AnnouncementLevel::Critical, None),
+      announcement("old", AnnouncementLevel::Info, None),
+    ]);
+
+    assert_eq!(app.get_current_route().id, RouteId::AnnouncementPrompt);
+    let first = pushed(&diff(&before, &app, Language::En), "announcement");
+    assert_eq!(
+      first["payload"],
+      serde_json::json!({
+        "active": {
+          "entry": {
+            "id": "first",
+            "title": "first title",
+            "body": "first body",
+            "level": "warning",
+            "url": "https://example.com",
+          },
+          "position": 1,
+          "total": 2,
+        },
+        "history": [{
+          "id": "old",
+          "title": "old title",
+          "body": "old body",
+          "level": "info",
+          "url": null,
+        }],
+      })
+    );
+
+    let next = apply_from_page(
+      &mut app,
+      &action_frame(Action::DismissAnnouncement {
+        id: "first".to_string(),
+      }),
+    );
+    let second = &pushed(&next, "announcement")["payload"];
+    assert_eq!(second["active"]["entry"]["id"], "second");
+    assert_eq!(second["active"]["entry"]["level"], "critical");
+    assert_eq!(second["active"]["position"], 2);
+    assert_eq!(second["active"]["total"], 2);
+    let ids = |payload: &serde_json::Value| {
+      payload["history"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["id"].as_str().unwrap().to_string())
+        .collect::<Vec<_>>()
+    };
+    assert_eq!(ids(second), ["first", "old"]);
+
+    let last = apply_from_page(
+      &mut app,
+      &action_frame(Action::DismissAnnouncement {
+        id: "second".to_string(),
+      }),
+    );
+    let none = &pushed(&last, "announcement")["payload"];
+    assert!(none["active"].is_null());
+    assert_eq!(ids(none), ["first", "second", "old"]);
+  }
+
+  #[test]
+  fn the_same_feed_fetched_again_pushes_nothing_and_a_new_batch_counts_from_one() {
+    use crate::core::app::{Announcement, AnnouncementLevel};
+    let (mut app, _rx) = app();
+    let dir = tempfile::tempdir().unwrap();
+    app.state_path = Some(dir.path().join("state.yml"));
+    let announcement = |id: &str| Announcement {
+      id: id.to_string(),
+      title: id.to_string(),
+      body: id.to_string(),
+      level: AnnouncementLevel::Info,
+      url: None,
+      received_at: std::time::Instant::now(),
+    };
+    app.receive_announcement_feed(vec![announcement("a")]);
+    app.apply(Action::DismissAnnouncement {
+      id: "a".to_string(),
+    });
+
+    let before = app.display_revisions();
+    app.receive_announcement_feed(vec![announcement("a")]);
+    assert!(diff(&before, &app, Language::En).is_empty());
+
+    app.receive_announcement_feed(vec![announcement("b"), announcement("a")]);
+    let payload = &pushed(&diff(&before, &app, Language::En), "announcement")["payload"];
+    assert_eq!(payload["active"]["entry"]["id"], "b");
+    assert_eq!(payload["active"]["position"], 1);
+    assert_eq!(payload["active"]["total"], 1);
+  }
+
+  #[test]
   fn typescript_bindings_are_written_to_the_frontend_source_tree() {
     use crate::core::plugin_api::{EpisodeInfo, ResumePointInfo};
     use ts_rs::TS;
@@ -3013,6 +3290,9 @@ mod tests {
     written::<ShowInfo>(&dir, &cfg);
     written::<WindowMode>(&dir, &cfg);
     written::<VisualizerFrame>(&dir, &cfg);
+    written::<WelcomePayload>(&dir, &cfg);
+    written::<WelcomeStreak>(&dir, &cfg);
+    written::<AnnouncementsPayload>(&dir, &cfg);
     std::fs::write(
       dir.join("strings.json"),
       serde_json::to_string_pretty(&serde_json::json!({

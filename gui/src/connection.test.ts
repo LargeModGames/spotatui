@@ -327,6 +327,8 @@ describe("showsOnboarding", () => {
     onboarding: null,
     version: null,
     window: false,
+    welcome: null,
+    changelog: null,
   };
   const view = { transcript: "", pending: null };
 
@@ -407,5 +409,31 @@ describe("watchVisualizer", () => {
     });
     expect(rendered).not.toHaveBeenCalled();
     expect(connection.getState()).toBe(state);
+  });
+});
+
+describe("the Home page messages", () => {
+  it("asks for the changelog and keeps the welcome lines and the answer", () => {
+    const { connection, sockets } = harness("abc");
+    sockets[0].handlers.message(hello("t1"));
+    connection.askChangelog();
+    expect(sockets[0].sent).toEqual([JSON.stringify({ type: "changelog" })]);
+
+    const welcome = {
+      streak: null,
+      counter: "Loading global song count...",
+      discord: "Join us",
+      banner: "S",
+      banner_gradient: true,
+    };
+    sockets[0].handlers.message(
+      JSON.stringify({ kind: "welcome", payload: welcome }),
+    );
+    sockets[0].handlers.message(
+      JSON.stringify({ kind: "changelog", payload: "## [v1]" }),
+    );
+
+    expect(connection.getState().welcome).toEqual(welcome);
+    expect(connection.getState().changelog).toBe("## [v1]");
   });
 });

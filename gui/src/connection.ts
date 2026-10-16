@@ -2,6 +2,7 @@ import type { HelloPayload } from "./bindings/HelloPayload";
 import type { ClientMessage } from "./bindings/ClientMessage";
 import type { OnboardingView } from "./bindings/OnboardingView";
 import type { ServerMessage } from "./bindings/ServerMessage";
+import type { WelcomePayload } from "./bindings/WelcomePayload";
 import { applyChannel, type Channels } from "./store";
 import type { Frame } from "./visualizerModel";
 
@@ -39,6 +40,10 @@ export interface State {
   version: string | null;
   /** A desktop shell can shrink its window to the mini player, from the hello. */
   window: boolean;
+  /** The Home page's lines under the banner. */
+  welcome: WelcomePayload | null;
+  /** The running app's changelog; null until the Home page asked and the answer came. */
+  changelog: string | null;
 }
 
 /** A tick this far behind the shown position is a jump (a seek, a new track), not jitter. */
@@ -126,6 +131,8 @@ export class Connection {
     onboarding: null,
     version: null,
     window: false,
+    welcome: null,
+    changelog: null,
   };
   private socket: Socket | null = null;
   /** The last item the playback channel named, kept across a blank update. */
@@ -192,6 +199,9 @@ export class Connection {
     };
   };
 
+  /** Asks the server for the changelog; the answer lands in `changelog`. */
+  askChangelog = (): void => this.send({ type: "changelog" });
+
   private receive(text: string): void {
     const message = JSON.parse(text) as ServerMessage;
     switch (message.kind) {
@@ -216,6 +226,10 @@ export class Connection {
         this.viewers.forEach((viewer) => viewer(frame));
         return;
       }
+      case "welcome":
+        return this.update({ welcome: message.payload });
+      case "changelog":
+        return this.update({ changelog: message.payload });
       case "onboarding":
         return this.update({ onboarding: message.payload });
       case "tick":

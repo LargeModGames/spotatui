@@ -287,6 +287,9 @@ impl App {
       Action::OpenRecap => self.open_recap(),
       Action::DismissRecapPrompt => self.dismiss_recap_prompt(),
       Action::DisableRecapPrompt => self.disable_recap_prompt(),
+      Action::DismissAnnouncement { id } => self.dismiss_announcement(&id),
+      Action::OpenAnnouncementUrl { id } => self.open_announcement_url(&id),
+      Action::OpenChangelogLink { url } => self.open_changelog_link(&url),
       Action::SetScreenContent { name, content } => {
         self.plugin_screens.insert(name, content);
       }

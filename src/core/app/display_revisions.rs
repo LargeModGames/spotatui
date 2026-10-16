@@ -39,6 +39,8 @@ pub enum DisplayDomain {
   Update,
   /// The podcast show the app holds for its show page, with its episodes.
   Show,
+  /// The spotatui announcement that is active now.
+  Announcement,
 }
 
 /// Per-domain revisions that move only when that domain's displayed state changed.
@@ -70,11 +72,12 @@ pub struct DisplayRevisions {
   settings: u64,
   update: u64,
   show: u64,
+  announcement: u64,
 }
 
 impl DisplayDomain {
   /// Every domain, in declaration order.
-  pub const ALL: [DisplayDomain; 24] = [
+  pub const ALL: [DisplayDomain; 25] = [
     DisplayDomain::Route,
     DisplayDomain::Status,
     DisplayDomain::Source,
@@ -99,6 +102,7 @@ impl DisplayDomain {
     DisplayDomain::Settings,
     DisplayDomain::Update,
     DisplayDomain::Show,
+    DisplayDomain::Announcement,
   ];
 }
 
@@ -129,6 +133,7 @@ impl DisplayRevisions {
       DisplayDomain::Settings => &mut self.settings,
       DisplayDomain::Update => &mut self.update,
       DisplayDomain::Show => &mut self.show,
+      DisplayDomain::Announcement => &mut self.announcement,
     };
     *slot = slot.wrapping_add(1);
   }
@@ -160,6 +165,7 @@ impl DisplayRevisions {
       DisplayDomain::Settings => self.settings,
       DisplayDomain::Update => self.update,
       DisplayDomain::Show => self.show,
+      DisplayDomain::Announcement => self.announcement,
     }
   }
 }

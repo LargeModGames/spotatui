@@ -125,6 +125,8 @@ impl Default for App {
 
       active_announcement: None,
       pending_announcements: Vec::new(),
+      announcement_feed: Vec::new(),
+      announcement_batch_dismissed: 0,
       lyrics: None,
       lyrics_status: LyricsStatus::default(),
       desired_lyrics_identity: None,

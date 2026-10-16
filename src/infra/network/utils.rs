@@ -230,12 +230,11 @@ impl UtilsNetwork for Network {
     const DEFAULT_ANNOUNCEMENTS_URL: &str =
       "https://raw.githubusercontent.com/LargeModGames/spotatui/main/announcements.json";
 
-    let (announcements_enabled, feed_url, seen_ids) = {
+    let (announcements_enabled, feed_url) = {
       let app = self.app.lock().await;
       (
         app.user_config.behavior.enable_announcements,
         app.user_config.behavior.announcement_feed_url.clone(),
-        app.runtime_state.seen_announcement_ids.clone(),
       )
     };
 
@@ -292,13 +291,12 @@ impl UtilsNetwork for Network {
     };
 
     let now = Utc::now();
-    let seen_ids = seen_ids.into_iter().collect::<HashSet<String>>();
     let mut feed_ids_seen = HashSet::new();
     let mut announcements = Vec::new();
 
     for record in feed.announcements {
       let id = record.id.trim().to_string();
-      if id.is_empty() || seen_ids.contains(&id) || !feed_ids_seen.insert(id.clone()) {
+      if id.is_empty() || !feed_ids_seen.insert(id.clone()) {
         continue;
       }
 
@@ -350,20 +348,11 @@ impl UtilsNetwork for Network {
       });
     }
 
-    if announcements.is_empty() {
-      return;
-    }
-
-    let mut app = self.app.lock().await;
-    let had_active_announcement = app.active_announcement.is_some();
-    app.enqueue_announcements(announcements);
-
-    if !had_active_announcement && app.active_announcement.is_some() {
-      app.push_navigation_stack(
-        crate::core::app::RouteId::AnnouncementPrompt,
-        crate::core::app::ActiveBlock::AnnouncementPrompt,
-      );
-    }
+    self
+      .app
+      .lock()
+      .await
+      .receive_announcement_feed(announcements);
   }
 }
 

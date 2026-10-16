@@ -3896,3 +3896,65 @@ fn set_theme_bumps_the_theme_revision_only_when_a_color_changes() {
   app.apply(action());
   assert_eq!(app.display_revisions().get(DisplayDomain::Theme), rev + 1);
 }
+
+fn announcement_app() -> (App, Receiver<IoEvent>, tempfile::TempDir) {
+  use crate::core::app::{ActiveBlock, Announcement, AnnouncementLevel};
+  let (mut app, rx) = app_with_channel();
+  let dir = tempfile::tempdir().unwrap();
+  app.state_path = Some(dir.path().join("state.yml"));
+  let announcement = |id: &str| Announcement {
+    id: id.to_string(),
+    title: id.to_string(),
+    body: format!("{id} body"),
+    level: AnnouncementLevel::Info,
+    url: None,
+    received_at: std::time::Instant::now(),
+  };
+  app.enqueue_announcements(vec![announcement("first"), announcement("second")]);
+  app.push_navigation_stack(RouteId::AnnouncementPrompt, ActiveBlock::AnnouncementPrompt);
+  (app, rx, dir)
+}
+
+#[test]
+fn dismiss_announcement_persists_it_as_seen_and_shows_the_next_until_none_is_left() {
+  let (mut app, _rx, dir) = announcement_app();
+
+  app.apply(Action::DismissAnnouncement {
+    id: "first".to_string(),
+  });
+
+  let active = app.active_announcement.as_ref().map(|a| a.id.as_str());
+  assert_eq!(active, Some("second"));
+  assert_eq!(app.runtime_state.seen_announcement_ids, ["first"]);
+  let saved = std::fs::read_to_string(dir.path().join("state.yml")).unwrap();
+  assert!(saved.contains("first"), "{saved}");
+  assert_eq!(app.get_current_route().id, RouteId::AnnouncementPrompt);
+
+  app.apply(Action::DismissAnnouncement {
+    id: "second".to_string(),
+  });
+
+  assert!(app.active_announcement.is_none());
+  assert_eq!(app.runtime_state.seen_announcement_ids, ["first", "second"]);
+  assert_ne!(app.get_current_route().id, RouteId::AnnouncementPrompt);
+}
+
+#[test]
+fn dismiss_announcement_with_an_id_that_is_not_active_changes_nothing() {
+  let (mut app, _rx, dir) = announcement_app();
+  let rev = app.display_revisions().get(DisplayDomain::Announcement);
+
+  app.apply(Action::DismissAnnouncement {
+    id: "second".to_string(),
+  });
+
+  let active = app.active_announcement.as_ref().map(|a| a.id.as_str());
+  assert_eq!(active, Some("first"));
+  assert!(app.runtime_state.seen_announcement_ids.is_empty());
+  assert!(!dir.path().join("state.yml").exists());
+  assert_eq!(
+    app.display_revisions().get(DisplayDomain::Announcement),
+    rev
+  );
+  assert_eq!(app.get_current_route().id, RouteId::AnnouncementPrompt);
+}

@@ -5,7 +5,7 @@ use crate::infra::network::IoEvent;
 use crate::tui::event::{self, Key};
 use crate::tui::handlers;
 use crate::tui::ui;
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use crossterm::{
   event::{
     DisableMouseCapture, EnableMouseCapture, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
@@ -142,28 +142,7 @@ fn dispatch_key(key: Key, app: &mut App) -> bool {
       if current_active_block == ActiveBlock::Settings {
         handlers::handle_app(key, app);
       } else if app.get_current_route().active_block == ActiveBlock::AnnouncementPrompt {
-        if let Some(dismissed_id) = app.dismiss_active_announcement() {
-          app.runtime_state.mark_announcement_seen(dismissed_id);
-          let patch = crate::core::state::PersistedRuntimeState::announcements(
-            &app.runtime_state.seen_announcement_ids,
-            &app.runtime_state.dismissed_announcements,
-          );
-          if let Err(error) = app.save_runtime_state(&patch) {
-            let message = app
-              .strings()
-              .status
-              .app
-              .announcement_save_failed(&error.to_string());
-            app.handle_error_with_message(
-              anyhow!("Failed to persist dismissed announcement: {}", error),
-              message,
-            );
-          }
-        }
-
-        if app.active_announcement.is_none() {
-          app.pop_navigation_stack();
-        }
+        handlers::dismiss_announcement(app);
       } else if app.get_current_route().active_block != ActiveBlock::Input {
         let pop_result = match app.pop_navigation_stack() {
           Some(ref x) if x.id == RouteId::Search => app.pop_navigation_stack(),

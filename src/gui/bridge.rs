@@ -58,6 +58,8 @@ pub(crate) struct Publisher {
   frames: watch::Sender<Option<Arc<str>>>,
   /// The sockets that show the visualizer.
   watchers: Arc<AtomicUsize>,
+  /// The Home page's lines as last pushed: they have no revision of their own.
+  welcome: Option<protocol::WelcomePayload>,
 }
 
 /// Counts its socket among the visualizer's watchers while it lives.
@@ -94,6 +96,7 @@ pub(crate) fn channel(
     alone_since: None,
     frames,
     watchers: Arc::clone(&watchers),
+    welcome: None,
   };
   (
     Link {
@@ -118,6 +121,13 @@ impl Publisher {
     }
     self.sent = app.display_revisions();
     self.language = app.language();
+    let welcome = protocol::welcome_payload(app);
+    if self.welcome.as_ref() != Some(&welcome) {
+      let _ = self
+        .pushes
+        .send(protocol::encode(&protocol::welcome(welcome.clone())));
+      self.welcome = Some(welcome);
+    }
   }
 
   /// Push the position at most every 250 ms, whatever the tick rate.
@@ -237,6 +247,8 @@ where
               watching = Some(Watching::new(&link.watchers));
             }
           }
+          // Only the page that asked gets the 240 KB answer.
+          Ok(ClientMessage::Changelog) => outgoing.push(protocol::changelog()),
           Ok(message) => {
             let _ = link.inbox.send(message);
           }

@@ -35,6 +35,7 @@ const revisions = {
   settings: 1,
   update: 1,
   show: 1,
+  announcement: 1,
 };
 
 export const hello: ServerMessage = {
@@ -806,6 +807,92 @@ export const recentlyPlayed: ServerMessage[] = [
   },
 ];
 
+const BANNER = `
+ ███████╗██████╗  ██████╗ ████████╗ █████╗ ████████╗██╗   ██╗██╗
+ ██╔════╝██╔══██╗██╔═══██╗╚══██╔══╝██╔══██╗╚══██╔══╝██║   ██║██║
+ ███████╗██████╔╝██║   ██║   ██║   ███████║   ██║   ██║   ██║██║
+ ╚════██║██╔═══╝ ██║   ██║   ██║   ██╔══██║   ██║   ██║   ██║██║
+ ███████║██║     ╚██████╔╝   ██║   ██║  ██║   ██║   ╚██████╔╝██║
+ ╚══════╝╚═╝      ╚═════╝    ╚═╝   ╚═╝  ╚═╝   ╚═╝    ╚═════╝ ╚═╝
+`;
+
+/** The Home page: the welcome lines and a changelog of four releases. */
+export const welcome: ServerMessage[] = [
+  {
+    kind: "welcome",
+    payload: {
+      streak: { days: "12-day listening streak", note: " · 1h 4m today" },
+      counter: "Global songs played with spotatui: 1,284,377",
+      discord: "Join the community on Discord: https://spotatui.com/discord",
+      banner: BANNER,
+      banner_gradient: false,
+    },
+  },
+  {
+    kind: "announcement",
+    rev: 1,
+    payload: {
+      active: null,
+      history: [
+        {
+          id: "shot-history-login",
+          title: "Spotify login change",
+          body: "Spotify changes its login on 1 November. Update spotatui before then to keep native playback.",
+          level: "warning",
+          url: "https://spotatui.com/news",
+        },
+        {
+          id: "shot-history-survey",
+          title: "Tell us what you play",
+          body: "The source survey is open until the end of the month.",
+          level: "info",
+          url: null,
+        },
+      ],
+    },
+  },
+  {
+    kind: "changelog",
+    payload: `# Changelog
+
+## [v0.47.0] 2026-10-20
+
+### Added
+
+- **A Welcome page in the desktop app**: the spotatui banner, your listening streak and the changelog of the version you run ([#900](https://github.com/LargeModGames/spotatui/issues/900)).
+
+- **Search settings**: filter by section, setting name or description, and press \`Escape\` to clear the search.
+
+### Fixed
+
+- **The playbar no longer jumps back while a song plays**.
+
+## [v0.46.0] 2026-10-14
+
+### Added
+
+- **Play on Cast and Spotify Connect speakers on your network**: Cast groups are not supported yet.
+  - Sonos rooms show as one device each.
+
+### Changed
+
+- **Discover shows Spotify's Made For You playlists**.
+
+## [v0.45.0] 2026-10-12
+
+### Fixed
+
+- **Subsonic usernames with special characters can log in** ([#814](https://github.com/LargeModGames/spotatui/issues/814)).
+
+## [v0.44.0] 2026-10-12
+
+### Added
+
+- **Mini player**.
+`,
+  },
+];
+
 /** Adele's artist page: her top songs from 21 and the album. */
 export const artist: ServerMessage[] = [
   {
@@ -1212,3 +1299,27 @@ export const songRadio: ServerMessage[] = [
     },
   },
 ];
+
+export const announcement = (
+  level: "info" | "warning" | "critical",
+  body: string,
+  position = 1,
+  total = 1,
+): ServerMessage => ({
+  kind: "announcement",
+  rev: 1,
+  payload: {
+    active: {
+      entry: {
+        id: `shot-${level}`,
+        title: "Spotify login change",
+        body,
+        level,
+        url: "https://spotatui.com/news",
+      },
+      position,
+      total,
+    },
+    history: [],
+  },
+});

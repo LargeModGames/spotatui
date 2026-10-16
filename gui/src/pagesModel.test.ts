@@ -11,11 +11,8 @@ import {
   asksDiscover,
   copyLink,
   discoverView,
-  greeting,
   lengthLine,
-  madeForYou,
   radioRows,
-  recentAlbums,
   releaseLine,
   trackKey,
   yearOf,
@@ -49,27 +46,6 @@ const discover = (over: Partial<DiscoverPayload>): DiscoverPayload => ({
   ...over,
 });
 
-describe("greeting", () => {
-  it("follows the local hour", () => {
-    expect(greeting(6)).toBe("Good morning");
-    expect(greeting(13)).toBe("Good afternoon");
-    expect(greeting(20)).toBe("Good evening");
-    expect(greeting(2)).toBe("Good evening");
-  });
-});
-
-describe("recentAlbums", () => {
-  it("keeps the first track of each album and drops tracks without one", () => {
-    const rows = recentAlbums([
-      track("1", "a"),
-      track("2", "b"),
-      track("3", "a"),
-      track("4", null),
-    ]);
-    expect(rows.map((row) => row.id)).toEqual(["1", "2"]);
-  });
-});
-
 describe("asksDiscover", () => {
   it("asks once the channel says a session exists and nothing landed", () => {
     expect(asksDiscover(discover({}), true)).toBe(true);
@@ -90,23 +66,12 @@ describe("asksDiscover", () => {
   });
 });
 
-describe("madeForYou", () => {
+describe("discoverView", () => {
   const mix = (uri: string) => ({
     uri,
     name: uri,
     description: null,
     image_url: `https://i.scdn.co/${uri}`,
-  });
-
-  it("lists each playlist once in page order", () => {
-    const shelves = [
-      { title: "Uniquely yours", playlists: [mix("a"), mix("b")] },
-      { title: "Daily", playlists: [mix("b"), mix("c")] },
-    ];
-    expect(
-      madeForYou(discover({ shelves })).map((playlist) => playlist.uri),
-    ).toEqual(["a", "b", "c"]);
-    expect(madeForYou(null)).toEqual([]);
   });
 
   it("opens a card as a Spotify playlist that carries its cover", () => {

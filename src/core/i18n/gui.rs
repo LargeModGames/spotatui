@@ -112,13 +112,9 @@ pub struct GuiStrings {
   pub loading_artists: &'static str,
   pub no_followed_artists: &'static str,
   pub recently_played: &'static str,
-  pub your_playlists: &'static str,
   pub saved_albums: &'static str,
   pub your_top_tracks: &'static str,
   pub artists_mix: &'static str,
-  pub good_morning: &'static str,
-  pub good_afternoon: &'static str,
-  pub good_evening: &'static str,
   pub save_to_library: &'static str,
   pub following: &'static str,
   pub follow: &'static str,
@@ -515,6 +511,13 @@ pub struct GuiStrings {
   pub device_game_console: &'static str,
   pub device_automobile: &'static str,
   pub device_unknown: &'static str,
+  pub announcement_open: &'static str,
+  pub announcement_got_it: &'static str,
+  pub announcement_position: &'static str,
+  pub changelog: &'static str,
+  pub loading_changelog: &'static str,
+  pub show_older: &'static str,
+  pub announcements: &'static str,
 }
 
 #[cfg(any(feature = "gui", test))]

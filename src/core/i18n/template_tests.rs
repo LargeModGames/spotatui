@@ -372,11 +372,6 @@ fn every_typed_message_fills_its_placeholders_and_preserves_all_arguments() {
     );
     check!("popups.listeners", strings.popups.listeners(9101), ["9101"]);
     check!(
-      "popups.announcement_save_failed",
-      strings.popups.announcement_save_failed("SENTINEL_ERROR_中"),
-      ["SENTINEL_ERROR_中"]
-    );
-    check!(
       "popups.add_tracks_title",
       strings.popups.add_tracks_title("SENTINEL_NAME_中"),
       ["SENTINEL_NAME_中"]
@@ -927,6 +922,11 @@ fn every_typed_message_fills_its_placeholders_and_preserves_all_arguments() {
         .app
         .announcement_save_failed("SENTINEL_ERROR_中"),
       ["SENTINEL_ERROR_中"]
+    );
+    check!(
+      "status_app.link_open_failed",
+      strings.status.app.link_open_failed("SENTINEL_URL_中"),
+      ["SENTINEL_URL_中"]
     );
     check!(
       "status_app.like_source_unavailable",

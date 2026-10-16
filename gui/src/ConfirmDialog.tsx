@@ -7,7 +7,7 @@ export function trapTab(event: KeyboardEvent<HTMLElement>) {
   if (event.key !== "Tab") return;
   const controls = [
     ...event.currentTarget.querySelectorAll<HTMLElement>(
-      "input, button:not(:disabled)",
+      "input, button:not(:disabled), [tabindex='0']",
     ),
   ];
   const first = controls[0];

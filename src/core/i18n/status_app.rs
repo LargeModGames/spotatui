@@ -114,6 +114,7 @@ pub struct AppStatusStrings {
   pub switching_device: &'static str,
   pub source_selected: &'static str,
   pub announcement_save_failed: &'static str,
+  pub link_open_failed: &'static str,
   pub capture_unavailable: &'static str,
   pub no_radio_playing: &'static str,
   pub search_needs_spotify: &'static str,
@@ -239,6 +240,7 @@ pub const EN: AppStatusStrings = AppStatusStrings {
   switching_device: "Switching playback to {device}",
   source_selected: "Source: {source}",
   announcement_save_failed: "Failed to persist dismissed announcement: {error}",
+  link_open_failed: "Couldn't open {url} in the browser",
   capture_unavailable: "Visualizer can't capture system audio - see the log for details.",
   no_radio_playing: "No radio station selected or playing",
   search_needs_spotify: "Search needs a Spotify session",
@@ -354,6 +356,9 @@ impl AppStatusStrings {
   }
   pub fn announcement_save_failed(&self, error: &str) -> String {
     crate::core::i18n::format_template(self.announcement_save_failed, &[("error", error)])
+  }
+  pub fn link_open_failed(&self, url: &str) -> String {
+    crate::core::i18n::format_template(self.link_open_failed, &[("url", url)])
   }
   pub fn like_source_unavailable(&self, source: &str) -> String {
     crate::core::i18n::format_template(self.like_source_unavailable, &[("source", source)])

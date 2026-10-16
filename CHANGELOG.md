@@ -4,6 +4,10 @@
 
 ### Added
 
+- **spotatui announcements in the desktop app and browser GUI**: the announcement the terminal shows as a popup now opens as a dialog in the middle of the window, one at a time with a "1 of 2" counter, with Open when it has a link and Got it (or Escape) to dismiss it. Warnings and critical notices get their own color and icon. Dismissed announcements stay readable on the Welcome page while they are still in the feed. A dismiss in either interface marks it seen for both, and `behavior.enable_announcements` turns them off too.
+
+- **A Welcome page in place of Home in the desktop app and the browser GUI**: the spotatui banner (animated when `behavior.banner_gradient` is on and the system does not ask for reduced motion), your listening streak, the global song counter, the Discord link, the announcements you already dismissed (with their level, full text and link) and the changelog of the version you run, newest three releases first with Show older for the rest. It works with every source and without a Spotify login; the Spotify shelves are gone from it, and Made For You and Recently played keep their own pages.
+
 - **A visualizer behind the player bar** of the desktop app and the browser GUI: while this computer plays, the bar shows a 75-band spectrum (bars that drop with gravity, peak caps and a bass glow) or a waveform, in colours from the accent. A click on empty space in the bar moves through Spectrum, Waveform and Off, and the Interface settings have it as Player Bar Visualizer (`behavior.player_bar_visualizer`: `spectrum` by default, `waveform` or `off`). Down to about a third of spotatui's volume, the bars do not shrink with it. Windows and Linux only: on Linux it captures through PipeWire, so the deb and rpm packages now depend on the PipeWire library.
 
 - **Search settings in the desktop app and browser GUI**: filter by section, setting name or description, and press Escape to clear the search ([#840](https://github.com/LargeModGames/spotatui/issues/840)).

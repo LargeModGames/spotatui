@@ -8,7 +8,7 @@
       "level": "info",
       "url": "https://spotatui.com/discord",
       "starts_at": "2026-08-06T00:00:00Z",
-      "ends_at": null
+      "ends_at": "2026-10-15T23:59:59Z"
     },
     {
       "id": "2026-07-04-multi-source-playback",
@@ -17,7 +17,7 @@
       "level": "info",
       "url": "https://github.com/LargeModGames/spotatui/pull/329",
       "starts_at": "2026-07-04T00:00:00Z",
-      "ends_at": null
+      "ends_at": "2026-10-15T23:59:59Z"
     },
     {
       "id": "2026-06-12-self-update-broken",
@@ -35,7 +35,7 @@
       "level": "info",
       "url": "https://github.com/LargeModGames/spotatui/pull/302",
       "starts_at": "2026-06-12T00:00:00Z",
-      "ends_at": null
+      "ends_at": "2026-10-15T23:59:59Z"
     },
     {
       "id": "2026-05-19-sonos-help-wanted",

@@ -131,6 +131,24 @@ const PATHS = {
       <circle cx="12" cy="12" r="3" />
     </>
   ),
+  info: (
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 11v5M12 8h.01" />
+    </>
+  ),
+  warning: (
+    <>
+      <path d="M12 4 2.5 20h19z" />
+      <path d="M12 10v4M12 17h.01" />
+    </>
+  ),
+  alert: (
+    <>
+      <path d="M8.3 3h7.4L21 8.3v7.4L15.7 21H8.3L3 15.7V8.3z" />
+      <path d="M12 8v5M12 16h.01" />
+    </>
+  ),
 } satisfies Record<string, ReactNode>;
 
 export type GlyphName = keyof typeof PATHS;

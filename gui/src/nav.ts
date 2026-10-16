@@ -69,8 +69,6 @@ export function goForward(history: History): History {
 /** The fetch a view asks for when it opens; null for a page that loads by itself. */
 export function openAction(view: View): Action | null {
   switch (view.page) {
-    case "home":
-      return { Navigate: "RecentlyPlayed" };
     case "liked":
       return { OpenLibrary: "LikedSongs" };
     case "playlist":
@@ -116,7 +114,6 @@ export function fetchFor(
   loaded: Loaded,
 ): Action | null {
   const spotifyOnly =
-    view.page === "home" ||
     view.page === "liked" ||
     view.page === "album" ||
     view.page === "artist" ||
@@ -129,7 +126,6 @@ export function fetchFor(
   if (!fresh) {
     // Radio rows differ on every fetch, so back and forward keep the rows they had.
     const held =
-      view.page === "home" ||
       view.page === "recent" ||
       view.page === "discover" ||
       (view.page === "liked" && loaded.liked) ||

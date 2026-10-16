@@ -60,6 +60,7 @@ describe("openAction", () => {
       Open: { Artist: { id: "a1", name: "Kygo" } },
     });
     expect(openAction({ page: "party" })).toBeNull();
+    expect(openAction({ page: "home" })).toBeNull();
   });
 
   it("discover asks for Made For You through its library row", () => {

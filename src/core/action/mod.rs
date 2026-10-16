@@ -358,6 +358,21 @@ pub enum Action {
   DismissRecapPrompt,
   /// Close the recap popup and switch the monthly prompt off in `config.yml`.
   DisableRecapPrompt,
+  /// Dismiss the active announcement if it has this id, persist it as seen,
+  /// and show the next pending one.
+  DismissAnnouncement {
+    id: String,
+  },
+  /// Open the link of the active or a fetched announcement with this id in the
+  /// system browser; the URL comes from the feed, never the producer.
+  OpenAnnouncementUrl {
+    id: String,
+  },
+  /// Open a Welcome page link in the system browser: the Discord invite or a
+  /// link target in the embedded changelog, any other URL is ignored.
+  OpenChangelogLink {
+    url: String,
+  },
   /// Publish (retained) content for a registered plugin screen.
   SetScreenContent {
     name: String,

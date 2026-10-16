@@ -52,6 +52,7 @@ use crate::core::requirement::{Availability, Capability, Requirement};
 use crate::core::source::Source;
 use crate::tui::event::Key;
 
+pub use announcement_prompt::dismiss as dismiss_announcement;
 pub use input::handler as input_handler;
 pub use mouse::handler as mouse_handler;
 

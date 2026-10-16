@@ -8,28 +8,6 @@ import type { TrackTablePayload } from "./bindings/TrackTablePayload";
 import { playRequest, step } from "./libraryModel";
 import type { View } from "./nav";
 
-/** One row of cards, as Spotify's Home shows it. */
-export const SHELF_MAX = 8;
-/** Liked Songs plus seven playlists fill the quick-access grid. */
-export const QUICK_PLAYLISTS = 7;
-
-/** The Home greeting for a local hour. */
-export function greeting(hour: number, s: GuiStrings = EN): string {
-  if (hour >= 5 && hour < 12) return s.good_morning;
-  if (hour >= 12 && hour < 18) return s.good_afternoon;
-  return s.good_evening;
-}
-
-/** The first track of each album in play order, for the Recently played shelf. */
-export function recentAlbums(recent: TrackInfo[]): TrackInfo[] {
-  const seen = new Set<string>();
-  return recent.filter((track) => {
-    if (!track.album_id || seen.has(track.album_id)) return false;
-    seen.add(track.album_id);
-    return true;
-  });
-}
-
 /** Whether a page still has to ask for the Made For You shelves; a closed socket drops the ask. */
 export function asksDiscover(
   discover: DiscoverPayload | null,
@@ -42,16 +20,6 @@ export function asksDiscover(
     !discover.loading &&
     discover.shelves === null
   );
-}
-
-/** Every Made For You playlist once, in page order: a playlist can sit on two shelves. */
-export function madeForYou(
-  discover: DiscoverPayload | null,
-): DiscoverPlaylist[] {
-  const seen = new Set<string>();
-  return (discover?.shelves ?? [])
-    .flatMap((shelf) => shelf.playlists)
-    .filter((playlist) => !seen.has(playlist.uri) && seen.add(playlist.uri));
 }
 
 /** The playlist page a Made For You card opens. */

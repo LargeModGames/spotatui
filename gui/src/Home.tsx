@@ -1,185 +1,302 @@
-import { EN, type GuiStrings, fmt } from "./i18n";
-import { useEffect, useRef } from "react";
-import type { Action } from "./bindings/Action";
-import type { DiscoverPayload } from "./bindings/DiscoverPayload";
-import type { PlaylistInfo } from "./bindings/PlaylistInfo";
-import type { SourcePlaylists } from "./bindings/SourcePlaylists";
-import type { TrackInfo } from "./bindings/TrackInfo";
-import { Glyph } from "./Icon";
-import type { OpenView, View } from "./nav";
-import "./Pages.css";
+import { EN, type GuiStrings } from "./i18n";
 import {
-  asksDiscover,
-  discoverView,
-  greeting,
-  madeForYou,
-  QUICK_PLAYLISTS,
-  recentAlbums,
-  SHELF_MAX,
-} from "./pagesModel";
-import { Card, Cover, PlayButton, Shelf } from "./ui";
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import type { Action } from "./bindings/Action";
+import type { AnnouncementEntry } from "./bindings/AnnouncementEntry";
+import type { WelcomePayload } from "./bindings/WelcomePayload";
+import {
+  parseBlocks,
+  parseInline,
+  releases,
+  RELEASES_SHOWN,
+  type Block,
+  type Span,
+} from "./changelogModel";
+import { AnnouncementLevelIcon } from "./AnnouncementDialog";
+import "./Pages.css";
 
-const playlistView = (playlist: PlaylistInfo): View => ({
-  page: "playlist",
-  uri: playlist.uri,
-  name: playlist.name,
-  source: "Spotify",
-});
+/** The Home page shows this many past announcements before "Show older". */
+export const ANNOUNCEMENTS_SHOWN = 3;
 
-/** Home: shelves of recently played, the user's playlists, saved albums and Made For You. */
+const REDUCED_MOTION = "(prefers-reduced-motion: reduce)";
+
+/** Whether the OS asks for less motion; false where the page cannot ask. */
+function useReducedMotion(): boolean {
+  const [reduced, setReduced] = useState(
+    () =>
+      typeof window !== "undefined" &&
+      window.matchMedia?.(REDUCED_MOTION).matches === true,
+  );
+  useEffect(() => {
+    const query = window.matchMedia?.(REDUCED_MOTION);
+    if (!query) return;
+    const change = () => setReduced(query.matches);
+    query.addEventListener("change", change);
+    return () => query.removeEventListener("change", change);
+  }, []);
+  return reduced;
+}
+
+/** Home: the spotatui banner, the streak and counter lines, and the changelog of the running app. */
 export function Home({
   s = EN,
-  recent,
-  playlists,
-  discover,
+  welcome,
+  announcements,
+  changelog,
   connected,
   active,
-  open,
+  askChangelog,
   send,
 }: {
   s?: GuiStrings;
-  /** Recently played, most recent first; null before the first fetch landed. */
-  recent: TrackInfo[] | null;
-  playlists: SourcePlaylists | null;
-  discover: DiscoverPayload | null;
+  welcome: WelcomePayload | null;
+  /** The dismissed announcements still in the feed, newest first. */
+  announcements: AnnouncementEntry[];
+  /** The changelog text; null until the server answered the ask. */
+  changelog: string | null;
   connected: boolean;
   active: boolean;
-  playingUri: string | null;
-  open: OpenView;
+  askChangelog: () => void;
   send: (action: Action) => void;
 }) {
   const asked = useRef(false);
   useEffect(() => {
     // A drop can swallow the ask, so a reconnect may ask once more.
     if (!connected) asked.current = false;
-    if (!active || asked.current || !asksDiscover(discover, connected)) return;
+    if (!active || !connected || asked.current || changelog !== null) return;
     asked.current = true;
-    send({ OpenLibrary: "Discover" });
-  }, [active, connected, discover, send]);
-
-  const spotify = playlists?.spotify ?? [];
-  const albums = playlists?.saved_albums ?? [];
-  const recentShelf = recentAlbums(recent ?? []);
-  const openAlbum = (id: string | null) => {
-    if (id) open({ page: "album", id });
-  };
-  const playContext = (uri: string | null) => {
-    if (uri) send({ PlayContext: { uri, offset: null } });
-  };
-  const forYou = madeForYou(discover);
+    askChangelog();
+  }, [active, connected, changelog, askChangelog]);
+  const [shown, setShown] = useState(RELEASES_SHOWN);
+  const [shownAnnouncements, setShownAnnouncements] =
+    useState(ANNOUNCEMENTS_SHOWN);
+  const reduced = useReducedMotion();
+  const all = useMemo(
+    () => (changelog === null ? null : releases(changelog)),
+    [changelog],
+  );
+  const openLink = useCallback(
+    (url: string) => send({ OpenChangelogLink: { url } }),
+    [send],
+  );
 
   return (
-    <section className="home" data-focus tabIndex={-1}>
-      <div className="home-top">
-        <h1>{greeting(new Date().getHours(), s)}</h1>
-        <div className="quick-grid">
-          <div className="quick-tile">
-            <button
-              type="button"
-              className="quick-open"
-              onClick={() => open({ page: "liked" })}
-            >
-              <span className="quick-liked" aria-hidden="true">
-                <Glyph name="heart" size={24} filled />
-              </span>
-              <span className="quick-name">{s.liked_songs}</span>
-            </button>
-          </div>
-          {spotify.slice(0, QUICK_PLAYLISTS).map((playlist) => (
-            <div key={playlist.uri} className="quick-tile">
-              <button
-                type="button"
-                className="quick-open"
-                onClick={() => open(playlistView(playlist))}
-              >
-                <Cover src={playlist.image_url} size={56} />
-                <span className="quick-name">{playlist.name}</span>
-              </button>
-              <span className="quick-play">
-                <PlayButton
-                  label={fmt(s.play_named, { name: playlist.name })}
-                  onClick={() => playContext(playlist.uri)}
-                />
-              </span>
-            </div>
-          ))}
-        </div>
-      </div>
-      {recentShelf.length > 0 && (
-        <Shelf
-          s={s}
-          oneRow
-          title={s.recently_played}
-          onMore={() => open({ page: "recent" })}
-        >
-          {recentShelf.slice(0, SHELF_MAX).map((track) => (
-            <Card
-              s={s}
-              key={track.album_id}
-              image={track.image_url}
-              title={track.album}
-              subtitle={track.artists.join(", ")}
-              onOpen={() => openAlbum(track.album_id)}
-              onPlay={() =>
-                track.album_id
-                  ? playContext(`spotify:album:${track.album_id}`)
-                  : track.uri &&
-                    send({ PlayUris: { uris: [track.uri], offset: null } })
-              }
-            />
-          ))}
-        </Shelf>
-      )}
-      {spotify.length > 0 && (
-        <Shelf s={s} oneRow title={s.your_playlists}>
-          {spotify.slice(0, SHELF_MAX).map((playlist) => (
-            <Card
-              s={s}
-              key={playlist.uri}
-              image={playlist.image_url}
-              title={playlist.name}
-              subtitle={fmt(s.by_owner, { owner: playlist.owner })}
-              onOpen={() => open(playlistView(playlist))}
-              onPlay={() => playContext(playlist.uri)}
-            />
-          ))}
-        </Shelf>
-      )}
-      {albums.length > 0 && (
-        <Shelf s={s} oneRow title={s.saved_albums}>
-          {albums.slice(0, SHELF_MAX).map((album, index) => (
-            <Card
-              s={s}
-              key={album.id ?? `${index}-${album.name}`}
-              image={album.image_url}
-              title={album.name}
-              subtitle={album.artists.map((artist) => artist.name).join(", ")}
-              onOpen={() => openAlbum(album.id)}
-              onPlay={() => playContext(album.uri)}
-            />
-          ))}
-        </Shelf>
-      )}
-      {forYou.length > 0 && (
-        <Shelf
-          oneRow
-          s={s}
-          title={s.made_for_you}
-          onMore={() => open({ page: "discover" })}
-        >
-          {forYou.slice(0, SHELF_MAX).map((playlist) => (
-            <Card
-              s={s}
-              key={playlist.uri}
-              image={playlist.image_url}
-              title={playlist.name}
-              subtitle={playlist.description ?? s.by_spotify}
-              onOpen={() => open(discoverView(playlist))}
-              onPlay={() => playContext(playlist.uri)}
-            />
-          ))}
-        </Shelf>
-      )}
+    <section className="home welcome" data-focus tabIndex={-1}>
+      <WelcomeView
+        s={s}
+        welcome={welcome}
+        animate={!!welcome?.banner_gradient && !reduced}
+        releases={all}
+        shown={shown}
+        onOlder={() => setShown((count) => count + RELEASES_SHOWN)}
+        onLink={openLink}
+        announcements={
+          <AnnouncementHistory
+            s={s}
+            entries={announcements}
+            shown={shownAnnouncements}
+            onOlder={() =>
+              setShownAnnouncements((count) => count + ANNOUNCEMENTS_SHOWN)
+            }
+            onOpen={(id) => send({ OpenAnnouncementUrl: { id } })}
+          />
+        }
+      />
     </section>
   );
+}
+
+/** The page body without state, so a test can walk it. */
+export function WelcomeView({
+  s,
+  welcome,
+  animate,
+  releases,
+  shown,
+  onOlder,
+  onLink,
+  announcements,
+}: {
+  s: GuiStrings;
+  welcome: WelcomePayload | null;
+  animate: boolean;
+  releases: string[] | null;
+  shown: number;
+  onOlder: () => void;
+  onLink: (url: string) => void;
+  /** Drawn between the lines under the banner and the changelog. */
+  announcements?: ReactNode;
+}) {
+  return (
+    <>
+      {welcome && (
+        <>
+          <h1
+            className={animate ? "welcome-banner animated" : "welcome-banner"}
+            aria-label="spotatui"
+          >
+            {welcome.banner.replace(/^\n+|\n+$/g, "")}
+          </h1>
+          <div className="welcome-lines">
+            {welcome.streak && (
+              <p className="welcome-streak">
+                {welcome.streak.days}
+                <span className="welcome-note">{welcome.streak.note}</span>
+              </p>
+            )}
+            <p className="welcome-note">{welcome.counter}</p>
+            <p className="welcome-discord">
+              <Inline spans={parseInline(welcome.discord)} onLink={onLink} />
+            </p>
+          </div>
+        </>
+      )}
+      {announcements}
+      <h2 className="welcome-heading">{s.changelog}</h2>
+      {releases === null ? (
+        <p className="welcome-note">{s.loading_changelog}</p>
+      ) : (
+        <>
+          {releases.slice(0, shown).map((release, index) => (
+            <article key={index} className="release">
+              <Blocks blocks={parseBlocks(release)} onLink={onLink} />
+            </article>
+          ))}
+          {shown < releases.length && (
+            <button
+              type="button"
+              className="outline-action welcome-older"
+              onClick={onOlder}
+            >
+              {s.show_older}
+            </button>
+          )}
+        </>
+      )}
+    </>
+  );
+}
+
+/** Past announcements with their level, full text and link; hidden without any. */
+export function AnnouncementHistory({
+  s,
+  entries,
+  shown,
+  onOlder,
+  onOpen,
+}: {
+  s: GuiStrings;
+  entries: AnnouncementEntry[];
+  shown: number;
+  onOlder: () => void;
+  onOpen: (id: string) => void;
+}) {
+  if (entries.length === 0) return null;
+  return (
+    <>
+      <h2 className="welcome-heading">{s.announcements}</h2>
+      <ul className="announcement-history">
+        {entries.slice(0, shown).map((entry) => (
+          <li key={entry.id} className="announcement-entry">
+            <AnnouncementLevelIcon level={entry.level} />
+            <div className="announcement-text">
+              <h3 id={`announcement-history-${entry.id}`}>{entry.title}</h3>
+              <p>{entry.body}</p>
+            </div>
+            {entry.url && (
+              <button
+                type="button"
+                className="outline-action"
+                aria-describedby={`announcement-history-${entry.id}`}
+                onClick={() => onOpen(entry.id)}
+              >
+                {s.announcement_open}
+              </button>
+            )}
+          </li>
+        ))}
+      </ul>
+      {shown < entries.length && (
+        <button
+          type="button"
+          className="outline-action welcome-older"
+          onClick={onOlder}
+        >
+          {s.show_older}
+        </button>
+      )}
+    </>
+  );
+}
+
+/** Consecutive bullets share one list; a nested bullet indents by its depth. */
+function Blocks({
+  blocks,
+  onLink,
+}: {
+  blocks: Block[];
+  onLink: (url: string) => void;
+}) {
+  const out: ReactNode[] = [];
+  let items: ReactNode[] = [];
+  const flush = () => {
+    if (items.length > 0) out.push(<ul key={out.length}>{items}</ul>);
+    items = [];
+  };
+  blocks.forEach((block, index) => {
+    const body = <Inline spans={block.spans} onLink={onLink} />;
+    if (block.kind === "item") {
+      items.push(
+        <li key={index} className={`depth-${Math.min(block.depth, 3)}`}>
+          {body}
+        </li>,
+      );
+      return;
+    }
+    flush();
+    if (block.kind === "paragraph") {
+      out.push(<p key={out.length}>{body}</p>);
+      return;
+    }
+    const Heading = `h${Math.min(block.level + 1, 6)}` as "h3";
+    out.push(<Heading key={out.length}>{body}</Heading>);
+  });
+  flush();
+  return out;
+}
+
+/** Links open outside the app through the server, never in the page. */
+function Inline({
+  spans,
+  onLink,
+}: {
+  spans: Span[];
+  onLink: (url: string) => void;
+}) {
+  return spans.map((span, index) => {
+    let body: ReactNode = span.text;
+    if (span.code) body = <code>{body}</code>;
+    if (span.bold) body = <strong>{body}</strong>;
+    const url = span.url;
+    if (url)
+      body = (
+        <a
+          href={url}
+          onClick={(event) => {
+            event.preventDefault();
+            onLink(url);
+          }}
+        >
+          {body}
+        </a>
+      );
+    return <Fragment key={index}>{body}</Fragment>;
+  });
 }

@@ -48,18 +48,17 @@ describe("main additions share the active language table", () => {
       const home = renderToStaticMarkup(
         <Home
           s={s}
-          recent={null}
-          playlists={null}
-          discover={discover}
+          welcome={null}
+          changelog={null}
           connected={false}
           active={false}
-          playingUri={null}
-          open={() => {}}
+          announcements={[]}
+          askChangelog={() => {}}
           send={() => {}}
         />,
       );
-      expect(home).toContain(s.made_for_you);
-      expect(home).toContain(s.by_spotify);
+      expect(home).toContain(s.changelog);
+      expect(home).toContain(s.loading_changelog);
     }
     expect(EN.discover_intro).toBe("Made For You, from Spotify.");
   });

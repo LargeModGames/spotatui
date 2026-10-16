@@ -9,12 +9,14 @@ import {
 } from "react";
 import type { ReactNode } from "react";
 import type { Action } from "./bindings/Action";
+import type { AnnouncementEntry } from "./bindings/AnnouncementEntry";
 import type { DeviceInfo } from "./bindings/DeviceInfo";
 import type { SessionPlay } from "./bindings/SessionPlay";
 import type { UpdateAsk } from "./bindings/UpdateAsk";
 import type { WindowMode } from "./bindings/WindowMode";
 import { MAC, shellKey, type ShellKey } from "./areas";
 import { AlbumPage } from "./AlbumPage";
+import { AnnouncementDialog } from "./AnnouncementDialog";
 import { ArtistPage } from "./ArtistPage";
 import "./Chrome.css";
 import type { State } from "./connection";
@@ -62,6 +64,7 @@ const NO_DEVICES: DeviceInfo[] = [];
 /** A search that got no answer stops showing "Searching…" after this long. */
 const PENDING_MS = 10_000;
 const NO_PLAYS: SessionPlay[] = [];
+const NO_ANNOUNCEMENTS: AnnouncementEntry[] = [];
 /** The width from which the right panel sits beside the main view; style.css has it too. */
 const WIDE = "(min-width: 1101px)";
 
@@ -74,6 +77,7 @@ export function Shell({
   onWindow,
   onQuit,
   watchVisualizer,
+  askChangelog,
 }: {
   s?: GuiStrings;
   state: State;
@@ -83,6 +87,8 @@ export function Shell({
   onWindow: ((mode: WindowMode) => void) | null;
   onQuit: () => void;
   watchVisualizer?: WatchVisualizer;
+  /** Asks the server for the changelog the Home page shows. */
+  askChangelog: () => void;
 }) {
   const { channels } = state;
   const [history, setHistory] = useState<History>(HOME);
@@ -128,15 +134,6 @@ export function Shell({
     (next: View) => show(push(history, next), true),
     [history, show],
   );
-  // Home asks for its data once a Spotify session is known.
-  const homeFetched = useRef(false);
-  useEffect(() => {
-    if (!spotify || homeFetched.current) return;
-    homeFetched.current = true;
-    const action = openAction(HOME.now);
-    if (action) send(action);
-  }, [spotify, send]);
-
   const playback = channels.playback?.payload ?? null;
   const playingUri = playback?.item?.uri ?? null;
   const queue = channels.queue?.payload;
@@ -254,13 +251,14 @@ export function Shell({
     home: (
       <Home
         s={s}
-        recent={channels.recently_played?.payload ?? null}
-        playlists={channels.library?.payload ?? null}
-        discover={channels.discover?.payload ?? null}
+        welcome={state.welcome}
+        announcements={
+          channels.announcement?.payload.history ?? NO_ANNOUNCEMENTS
+        }
+        changelog={state.changelog}
         connected={state.connected}
         active={page === "home"}
-        playingUri={playingUri}
-        open={open}
+        askChangelog={askChangelog}
         send={send}
       />
     ),
@@ -710,6 +708,11 @@ export function Shell({
         s={s}
         status={channels.status?.payload ?? null}
         route={channels.route?.payload ?? null}
+        send={send}
+      />
+      <AnnouncementDialog
+        s={s}
+        active={channels.announcement?.payload.active ?? null}
         send={send}
       />
     </TrackActionsContext.Provider>

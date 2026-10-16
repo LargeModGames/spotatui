@@ -1,6 +1,7 @@
-import { test } from "@playwright/test";
+import { test, type Page } from "@playwright/test";
 import { openWith, openWithVisualizer, shot } from "./bridge";
 import {
+  announcement,
   artist,
   discover,
   filmScores,
@@ -28,7 +29,21 @@ import {
   stats,
   visualizerSetting,
   waveFrame,
+  welcome,
 } from "./fixtures";
+
+/** Opens the album 21 from its link in a Recently played row. */
+async function openAlbum21(page: Page): Promise<void> {
+  await page
+    .getByRole("navigation", { name: "Your Library" })
+    .getByRole("button", { name: /Recently played/ })
+    .click();
+  await page
+    .getByRole("listbox", { name: "Recently played" })
+    .getByRole("button", { name: "21" })
+    .first()
+    .click();
+}
 
 test("expired", async ({ page }) => {
   await page.goto("/");
@@ -287,24 +302,16 @@ test("library health", async ({ page }) => {
 });
 
 test("home", async ({ page }) => {
-  await openWith(page, [
-    ...playing,
-    ...library,
-    ...recentlyPlayed,
-    ...discover,
-  ]);
+  await openWith(page, [...playing, ...library, ...welcome]);
   await page.getByText("Set Fire to the Rain").first().waitFor();
-  await page.getByRole("region", { name: "Recently played" }).waitFor();
+  await page.getByRole("heading", { name: "Announcements" }).waitFor();
+  await page.getByRole("heading", { name: "[v0.46.0] 2026-10-14" }).waitFor();
   await shot(page, "home");
 });
 
 test("album", async ({ page }) => {
   await openWith(page, [...playing, ...library, ...recentlyPlayed, ...room]);
-  await page
-    .getByRole("region", { name: "Recently played" })
-    .getByRole("button", { name: /21/ })
-    .first()
-    .click();
+  await openAlbum21(page);
   await page.getByRole("listbox", { name: "21" }).waitFor();
   await shot(page, "album");
 });
@@ -317,11 +324,7 @@ test("artist", async ({ page }) => {
     ...room,
     ...artist,
   ]);
-  await page
-    .getByRole("region", { name: "Recently played" })
-    .getByRole("button", { name: /21/ })
-    .first()
-    .click();
+  await openAlbum21(page);
   await page
     .getByRole("button", { name: "Adele", exact: true })
     .first()
@@ -494,11 +497,7 @@ test("saved album", async ({ page }) => {
         : message,
     ),
   ]);
-  await page
-    .getByRole("region", { name: "Recently played" })
-    .getByRole("button", { name: /21/ })
-    .first()
-    .click();
+  await openAlbum21(page);
   await page.getByRole("listbox", { name: "21" }).waitFor();
   await page
     .getByRole("button", { name: "Remove from Your Library" })
@@ -514,4 +513,54 @@ test("mini player", async ({ page }) => {
   await page.setViewportSize({ width: 360, height: 420 });
   await page.getByRole("region", { name: "Mini player" }).waitFor();
   await shot(page, "mini-player");
+});
+
+test("announcement modal", async ({ page }) => {
+  await openWith(page, [
+    ...playing,
+    ...library,
+    announcement(
+      "warning",
+      "Spotify changes its login on 1 November. Update spotatui before then to keep native playback.",
+      1,
+      2,
+    ),
+  ]);
+  await page.getByRole("dialog", { name: "Spotify login change" }).waitFor();
+  await shot(page, "announcement-modal");
+});
+
+test("announcement modal 2 of 2", async ({ page }) => {
+  await openWith(page, [
+    ...playing,
+    ...library,
+    announcement(
+      "info",
+      "spotatui now has a community Discord: install help, feature ideas and listening parties.",
+      2,
+      2,
+    ),
+  ]);
+  await page.getByText("2 of 2").waitFor();
+  await shot(page, "announcement-modal-second");
+});
+
+test("critical announcement modal at 800 px with a long body", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 800, height: 600 });
+  await openWith(page, [
+    ...playing,
+    ...library,
+    announcement(
+      "critical",
+      Array.from(
+        { length: 6 },
+        () =>
+          "Native playback fails for accounts created after 1 October because Spotify blocks their audio keys. Switch the playback device to the official app until a fixed spotatui release is out.",
+      ).join("\n\n"),
+    ),
+  ]);
+  await page.getByRole("alertdialog").waitFor();
+  await shot(page, "announcement-modal-critical-800");
 });

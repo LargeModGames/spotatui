@@ -830,6 +830,13 @@ pub fn default_binding(action: &Action) -> Exposure<TuiSurface> {
     Action::OpenRecap => literal(ENTER, "Recap prompt"),
     Action::DismissRecapPrompt => literal(ESC, "Recap prompt"),
     Action::DisableRecapPrompt => literal("d", "Recap prompt"),
+    Action::DismissAnnouncement { .. } => literal(ENTER, "Announcement prompt"),
+    Action::OpenAnnouncementUrl { .. } => {
+      Unbound("the announcement prompt shows its link as text; the GUI strip opens it")
+    }
+    Action::OpenChangelogLink { .. } => {
+      Unbound("the terminal Home shows its links as text; the GUI Welcome page opens them")
+    }
   }
 }
 
@@ -1118,6 +1125,8 @@ mod tests {
     "GenerateStatsRecap",
     "Notify",
     "NotifyError",
+    "OpenAnnouncementUrl",
+    "OpenChangelogLink",
     "Pause",
     "Play",
     "QueueTracks",
@@ -1435,6 +1444,9 @@ mod tests {
       Action::OpenRecap,
       Action::DismissRecapPrompt,
       Action::DisableRecapPrompt,
+      Action::DismissAnnouncement { id: text() },
+      Action::OpenAnnouncementUrl { id: text() },
+      Action::OpenChangelogLink { url: text() },
       Action::SetScreenContent {
         name: text(),
         content: PluginScreenContent::default(),

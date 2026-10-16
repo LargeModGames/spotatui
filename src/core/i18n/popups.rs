@@ -113,7 +113,6 @@ pub struct PopupStrings {
   pub party_title: &'static str,
   pub plugin_close_hint: &'static str,
   pub fallback_session_only: &'static str,
-  pub announcement_save_failed_template: &'static str,
   pub create_playlist_title: &'static str,
   pub playlist_name_label: &'static str,
   pub create_continue_hint: &'static str,
@@ -235,7 +234,6 @@ pub const EN: PopupStrings = PopupStrings {
   party_title: "Party",
   plugin_close_hint: "(Esc to close)",
   fallback_session_only: "Using Alt+, for this session only",
-  announcement_save_failed_template: "Failed to persist dismissed announcement: {error}",
   create_playlist_title: "Create Playlist (Esc to cancel)",
   playlist_name_label: "Playlist name:",
   create_continue_hint: "Press Enter to continue, Esc to cancel",
@@ -337,10 +335,6 @@ impl PopupStrings {
 
   pub fn listeners(&self, count: usize) -> String {
     super::format_template(self.listeners_template, &[("count", &count.to_string())])
-  }
-
-  pub fn announcement_save_failed(&self, error: &str) -> String {
-    super::format_template(self.announcement_save_failed_template, &[("error", error)])
   }
 
   pub fn add_tracks_title(&self, name: &str) -> String {

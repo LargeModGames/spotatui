@@ -1,6 +1,9 @@
 use super::*;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
+#[cfg_attr(feature = "gui", derive(serde::Serialize))]
+#[cfg_attr(feature = "gui", serde(rename_all = "snake_case"))]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub enum AnnouncementLevel {
   Info,
   Warning,
@@ -52,11 +55,63 @@ impl App {
     if self.active_announcement.is_none() {
       if let Some(first) = incoming.first().cloned() {
         self.active_announcement = Some(first);
+        self.announcement_batch_dismissed = 0;
         incoming.remove(0);
+        self.display_revisions.bump(DisplayDomain::Announcement);
       }
     }
 
+    if !incoming.is_empty() {
+      self.display_revisions.bump(DisplayDomain::Announcement);
+    }
     self.pending_announcements.extend(incoming);
+  }
+
+  /// Keep the fetched feed for the history and queue its announcements not seen yet.
+  pub(crate) fn receive_announcement_feed(&mut self, feed: Vec<Announcement>) {
+    let same = |a: &Announcement, b: &Announcement| {
+      (&a.id, &a.title, &a.body, a.level, &a.url) == (&b.id, &b.title, &b.body, b.level, &b.url)
+    };
+    let unchanged = self.announcement_feed.len() == feed.len()
+      && self
+        .announcement_feed
+        .iter()
+        .zip(&feed)
+        .all(|(a, b)| same(a, b));
+    if !unchanged {
+      self.announcement_feed = feed.clone();
+      self.display_revisions.bump(DisplayDomain::Announcement);
+    }
+
+    let seen = &self.runtime_state.seen_announcement_ids;
+    let unseen = feed
+      .into_iter()
+      .filter(|announcement| !seen.contains(&announcement.id))
+      .collect();
+    let had_active = self.active_announcement.is_some();
+    self.enqueue_announcements(unseen);
+    if !had_active && self.active_announcement.is_some() {
+      self.push_navigation_stack(RouteId::AnnouncementPrompt, ActiveBlock::AnnouncementPrompt);
+    }
+  }
+
+  /// The active announcement's place in its batch and the batch size, both from 1.
+  #[cfg(feature = "gui")]
+  pub(crate) fn announcement_position(&self) -> Option<(usize, usize)> {
+    self.active_announcement.as_ref().map(|_| {
+      let position = self.announcement_batch_dismissed + 1;
+      (position, position + self.pending_announcements.len())
+    })
+  }
+
+  /// The seen announcements still in the feed, in feed order.
+  #[cfg(feature = "gui")]
+  pub(crate) fn announcement_history(&self) -> impl Iterator<Item = &Announcement> {
+    let seen = &self.runtime_state.seen_announcement_ids;
+    self
+      .announcement_feed
+      .iter()
+      .filter(move |announcement| seen.contains(&announcement.id))
   }
 
   pub fn dismiss_active_announcement(&mut self) -> Option<String> {
@@ -64,13 +119,76 @@ impl App {
       .active_announcement
       .take()
       .map(|announcement| announcement.id);
+    if dismissed_id.is_some() {
+      self.announcement_batch_dismissed += 1;
+    }
 
     if let Some(next_announcement) = self.pending_announcements.first().cloned() {
       self.active_announcement = Some(next_announcement);
       self.pending_announcements.remove(0);
+    } else {
+      self.announcement_batch_dismissed = 0;
     }
 
+    self.display_revisions.bump(DisplayDomain::Announcement);
     dismissed_id
+  }
+
+  /// Dismiss the active announcement if it has this id, mark it seen in
+  /// `state.yml`, and close the prompt when no announcement waits.
+  pub(crate) fn dismiss_announcement(&mut self, id: &str) {
+    let is_active = self
+      .active_announcement
+      .as_ref()
+      .is_some_and(|announcement| announcement.id == id);
+    if is_active {
+      if let Some(dismissed_id) = self.dismiss_active_announcement() {
+        self.runtime_state.mark_announcement_seen(dismissed_id);
+        let patch = crate::core::state::PersistedRuntimeState::announcements(
+          &self.runtime_state.seen_announcement_ids,
+          &self.runtime_state.dismissed_announcements,
+        );
+        if let Err(error) = self.save_runtime_state(&patch) {
+          let message = self
+            .strings()
+            .status
+            .app
+            .announcement_save_failed(&error.to_string());
+          self.handle_error_with_message(
+            anyhow!("Failed to persist dismissed announcement: {}", error),
+            message,
+          );
+        }
+      }
+    }
+
+    if self.active_announcement.is_none()
+      && self.get_current_route().active_block == ActiveBlock::AnnouncementPrompt
+    {
+      self.pop_navigation_stack();
+    }
+  }
+
+  /// Open the link of the active or a fetched announcement with this id.
+  pub(crate) fn open_announcement_url(&mut self, id: &str) {
+    let url = self
+      .active_announcement
+      .iter()
+      .chain(&self.announcement_feed)
+      .find(|announcement| announcement.id == id)
+      .and_then(|announcement| announcement.url.clone());
+    if let Some(url) = url {
+      self.open_external_url(&url);
+    }
+  }
+
+  /// Open a URL the caller checked in the system browser.
+  pub(crate) fn open_external_url(&mut self, url: &str) {
+    if let Err(e) = open::that_detached(url) {
+      log::warn!("failed to open {} in the browser: {}", url, e);
+      let message = self.strings().status.app.link_open_failed(url);
+      self.set_error_status_message(message, 6);
+    }
   }
 
   /// The status-bar message that is live now, if any.
