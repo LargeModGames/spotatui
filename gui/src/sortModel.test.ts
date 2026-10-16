@@ -6,6 +6,7 @@ import {
   parseSort,
   removeAction,
   rowKeys,
+  shufflePlayRequest,
   shownPlayRequest,
   SORT_OPTIONS,
   sortTracks,
@@ -225,6 +226,82 @@ describe("shownPlayRequest", () => {
         offset: 0,
       },
     });
+  });
+});
+
+describe("shufflePlayRequest", () => {
+  const shown = [
+    tracks[0],
+    track("gone", [], "", 1, null),
+    tracks[1],
+    tracks[2],
+  ];
+
+  it("plays every shown song with a URI once, in the order the random picks give", () => {
+    expect(shufflePlayRequest(shown, () => 0)).toEqual({
+      PlayUris: {
+        uris: [
+          "spotify:track:Apple",
+          "spotify:track:cherry",
+          "spotify:track:banana",
+        ],
+        offset: 0,
+      },
+    });
+    expect(shufflePlayRequest(shown, () => 0.999)).toEqual({
+      PlayUris: {
+        uris: [
+          "spotify:track:banana",
+          "spotify:track:Apple",
+          "spotify:track:cherry",
+        ],
+        offset: 0,
+      },
+    });
+  });
+
+  it("sends nothing when no shown row has a URI", () => {
+    expect(
+      shufflePlayRequest([track("gone", [], "", 1, null)], () => 0),
+    ).toBeNull();
+    expect(shufflePlayRequest([], () => 0)).toBeNull();
+  });
+
+  it("keeps a single song a single-song request and keeps duplicate URIs", () => {
+    expect(shufflePlayRequest([tracks[0]], () => 0)).toEqual({
+      PlayUris: { uris: ["spotify:track:banana"], offset: 0 },
+    });
+    expect(shufflePlayRequest([tracks[0], tracks[0]], () => 0)).toEqual({
+      PlayUris: {
+        uris: ["spotify:track:banana", "spotify:track:banana"],
+        offset: 0,
+      },
+    });
+  });
+
+  it("does not reorder the caller's rows", () => {
+    const before = [...shown];
+    shufflePlayRequest(shown, () => 0);
+    expect(shown).toEqual(before);
+  });
+
+  it("keeps a URI whatever its source, like the play path does", () => {
+    const radio = track("radio", [], "", 1, "radio:track:1");
+    expect(shufflePlayRequest([radio], () => 0)).toEqual({
+      PlayUris: { uris: ["radio:track:1"], offset: 0 },
+    });
+  });
+
+  it("passes the whole shuffled list on, so the server-side window can pick any of it", () => {
+    const many = Array.from({ length: 101 }, (_, i) => `spotify:track:t${i}`);
+    const rows = many.map((uri) => track(uri, [], "", 1, uri));
+    const rng = () => 0;
+    const request = shufflePlayRequest(rows, rng) as {
+      PlayUris: { uris: string[] };
+    };
+    expect(request.PlayUris.uris).toHaveLength(101);
+    expect(new Set(request.PlayUris.uris).size).toBe(101);
+    expect(request.PlayUris.uris[0]).toBe(many[1]);
   });
 });
 

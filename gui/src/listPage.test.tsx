@@ -158,3 +158,34 @@ describe("ListPage sort labels", () => {
     );
   });
 });
+
+describe("ListPage shuffle button", () => {
+  const shuffleButton = (html: string) =>
+    html.match(/<button[^>]*aria-label="Shuffle [^"]*"[^>]*>/)?.[0] ?? "";
+
+  it("enables Shuffle once the list shows a playable song", () => {
+    const button = shuffleButton(page({ page: "liked" }));
+    expect(button).toContain('aria-label="Shuffle Liked Songs"');
+    expect(button).not.toContain("disabled");
+  });
+
+  it("disables Shuffle while a playlist is still loading", () => {
+    const html = renderToStaticMarkup(
+      <ListPage
+        view={mix}
+        liked={liked}
+        table={{ ...table, uri: null, tracks: [], positions: [] }}
+        playlists={null}
+        source={null}
+        playingUri={null}
+        statusRev={4}
+        statusError={false}
+        active
+        open={() => {}}
+        send={() => {}}
+        defaultSort="name"
+      />,
+    );
+    expect(shuffleButton(html)).toContain("disabled");
+  });
+});

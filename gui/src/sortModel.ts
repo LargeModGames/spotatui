@@ -155,3 +155,17 @@ export function shownPlayRequest(
     ? listPlayRequest(list.source, list.uri, shown, index)
     : playRequest(shown, index);
 }
+
+/** Play the shown rows that have a URI, in a random order; null when none has one. */
+export function shufflePlayRequest(
+  shown: TrackInfo[],
+  random: () => number = Math.random,
+): Action | null {
+  const uris = shown.flatMap((track) => (track.uri ? [track.uri] : []));
+  if (uris.length === 0) return null;
+  for (let i = uris.length - 1; i > 0; i--) {
+    const j = Math.floor(random() * (i + 1));
+    [uris[i], uris[j]] = [uris[j], uris[i]];
+  }
+  return { PlayUris: { uris, offset: 0 } };
+}

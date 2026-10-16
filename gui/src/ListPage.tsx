@@ -20,6 +20,7 @@ import {
   isDefaultSort,
   parseSort,
   removeAction,
+  shufflePlayRequest,
   shownPlayRequest,
   SORT_OPTIONS,
   sortTracks,
@@ -226,8 +227,12 @@ export function ListPage({
         <button
           type="button"
           className="list-shuffle"
-          aria-label="Shuffle"
-          disabled
+          aria-label={`Shuffle ${title}`}
+          disabled={first < 0}
+          onClick={() => {
+            const action = shufflePlayRequest(shownTracks);
+            if (action) send(action);
+          }}
         >
           <Glyph name="shuffle" size={28} />
         </button>
