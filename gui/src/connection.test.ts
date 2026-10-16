@@ -192,6 +192,30 @@ describe("Connection", () => {
     expect(connection.getState().position).toEqual({ ms: 1234, at: 42 });
   });
 
+  it("a new item after a blank playback update starts at zero", () => {
+    const { connection, sockets } = harness("abc");
+    const playback = (rev: number, uri: string | null) =>
+      JSON.stringify({
+        kind: "playback",
+        rev,
+        payload: {
+          item: uri === null ? null : { uri, is_playing: false },
+          volume: 50,
+          device: null,
+          liked: false,
+        },
+      });
+    sockets[0].handlers.message(hello("t1"));
+    sockets[0].handlers.message(playback(1, "spotify:track:a"));
+    sockets[0].handlers.message(
+      JSON.stringify({ kind: "tick", payload: 103_000 }),
+    );
+    sockets[0].handlers.message(playback(2, null));
+    expect(connection.getState().position).toEqual({ ms: 103_000, at: 42 });
+    sockets[0].handlers.message(playback(3, "spotify:track:b"));
+    expect(connection.getState().position).toEqual({ ms: 0, at: 42 });
+  });
+
   it("an action goes out as a typed client message", () => {
     const { connection, sockets } = harness("abc");
     sockets[0].handlers.message(hello("t1"));

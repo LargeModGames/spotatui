@@ -127,6 +127,8 @@ export class Connection {
     window: false,
   };
   private socket: Socket | null = null;
+  /** The last item the playback channel named, kept across a blank update. */
+  private lastUri: string | null = null;
   private readonly listeners = new Set<() => void>();
   private code: string | null;
   private readonly open: Open;
@@ -216,13 +218,19 @@ export class Connection {
       }
       default: {
         const channels = applyChannel(this.state.channels, message);
+        const before = {
+          uri: this.lastUri,
+          playing: playingOf(this.state.channels).playing,
+        };
+        const after = playingOf(channels);
+        if (after.uri !== null) this.lastUri = after.uri;
         return this.update({
           channels,
           booted: this.state.booted || message.kind === "route",
           position: positionAfterChannel(
             this.state.position,
-            playingOf(this.state.channels),
-            playingOf(channels),
+            before,
+            after,
             this.now(),
           ),
         });
