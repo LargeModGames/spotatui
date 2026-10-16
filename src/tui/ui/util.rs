@@ -77,13 +77,9 @@ pub fn draw_selectable_list<S>(
 {
   let mut state = ListState::default();
 
-  // If the list shrank (e.g. entering a folder) or is empty,
-  // reset to 0 so we don't start scrolled beyond the end.
-  let offset = if items.is_empty() || scroll_offset.get() >= items.len() {
-    0
-  } else {
-    scroll_offset.get()
-  };
+  let visible_rows = layout_chunk.height.saturating_sub(2) as usize; // inner area without borders
+  let max_offset = items.len().saturating_sub(visible_rows);
+  let offset = scroll_offset.get().min(max_offset);
 
   *state.offset_mut() = offset;
   state.select(selected_index);
