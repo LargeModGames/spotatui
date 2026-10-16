@@ -654,11 +654,10 @@ fn handle_escape(app: &mut App) {
     ActiveBlock::SelectDevice
     | ActiveBlock::CoverArtView
     | ActiveBlock::MiniPlayer
-    | ActiveBlock::PluginScreen => {
+    | ActiveBlock::PluginScreen
+    | ActiveBlock::Analysis => {
       app.pop_navigation_stack();
     }
-    // This is a global view that has no active/inactive distinction so do nothing
-    ActiveBlock::Analysis => {}
 
     // Announcement prompt must be dismissed with Enter/Esc, not global escape
     ActiveBlock::AnnouncementPrompt => {}
@@ -1355,5 +1354,17 @@ mod tests {
       app.status_message(),
       Some("Copy URL isn't available for Local Files")
     );
+  }
+
+  #[test]
+  fn esc_closes_the_audio_analysis_screen() {
+    let mut app = App::default();
+    app.get_audio_analysis();
+    assert_eq!(app.get_current_route().id, RouteId::Analysis);
+
+    handle_app(Key::Esc, &mut app);
+
+    assert_eq!(app.get_current_route().id, RouteId::Home);
+    assert_eq!(app.get_current_route().active_block, ActiveBlock::Empty);
   }
 }
