@@ -10,17 +10,21 @@ import { Icon } from '@/components/Icon';
 import { MINI_PLAYER_SPACE, MiniPlayer } from '@/components/MiniPlayer';
 import { Card, Shelf } from '@/components/Shelf';
 import { StatusScrim } from '@/components/StatusScrim';
-import { useCore, useSend } from '@/core-context';
+import { useChannel, useCoreSelect, useSend } from '@/core-context';
 import { colors, fonts, type } from '@/theme';
 
 /** Liked Songs plus five playlists fill the 2x3 grid. */
 const GRID_PLAYLISTS = 5;
 
 export default function HomeScreen() {
-  const { channels, connected } = useCore();
+  const liked = useChannel('liked');
+  const discoverPayload = useChannel('discover');
+  const library = useChannel('library');
+  const recentlyPlayed = useChannel('recently_played');
+  const connected = useCoreSelect((state) => state.connected);
   const send = useSend();
-  const spotify = channels.liked?.payload.available ?? false;
-  const discover = channels.discover?.payload ?? null;
+  const spotify = liked?.available ?? false;
+  const discover = discoverPayload ?? null;
   // Home asks for its data once a Spotify session is known, as the browser does.
   const asked = useRef(false);
   useEffect(() => {
@@ -36,16 +40,26 @@ export default function HomeScreen() {
     askedDiscover.current = true;
     send({ OpenLibrary: 'Discover' });
   }, [connected, discover, send]);
-  const playlists = (channels.library?.payload.spotify ?? []).slice(0, GRID_PLAYLISTS);
-  const recent = recentAlbums(channels.recently_played?.payload ?? []).slice(0, SHELF_MAX);
+  const playlists = (library?.spotify ?? []).slice(0, GRID_PLAYLISTS);
+  const recent = recentAlbums(recentlyPlayed ?? []).slice(0, SHELF_MAX);
   const forYou = madeForYou(discover).slice(0, SHELF_MAX);
   return (
     <View style={styles.screen}>
       <ScrollView contentContainerStyle={{ paddingBottom: MINI_PLAYER_SPACE }}>
         <SafeAreaView edges={['top']} style={styles.top}>
-          <Text style={styles.wordmark}>
-            spota<Text style={styles.accent}>tui</Text>
-          </Text>
+          <View style={styles.brand}>
+            <Pressable
+              style={styles.avatar}
+              hitSlop={6}
+              onPress={() => router.push('/settings')}
+              accessibilityRole="button"
+              accessibilityLabel="Settings">
+              <Icon name="settings" size={18} color={colors.onAccent} />
+            </Pressable>
+            <Text style={styles.wordmark}>
+              spota<Text style={styles.accent}>tui</Text>
+            </Text>
+          </View>
           <View style={styles.titleRow}>
             <Text style={type.title}>{greeting(new Date().getHours())}</Text>
             <View style={styles.source}>
@@ -125,6 +139,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingTop: 12,
     experimental_backgroundImage: `linear-gradient(#3a2e1f, ${colors.background})`,
+  },
+  brand: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  avatar: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.accent,
   },
   wordmark: { fontFamily: fonts.extrabold, fontSize: 22, letterSpacing: -0.6, color: colors.text },
   accent: { color: colors.accent, textShadowColor: 'rgba(240,168,58,0.4)', textShadowRadius: 10 },

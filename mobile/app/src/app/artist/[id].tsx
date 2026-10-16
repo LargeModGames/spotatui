@@ -11,7 +11,7 @@ import { Icon } from '@/components/Icon';
 import { MINI_PLAYER_SPACE, MiniPlayer } from '@/components/MiniPlayer';
 import { Card, Shelf } from '@/components/Shelf';
 import { TrackRow } from '@/components/TrackRow';
-import { useCore, useSend } from '@/core-context';
+import { useChannel, useSend } from '@/core-context';
 import { usePlayback } from '@/playback';
 import { colors, fonts, TOUCH, type } from '@/theme';
 
@@ -22,14 +22,14 @@ const RELEASES = 4;
 /** An artist by its Spotify id, laid out as in Spotify's app; `name` and `image` show while it loads. */
 export default function ArtistScreen() {
   const { id, name, image } = useLocalSearchParams<{ id: string; name?: string; image?: string }>();
-  const { channels } = useCore();
+  const artist = useChannel('artist');
   const send = useSend();
   const { item } = usePlayback();
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
   const [more, setMore] = useState(false);
   const [allReleases, setAllReleases] = useState(false);
-  const fetched = channels.artist?.payload.page;
+  const fetched = artist?.page;
   const page = fetched?.id === id ? fetched : null;
   // The core keeps one artist, so a screen under a newer artist asks again when it shows.
   useFocusEffect(

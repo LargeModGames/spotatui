@@ -2,23 +2,31 @@ import { createContext, useCallback, useContext, useSyncExternalStore, type Reac
 
 import type { Action } from '@gui/bindings/Action';
 import type { Connection, State } from '@gui/connection';
+import type { ChannelMessage, Kind } from '@gui/store';
 
 const CoreContext = createContext<Connection | null>(null);
+
+type ChannelPayload<K extends Kind> = Extract<ChannelMessage, { kind: K }>['payload'];
 
 export function CoreProvider({ connection, children }: { connection: Connection; children: ReactNode }) {
   return <CoreContext.Provider value={connection}>{children}</CoreContext.Provider>;
 }
 
-function useConnection(): Connection {
+export function useConnection(): Connection {
   const connection = useContext(CoreContext);
-  if (!connection) throw new Error('useCore outside CoreProvider');
+  if (!connection) throw new Error('useConnection outside CoreProvider');
   return connection;
 }
 
-/** Everything the core pushed so far. */
-export function useCore(): State {
+/** One slice of the pushed state; `select` returns a primitive or an object already in the state, never a new one. */
+export function useCoreSelect<T>(select: (state: State) => T): T {
   const connection = useConnection();
-  return useSyncExternalStore(connection.subscribe, connection.getState);
+  return useSyncExternalStore(connection.subscribe, () => select(connection.getState()));
+}
+
+/** One channel's payload, undefined until the core pushed it. */
+export function useChannel<K extends Kind>(kind: K): ChannelPayload<K> | undefined {
+  return useCoreSelect((state) => state.channels[kind]?.payload as ChannelPayload<K> | undefined);
 }
 
 /** Sends one action to the core. */

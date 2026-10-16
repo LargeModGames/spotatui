@@ -10,7 +10,7 @@ import { showsOnboarding } from '@gui/connection';
 
 import { Onboarding } from '@/components/Onboarding';
 import { connect } from '@/core';
-import { CoreProvider, useConnectionSend, useCore } from '@/core-context';
+import { CoreProvider, useConnectionSend, useCoreSelect } from '@/core-context';
 import { colors, fontFiles, type } from '@/theme';
 
 SplashScreen.preventAutoHideAsync();
@@ -46,6 +46,7 @@ export default function RootLayout() {
               <Stack.Screen name="playlist/[id]" />
               <Stack.Screen name="artist/[id]" />
               <Stack.Screen name="album/[id]" />
+              <Stack.Screen name="settings" />
               <Stack.Screen name="now-playing" options={{ presentation: 'fullScreenModal', animation: 'slide_from_bottom' }} />
               <Stack.Screen name="lyrics" options={{ presentation: 'fullScreenModal', animation: 'slide_from_bottom' }} />
               <Stack.Screen name="queue" options={{ presentation: 'fullScreenModal', animation: 'slide_from_bottom' }} />
@@ -68,13 +69,13 @@ export default function RootLayout() {
 
 /** The app once the core has booted; before that its connection state or first-launch questions. */
 function Gate({ children }: { children: ReactNode }) {
-  const state = useCore();
+  const expired = useCoreSelect((state) => state.expired);
+  const connected = useCoreSelect((state) => state.connected);
+  const onboarding = useCoreSelect((state) => (state.onboarding && showsOnboarding(state) ? state.onboarding : null));
   const send = useConnectionSend();
-  if (state.expired) return <Message text="The connection to spotatui was refused or closed." />;
-  if (!state.connected) return <Message text="Connecting…" />;
-  if (state.onboarding && showsOnboarding(state)) {
-    return <Onboarding view={state.onboarding} onReply={(reply) => send({ type: 'onboarding', reply })} />;
-  }
+  if (expired) return <Message text="The connection to spotatui was refused or closed." />;
+  if (!connected) return <Message text="Connecting…" />;
+  if (onboarding) return <Onboarding view={onboarding} onReply={(reply) => send({ type: 'onboarding', reply })} />;
   return children;
 }
 

@@ -5,31 +5,24 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { PanelHeader, Transport } from '@/components/Controls';
 import { Icon } from '@/components/Icon';
 import { TrackRow } from '@/components/TrackRow';
-import { useCore, useSend } from '@/core-context';
+import { useChannel, useSend } from '@/core-context';
 import { isSpotify, playingFrom, usePlayback } from '@/playback';
 import { colors, fonts, TOUCH, type } from '@/theme';
 
 export default function QueueScreen() {
-  const { channels } = useCore();
+  const queue = useChannel('queue');
   const send = useSend();
   const { item } = usePlayback();
   const uri = item?.uri ?? null;
   useEffect(() => {
     send('RefreshQueue');
   }, [uri, send]);
-  const queue = channels.queue?.payload;
   const queued = queue?.native ?? [];
   // Spotify's own next tracks only follow while a Spotify track plays.
   const fromSpotify = isSpotify(uri) ? (queue?.spotify.items ?? []).flatMap((entry) => (entry.track ? [entry.track] : [])) : [];
-  const from = playingFrom(item, channels.library?.payload.spotify ?? []);
+  const from = playingFrom(item);
   const now = queue?.now;
-  const clear = () => {
-    // No action clears the queue yet: remove from the end, so no position moves.
-    for (let position = queued.length - 1; position >= 0; position--) {
-      const track = queued[position];
-      if (track.uri) send({ RemoveFromQueue: { uri: track.uri, position } });
-    }
-  };
+  const clear = () => send('ClearQueue');
   return (
     <View style={styles.screen}>
       <PanelHeader title="Queue" />

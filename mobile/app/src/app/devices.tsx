@@ -4,20 +4,21 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { DeviceInfo } from '@gui/bindings/DeviceInfo';
 
 import { Icon, type IconName } from '@/components/Icon';
-import { useCore, useSend } from '@/core-context';
+import { useChannel, useSend } from '@/core-context';
 import { usePlayback } from '@/playback';
 import { colors, fonts, TOUCH } from '@/theme';
 
 export default function DevicesSheet() {
-  const { channels } = useCore();
   const send = useSend();
   const { playback } = usePlayback();
+  const current = playback?.device ?? null;
   useEffect(() => {
     send('RefreshDevices');
-  }, [send]);
-  const devices = channels.devices?.payload ?? [];
-  const active = devices.find((device) => device.is_active);
-  const others = devices.filter((device) => !device.is_active);
+  }, [send, current]);
+  const devices = useChannel('devices') ?? [];
+  // The device list is only as fresh as its last refresh; the playback names the device now.
+  const active = devices.find((device) => device.name === current) ?? devices.find((device) => device.is_active);
+  const others = devices.filter((device) => device !== active);
   const volume = playback?.volume ?? active?.volume_percent ?? 0;
   return (
     <View style={styles.sheet}>
@@ -28,7 +29,7 @@ export default function DevicesSheet() {
           <View style={styles.words}>
             <Text style={styles.currentLabel}>Current device</Text>
             <Text style={styles.currentName} numberOfLines={1}>
-              {active?.name ?? playback?.device ?? 'None'}
+              {active?.name ?? current ?? 'None'}
             </Text>
           </View>
         </View>
@@ -75,8 +76,8 @@ function Volume({ value, onChange }: { value: number; onChange: (percent: number
         onStartShouldSetResponder={() => true}
         onResponderGrant={(event) => setDrag(at(event.nativeEvent.locationX))}
         onResponderMove={(event) => setDrag(at(event.nativeEvent.locationX))}
-        onResponderRelease={() => {
-          if (drag !== null) onChange(drag);
+        onResponderRelease={(event) => {
+          onChange(at(event.nativeEvent.locationX));
           setDrag(null);
         }}
         onResponderTerminate={() => setDrag(null)}

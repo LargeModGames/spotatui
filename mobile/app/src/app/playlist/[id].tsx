@@ -10,7 +10,7 @@ import { Cover } from '@/components/Cover';
 import { Icon } from '@/components/Icon';
 import { MINI_PLAYER_SPACE, MiniPlayer } from '@/components/MiniPlayer';
 import { TrackRow } from '@/components/TrackRow';
-import { useCore, useSend } from '@/core-context';
+import { useChannel, useSend } from '@/core-context';
 import { usePlayback } from '@/playback';
 import { colors, fonts, TOUCH, type } from '@/theme';
 
@@ -21,7 +21,6 @@ import { colors, fonts, TOUCH, type } from '@/theme';
 export default function PlaylistScreen() {
   const params = useLocalSearchParams<{ id: string; name?: string; image?: string }>();
   const id = params.id;
-  const { channels } = useCore();
   const send = useSend();
   const { item } = usePlayback();
   const insets = useSafeAreaInsets();
@@ -30,10 +29,10 @@ export default function PlaylistScreen() {
   useEffect(() => {
     send(liked ? { OpenLibrary: 'LikedSongs' } : { Open: { Playlist: { id: uri!, from_search: false } } });
   }, [liked, uri, send]);
-  const library = channels.library?.payload;
+  const library = useChannel('library');
   const info = library?.spotify.find((playlist) => playlist.uri === uri);
-  const table = channels.track_table?.payload;
-  const likedSongs = channels.liked?.payload;
+  const table = useChannel('track_table');
+  const likedSongs = useChannel('liked');
   const tracks = liked ? (likedSongs?.tracks ?? []) : table?.uri === uri ? table.tracks : [];
   const hasMore = liked ? !!likedSongs?.has_more : table?.uri === uri && table.has_more;
   const total = liked ? likedSongs?.total : info?.track_count;

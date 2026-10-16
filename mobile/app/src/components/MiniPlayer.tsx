@@ -5,7 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Cover } from '@/components/Cover';
 import { Icon } from '@/components/Icon';
 import { useSend } from '@/core-context';
-import { isSpotify, usePlayback } from '@/playback';
+import { isSpotify, useElapsed, usePlayback } from '@/playback';
 import { colors, fonts, TOUCH } from '@/theme';
 
 /**
@@ -15,9 +15,8 @@ import { colors, fonts, TOUCH } from '@/theme';
 export function MiniPlayer({ edge }: { edge?: boolean }) {
   const send = useSend();
   const insets = useSafeAreaInsets();
-  const { playback, item, ms, stale } = usePlayback();
+  const { playback, item } = usePlayback();
   if (!item) return null;
-  const progress = !stale && item.duration_ms > 0 ? Math.min(1, ms / item.duration_ms) : 0;
   return (
     <View style={[styles.bar, edge && { bottom: 8 + insets.bottom }]}>
       <Pressable
@@ -53,9 +52,18 @@ export function MiniPlayer({ edge }: { edge?: boolean }) {
         accessibilityLabel={item.is_playing ? 'Pause' : 'Play'}>
         <Icon name={item.is_playing ? 'pause' : 'play'} size={24} />
       </Pressable>
-      <View style={styles.rail}>
-        <View style={[styles.fill, { width: `${progress * 100}%` }]} />
-      </View>
+      <MiniProgress duration={item.duration_ms} />
+    </View>
+  );
+}
+
+/** The rail under the bar: the only part that follows the position. */
+function MiniProgress({ duration }: { duration: number }) {
+  const ms = useElapsed();
+  const progress = ms !== null && duration > 0 ? Math.min(1, ms / duration) : 0;
+  return (
+    <View style={styles.rail}>
+      <View style={[styles.fill, { width: `${progress * 100}%` }]} />
     </View>
   );
 }

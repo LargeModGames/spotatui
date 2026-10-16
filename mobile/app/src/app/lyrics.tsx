@@ -1,22 +1,25 @@
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { activeLyric } from '@gui/roomModel';
 
 import { PanelHeader, SeekBar, Transport } from '@/components/Controls';
-import { useCore } from '@/core-context';
-import { usePlayback } from '@/playback';
+import { useChannel } from '@/core-context';
+import { usePlayback, usePositionSelect } from '@/playback';
 import { colors, fonts, type } from '@/theme';
 
 const BACKGROUND = '#4a3b6b';
 
 export default function LyricsScreen() {
-  const { channels } = useCore();
-  const { item, ms } = usePlayback();
-  const lyrics = channels.lyrics?.payload;
+  const lyrics = useChannel('lyrics');
+  const { item } = usePlayback();
   const lines = lyrics?.status === 'found' ? lyrics.lines : [];
-  const current = lyrics?.synced ? activeLyric(lines, ms) : -1;
+  const line = useCallback(
+    (ms: number | null) => (lyrics?.synced && lyrics.status === 'found' ? activeLyric(lyrics.lines, ms ?? 0) : -1),
+    [lyrics],
+  );
+  const current = usePositionSelect(line);
   const scroll = useRef<ScrollView>(null);
   const offsets = useRef<number[]>([]);
   // Keep the current line a third of the way down the view.

@@ -1,18 +1,54 @@
+import { useEffect, useState } from 'react';
+
 import type { NowPlaying } from '@gui/bindings/NowPlaying';
-import type { PlaylistInfo } from '@gui/bindings/PlaylistInfo';
-import { usePosition } from '@gui/usePosition';
+import type { State } from '@gui/connection';
 
-import { useCore } from '@/core-context';
+import { useChannel, useConnection, useCoreSelect } from '@/core-context';
 
-/** The playback channel plus the position, interpolated per frame while playing. */
+/** The playback channel; a position tick does not re-render its caller. */
 export function usePlayback() {
-  const state = useCore();
-  const playback = state.channels.playback?.payload ?? null;
-  const item = playback?.item ?? null;
-  const ms = usePosition(state.position, item?.is_playing ?? false);
-  // usePosition reads a stale tick as 0; the screens say so instead.
-  const stale = !state.position || state.position.ms === null;
-  return { playback, item, ms, stale };
+  const playback = useChannel('playback') ?? null;
+  return { playback, item: playback?.item ?? null };
+}
+
+function isPlaying(state: State): boolean {
+  return state.channels.playback?.payload.item?.is_playing ?? false;
+}
+
+/** The position at `now` (a performance.now() value), interpolated while playing; null while the tick loop is stale. */
+function elapsedAt(state: State, now: number): number | null {
+  const position = state.position;
+  if (!position || position.ms === null) return null;
+  return isPlaying(state) ? position.ms + Math.max(0, now - position.at) : position.ms;
+}
+
+/** `select` over the interpolated position; the caller re-renders only when its result changes, so pass a stable `select`. */
+export function usePositionSelect<T extends number | string | boolean | null>(select: (ms: number | null) => T): T {
+  const connection = useConnection();
+  const playing = useCoreSelect(isPlaying);
+  const [value, setValue] = useState(() => select(elapsedAt(connection.getState(), performance.now())));
+  useEffect(() => {
+    const read = () => setValue(select(elapsedAt(connection.getState(), performance.now())));
+    read();
+    const unsubscribe = connection.subscribe(read);
+    if (!playing) return unsubscribe;
+    let frame = requestAnimationFrame(function step() {
+      read();
+      frame = requestAnimationFrame(step);
+    });
+    return () => {
+      unsubscribe();
+      cancelAnimationFrame(frame);
+    };
+  }, [connection, select, playing]);
+  return value;
+}
+
+const identity = (ms: number | null) => ms;
+
+/** The position every frame while playing, null while stale; call it only in a small leaf. */
+export function useElapsed(): number | null {
+  return usePositionSelect(identity);
 }
 
 /** "3:07" for a millisecond count. */
@@ -26,19 +62,20 @@ export function isSpotify(uri: string | null | undefined): boolean {
   return !!uri?.startsWith('spotify:');
 }
 
-/** "PLAYING FROM PLAYLIST" and the context's name, as far as the page can tell from its URI. */
-export function playingFrom(item: NowPlaying | null, playlists: PlaylistInfo[]): { kind: string; name: string | null } {
+/** "PLAYING FROM PLAYLIST" from the context URI, and the core's name for it. */
+export function playingFrom(item: NowPlaying | null): { kind: string; name: string | null } {
   const context = item?.context_uri;
   if (!item || !context) return { kind: 'NOW PLAYING', name: null };
-  if (context.includes(':collection')) return { kind: 'PLAYING FROM YOUR LIBRARY', name: 'Liked Songs' };
+  const name = item.context_name;
+  if (context.includes(':collection')) return { kind: 'PLAYING FROM YOUR LIBRARY', name };
   switch (context.split(':')[1]) {
     case 'playlist':
-      return { kind: 'PLAYING FROM PLAYLIST', name: playlists.find((p) => p.uri === context)?.name ?? null };
+      return { kind: 'PLAYING FROM PLAYLIST', name };
     case 'album':
-      return { kind: 'PLAYING FROM ALBUM', name: item.album };
+      return { kind: 'PLAYING FROM ALBUM', name };
     case 'artist':
-      return { kind: 'PLAYING FROM ARTIST', name: item.artists[0] ?? null };
+      return { kind: 'PLAYING FROM ARTIST', name };
     default:
-      return { kind: 'PLAYING FROM', name: null };
+      return { kind: 'PLAYING FROM', name };
   }
 }

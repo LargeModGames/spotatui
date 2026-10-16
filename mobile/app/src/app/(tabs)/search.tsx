@@ -16,7 +16,7 @@ import { Icon } from '@/components/Icon';
 import { MINI_PLAYER_SPACE, MiniPlayer } from '@/components/MiniPlayer';
 import { StatusScrim } from '@/components/StatusScrim';
 import { TrackRow } from '@/components/TrackRow';
-import { useCore, useSend } from '@/core-context';
+import { useChannel, useSend } from '@/core-context';
 import { usePlayback } from '@/playback';
 import { colors, fonts, type } from '@/theme';
 
@@ -26,13 +26,12 @@ const ALL_SONGS = 4;
 const TYPE_PAUSE_MS = 350;
 
 export default function SearchScreen() {
-  const { channels } = useCore();
   const send = useSend();
   const { item } = usePlayback();
   const [text, setText] = useState('');
   const [asked, setAsked] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>('All');
-  const search = channels.search?.payload;
+  const search = useChannel('search');
   const query = text.trim();
   // As in Spotify's app, the last results stay while a newer search runs.
   const results = query && search?.query ? search : null;

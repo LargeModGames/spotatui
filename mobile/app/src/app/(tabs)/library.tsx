@@ -10,7 +10,7 @@ import { Chip } from '@/components/Controls';
 import { MINI_PLAYER_SPACE, MiniPlayer } from '@/components/MiniPlayer';
 import { StatusScrim } from '@/components/StatusScrim';
 import { TrackRow } from '@/components/TrackRow';
-import { useCore, useSend } from '@/core-context';
+import { useChannel, useSend } from '@/core-context';
 import { usePlayback } from '@/playback';
 import { colors, type } from '@/theme';
 
@@ -18,12 +18,11 @@ const FILTERS = ['Playlists', 'Albums', 'Artists', 'Podcasts'] as const;
 type Filter = (typeof FILTERS)[number];
 
 export default function LibraryScreen() {
-  const { channels } = useCore();
   const send = useSend();
   const { item } = usePlayback();
   const [filter, setFilter] = useState<Filter>('Playlists');
-  const library = channels.library?.payload;
-  const liked = channels.liked?.payload;
+  const library = useChannel('library');
+  const liked = useChannel('liked');
   const play = (uri: string | null) => uri && send({ PlayContext: { uri, offset: null } });
   const pick = (next: Filter) => {
     setFilter(next);

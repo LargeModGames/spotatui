@@ -16,6 +16,8 @@ emulator, `x86_64-linux-android`) Rust targets.
    cargo ndk -t arm64-v8a -P 26 -o ../app/modules/spotatui-core/android/src/main/jniLibs build
    ```
 
+   For the emulator, add `-t x86_64`.
+
 2. From `mobile/app`, install the packages and build the development app:
 
    ```sh

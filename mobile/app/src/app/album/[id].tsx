@@ -9,18 +9,17 @@ import { Cover } from '@/components/Cover';
 import { Icon } from '@/components/Icon';
 import { MINI_PLAYER_SPACE, MiniPlayer } from '@/components/MiniPlayer';
 import { TrackRow } from '@/components/TrackRow';
-import { useCore, useSend } from '@/core-context';
+import { useChannel, useSend } from '@/core-context';
 import { usePlayback } from '@/playback';
 import { colors, fonts, TOUCH, type } from '@/theme';
 
 /** An album by its Spotify id, laid out as in Spotify's app; `name` and `image` show while it loads. */
 export default function AlbumScreen() {
   const { id, name, image } = useLocalSearchParams<{ id: string; name?: string; image?: string }>();
-  const { channels } = useCore();
   const send = useSend();
   const { item } = usePlayback();
   const insets = useSafeAreaInsets();
-  const payload = channels.album?.payload;
+  const payload = useChannel('album');
   const album = payload?.album?.id === id ? payload.album : null;
   // The core keeps one album, so a screen under a newer album asks again when it shows.
   useFocusEffect(

@@ -5,7 +5,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Icon } from '@/components/Icon';
 import { useSend } from '@/core-context';
-import { clock, usePlayback } from '@/playback';
+import { clock, useElapsed, usePlayback } from '@/playback';
 import { colors, fonts, TOUCH } from '@/theme';
 
 /** A filter chip. */
@@ -88,12 +88,13 @@ export function Transport({ compact, light }: { compact?: boolean; light?: boole
 /** The seek bar: it follows the finger and seeks on release. */
 export function SeekBar() {
   const send = useSend();
-  const { item, ms, stale } = usePlayback();
+  const { item } = usePlayback();
+  const ms = useElapsed();
   const [width, setWidth] = useState(0);
   const [drag, setDrag] = useState<number | null>(null);
   const duration = item?.duration_ms ?? 0;
   const seekable = !!item && !item.is_live && duration > 0;
-  const shown = drag ?? (stale ? 0 : Math.min(ms, duration));
+  const shown = drag ?? (ms === null ? 0 : Math.min(ms, duration));
   const ratio = duration > 0 ? shown / duration : 0;
   const at = (x: number) => Math.round(Math.min(1, Math.max(0, x / Math.max(1, width))) * duration);
   return (
@@ -104,8 +105,8 @@ export function SeekBar() {
         onStartShouldSetResponder={() => seekable}
         onResponderGrant={(event) => setDrag(at(event.nativeEvent.locationX))}
         onResponderMove={(event) => setDrag(at(event.nativeEvent.locationX))}
-        onResponderRelease={() => {
-          if (drag !== null) send({ SeekTo: drag });
+        onResponderRelease={(event) => {
+          send({ SeekTo: at(event.nativeEvent.locationX) });
           setDrag(null);
         }}
         onResponderTerminate={() => setDrag(null)}
@@ -118,7 +119,7 @@ export function SeekBar() {
         <View pointerEvents="none" style={[styles.thumb, { left: `${ratio * 100}%` }]} />
       </View>
       <View style={styles.times}>
-        <Text style={styles.time}>{stale ? '--:--' : clock(shown)}</Text>
+        <Text style={styles.time}>{ms === null ? '--:--' : clock(shown)}</Text>
         <Text style={styles.time}>{item?.is_live ? 'LIVE' : clock(duration)}</Text>
       </View>
     </View>

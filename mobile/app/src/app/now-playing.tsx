@@ -8,12 +8,12 @@ import { upNext } from '@gui/libraryModel';
 import { SeekBar, Transport } from '@/components/Controls';
 import { Cover } from '@/components/Cover';
 import { Icon } from '@/components/Icon';
-import { useCore, useSend } from '@/core-context';
+import { useChannel, useSend } from '@/core-context';
 import { isSpotify, playingFrom, usePlayback } from '@/playback';
 import { colors, fonts, TOUCH, type } from '@/theme';
 
 export default function NowPlayingScreen() {
-  const { channels } = useCore();
+  const queue = useChannel('queue');
   const send = useSend();
   const { playback, item } = usePlayback();
   const { width } = useWindowDimensions();
@@ -22,8 +22,8 @@ export default function NowPlayingScreen() {
   useEffect(() => {
     send('RefreshQueue');
   }, [uri, send]);
-  const next = upNext(channels.queue?.payload, isSpotify(uri))[0];
-  const from = playingFrom(item, channels.library?.payload.spotify ?? []);
+  const next = upNext(queue, isSpotify(uri))[0];
+  const from = playingFrom(item);
   return (
     <SafeAreaView style={styles.screen} edges={['top', 'bottom']}>
       <View style={styles.header}>
