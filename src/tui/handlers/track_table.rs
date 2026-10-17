@@ -113,10 +113,11 @@ pub fn handler(key: Key, app: &mut App) {
     Key::Char('x') => {
       app.apply(Action::OpenRemoveTrackDialog);
     }
-    Key::Char('q') | Key::Esc if app.is_playlist_track_filter_active() => {
+    // `handle_app` routes to `handle_escape` first, so `Esc` handling here unreachable.
+    Key::Char('q') if app.is_playlist_track_filter_active() => {
       app.clear_playlist_track_filter();
     }
-    Key::Char('q') | Key::Esc if app.is_saved_track_filter_active() => {
+    Key::Char('q') if app.is_saved_track_filter_active() => {
       app.clear_saved_track_filter();
     }
     Key::Char('s') => handle_save_track_event(app),
@@ -386,13 +387,14 @@ fn saved_tracks_playback_request(app: &App) -> Option<(Vec<String>, usize)> {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::core::app::{ActiveBlock, PendingTrackSelection};
+  use crate::core::app::{ActiveBlock, PendingTrackSelection, RouteId};
   use crate::core::geometry::Viewport;
   use crate::core::pagination::Paged;
   use crate::core::plugin_api::{PlayableInfo, TrackInfo};
   use crate::core::test_helpers::{app_with_sidebar, full_track};
   use crate::core::user_config::UserConfig;
   use crate::infra::network::IoEvent;
+  use crate::tui::handlers::handle_app;
   use chrono::Utc;
   use rspotify::model::{idtypes::PlaylistId, page::Page, track::SavedTrack};
   use std::sync::mpsc::channel;
@@ -727,7 +729,14 @@ mod tests {
       ))];
       app.playlist_track_positions = Some(vec![1]);
 
-      handler(key, &mut app);
+      // `Key::Esc` never reaches this block handler: `handle_app` gives it to
+      // `handle_escape`, which owns the filter-clearing for Esc.
+      if key == Key::Esc {
+        app.push_navigation_stack(RouteId::TrackTable, ActiveBlock::TrackTable);
+        handle_app(key, &mut app);
+      } else {
+        handler(key, &mut app);
+      }
 
       assert!(app.active_playlist_track_filter.is_none());
       assert_eq!(app.track_table.tracks.len(), 2);
@@ -755,7 +764,12 @@ mod tests {
         ))],
       );
 
-      handler(key, &mut app);
+      if key == Key::Esc {
+        app.push_navigation_stack(RouteId::TrackTable, ActiveBlock::TrackTable);
+        handle_app(key, &mut app);
+      } else {
+        handler(key, &mut app);
+      }
 
       assert!(!app.is_saved_track_filter_active());
       assert_eq!(app.track_table.tracks.len(), 2);
