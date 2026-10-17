@@ -123,9 +123,22 @@ pub async fn handle_matches(
         cli.mark(f).await?;
       }
       if matches.get_count("next") > 0 || matches.get_count("previous") > 0 {
+        // Fetch current playback first so we know what track we're skipping from
+        cli
+          .net
+          .handle_network_event(IoEvent::GetCurrentPlayback)
+          .await;
+        let old_id = cli.net.app.lock().await.cached_playback_item_id();
+
         let (direction, amount) = JumpDirection::from_matches(matches);
         for _ in 0..amount {
           cli.jump(&direction).await;
+        }
+
+        // Nothing playing: the status line has no old track to be wrong about,
+        // and waiting would only spend the shared rate window.
+        if let Some(old_id) = old_id {
+          wait_for_playback_to_move_on(&mut cli, old_id).await;
         }
       }
       if let Some(vol) = matches.get_one::<String>("volume") {
@@ -198,6 +211,41 @@ pub async fn handle_matches(
     output
   } else {
     Err(anyhow!("{}", api_error))
+  }
+}
+
+const JUMP_SETTLE: std::time::Duration = std::time::Duration::from_secs(2);
+const JUMP_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// Wait until the playback Spotify reports no longer names `old`. Gives up after [`JUMP_SETTLE`].
+async fn wait_for_playback_to_move_on(cli: &mut CliApp, old: String) {
+  let deadline = tokio::time::Instant::now() + JUMP_SETTLE;
+  loop {
+    // Wraps the request too, so a slow or rate-gated one cannot stretch the wait.
+    let fetched = tokio::time::timeout_at(
+      deadline,
+      cli.net.handle_network_event(IoEvent::GetCurrentPlayback),
+    )
+    .await;
+    if fetched.is_err() {
+      return;
+    }
+    if cli
+      .net
+      .app
+      .lock()
+      .await
+      .cached_playback_item_id()
+      .as_deref()
+      != Some(old.as_str())
+    {
+      return;
+    }
+    let now = tokio::time::Instant::now();
+    if now >= deadline {
+      return;
+    }
+    tokio::time::sleep(JUMP_POLL_INTERVAL.min(deadline - now)).await;
   }
 }
 
@@ -393,10 +441,11 @@ mod tests {
 
       let next = requests_of("playback", &["--next"]).await;
       let fetches = next.iter().filter(|line| is_playback_fetch(line)).count();
-      assert_eq!(fetches, 1, "the status line only: {next:?}");
+      // --next now checks the track before jumping to avoid race conditions
+      assert_eq!(fetches, 2, "the pre-jump check and the status line: {next:?}");
     })
-    .await
-    .expect("playback probe test timed out");
+      .await
+      .expect("playback probe test timed out");
   }
 
   #[tokio::test]
