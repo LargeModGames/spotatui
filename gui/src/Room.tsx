@@ -3,6 +3,7 @@ import { useEffect, useLayoutEffect, useRef } from "react";
 import type { Action } from "./bindings/Action";
 import type { AlbumInfo } from "./bindings/AlbumInfo";
 import type { LyricsPayload } from "./bindings/LyricsPayload";
+import { scrollBehavior } from "./motion";
 import type { NowPlaying } from "./bindings/NowPlaying";
 import type { TrackInfo } from "./bindings/TrackInfo";
 import type { Position } from "./connection";
@@ -347,7 +348,7 @@ function Lyrics({
     if (!list || !line) return;
     list.scrollTo({
       top: line.offsetTop - list.offsetTop - list.clientHeight / 2,
-      behavior: "smooth",
+      behavior: scrollBehavior(),
     });
   }, [current]);
 

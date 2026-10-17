@@ -3,6 +3,7 @@ import { useLayoutEffect, useRef } from "react";
 import type { Action } from "./bindings/Action";
 import type { LyricsPayload } from "./bindings/LyricsPayload";
 import type { NowPlaying } from "./bindings/NowPlaying";
+import { scrollBehavior } from "./motion";
 import type { Position } from "./connection";
 import "./LyricsPage.css";
 import { LyricText } from "./LyricText";
@@ -40,7 +41,7 @@ export function LyricsPage({
     if (!active || !root || !line) return;
     root.scrollTo({
       top: line.offsetTop + line.offsetHeight / 2 - root.clientHeight / 2,
-      behavior: "smooth",
+      behavior: scrollBehavior(),
     });
   }, [current, active]);
 

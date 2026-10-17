@@ -390,3 +390,11 @@ button:disabled {
   padding: 16px;
   white-space: pre-wrap;
 }
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition: none !important;
+  }
+}
