@@ -6,6 +6,10 @@
 
 - **Click a synced lyric line to jump there** in the desktop app, on the Lyrics page and in full screen. Lines that are only estimates stay plain text, and Tab reaches the line being sung.
 
+### Fixed
+
+- **Plugin playbar text stays while another source plays**: text a plugin sets with `spotatui.set_playbar` now stays in the playbar title for Local Files, Subsonic, Qobuz, internet radio, YouTube, the queue, and Apple Music, after any status message, as it already did for Spotify ([#823](https://github.com/LargeModGames/spotatui/issues/823)).
+
 ## [v0.46.0] 2026-10-14
 
 ### Added

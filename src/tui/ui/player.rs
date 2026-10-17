@@ -2173,13 +2173,12 @@ mod tests {
   /// Collect every rendered cell symbol in `area` into one string for substring
   /// assertions.
   #[cfg(any(feature = "local-files", feature = "qobuz"))]
-  fn rendered_text(area: Rect, view: &LocalPlaybarView) -> String {
+  fn rendered_text(app: &App, area: Rect, view: &LocalPlaybarView) -> String {
     use ratatui::{backend::TestBackend, Terminal};
 
-    let app = App::default();
     let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
     terminal
-      .draw(|f| render_local_playbar(f, &app, area, view))
+      .draw(|f| render_local_playbar(f, app, area, view))
       .unwrap();
     let buffer = terminal.backend().buffer();
     (0..area.height)
@@ -2207,7 +2206,7 @@ mod tests {
       show_modes: true,
       quality: None,
     };
-    let content = rendered_text(Rect::new(0, 0, 160, 6), &view);
+    let content = rendered_text(&App::default(), Rect::new(0, 0, 160, 6), &view);
 
     assert!(
       content.contains("My Local Song"),
@@ -2251,7 +2250,7 @@ mod tests {
       show_modes: true,
       quality: None,
     };
-    let content = rendered_text(Rect::new(0, 0, 160, 6), &view);
+    let content = rendered_text(&App::default(), Rect::new(0, 0, 160, 6), &view);
     assert!(content.contains("Paused"), "should show Paused: {content}");
     assert!(
       !content.contains('/') || !content.contains("1/1"),
@@ -2264,13 +2263,12 @@ mod tests {
   /// queue, and Apple Music.
   #[cfg(feature = "local-files")]
   #[test]
-  fn local_playbar_renders_stored_plugin_segment() {
-    use ratatui::{backend::TestBackend, Terminal};
-
+  fn local_playbar_shows_plugin_segments() {
     let mut app = App::default();
     app
       .plugin_playbar_segments
       .insert("clock".to_string(), "plugin-clock".to_string());
+    app.set_status_message("status", 10);
     let view = LocalPlaybarView {
       source_label: "Local",
       name: "Track".to_string(),
@@ -2284,17 +2282,12 @@ mod tests {
       show_modes: true,
       quality: None,
     };
-    let area = Rect::new(0, 0, 160, 6);
-    let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
-    terminal
-      .draw(|f| render_local_playbar(f, &app, area, &view))
-      .unwrap();
-    let buffer = terminal.backend().buffer();
-    let content: String = (0..area.height)
-      .flat_map(|y| (0..area.width).map(move |x| (x, y)))
-      .filter_map(|(x, y)| buffer.cell((x, y)).map(|c| c.symbol().to_string()))
-      .collect();
+    let content = rendered_text(&app, Rect::new(0, 0, 160, 6), &view);
 
+    assert!(
+      content.find("status").unwrap() < content.find("plugin-clock").unwrap(),
+      "plugin playbar text should follow the status message: {content}"
+    );
     assert!(
       content.contains(" | plugin-clock"),
       "plugin playbar text should follow the title: {content}"
@@ -2317,7 +2310,7 @@ mod tests {
       show_modes: true,
       quality: Some("FLAC 16/44.1".to_string()),
     };
-    let content = rendered_text(Rect::new(0, 0, 160, 6), &view);
+    let content = rendered_text(&App::default(), Rect::new(0, 0, 160, 6), &view);
     assert!(
       content.contains("Artist \u{2022} FLAC 16/44.1"),
       "the delivered format should follow the artists: {content}"
@@ -2327,7 +2320,7 @@ mod tests {
       artists: String::new(),
       ..view
     };
-    let content = rendered_text(Rect::new(0, 0, 160, 6), &no_artists);
+    let content = rendered_text(&App::default(), Rect::new(0, 0, 160, 6), &no_artists);
     assert!(
       content.contains("FLAC 16/44.1") && !content.contains('\u{2022}'),
       "no separator without artists: {content}"
@@ -2353,7 +2346,7 @@ mod tests {
       show_modes: false,
       quality: None,
     };
-    let content = rendered_text(Rect::new(0, 0, 160, 6), &view);
+    let content = rendered_text(&App::default(), Rect::new(0, 0, 160, 6), &view);
 
     assert!(
       content.contains("SomaFM Groove Salad"),
