@@ -792,6 +792,38 @@ export const filmScores: ServerMessage[] = [
   { kind: "liked_marks", rev: 1, payload: ["f1"] },
 ];
 
+/**
+ * A long playlist with explicit songs spread through it, for the page-scroll
+ * check: with unanchored `.sr-only` text the document grows past the window
+ * whenever an explicit row sits below the fold (#878). Derived from the
+ * library's own playlist shape; the shared filmScores fixture stays as is.
+ */
+export const filmScoresLongExplicit: ServerMessage[] = [
+  {
+    kind: "track_table",
+    rev: 1,
+    payload: {
+      uri: "spotify:playlist:1",
+      tracks: Array.from({ length: 40 }, (_, index) => ({
+        ...track(
+          `Long cut ${index + 1}`,
+          200 + index,
+          `spotify:track:g${index}`,
+          "Hans Zimmer",
+        ),
+        id: `g${index}`,
+        album_id: "interstellar",
+        artist_refs: [{ id: "zimmer", name: "Hans Zimmer" }],
+        is_local: false,
+        explicit: index % 7 === 3,
+      })),
+      has_more: false,
+      positions: Array.from({ length: 40 }, (_, index) => index),
+      radio: null,
+    },
+  },
+];
+
 /** Two songs of Adele's 21 played lately, so Home shows the album. */
 export const recentlyPlayed: ServerMessage[] = [
   {

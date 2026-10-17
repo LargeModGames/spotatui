@@ -1,10 +1,11 @@
-import { test, type Page } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { openWith, openWithVisualizer, shot } from "./bridge";
 import {
   announcement,
   artist,
   discover,
   filmScores,
+  filmScoresLongExplicit,
   history,
   hello,
   idle,
@@ -120,6 +121,28 @@ test("library playlist", async ({ page }) => {
     .getByText("Cornfield Chase")
     .waitFor();
   await shot(page, "library-playlist");
+});
+
+test("a long playlist with explicit songs keeps the page from scrolling", async ({
+  page,
+}) => {
+  await openWith(page, [...playing, ...library, ...filmScoresLongExplicit]);
+  await page
+    .getByRole("navigation", { name: "Your Library" })
+    .getByRole("button", { name: "Film scores" })
+    .click();
+  // Wait for a below-the-fold explicit row to be in the table before
+  // measuring: the hidden sr-only text next to its E badge is what grew the
+  // document (#878).
+  await page
+    .getByRole("listbox", { name: "Film scores" })
+    .getByText("Long cut 32")
+    .waitFor();
+  const pageHeight = await page.evaluate(
+    () => document.documentElement.scrollHeight,
+  );
+  const innerHeight = await page.evaluate(() => window.innerHeight);
+  expect(pageHeight).toBe(innerHeight);
 });
 
 test("library without a Spotify session", async ({ page }) => {
