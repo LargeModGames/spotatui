@@ -212,39 +212,61 @@ mod tests {
     assert_eq!(app.get_current_route().id, RouteId::TrackTable);
   }
 
-  /// Both filters set at once: a playlist search left over from before the user
-  /// switched to Saved Tracks, plus a saved-tracks search.
-  fn app_with_both_track_filters() -> App {
+  #[test]
+  fn escape_keeps_liked_rows_when_liked_songs_opened_after_a_playlist_search() {
+    use crate::core::action::LibraryTarget;
+    use crate::core::pagination::Paged;
+    use crate::core::plugin_api::{PlayableInfo, TrackInfo};
+
     let mut app = app();
-    app.track_table.context = Some(TrackTableContext::SavedTracks);
-    app.apply_saved_track_search_results("query".to_string(), vec![]);
+    let playlist_id = PlaylistId::from_id("37i9dQZF1DX4WYpdgoIcn6")
+      .unwrap()
+      .into_static();
+    app.playlist_track_table_id = Some(playlist_id);
+    // A playlist search left over from before the user switched to Liked Songs,
+    // with cached playlist rows that clearing the filter would otherwise
+    // restore into the table.
     app.active_playlist_track_filter = Some("leftover".to_string());
-    app.push_navigation_stack(RouteId::TrackTable, ActiveBlock::TrackTable);
-    app
-  }
+    app.playlist_track_pages.upsert_page_by_offset(Paged {
+      items: vec![(
+        0,
+        PlayableInfo::Track(TrackInfo {
+          generated_name: None,
+          uri: None,
+          name: "Playlist Track".to_string(),
+          artists: vec![],
+          album: String::new(),
+          duration_ms: 0,
+          id: None,
+          album_id: None,
+          artist_refs: vec![],
+          is_playable: true,
+          is_local: false,
+          track_number: 0,
+          explicit: false,
+          image_url: None,
+          release_date: None,
+        }),
+      )],
+      limit: 1,
+      next: None,
+      offset: 0,
+      previous: None,
+      total: 1,
+    });
 
-  #[test]
-  fn back_key_clears_the_playlist_filter_when_both_filters_are_active() {
-    let mut app = app_with_both_track_filters();
-
-    assert!(back_key_clears_playlist_filter(
-      &mut app,
-      ActiveBlock::TrackTable
-    ));
-
-    // The one shared rule drops the playlist filter and leaves the saved one.
-    assert!(app.active_playlist_track_filter.is_none());
-    assert!(app.is_saved_track_filter_active());
-  }
-
-  #[test]
-  fn escape_clears_the_same_filter_the_back_key_does_when_both_are_active() {
-    let mut app = app_with_both_track_filters();
+    app.open_library_section(LibraryTarget::LikedSongs);
 
     handlers::handle_app(Key::Esc, &mut app);
 
+    // The leftover playlist filter must not survive opening Liked Songs, so Esc
+    // must not swap the liked rows out for the playlist's cached rows.
     assert!(app.active_playlist_track_filter.is_none());
-    assert!(app.is_saved_track_filter_active());
+    assert_eq!(
+      app.track_table.context,
+      Some(TrackTableContext::SavedTracks)
+    );
+    assert!(app.track_table.tracks.is_empty());
   }
 
   #[test]
