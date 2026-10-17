@@ -7,8 +7,10 @@ import type { Position } from "./connection";
 import { DevicesPopover } from "./DevicesPopover";
 import { sourceOf } from "./format";
 import { Glyph } from "./Icon";
+import type { VisualizerLook } from "./bindings/VisualizerLook";
 import {
   PlayerBarVisualizer,
+  type CoverArt,
   type WatchVisualizer,
 } from "./PlayerBarVisualizer";
 import { setSetting } from "./settingsModel";
@@ -26,6 +28,11 @@ const UNMUTE_VOLUME = 50;
 
 const NO_FRAMES: WatchVisualizer = () => () => {};
 
+/** The page URL of a playing item's cover; null when the page cannot ask for it. */
+export type CoverSrc = (uri: string) => string | null;
+
+const NO_COVER: CoverSrc = () => null;
+
 export function PlayerBar({
   s = EN,
   playback,
@@ -42,6 +49,8 @@ export function PlayerBar({
   visualizer = null,
   watchVisualizer = NO_FRAMES,
   covered = false,
+  look = null,
+  coverSrc = NO_COVER,
 }: {
   s?: GuiStrings;
   playback: PlaybackPayload | null;
@@ -61,8 +70,16 @@ export function PlayerBar({
   watchVisualizer?: WatchVisualizer;
   /** Something opaque, such as the Room, hides the bar. */
   covered?: boolean;
+  look?: VisualizerLook | null;
+  coverSrc?: CoverSrc;
 }) {
   const item = playback?.item ?? null;
+  const uri = item?.uri ?? null;
+  // A local file's cover is in its tags, so it has no URL of its own.
+  const art: CoverArt | null =
+    uri !== null && (item?.image_url || uri.startsWith("file:"))
+      ? { key: item?.image_url ?? uri, src: coverSrc(uri) }
+      : null;
   const playing = item?.is_playing ?? false;
   const elapsed = usePosition(position, playing);
   const volume = playback?.volume ?? 0;
@@ -130,6 +147,8 @@ export function PlayerBar({
           }
           watch={watchVisualizer}
           covered={covered}
+          look={look}
+          art={art}
         />
       )}
       <div className="now-track">

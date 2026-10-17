@@ -56,3 +56,5 @@ pub mod theme;
 pub mod update;
 #[cfg_attr(not(feature = "tui"), allow(dead_code))]
 pub mod user_config;
+#[cfg_attr(not(feature = "gui"), allow(dead_code))]
+pub mod visualizer_look;

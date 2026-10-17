@@ -189,6 +189,14 @@ export class Connection {
 
   getState = (): State => this.state;
 
+  /** The same-origin URL of the playing item's cover; null before the server gave a token. */
+  coverSrc = (uri: string): string | null => {
+    const token = this.storage.getItem(TOKEN_KEY);
+    return token
+      ? `/cover?uri=${encodeURIComponent(uri)}&t=${encodeURIComponent(token)}`
+      : null;
+  };
+
   /** Hands visualizer frames to `listener`; the server sends them while one listens. */
   watchVisualizer = (listener: (frame: Frame) => void): (() => void) => {
     this.viewers.add(listener);

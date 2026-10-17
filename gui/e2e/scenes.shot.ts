@@ -3,6 +3,7 @@ import { openWith, openWithVisualizer, shot } from "./bridge";
 import {
   announcement,
   artist,
+  DEFAULT_LOOK,
   discover,
   filmScores,
   filmScoresLongExplicit,
@@ -28,6 +29,7 @@ import {
   songRadio,
   spectrumFrame,
   stats,
+  stripedCover,
   visualizerSetting,
   waveFrame,
   welcome,
@@ -403,6 +405,38 @@ test("visualizer waveform", async ({ page }) => {
   );
   await shot(page, "visualizer-waveform");
 });
+
+for (const mode of ["Spectrum", "Waveform"] as const) {
+  test(`visualizer ${mode.toLowerCase()} cover gradient`, async ({ page }) => {
+    await page.route("**/cover?**", (route) =>
+      route.fulfill({ contentType: "image/svg+xml", body: stripedCover }),
+    );
+    await openWithVisualizer(
+      page,
+      [
+        ...playing,
+        ...library,
+        visualizerSetting(mode, { ...DEFAULT_LOOK, fade_ms: 0 }),
+      ],
+      mode === "Spectrum" ? spectrumFrame : waveFrame,
+    );
+    // The bass end takes the cover's darkest colour, navy, in place of the amber accent.
+    await page.waitForFunction(() => {
+      const canvas =
+        document.querySelector<HTMLCanvasElement>(".playerbar-viz");
+      const pixels = canvas
+        ?.getContext("2d")
+        ?.getImageData(0, 0, Math.ceil(canvas.width / 10), canvas.height).data;
+      let [red, blue] = [0, 0];
+      for (let at = 0; pixels && at < pixels.length; at += 4) {
+        red += pixels[at] * pixels[at + 3];
+        blue += pixels[at + 2] * pixels[at + 3];
+      }
+      return blue > red;
+    });
+    await shot(page, `visualizer-${mode.toLowerCase()}-cover`);
+  });
+}
 
 test("library folders", async ({ page }) => {
   await openWith(page, [...playing, ...libraryFolders]);

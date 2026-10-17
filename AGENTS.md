@@ -116,7 +116,7 @@ enters the root package, its lock, crates.io or Nix. Six top-level units under `
 | `core/` | Centralized state (`App`), the frontend-neutral tick scheduler (`driver/`), the shared action vocabulary (`action/`), config/state persistence, and the rspotify-free domain types (`plugin_api`, `pagination`, `source`) |
 | `infra/` | Spotify: Web API shapes (`network/`) answered from Spotify's internal API (`spotify/`, feature `spotify-session`), native librespot streaming (`player/`), alternative sources (`local/`, `subsonic/`, `qobuz/`, `radio/`, `youtube/`, `queue/`), audio viz (`audio/`), Lua scripting (`scripting/`), AI DJ + MCP (`dj/`, `mcp/`), OS integrations (Discord RPC, MPRIS, macOS/Windows media) |
 | `tui/` | Terminal UI: the event/render loop (`runner.rs`), key plumbing (`event/`), per-block input handlers (`handlers/`), immutable draw fns (`ui/`) |
-| `gui/` | Browser frontend (feature `gui`): the loopback page server with its Host/Origin/launch-code checks (`server.rs`), the JSON push protocol over the display revisions (`protocol.rs`), the socket bridge to the tick loop (`bridge.rs`), and the first-launch questions over the socket (`onboarding.rs`, a blocking `Onboarding` that waits for the page); `build.rs` embeds `gui/dist`. The `desktop/` shell shows the same page, served unchanged, through `run_gui_hosted` |
+| `gui/` | Browser frontend (feature `gui`): the loopback page server with its Host/Origin/launch-code checks and a token-checked `/cover` with the playing item's art (`server.rs`), the JSON push protocol over the display revisions (`protocol.rs`), the socket bridge to the tick loop (`bridge.rs`), and the first-launch questions over the socket (`onboarding.rs`, a blocking `Onboarding` that waits for the page); `build.rs` embeds `gui/dist`. The `desktop/` shell shows the same page, served unchanged, through `run_gui_hosted` |
 | `cli/` | clap subcommands: playback control, listening history, self-update, MCP relay, plugin management |
 | `runtime/` | `mod.rs::run_cli` (entry point + CLI dispatch), `bootstrap.rs::boot` (frontend-neutral config/auth/`App` construction, `run_cli` and `run_gui` its callers, plus the boot login rule `spotify_auth_mode`: the device login only when the first-run picker chose Spotify or on `--reconfigure-auth`, a subcommand needs a cached login with a live session, a UI launch tolerates no session), `cli.rs` (clap assembly + self-update), `pump.rs::start_tokio` (the IoEvent pump), `streaming/` (native-streaming startup every frontend shares: the pure saved-device decision in `mod.rs`, the librespot bring-up in `launch.rs`, gated on `streaming`), `startup.rs` (the UI-launch half, gated on `tui` or `gui`), `gui.rs::run_gui` (the browser frontend: the loopback server first, boot with the first-launch questions answered in the page, then a tick loop with no terminal; `run_gui_hosted` is the same run with a desktop shell's window, a `GuiHost`, in place of the system browser), `instance.rs` (the single-instance lock a UI launch takes before boot; `restart_after_update` releases it before the re-exec) |
 
@@ -343,7 +343,7 @@ same predicate the row uses, so the two cannot disagree.
 
 ### Config & on-disk files
 
-Six files, six owners - a value that changes as the app runs goes in state,
+Seven files, seven owners - a value that changes as the app runs goes in state,
 never config:
 
 | File | Owner | Contents |
@@ -354,6 +354,7 @@ never config:
 | `last_session.yml` (state dir) | `core/persisted_playback.rs` | non-Spotify playback + native queue |
 | `playlist_sync.yml` (state dir) | `core/playlist_sync/store.rs` | playlist links + match cache |
 | `qobuz_credentials.yml` (config dir) | `infra/qobuz/auth.rs` | the Qobuz login token (feature `qobuz`) |
+| `visualizer.yml` (config dir) | `core/visualizer_look.rs` (read only) | the GUI player-bar visualizer's look; `runtime/gui.rs` reads it at launch and again on each edit (feature `gui`, only where `gui::visualizer::AVAILABLE`) |
 
 - All paths resolve through `core/paths.rs`, never `dirs::` directly.
 - `state.yml` saves are read-modify-write **sparse patches** so a second running

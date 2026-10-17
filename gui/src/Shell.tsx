@@ -45,7 +45,7 @@ import {
 import { NowPlayingPanel } from "./NowPlayingPanel";
 import { Party } from "./Party";
 import { PodcastPage } from "./PodcastPage";
-import { PlayerBar, type Panel } from "./PlayerBar";
+import { PlayerBar, type CoverSrc, type Panel } from "./PlayerBar";
 import type { WatchVisualizer } from "./PlayerBarVisualizer";
 import { QueueDrawer } from "./QueueDrawer";
 import { RadioPage } from "./RadioPage";
@@ -77,6 +77,7 @@ export function Shell({
   onWindow,
   onQuit,
   watchVisualizer,
+  coverSrc,
   askChangelog,
 }: {
   s?: GuiStrings;
@@ -87,6 +88,7 @@ export function Shell({
   onWindow: ((mode: WindowMode) => void) | null;
   onQuit: () => void;
   watchVisualizer?: WatchVisualizer;
+  coverSrc?: CoverSrc;
   /** Asks the server for the changelog the Home page shows. */
   askChangelog: () => void;
 }) {
@@ -666,6 +668,8 @@ export function Shell({
           visualizer={choice(VISUALIZER_SETTING)}
           watchVisualizer={watchVisualizer}
           covered={room}
+          look={channels.settings?.payload.visualizer ?? null}
+          coverSrc={coverSrc}
         />
         {room && (
           <div className="room-layer">

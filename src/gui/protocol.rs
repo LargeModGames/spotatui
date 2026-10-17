@@ -16,6 +16,7 @@ use crate::core::plugin_api::{
 use crate::core::source::Source;
 use crate::core::theme::{resolve, Color, Palette, Theme, ThemeField};
 use crate::core::update::{UpdateAsk, UpdateStatus};
+use crate::core::visualizer_look::VisualizerLook;
 use crate::gui::onboarding::{OnboardingReply, OnboardingView};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -176,6 +177,8 @@ pub(crate) struct SettingsPayload {
   rows: Vec<SettingRow>,
   language: Language,
   strings: Option<&'static Strings>,
+  /// The player-bar visualizer's look from `visualizer.yml`.
+  visualizer: VisualizerLook,
 }
 
 #[derive(Serialize)]
@@ -968,6 +971,7 @@ fn channel_message(
         rows: settings(app),
         language: app.language(),
         strings: (language != Some(app.language())).then(|| app.strings()),
+        visualizer: app.visualizer_look().clone(),
       },
     },
     DisplayDomain::Update => ServerMessage::Update {

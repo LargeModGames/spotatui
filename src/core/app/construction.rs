@@ -22,6 +22,8 @@ impl Default for App {
       liked_marks_view: Vec::new(),
       #[cfg(feature = "gui")]
       update_status: None,
+      #[cfg(feature = "gui")]
+      visualizer_look: Default::default(),
       source_table_uri: None,
       track_table_view: TrackTableView::default(),
       stats_period: RecapPeriod::ThirtyDays,

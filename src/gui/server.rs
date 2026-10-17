@@ -1,7 +1,7 @@
 //! The loopback page server: serves the embedded frontend and upgrades the page's
 //! socket once the Host, Origin and launch-code checks pass.
 
-use crate::gui::bridge::{self, Link};
+use crate::gui::bridge::{self, CoverSource, Link};
 use crate::infra::loopback::{generate_token, tokens_match};
 use anyhow::{Context, Result};
 use std::io::Cursor;
@@ -20,6 +20,9 @@ const CODE_PROTOCOL: &str = "spotatui.code.";
 const TOKEN_PROTOCOL: &str = "spotatui.token.";
 const PROTOCOL_HEADER: &str = "Sec-WebSocket-Protocol";
 const TEXT: &str = "text/plain; charset=utf-8";
+/// A cover fetch ends inside the request's own limit.
+const COVER_FETCH_TIMEOUT: Duration = Duration::from_secs(4);
+const MAX_COVER_BYTES: usize = 16 * 1024 * 1024;
 
 type Assets = &'static [(&'static str, &'static [u8])];
 
@@ -31,6 +34,7 @@ struct Server {
   access: Arc<Access>,
   assets: Assets,
   link: Link,
+  covers: reqwest::Client,
 }
 
 /// The launch code the browser URL carries, and the session token it is traded for.
@@ -113,6 +117,10 @@ pub(crate) async fn spawn_listener(assets: Assets, link: Link) -> Result<(u16, A
     access: Arc::clone(&access),
     assets,
     link,
+    covers: reqwest::Client::builder()
+      .timeout(COVER_FETCH_TIMEOUT)
+      .build()
+      .context("could not build the cover client")?,
   });
   tokio::spawn(async move {
     loop {
@@ -178,6 +186,10 @@ async fn answer(stream: &mut TcpStream, server: &Server) -> Result<Option<Vec<u8
     return Ok(Some(raw));
   }
   let path = head.path.split('?').next().unwrap_or_default();
+  if path == "/cover" {
+    cover(stream, server, &head.path).await?;
+    return Ok(None);
+  }
   let name = if path == "/" {
     "index.html"
   } else {
@@ -198,6 +210,82 @@ async fn answer(stream: &mut TcpStream, server: &Server) -> Result<Option<Vec<u8
     None => respond(stream, port, "404 Not Found", TEXT, b"not found\n").await?,
   }
   Ok(None)
+}
+
+/// The playing item's cover, so the page can read its colours; only with the session token.
+async fn cover(stream: &mut TcpStream, server: &Server, target: &str) -> Result<()> {
+  let port = server.port;
+  let query = target
+    .split_once('?')
+    .map(|(_, query)| query)
+    .unwrap_or_default();
+  let (mut uri, mut token) = (None, None);
+  for (key, value) in url::form_urlencoded::parse(query.as_bytes()) {
+    match &*key {
+      "uri" => uri = Some(value.into_owned()),
+      "t" => token = Some(value.into_owned()),
+      _ => {}
+    }
+  }
+  if !token.is_some_and(|token| tokens_match(&token, &server.access.token)) {
+    return respond(stream, port, "403 Forbidden", TEXT, b"forbidden\n").await;
+  }
+  let source = match uri {
+    Some(uri) => server.link.cover_source(&uri).await,
+    None => None,
+  };
+  let picture = match source {
+    Some(source) => cover_bytes(&server.covers, source).await,
+    None => None,
+  };
+  match picture
+    .as_deref()
+    .and_then(|bytes| Some((image_type(bytes)?, bytes)))
+  {
+    Some((kind, bytes)) => respond(stream, port, "200 OK", kind, bytes).await,
+    None => respond(stream, port, "404 Not Found", TEXT, b"not found\n").await,
+  }
+}
+
+async fn cover_bytes(client: &reqwest::Client, source: CoverSource) -> Option<Vec<u8>> {
+  match source {
+    CoverSource::Url(url) => {
+      let mut response = client
+        .get(&url)
+        .send()
+        .await
+        .ok()?
+        .error_for_status()
+        .ok()?;
+      let mut body = Vec::new();
+      while let Some(chunk) = response.chunk().await.ok()? {
+        body.extend_from_slice(&chunk);
+        if body.len() > MAX_COVER_BYTES {
+          return None;
+        }
+      }
+      Some(body)
+    }
+    #[cfg(feature = "local-files")]
+    CoverSource::File(path) => {
+      tokio::task::spawn_blocking(move || crate::infra::local::embedded_cover_bytes(&path))
+        .await
+        .ok()?
+        .ok()
+        .filter(|bytes| bytes.len() <= MAX_COVER_BYTES)
+    }
+  }
+}
+
+/// The image type its first bytes name; any other body is refused.
+fn image_type(bytes: &[u8]) -> Option<&'static str> {
+  match bytes {
+    [0xFF, 0xD8, 0xFF, ..] => Some("image/jpeg"),
+    [0x89, b'P', b'N', b'G', ..] => Some("image/png"),
+    [b'G', b'I', b'F', b'8', ..] => Some("image/gif"),
+    [b'R', b'I', b'F', b'F', _, _, _, _, b'W', b'E', b'B', b'P', ..] => Some("image/webp"),
+    _ => None,
+  }
 }
 
 /// Reads one request head, keeping every byte read so an upgrade can replay it.
@@ -424,6 +512,106 @@ mod tests {
     }
   }
 
+  const PLAYING_URI: &str = "spotify:track:4uLU6hMCjMI75M1A2tKUQC";
+  const PNG: &[u8] = b"\x89PNG\r\n\x1a\nnot really a png";
+
+  /// A server whose app plays a track with art at `image_url`, and its session token.
+  async fn start_playing(image_url: &str) -> (u16, String) {
+    let (tx, _rx) = std::sync::mpsc::channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.current_playback_context = Some(crate::core::test_helpers::playing_with_art(
+      "4uLU6hMCjMI75M1A2tKUQC",
+      image_url,
+    ));
+    app.note_display_changes();
+    let (link, _publisher, _inbox) = bridge::tests::booted(Arc::new(tokio::sync::Mutex::new(app)));
+    let (port, access) = spawn_listener(PAGE, link).await.unwrap();
+    (port, access.token.clone())
+  }
+
+  /// Serves one request with `content_type` and `body`, at the URL it returns.
+  async fn upstream(content_type: &'static str, body: &'static [u8]) -> String {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+      let (mut stream, _) = listener.accept().await.unwrap();
+      let _ = read_head(&mut stream).await;
+      let head = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+      );
+      stream.write_all(head.as_bytes()).await.unwrap();
+      stream.write_all(body).await.unwrap();
+    });
+    format!("http://127.0.0.1:{port}/cover.png")
+  }
+
+  async fn get_cover(port: u16, query: &str) -> String {
+    get(
+      port,
+      format!(
+        "GET /cover?{query} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nSec-Fetch-Site: same-origin\r\n\r\n"
+      ),
+    )
+    .await
+  }
+
+  #[tokio::test]
+  async fn a_cover_needs_the_session_token() {
+    let (port, _token) = start_playing("http://127.0.0.1:9/cover.png").await;
+    let missing = get_cover(port, &format!("uri={PLAYING_URI}")).await;
+    assert!(missing.starts_with("HTTP/1.1 403"), "{missing}");
+    let wrong = get_cover(port, &format!("uri={PLAYING_URI}&t=guess")).await;
+    assert!(wrong.starts_with("HTTP/1.1 403"), "{wrong}");
+  }
+
+  #[tokio::test]
+  async fn a_cover_of_an_item_that_is_not_playing_is_not_found() {
+    let (port, token) = start_playing("http://127.0.0.1:9/cover.png").await;
+    let reply = get_cover(port, &format!("uri=spotify:track:other&t={token}")).await;
+    assert!(reply.starts_with("HTTP/1.1 404"), "{reply}");
+  }
+
+  #[tokio::test]
+  async fn the_playing_cover_passes_through_as_its_image_type() {
+    let (port, token) = start_playing(&upstream("application/octet-stream", PNG).await).await;
+    let reply = get_cover(port, &format!("uri={PLAYING_URI}&t={token}")).await;
+    assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+    assert!(reply.contains("Content-Type: image/png\r\n"), "{reply}");
+    assert!(reply.contains("Cache-Control: no-store\r\n"), "{reply}");
+    assert!(reply.ends_with(&*String::from_utf8_lossy(PNG)), "{reply}");
+  }
+
+  #[tokio::test]
+  async fn a_cover_that_is_not_an_image_is_not_served() {
+    let (port, token) = start_playing(&upstream("image/png", b"<html>hi</html>").await).await;
+    let reply = get_cover(port, &format!("uri={PLAYING_URI}&t={token}")).await;
+    assert!(reply.starts_with("HTTP/1.1 404"), "{reply}");
+  }
+
+  #[tokio::test]
+  async fn a_cross_site_cover_request_is_refused() {
+    let (port, token) = start_playing("http://127.0.0.1:9/cover.png").await;
+    let reply = get(
+      port,
+      format!(
+        "GET /cover?uri={PLAYING_URI}&t={token} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nSec-Fetch-Site: cross-site\r\n\r\n"
+      ),
+    )
+    .await;
+    assert!(reply.starts_with("HTTP/1.1 403"), "{reply}");
+  }
+
+  #[test]
+  fn only_jpeg_png_gif_and_webp_are_images() {
+    assert_eq!(image_type(b"\xFF\xD8\xFF\xE0rest"), Some("image/jpeg"));
+    assert_eq!(image_type(PNG), Some("image/png"));
+    assert_eq!(image_type(b"GIF89a"), Some("image/gif"));
+    assert_eq!(image_type(b"RIFF\0\0\0\0WEBPVP8 "), Some("image/webp"));
+    assert_eq!(image_type(b"<svg/>"), None);
+    assert_eq!(image_type(b""), None);
+  }
+
   #[tokio::test]
   async fn a_foreign_host_is_refused() {
     let (port, _code, _inbox) = start(PAGE).await;
@@ -595,6 +783,7 @@ mod tests {
       }),
       assets: PAGE,
       link,
+      covers: reqwest::Client::new(),
     };
     let client = tokio::spawn(async move {
       let mut stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
@@ -687,6 +876,7 @@ mod tests {
       }),
       assets: PAGE,
       link,
+      covers: reqwest::Client::new(),
     };
     let client = tokio::spawn(async move {
       let mut stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();

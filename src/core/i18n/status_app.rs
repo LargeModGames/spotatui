@@ -124,6 +124,7 @@ pub struct AppStatusStrings {
   pub search_source_unavailable: &'static str,
   pub paused: &'static str,
   pub paused_details: &'static str,
+  pub visualizer_config: &'static str,
 }
 
 pub const EN: AppStatusStrings = AppStatusStrings {
@@ -250,6 +251,7 @@ pub const EN: AppStatusStrings = AppStatusStrings {
   search_source_unavailable: "Search isn't available for {source}",
   paused: "Paused",
   paused_details: "Paused: {details}",
+  visualizer_config: "visualizer.yml: {problem}",
 };
 
 // Keep ..EN so new English fields compile before their translations are added.
@@ -368,5 +370,9 @@ impl AppStatusStrings {
   }
   pub fn paused_details(&self, details: &str) -> String {
     crate::core::i18n::format_template(self.paused_details, &[("details", details)])
+  }
+  #[cfg_attr(not(feature = "gui"), allow(dead_code))]
+  pub fn visualizer_config(&self, problem: &str) -> String {
+    crate::core::i18n::format_template(self.visualizer_config, &[("problem", problem)])
   }
 }

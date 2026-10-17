@@ -1633,6 +1633,7 @@
         "track_cannot_edit": "Track cannot be edited in playlist",
         "track_no_id": "Track has no ID",
         "unfollow_profile_loading": "Cannot unfollow: user profile not loaded yet",
+        "visualizer_config": "visualizer.yml: {problem}",
         "youtube_no_open_playlist": "No YouTube playlist is open",
         "youtube_no_playlists": "No YouTube playlists yet — create one from the sidebar",
         "youtube_playlist": "YouTube playlist"
@@ -3628,6 +3629,7 @@
         "track_cannot_edit": "Track cannot be edited in playlist",
         "track_no_id": "Track has no ID",
         "unfollow_profile_loading": "Cannot unfollow: user profile not loaded yet",
+        "visualizer_config": "visualizer.yml: {problem}",
         "youtube_no_open_playlist": "No YouTube playlist is open",
         "youtube_no_playlists": "No YouTube playlists yet — create one from the sidebar",
         "youtube_playlist": "YouTube playlist"
@@ -5623,6 +5625,7 @@
         "track_cannot_edit": "Track cannot be edited in playlist",
         "track_no_id": "Track has no ID",
         "unfollow_profile_loading": "Cannot unfollow: user profile not loaded yet",
+        "visualizer_config": "visualizer.yml: {problem}",
         "youtube_no_open_playlist": "No YouTube playlist is open",
         "youtube_no_playlists": "No YouTube playlists yet — create one from the sidebar",
         "youtube_playlist": "YouTube playlist"

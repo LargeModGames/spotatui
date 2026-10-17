@@ -1,5 +1,6 @@
 import strings from "./bindings/strings.json";
 import { describe, expect, it, vi } from "vitest";
+import { DEFAULT_LOOK } from "../e2e/fixtures";
 import {
   Connection,
   positionAfterChannel,
@@ -146,12 +147,22 @@ describe("Connection", () => {
     receive({
       kind: "settings",
       rev: 3,
-      payload: { language: "zh-Hans", strings: strings.ZH_HANS, rows: [] },
+      payload: {
+        language: "zh-Hans",
+        strings: strings.ZH_HANS,
+        rows: [],
+        visualizer: DEFAULT_LOOK,
+      },
     });
     receive({
       kind: "settings",
       rev: 2,
-      payload: { language: "en", strings: strings.EN, rows: [] },
+      payload: {
+        language: "en",
+        strings: strings.EN,
+        rows: [],
+        visualizer: DEFAULT_LOOK,
+      },
     });
     const active = connection.getState().localization;
     expect(active?.language).toBe("zh-Hans");
@@ -159,7 +170,12 @@ describe("Connection", () => {
     receive({
       kind: "settings",
       rev: 4,
-      payload: { language: "zh-Hans", strings: null, rows: [] },
+      payload: {
+        language: "zh-Hans",
+        strings: null,
+        rows: [],
+        visualizer: DEFAULT_LOOK,
+      },
     });
     expect(connection.getState().localization).toBe(active);
   });

@@ -62,6 +62,12 @@ pub(crate) fn qobuz_credentials_path() -> Option<PathBuf> {
   app_config_dir().map(|dir| dir.join("qobuz_credentials.yml"))
 }
 
+/// The player-bar visualizer's look: `<config dir>/visualizer.yml`, never written by the app.
+#[cfg(feature = "gui")]
+pub(crate) fn visualizer_config_path() -> Option<PathBuf> {
+  app_config_dir().map(|dir| dir.join("visualizer.yml"))
+}
+
 /// Directory holding this run's log file.
 ///
 /// The OS temp directory rather than the state dir: a log file is written per

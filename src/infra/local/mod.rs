@@ -540,6 +540,12 @@ pub(crate) fn file_uri_to_path(uri: &str) -> Result<PathBuf> {
 /// builds enabling only one of them do not pull in the other's dependency.
 #[cfg(feature = "art-decode")]
 pub(crate) fn extract_embedded_cover(path: &Path) -> Result<image::DynamicImage> {
+  image::load_from_memory(&embedded_cover_bytes(path)?).context("decoding embedded cover art")
+}
+
+/// The first embedded cover picture of a local audio file, undecoded; synchronous file I/O.
+#[cfg_attr(not(any(feature = "gui", feature = "art-decode")), allow(dead_code))]
+pub(crate) fn embedded_cover_bytes(path: &Path) -> Result<Vec<u8>> {
   let tagged = read_from_path(path).with_context(|| format!("reading tags from {:?}", path))?;
   let tag = tagged
     .primary_tag()
@@ -549,7 +555,7 @@ pub(crate) fn extract_embedded_cover(path: &Path) -> Result<image::DynamicImage>
     .pictures()
     .first()
     .context("file has no embedded cover art")?;
-  image::load_from_memory(picture.data()).context("decoding embedded cover art")
+  Ok(picture.data().to_vec())
 }
 
 /// How many directory levels below the music root the scan descends: the

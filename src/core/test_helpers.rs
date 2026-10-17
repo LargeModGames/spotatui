@@ -184,6 +184,40 @@ pub fn app_with_playbar(position: &str) -> App {
   app
 }
 
+/// A Spotify track playing on another device, its album art at `image_url`.
+#[cfg(feature = "gui")]
+pub fn playing_with_art(id: &str, image_url: &str) -> rspotify::model::CurrentPlaybackContext {
+  use rspotify::model::{
+    context::Actions, CurrentlyPlayingType, Device, DeviceType, Image, PlayableItem, RepeatState,
+  };
+  let mut track = full_track(id, "Cover Song");
+  track.album.images = vec![Image {
+    url: image_url.to_string(),
+    height: None,
+    width: None,
+  }];
+  rspotify::model::CurrentPlaybackContext {
+    device: Device {
+      id: Some("external".to_string()),
+      is_active: true,
+      is_private_session: false,
+      is_restricted: false,
+      name: "Phone".to_string(),
+      _type: DeviceType::Smartphone,
+      volume_percent: Some(50),
+    },
+    repeat_state: RepeatState::Off,
+    shuffle_state: false,
+    context: None,
+    timestamp: chrono::Utc::now(),
+    progress: None,
+    is_playing: true,
+    item: Some(PlayableItem::Track(track)),
+    currently_playing_type: CurrentlyPlayingType::Track,
+    actions: Actions::default(),
+  }
+}
+
 /// Scripted [`Onboarding`] double: hands out canned prompt answers in order
 /// (each with the trailing newline `read_line` would produce) and records
 /// everything shown.

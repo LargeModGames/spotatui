@@ -9,6 +9,7 @@ import type { ShowInfo } from "../src/bindings/ShowInfo";
 import type { Source } from "../src/bindings/Source";
 import type { SourcePlaylists } from "../src/bindings/SourcePlaylists";
 import type { TrackInfo } from "../src/bindings/TrackInfo";
+import type { VisualizerLook } from "../src/bindings/VisualizerLook";
 
 const revisions = {
   route: 1,
@@ -36,6 +37,54 @@ const revisions = {
   update: 1,
   show: 1,
   announcement: 1,
+};
+
+/** The Rust defaults of `VisualizerLook`, for pages and tests with no server. */
+export const DEFAULT_LOOK: VisualizerLook = {
+  source: "cover",
+  colors: [],
+  fallback: [],
+  count: 5,
+  order: "luminance",
+  reverse: false,
+  greys: false,
+  min_distance: 0.08,
+  min_share: 0.01,
+  min_saturation: 0,
+  luminance_floor: 0.22,
+  luminance_ceiling: 0.35,
+  interpolation: "srgb",
+  fade_ms: 800,
+  spectrum: {
+    gap: 2,
+    cap_height: 2,
+    cap_gap: 2,
+    glow_side: 2,
+    glow_end: 3,
+    foot_alpha: 0.28,
+    top_alpha: 0.08,
+    glow_alpha: 0.12,
+    glow_top_alpha: 0.036,
+    cap_alpha: 0.7,
+    pulse_alpha: 0.35,
+    pulse_height: 0.5,
+    pulse_bands: 0.125,
+    fall_per_second: 3,
+    peak_hold: 0.35,
+    peak_gravity: 2.4,
+  },
+  waveform: {
+    reach: 0.46,
+    fill_alpha: 0.14,
+    point_spacing: 8,
+    min_points: 75,
+    lines: [
+      [-0.6, 1, 0.18],
+      [1, 9, 0.06],
+      [1, 4, 0.16],
+      [1, 1.6, 0.85],
+    ],
+  },
 };
 
 export const hello: ServerMessage = {
@@ -984,14 +1033,28 @@ function visualizerRow(mode: "Spectrum" | "Waveform"): SettingRow {
   );
 }
 
-/** Only the visualizer row, set to `mode`. */
+/** Only the visualizer row, set to `mode`, with `look`. */
 export const visualizerSetting = (
   mode: "Spectrum" | "Waveform",
+  look: VisualizerLook = DEFAULT_LOOK,
 ): ServerMessage => ({
   kind: "settings",
   rev: 1,
-  payload: { language: "en", strings: strings.EN, rows: [visualizerRow(mode)] },
+  payload: {
+    language: "en",
+    strings: strings.EN,
+    rows: [visualizerRow(mode)],
+    visualizer: look,
+  },
 });
+
+/** A cover in four bands: navy, coral, teal and sand, largest first. */
+export const stripedCover = `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+<rect width="26" height="64" fill="#1d3557"/>
+<rect x="26" width="19" height="64" fill="#e63946"/>
+<rect x="45" width="13" height="64" fill="#2a9d8f"/>
+<rect x="58" width="6" height="64" fill="#f4a261"/>
+</svg>`;
 
 /** A loud bass and a quieter treble, as most music has. */
 export const spectrumFrame: ServerMessage = {
@@ -1030,6 +1093,7 @@ export const settings: ServerMessage[] = [
     payload: {
       language: "en",
       strings: strings.EN,
+      visualizer: DEFAULT_LOOK,
       rows: [
         setting(
           "seek_milliseconds",

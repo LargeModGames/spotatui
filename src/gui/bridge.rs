@@ -43,6 +43,33 @@ impl Link {
       None => self.onboarding.language().strings(),
     }
   }
+
+  /// Where the cover of `uri` is, only while `uri` is the item the page shows playing.
+  pub(crate) async fn cover_source(&self, uri: &str) -> Option<CoverSource> {
+    let app = self.app.borrow().clone()?;
+    let app = app.lock().await;
+    let snapshot = app.playback_view().0.as_ref()?;
+    if snapshot.item_uri.as_deref() != Some(uri) {
+      return None;
+    }
+    if let Some(url) = &snapshot.metadata.image_url {
+      return Some(CoverSource::Url(url.clone()));
+    }
+    #[cfg(feature = "local-files")]
+    if uri.starts_with("file:") {
+      return crate::infra::local::file_uri_to_path(uri)
+        .ok()
+        .map(CoverSource::File);
+    }
+    None
+  }
+}
+
+pub(crate) enum CoverSource {
+  Url(String),
+  /// A local file, whose cover is in its tags.
+  #[cfg(feature = "local-files")]
+  File(std::path::PathBuf),
 }
 
 /// The tick loop's side of the bridge.

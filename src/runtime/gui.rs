@@ -11,6 +11,7 @@ use crate::core::i18n::{system_language, Language};
 use crate::core::onboarding::Onboarding;
 use crate::core::update::{UpdateAsk, UpdateRequest, UpdateStatus};
 use crate::core::user_config::{parse_update_delay_secs, BehaviorConfig};
+use crate::core::visualizer_look::LookFile;
 use crate::gui::bridge::{self, Publisher};
 use crate::gui::onboarding::BrowserOnboarding;
 use crate::gui::protocol::ClientMessage;
@@ -18,7 +19,7 @@ pub use crate::gui::protocol::WindowMode;
 use crate::gui::server;
 use crate::gui::visualizer::{Feed, FRAME_EVERY};
 use anyhow::Result;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
@@ -83,6 +84,9 @@ const MEDIA_POSITION_DRIFT_MS: u64 = 2000;
 
 /// How often a running app looks for an update.
 const UPDATE_CHECK_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
+
+/// How often `visualizer.yml` is checked for an edit.
+const LOOK_CHECK_EVERY: Duration = Duration::from_secs(1);
 
 pub async fn run_gui() -> Result<()> {
   run(None).await
@@ -210,6 +214,15 @@ async fn launch_gui(host: Option<GuiHost>) -> Result<()> {
     discord,
     history_collector,
   } = prepare_frontend(boot).await;
+  // Read before the page sees the app, so it never draws the default look first.
+  let mut look = if crate::gui::visualizer::AVAILABLE {
+    crate::core::paths::visualizer_config_path().map(|path| (path, LookFile::default()))
+  } else {
+    None
+  };
+  if let Some(loaded) = look.as_mut().and_then(|(path, file)| file.check(path)) {
+    app.lock().await.apply_visualizer_look(loaded);
+  }
   boot_done.send_replace(Some(Arc::clone(&app)));
   if let Some(serving) = serving {
     serving();
@@ -222,6 +235,7 @@ async fn launch_gui(host: Option<GuiHost>) -> Result<()> {
     publisher,
     inbox,
     tick_rate,
+    look,
     ShellLinks {
       closed,
       updates,
@@ -253,6 +267,7 @@ async fn serve_until_quit(
   mut publisher: Publisher,
   mut inbox: UnboundedReceiver<ClientMessage>,
   tick_rate: Duration,
+  mut look: Option<(PathBuf, LookFile)>,
   shell: ShellLinks,
 ) {
   let ShellLinks {
@@ -311,8 +326,20 @@ async fn serve_until_quit(
   let mut update_checks = tokio::time::interval(UPDATE_CHECK_EVERY);
   update_checks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
   let mut last_check = None;
+  let mut look_checks = tokio::time::interval_at(
+    tokio::time::Instant::now() + LOOK_CHECK_EVERY,
+    LOOK_CHECK_EVERY,
+  );
+  look_checks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
   loop {
     tokio::select! {
+      _ = look_checks.tick(), if look.is_some() => {
+        if let Some(loaded) = look.as_mut().and_then(|(path, file)| file.check(path)) {
+          let mut app = app.lock().await;
+          app.apply_visualizer_look(loaded);
+          publisher.publish(&app);
+        }
+      }
       _ = ticks.tick() => {
         // A shell runs the main run loop itself.
         #[cfg(all(feature = "macos-media", target_os = "macos"))]

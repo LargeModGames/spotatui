@@ -950,6 +950,11 @@ fn every_typed_message_fills_its_placeholders_and_preserves_all_arguments() {
       ["SENTINEL_DETAILS_中"]
     );
     check!(
+      "status_app.visualizer_config",
+      strings.status.app.visualizer_config("SENTINEL_PROBLEM_中"),
+      ["SENTINEL_PROBLEM_中"]
+    );
+    check!(
       "status_infra.local_uri_invalid",
       strings.status.infra.local_uri_invalid("SENTINEL_ERROR_中"),
       ["SENTINEL_ERROR_中"]

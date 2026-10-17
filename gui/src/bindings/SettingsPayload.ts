@@ -2,5 +2,10 @@
 import type { Language } from "./Language";
 import type { SettingRow } from "./SettingRow";
 import type { Strings } from "./Strings";
+import type { VisualizerLook } from "./VisualizerLook";
 
-export type SettingsPayload = { rows: Array<SettingRow>, language: Language, strings: Strings | null, };
+export type SettingsPayload = { rows: Array<SettingRow>, language: Language, strings: Strings | null, 
+/**
+ * The player-bar visualizer's look from `visualizer.yml`.
+ */
+visualizer: VisualizerLook, };

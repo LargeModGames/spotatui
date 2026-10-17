@@ -1,6 +1,6 @@
 import { expect, test, type WebSocketRoute } from "@playwright/test";
 import strings from "../src/bindings/strings.json" with { type: "json" };
-import { playing, library, filmScores } from "./fixtures";
+import { playing, library, filmScores, DEFAULT_LOOK } from "./fixtures";
 import type { ClientMessage } from "../src/bindings/ClientMessage";
 
 const alternate = {
@@ -17,7 +17,12 @@ function changeLanguage(socket: WebSocketRoute) {
     JSON.stringify({
       kind: "settings",
       rev: 100,
-      payload: { language: "zh-Hant", strings: alternate, rows: [] },
+      payload: {
+        language: "zh-Hant",
+        strings: alternate,
+        rows: [],
+        visualizer: DEFAULT_LOOK,
+      },
     }),
   );
 }
