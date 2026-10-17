@@ -613,6 +613,22 @@ fn handle_block_events(key: Key, app: &mut App) {
   }
 }
 
+/// Unified Back/Esc handler to clear active track filters before exiting.
+///
+/// Handles playlist filters first (saved tracks are subsumed).
+/// Returns `true` if a filter was cleared.
+pub(crate) fn clear_active_track_filter(app: &mut App) -> bool {
+  if app.is_playlist_track_filter_active() {
+    app.clear_playlist_track_filter();
+    true
+  } else if app.is_saved_track_filter_active() {
+    app.clear_saved_track_filter();
+    true
+  } else {
+    false
+  }
+}
+
 fn handle_escape(app: &mut App) {
   match app.get_current_route().active_block {
     // Delegated rather than duplicated, the way `ActiveBlock::Friends` is below.
@@ -647,23 +663,7 @@ fn handle_escape(app: &mut App) {
       }
     }
     ActiveBlock::TrackTable => {
-      let cleared = match app.track_table.context {
-        Some(TrackTableContext::SavedTracks) if app.is_saved_track_filter_active() => {
-          app.clear_saved_track_filter();
-          true
-        }
-        _ if app.is_playlist_track_filter_active() => {
-          app.clear_playlist_track_filter();
-          true
-        }
-        _ if app.is_saved_track_filter_active() => {
-          app.clear_saved_track_filter();
-          true
-        }
-        _ => false,
-      };
-
-      if !cleared {
+      if !clear_active_track_filter(app) {
         app.set_current_route_state(Some(ActiveBlock::Empty), None);
       }
     }

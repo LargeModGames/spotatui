@@ -41,17 +41,7 @@ fn cover_art_full_image_support() -> bool {
 }
 
 fn back_key_clears_playlist_filter(app: &mut App, active_block: ActiveBlock) -> bool {
-  if active_block == ActiveBlock::TrackTable {
-    if app.is_playlist_track_filter_active() {
-      app.clear_playlist_track_filter();
-      return true;
-    }
-    if app.is_saved_track_filter_active() {
-      app.clear_saved_track_filter();
-      return true;
-    }
-  }
-  false
+  active_block == ActiveBlock::TrackTable && handlers::clear_active_track_filter(app)
 }
 
 /// The runner normally handles the configurable back key before `handle_app`.
@@ -220,6 +210,41 @@ mod tests {
 
     assert!(!app.is_saved_track_filter_active());
     assert_eq!(app.get_current_route().id, RouteId::TrackTable);
+  }
+
+  /// Both filters set at once: a playlist search left over from before the user
+  /// switched to Saved Tracks, plus a saved-tracks search.
+  fn app_with_both_track_filters() -> App {
+    let mut app = app();
+    app.track_table.context = Some(TrackTableContext::SavedTracks);
+    app.apply_saved_track_search_results("query".to_string(), vec![]);
+    app.active_playlist_track_filter = Some("leftover".to_string());
+    app.push_navigation_stack(RouteId::TrackTable, ActiveBlock::TrackTable);
+    app
+  }
+
+  #[test]
+  fn back_key_clears_the_playlist_filter_when_both_filters_are_active() {
+    let mut app = app_with_both_track_filters();
+
+    assert!(back_key_clears_playlist_filter(
+      &mut app,
+      ActiveBlock::TrackTable
+    ));
+
+    // The one shared rule drops the playlist filter and leaves the saved one.
+    assert!(app.active_playlist_track_filter.is_none());
+    assert!(app.is_saved_track_filter_active());
+  }
+
+  #[test]
+  fn escape_clears_the_same_filter_the_back_key_does_when_both_are_active() {
+    let mut app = app_with_both_track_filters();
+
+    handlers::handle_app(Key::Esc, &mut app);
+
+    assert!(app.active_playlist_track_filter.is_none());
+    assert!(app.is_saved_track_filter_active());
   }
 
   #[test]
