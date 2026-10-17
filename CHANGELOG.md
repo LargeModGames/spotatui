@@ -54,6 +54,8 @@
 
 - **Subsonic usernames with special characters can log in**: a username with `+`, `&`, `#`, `%`, `=` or a space is now percent-encoded in every request, so the server no longer answers with error 40 ([#814](https://github.com/LargeModGames/spotatui/issues/814)).
 
+- **Plugin playbar text stays while another source plays**: text a plugin sets with `spotatui.set_playbar` now stays in the playbar title for Local Files, Subsonic, Qobuz, internet radio, YouTube, the queue, and Apple Music, after any status message, as it already did for Spotify ([#823](https://github.com/LargeModGames/spotatui/issues/823)).
+
 ## [v0.46.0] 2026-10-14
 
 ### Added
