@@ -259,21 +259,20 @@ async fn cover_bytes(client: &reqwest::Client, source: CoverSource) -> Option<Ve
         .ok()?;
       let mut body = Vec::new();
       while let Some(chunk) = response.chunk().await.ok()? {
-        body.extend_from_slice(&chunk);
-        if body.len() > MAX_COVER_BYTES {
+        if chunk.len() > MAX_COVER_BYTES - body.len() {
           return None;
         }
+        body.extend_from_slice(&chunk);
       }
       Some(body)
     }
     #[cfg(feature = "local-files")]
-    CoverSource::File(path) => {
-      tokio::task::spawn_blocking(move || crate::infra::local::embedded_cover_bytes(&path))
-        .await
-        .ok()?
-        .ok()
-        .filter(|bytes| bytes.len() <= MAX_COVER_BYTES)
-    }
+    CoverSource::File(path) => tokio::task::spawn_blocking(move || {
+      crate::infra::local::embedded_cover_bytes(&path, MAX_COVER_BYTES)
+    })
+    .await
+    .ok()?
+    .ok(),
   }
 }
 

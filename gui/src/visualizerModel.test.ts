@@ -323,6 +323,17 @@ describe("the look", () => {
     expect(shades[0]).toMatchObject({ x: 0, width: 4 });
   });
 
+  it("shrinks the bars to nothing when the gaps fill the width", () => {
+    const bars = restingBars(8);
+    bars.levels.fill(1);
+    const shades = spectrumShades(bars, 32, 72, COLOURS, {
+      ...SPECTRUM,
+      gap: 20,
+      glow_alpha: 0,
+    });
+    expect(shades.every((shade) => shade.width >= 0)).toBe(true);
+  });
+
   it("lets the bars fall at the configured speed", () => {
     const bars = restingBars(1);
     stepBars(bars, [1], 0.016, SPECTRUM);

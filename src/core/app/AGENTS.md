@@ -90,7 +90,9 @@ fixtures are `pub(super) fn`s in `test_support.rs`, imported as
   fires from the tick or a self-refreshing retry loop (so every retry restamps
   the lifetime and the backstop can never win), it is provably unreachable as a
   CLI exit signal, and the failed operation is bookkeeping rather than the thing
-  the user asked for. `flush_state_save` is the only site that qualifies today,
-  and it latches its report to once per failure run - repeating it at the retry
+  the user asked for. Two sites qualify today: `flush_state_save`, which
+  latches its report to once per failure run, and the GUI's `visualizer.yml`
+  check (`apply_visualizer_look`), whose `LookFile` reports a read only when
+  its text or error changed. Repeating either report at the retry
   rate would hold `status_message_is_error` and silently drop every ordinary
   status message for the rest of the session.

@@ -247,7 +247,7 @@ export function spectrumShades(
   look: SpectrumLook,
 ): Shade[] {
   const count = bars.levels.length;
-  const bar = (width - look.gap * (count - 1)) / count;
+  const bar = Math.max(0, (width - look.gap * (count - 1)) / count);
   const reach = height - look.cap_gap - look.cap_height - 1;
   const bassBands = Math.max(1, Math.floor(count * look.pulse_bands));
   const bass =
