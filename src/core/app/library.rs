@@ -455,6 +455,8 @@ impl App {
 
   pub fn reset_saved_tracks_view(&mut self) {
     self.active_saved_track_filter = None;
+    self.active_playlist_track_filter = None;
+    self.pending_playlist_track_search = None;
     self.track_table_epoch = self.track_table_epoch.wrapping_add(1);
     self.saved_tracks_prefetch_generation = self.saved_tracks_prefetch_generation.wrapping_add(1);
     self.saved_tracks_prefetch_in_flight.clear();
