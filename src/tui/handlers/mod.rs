@@ -668,8 +668,10 @@ fn handle_escape(app: &mut App) {
       app.pop_navigation_stack();
     }
 
-    // Announcement prompt must be dismissed with Enter/Esc, not global escape
-    ActiveBlock::AnnouncementPrompt => {}
+    // Esc hands the popup its own dismissal, like Enter does
+    ActiveBlock::AnnouncementPrompt => {
+      announcement_prompt::handler(Key::Esc, app);
+    }
     ActiveBlock::ExitPrompt => {}
     // Sort menu closes on escape
     ActiveBlock::SortMenu => {
@@ -1363,6 +1365,48 @@ mod tests {
     assert_ne!(
       app.status_message(),
       Some("Copy URL isn't available for Local Files")
+    );
+  }
+
+  #[test]
+  fn esc_dismisses_the_announcement_prompt() {
+    use crate::core::app::{Announcement, AnnouncementLevel, RouteId};
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = App::new_with_state(
+      std::sync::mpsc::channel().0,
+      crate::core::user_config::UserConfig::new(),
+      crate::core::state::RuntimeState::default(),
+      Some(dir.path().join("state.yml")),
+      false,
+      crate::core::i18n::Language::En,
+    );
+    let announcement = |id: &str| Announcement {
+      id: id.to_string(),
+      title: id.to_string(),
+      body: format!("{id} body"),
+      level: AnnouncementLevel::Info,
+      url: None,
+      received_at: std::time::Instant::now(),
+    };
+    app.enqueue_announcements(vec![announcement("first"), announcement("second")]);
+    app.push_navigation_stack(RouteId::AnnouncementPrompt, ActiveBlock::AnnouncementPrompt);
+
+    handle_app(Key::Esc, &mut app);
+    let active = app.active_announcement.as_ref().map(|a| a.id.as_str());
+    assert_eq!(active, Some("second"));
+    assert_eq!(app.get_current_route().id, RouteId::AnnouncementPrompt);
+    assert_eq!(
+      app.get_current_route().active_block,
+      ActiveBlock::AnnouncementPrompt
+    );
+
+    handle_app(Key::Esc, &mut app);
+    assert!(app.active_announcement.is_none());
+    assert_ne!(app.get_current_route().id, RouteId::AnnouncementPrompt);
+    assert_ne!(
+      app.get_current_route().active_block,
+      ActiveBlock::AnnouncementPrompt
     );
   }
 

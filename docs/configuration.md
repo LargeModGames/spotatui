@@ -27,7 +27,8 @@ Chinese tables follow in stacked translation PRs. The language choices are selec
 and `zh-Hant` (Traditional Chinese). Common spellings such as `zh-CN`, `zh_CN`,
 `zh`, and `ZH-HANS` are accepted and saved canonically. Unknown values warn and
 fall back to `auto` without aborting configuration loading. Change it live in Settings; the terminal and
-browser/desktop frontends share the same table. The language picker displays `auto` as **Auto (system)**, while the saved value stays
+browser/desktop frontends share the same table. The language picker displays `auto` as
+**Auto (system)** / **自动（跟随系统）** / **自動（跟隨系統）**, while the saved value stays
 `auto`. CLI output and logs remain English.
 
 `auto` reads the first nonempty `LC_ALL`, `LC_MESSAGES`, or `LANG`. Without one,
