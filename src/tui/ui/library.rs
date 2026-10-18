@@ -6,7 +6,10 @@ use ratatui::{
   Frame,
 };
 
-use super::{search::draw_input_and_help_box, util::draw_selectable_list};
+use super::{
+  search::draw_input_and_help_box,
+  util::{draw_selectable_list, FOLDER_ICON},
+};
 
 pub fn draw_library_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   let current_route = app.get_current_route();
@@ -55,7 +58,7 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       app
         .local_playlists()
         .iter()
-        .map(|p| format!("\u{1F4C1} {}", p.display_name(app.strings())))
+        .map(|p| format!("{FOLDER_ICON} {}", p.display_name(app.strings())))
         .collect()
     };
     draw_selectable_list(
@@ -228,7 +231,7 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
             // Back entry (already has arrow prefix)
             name.into_owned()
           } else {
-            format!("\u{1F4C1} {}", name)
+            format!("{FOLDER_ICON} {}", name)
           }
         }
         crate::core::app::PlaylistFolderItem::Playlist { index, .. } => app
@@ -332,6 +335,66 @@ mod tests {
     assert!(
       !content.contains("Liked Songs"),
       "Spotify library entries must be hidden under Local: {content}"
+    );
+  }
+
+  /// The foreground of the first cell drawing `symbol`, if any cell does.
+  fn fg_of(app: &App, area: Rect, symbol: &str) -> Option<ratatui::style::Color> {
+    let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+    terminal.draw(|f| draw_user_block(f, app, area)).unwrap();
+    let buffer = terminal.backend().buffer();
+    buffer
+      .content()
+      .iter()
+      .find(|c| c.symbol() == symbol)
+      .map(|c| c.fg)
+  }
+
+  #[test]
+  fn sidebar_folder_icon_is_a_text_glyph_in_the_theme_text_color() {
+    use crate::core::app::{PlaylistFolder, PlaylistFolderItem};
+    use crate::core::theme::Color;
+    use crate::tui::ui::util::FOLDER_ICON;
+    let mut app = App::default();
+    app.user_config.theme.text = Color::Rgb(1, 2, 3);
+    *app.playlist_folder_items_mut() = vec![PlaylistFolderItem::Folder(PlaylistFolder {
+      generated_name: false,
+      name: "Moods".into(),
+      current_id: 0,
+      target_id: 1,
+    })];
+    let area = Rect::new(0, 0, 40, 40);
+    let content = rendered(&app, area);
+    // An emoji is drawn as a fixed-color picture no theme can recolor.
+    assert!(!content.contains('\u{1F4C1}'), "{content}");
+    assert!(
+      content.contains(&format!("{FOLDER_ICON} Moods")),
+      "{content}"
+    );
+    assert_eq!(
+      fg_of(&app, area, FOLDER_ICON),
+      Some(ratatui::style::Color::Rgb(1, 2, 3))
+    );
+  }
+
+  #[test]
+  fn local_source_folder_icon_is_a_text_glyph_in_the_theme_text_color() {
+    use crate::core::theme::Color;
+    use crate::tui::ui::util::FOLDER_ICON;
+    let mut app = App::default_connected();
+    app.active_source = Source::Local;
+    app.user_config.theme.text = Color::Rgb(1, 2, 3);
+    *app.local_playlists_mut() = vec![folder("Jazz")];
+    let area = Rect::new(0, 0, 32, 40);
+    let content = rendered(&app, area);
+    assert!(!content.contains('\u{1F4C1}'), "{content}");
+    assert!(
+      content.contains(&format!("{FOLDER_ICON} Jazz")),
+      "{content}"
+    );
+    assert_eq!(
+      fg_of(&app, area, FOLDER_ICON),
+      Some(ratatui::style::Color::Rgb(1, 2, 3))
     );
   }
 
