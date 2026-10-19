@@ -239,6 +239,9 @@ Everyone who helped, with code or without. To get on this list, see [Recognition
       <td align="center" valign="top" width="14.28%"><a href="https://anandb71.in"><img src="https://avatars.githubusercontent.com/u/169837340?v=4?s=100" width="100px;" alt="Anand B"/><br /><sub><b>Anand B</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=Anandb71" title="Code">💻</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://xdaforums.com/m/termuxsolutions.13482532/"><img src="https://avatars.githubusercontent.com/u/325067280?v=4?s=100" width="100px;" alt="AAA"/><br /><sub><b>AAA</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=kukirin-ui" title="Documentation">📖</a> <a href="https://github.com/LargeModGames/spotatui/commits?author=kukirin-ui" title="Code">💻</a></td>
     </tr>
+    <tr>
+      <td align="center" valign="top" width="14.28%"><a href="https://codedbearder.com"><img src="https://avatars.githubusercontent.com/u/1291396?v=4?s=100" width="100px;" alt="Arnar"/><br /><sub><b>Arnar</b></sub></a><br /><a href="#platform-arnarg" title="Packaging/porting to new platform">📦</a></td>
+    </tr>
   </tbody>
 </table>
 
