@@ -30,13 +30,13 @@
           [
             openssl
           ]
-          ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
+          ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
             alsa-lib
             dbus
             pipewire
           ]
           # Build inputs for nix-darwin
-          ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
+          ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isDarwin [
             # macOS specific dependencies - use latest supported Apple SDK
             pkgs.apple-sdk
             pkgs.portaudio
@@ -44,7 +44,7 @@
       in
       {
         # Build dependencies for rust
-        packages = rec {
+        packages = {
           default = pkgs.rustPlatform.buildRustPackage {
             pname = "spotatui";
             version = "${cargoVersion}-${commitHash}";
