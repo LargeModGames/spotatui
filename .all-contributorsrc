@@ -603,6 +603,15 @@
         "doc",
         "code"
       ]
+    },
+    {
+      "login": "arnarg",
+      "name": "Arnar",
+      "avatar_url": "https://avatars.githubusercontent.com/u/1291396?v=4",
+      "profile": "https://codedbearder.com",
+      "contributions": [
+        "platform"
+      ]
     }
   ],
   "contributorsPerLine": 7,
