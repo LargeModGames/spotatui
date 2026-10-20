@@ -164,6 +164,13 @@ impl LocalSource {
   }
 }
 
+/// Case-insensitive name order, with byte order as a stable tiebreak.
+fn name_order(a: &str, b: &str) -> std::cmp::Ordering {
+  a.to_lowercase()
+    .cmp(&b.to_lowercase())
+    .then_with(|| a.cmp(b))
+}
+
 // ---------------------------------------------------------------------------
 // MediaSource implementation
 // ---------------------------------------------------------------------------
@@ -234,7 +241,7 @@ impl MediaSource for LocalSource {
 
     // Sort alphabetically for stable ordering across runs. The relative names
     // carry `/`, so a parent folder's playlists stay grouped together.
-    playlists.sort_by(|a, b| a.name.cmp(&b.name));
+    playlists.sort_by(|a, b| name_order(&a.name, &b.name));
 
     // Prepend a synthetic "(root)" entry when the root directory itself
     // contains at least one audio file, so loose files are browsable.
@@ -298,7 +305,7 @@ impl MediaSource for LocalSource {
       let key = |n: u32| if n == 0 { u32::MAX } else { n };
       key(a.track_number)
         .cmp(&key(b.track_number))
-        .then(a.name.cmp(&b.name))
+        .then_with(|| name_order(&a.name, &b.name))
     });
     Ok(tracks)
   }
@@ -695,6 +702,15 @@ mod tests {
   use std::io::Write;
 
   #[test]
+  fn name_order_ignores_case_and_breaks_ties_by_bytes() {
+    use std::cmp::Ordering;
+
+    assert_eq!(name_order("abba", "Zappa"), Ordering::Less);
+    assert_eq!(name_order("Abba", "abba"), Ordering::Less);
+    assert_eq!(name_order("abba", "Abba"), Ordering::Greater);
+  }
+
+  #[test]
   fn generated_local_labels_do_not_rewrite_user_file_or_folder_names() {
     use crate::core::i18n::{EN, ZH_HANS, ZH_HANT};
 
@@ -890,6 +906,23 @@ mod tests {
   // ---------------------------------------------------------------------------
 
   #[test]
+  fn playlists_sort_folder_names_case_insensitively() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+
+    // Byte order would list these as Beatles, Zappa, abba.
+    for name in ["Zappa", "abba", "Beatles"] {
+      let folder = root.join(name);
+      std::fs::create_dir(&folder).unwrap();
+      write_wav(&folder.join("track.wav"), 44100, 100);
+    }
+
+    let playlists = list(root);
+    let names: Vec<&str> = playlists.iter().map(|p| p.name.as_str()).collect();
+    assert_eq!(names, vec!["abba", "Beatles", "Zappa"]);
+  }
+
+  #[test]
   fn playlists_returns_one_entry_per_subdir() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
@@ -1060,6 +1093,24 @@ mod tests {
     let t = &tracks[0];
     // The name is either "my_song" (fallback) or a tag title; either is acceptable.
     assert!(!t.name.is_empty(), "name should not be empty");
+  }
+
+  #[test]
+  fn untagged_tracks_sort_by_name_case_insensitively() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let folder = root.join("Album");
+    std::fs::create_dir(&folder).unwrap();
+
+    // Bare WAVs carry no tags, so the names are the file stems. Z would sort
+    // before b and c under byte order.
+    for name in ["b.wav", "A.wav", "c.wav", "Z.wav"] {
+      write_wav(&folder.join(name), 44100, 100);
+    }
+
+    let tracks = rows(root, &folder);
+    let names: Vec<&str> = tracks.iter().map(|t| t.name.as_str()).collect();
+    assert_eq!(names, vec!["A", "b", "c", "Z"]);
   }
 
   // ---------------------------------------------------------------------------
