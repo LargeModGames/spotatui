@@ -88,7 +88,7 @@ fn selected_saved_album_id(app: &App) -> Option<String> {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::core::app::ActiveBlock;
+  use crate::core::app::{ActiveBlock, RouteId};
   use crate::core::pagination::Paged;
   use crate::core::plugin_api::{AlbumInfo, SavedAlbumInfo, TrackInfo};
   use crate::core::user_config::UserConfig;
@@ -248,10 +248,7 @@ mod tests {
   #[test]
   fn on_left_press() {
     let mut app = App::default();
-    app.set_current_route_state(
-      Some(ActiveBlock::AlbumTracks),
-      Some(ActiveBlock::AlbumTracks),
-    );
+    app.set_current_route_state(Some(ActiveBlock::AlbumList), Some(ActiveBlock::AlbumList));
 
     handler(Key::Left, &mut app);
     let current_route = app.get_current_route();
@@ -260,12 +257,15 @@ mod tests {
   }
 
   #[test]
-  fn on_esc() {
+  fn esc_leaves_album_list_in_hover_mode() {
     let mut app = App::default();
+    app.push_navigation_stack(RouteId::AlbumList, ActiveBlock::AlbumList);
+    assert_eq!(app.get_current_route().active_block, ActiveBlock::AlbumList);
 
-    handler(Key::Esc, &mut app);
+    crate::tui::handlers::handle_app(Key::Esc, &mut app);
 
-    let current_route = app.get_current_route();
-    assert_eq!(current_route.active_block, ActiveBlock::Empty);
+    let route = app.get_current_route();
+    assert_eq!(route.active_block, ActiveBlock::Empty);
+    assert_eq!(route.hovered_block, ActiveBlock::AlbumList);
   }
 }
