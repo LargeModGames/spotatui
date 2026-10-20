@@ -20,6 +20,9 @@ use ratatui::{
   style::{Color, Modifier, Style},
 };
 
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
+
 use crate::tui::ui::head_unit::HeadUnitView;
 
 pub mod cassette;
@@ -133,22 +136,44 @@ impl Cells<'_> {
     Some(&mut self.buf[(x, y)])
   }
 
-  /// Text from `(x, y)`, one character per cell; `bg: None` keeps the
-  /// background already there.
+  /// Text from `(x, y)`, clipped to the area. Each grapheme takes its display
+  /// width, so CJK and other wide characters fill two cells as with
+  /// `Buffer::set_stringn`; one that would be cut by an edge is left out.
+  /// `bg: None` keeps the background already there.
   pub fn put(&mut self, x: i32, y: i32, text: &str, fg: Rgb, bg: Option<Rgb>, bold: bool) {
-    for (i, ch) in text.chars().enumerate() {
-      if let Some(cell) = self.at(x + i as i32, y) {
-        cell.set_char(ch).set_fg(rgb(fg));
-        if let Some(bg) = bg {
-          cell.set_bg(rgb(bg));
-        }
-        let style = if bold {
-          Style::default().add_modifier(Modifier::BOLD)
-        } else {
-          Style::default().remove_modifier(Modifier::BOLD)
-        };
-        cell.set_style(style);
+    if y < 0 || y >= self.height() {
+      return;
+    }
+    let mut style = Style::default().fg(rgb(fg));
+    if let Some(bg) = bg {
+      style = style.bg(rgb(bg));
+    }
+    style = if bold {
+      style.add_modifier(Modifier::BOLD)
+    } else {
+      style.remove_modifier(Modifier::BOLD)
+    };
+    let mut col = x;
+    for symbol in text.graphemes(true) {
+      if symbol.contains(char::is_control) {
+        continue;
       }
+      let width = symbol.width() as i32;
+      if width == 0 {
+        continue;
+      }
+      if col >= self.width() {
+        break;
+      }
+      if col >= 0 && col + width <= self.width() {
+        let (cx, cy) = (self.area.x + col as u16, self.area.y + y as u16);
+        self.buf[(cx, cy)].set_symbol(symbol).set_style(style);
+        // The cells under the rest of a wide character are hidden by it.
+        for hidden in 1..width {
+          self.buf[(cx + hidden as u16, cy)].reset();
+        }
+      }
+      col += width;
     }
   }
 
@@ -226,10 +251,18 @@ impl Dots {
     self.dots[y * self.width + x]
   }
 
+  /// Set the dot nearest `(x, y)`; off-canvas points are ignored.
   pub fn set(&mut self, x: f32, y: f32, color: Rgb) {
     let (x, y) = (x.round(), y.round());
-    if x >= 0.0 && y >= 0.0 && (x as usize) < self.width && (y as usize) < self.height {
-      self.dots[y as usize * self.width + x as usize] = Some(color);
+    if x >= 0.0 && y >= 0.0 {
+      self.set_dot(x as usize, y as usize, color);
+    }
+  }
+
+  /// Set the dot at `(x, y)` exactly; off-canvas dots are ignored.
+  pub fn set_dot(&mut self, x: usize, y: usize, color: Rgb) {
+    if x < self.width && y < self.height {
+      self.dots[y * self.width + x] = Some(color);
     }
   }
 
@@ -428,6 +461,88 @@ pub(crate) mod tests {
       })
       .collect::<Vec<_>>()
       .join("\n")
+  }
+
+  #[test]
+  fn resample_keeps_endpoints_and_matches_the_target_count() {
+    let out = resample(&[0.0, 1.0], 5);
+    assert_eq!(out.len(), 5);
+    assert_eq!((out[0], out[4]), (0.0, 1.0));
+    assert_eq!(resample(&[0.3; 12], 12), vec![0.3; 12]);
+  }
+
+  fn put_row(width: u16, x: i32, text: &str) -> Vec<String> {
+    let area = Rect::new(0, 0, width, 1);
+    let mut buf = Buffer::empty(area);
+    Cells {
+      buf: &mut buf,
+      area,
+    }
+    .put(x, 0, text, (200, 200, 200), None, false);
+    (0..width)
+      .map(|x| buf[(x, 0)].symbol().to_string())
+      .collect()
+  }
+
+  #[test]
+  fn put_gives_wide_characters_two_cells_and_keeps_every_one() {
+    assert_eq!(
+      put_row(8, 0, "日本語ab"),
+      ["日", " ", "本", " ", "語", " ", "a", "b"]
+    );
+  }
+
+  #[test]
+  fn put_leaves_out_a_wide_character_an_edge_would_cut() {
+    // Right edge: 語 would need columns 4 and 5.
+    assert_eq!(put_row(5, 0, "日本語"), ["日", " ", "本", " ", " "]);
+    // Left edge: 日 would start at -1.
+    assert_eq!(put_row(4, -1, "日本"), [" ", "本", " ", " "]);
+  }
+
+  #[test]
+  fn a_cjk_title_keeps_every_glyph_in_the_styles_that_show_it() {
+    let bands = sample_bands(24);
+    let wave = sample_wave();
+    let title = "東京事変 群青日和";
+    let view = HeadUnitView {
+      title: Some(title.into()),
+      progress_ms: Some(65_000),
+      duration_ms: Some(200_000),
+      is_playing: true,
+      ..HeadUnitView::default()
+    };
+    for style in [Retro::Winamp, Retro::Outrun, Retro::Cassette] {
+      let area = Rect::new(0, 0, 116, 30);
+      let mut buf = Buffer::empty(area);
+      let frame = Frame {
+        audio: Audio {
+          bands: &bands,
+          wave: &wave,
+        },
+        view: &view,
+        now: Instant::now(),
+      };
+      render(style, &mut buf, area, &frame);
+      let text = screen(&buf);
+      for glyph in title.chars().filter(|c| !c.is_whitespace()) {
+        assert!(text.contains(glyph), "{style:?} lost {glyph}:\n{text}");
+      }
+      // A terminal draws a wide glyph over the next cell too, so that cell
+      // must be blank or the glyph after it is covered.
+      for y in 0..area.height {
+        for x in 0..area.width - 1 {
+          if buf[(x, y)].symbol().width() == 2 {
+            assert_eq!(
+              buf[(x + 1, y)].symbol(),
+              " ",
+              "{style:?} covers a glyph at ({}, {y}):\n{text}",
+              x + 1
+            );
+          }
+        }
+      }
+    }
   }
 
   #[test]

@@ -34,6 +34,7 @@ use ratatui::{
   style::{Color, Modifier, Style},
 };
 
+use super::retro::{lerp, resample, rgb, Cells, Dots, Rgb};
 use crate::core::user_config::Theme;
 
 /// Strips on the floor, as on the faceplate. Even, since each back-wall panel
@@ -91,32 +92,6 @@ pub fn fold_stereo(bands: &[f32]) -> Vec<f32> {
     .collect()
 }
 
-/// Linear resample onto `target` points, for when the analyzer briefly sends
-/// another count (a style switch or resize lags a frame).
-fn resample(values: &[f32], target: usize) -> Vec<f32> {
-  if values.len() == target || target == 0 {
-    return values.iter().copied().take(target).collect();
-  }
-  if values.is_empty() {
-    return vec![0.0; target];
-  }
-  if values.len() == 1 || target == 1 {
-    return vec![values[0]; target];
-  }
-  let scale = (values.len() - 1) as f32 / (target - 1) as f32;
-  (0..target)
-    .map(|i| {
-      let pos = i as f32 * scale;
-      let idx = pos.floor() as usize;
-      let frac = pos - idx as f32;
-      match values.get(idx + 1) {
-        Some(next) => values[idx] * (1.0 - frac) + next * frac,
-        None => values[idx.min(values.len() - 1)],
-      }
-    })
-    .collect()
-}
-
 #[derive(Debug, Default)]
 struct HeadUnitState {
   /// The latest row, one value per strip.
@@ -143,8 +118,6 @@ thread_local! {
   static STATE: RefCell<HeadUnitState> = RefCell::new(HeadUnitState::default());
 }
 
-type Rgb = (u8, u8, u8);
-
 /// RGB for any ratatui color, xterm values for the named ones.
 fn to_rgb(color: Color, fallback: Rgb) -> Rgb {
   match color {
@@ -167,16 +140,6 @@ fn to_rgb(color: Color, fallback: Rgb) -> Rgb {
     Color::White => (255, 255, 255),
     Color::Indexed(_) | Color::Reset => fallback,
   }
-}
-
-fn lerp(a: Rgb, b: Rgb, t: f32) -> Rgb {
-  let t = t.clamp(0.0, 1.0);
-  let mix = |x: u8, y: u8| (f32::from(x) + (f32::from(y) - f32::from(x)) * t).round() as u8;
-  (mix(a.0, b.0), mix(a.1, b.1), mix(a.2, b.2))
-}
-
-fn rgb(c: Rgb) -> Color {
-  Color::Rgb(c.0, c.1, c.2)
 }
 
 /// The VFD's colors, all derived from the theme.
@@ -312,10 +275,13 @@ fn draw(buf: &mut Buffer, area: Rect, theme: &Theme, view: &HeadUnitView, state:
     main.width -= METER_WIDTH + 1;
   }
 
-  let mut canvas = Canvas::new(main.width, main.height);
+  let mut canvas = Dots::new(i32::from(main.width), i32::from(main.height));
   let stage = Stage::new(&canvas);
   stage.draw(&mut canvas, &state.live);
-  canvas.blit(buf, main);
+  let mut cells = Cells { buf, area: main };
+  let (w, h) = (cells.width(), cells.height());
+  cells.fill(0, 0, w, h, vfd_palette::GLASS);
+  cells.dots(&canvas, 0, 0);
 
   if let Some(y) = labels_y {
     stage.draw_labels(buf, Rect::new(area.x, y, area.width, 1), main.x, &vfd);
@@ -430,72 +396,6 @@ impl Projection {
   }
 }
 
-/// A Braille dot canvas: two dots across and four down per terminal cell.
-/// A cell shows every dot drawn in it, in the most common color among them;
-/// the stage colors each strip a whole cell at a time, so cells never mix.
-struct Canvas {
-  width: usize,
-  height: usize,
-  dots: Vec<Option<Rgb>>,
-}
-
-impl Canvas {
-  fn new(cols: u16, rows: u16) -> Self {
-    let width = usize::from(cols) * 2;
-    let height = usize::from(rows) * 4;
-    Canvas {
-      width,
-      height,
-      dots: vec![None; width * height],
-    }
-  }
-
-  fn get(&self, x: usize, y: usize) -> Option<Rgb> {
-    self.dots[y * self.width + x]
-  }
-
-  fn set(&mut self, x: usize, y: usize, color: Rgb) {
-    if x < self.width && y < self.height {
-      self.dots[y * self.width + x] = Some(color);
-    }
-  }
-
-  fn blit(&self, buf: &mut Buffer, area: Rect) {
-    // Braille dot bits by (column, row) within the cell.
-    const BITS: [[u32; 4]; 2] = [[0x01, 0x02, 0x04, 0x40], [0x08, 0x10, 0x20, 0x80]];
-    let glass = rgb(vfd_palette::GLASS);
-    for cy in 0..usize::from(area.height) {
-      for cx in 0..usize::from(area.width) {
-        let (x, y) = (area.x + cx as u16, area.y + cy as u16);
-        let mut bits = 0;
-        let mut counts: Vec<(Rgb, u8)> = Vec::with_capacity(2);
-        for (dx, column) in BITS.iter().enumerate() {
-          for (dy, bit) in column.iter().enumerate() {
-            if let Some(color) = self.get(cx * 2 + dx, cy * 4 + dy) {
-              bits |= bit;
-              match counts.iter_mut().find(|(c, _)| *c == color) {
-                Some((_, n)) => *n += 1,
-                None => counts.push((color, 1)),
-              }
-            }
-          }
-        }
-        let cell = &mut buf[(x, y)];
-        cell.set_bg(glass);
-        match counts.iter().max_by_key(|(_, n)| *n) {
-          Some((color, _)) => {
-            let glyph = char::from_u32(0x2800 + bits).unwrap_or(' ');
-            cell.set_char(glyph).set_fg(rgb(*color));
-          }
-          None => {
-            cell.set_char(' ');
-          }
-        }
-      }
-    }
-  }
-}
-
 /// The stage, in canvas dots.
 #[derive(Debug, Clone, Copy)]
 struct Stage {
@@ -505,7 +405,7 @@ struct Stage {
 }
 
 impl Stage {
-  fn new(canvas: &Canvas) -> Self {
+  fn new(canvas: &Dots) -> Self {
     let (w, h) = (
       (canvas.width as f32 - 1.0).max(1.0),
       (canvas.height as f32 - 1.0).max(1.0),
@@ -547,7 +447,7 @@ impl Stage {
     }
   }
 
-  fn draw(&self, canvas: &mut Canvas, live: &[f32]) {
+  fn draw(&self, canvas: &mut Dots, live: &[f32]) {
     for (band, &level) in live.iter().enumerate() {
       self.draw_strip(canvas, band, level.clamp(0.0, 1.0));
     }
@@ -560,7 +460,7 @@ impl Stage {
   /// flat ends. Both edges step together, so they stay clean, and it still
   /// leans toward the vanishing point. Its color is decided once per terminal
   /// cell row, at the center line, so each cell is one color.
-  fn draw_strip(&self, canvas: &mut Canvas, band: usize, level: f32) {
+  fn draw_strip(&self, canvas: &mut Dots, band: usize, level: f32) {
     let (u0, u1) = Self::lane(band);
     let uc = (u0 + u1) / 2.0;
     let (front, back) = (self.floor.apply(uc, 0.0), self.floor.apply(uc, 1.0));
@@ -578,7 +478,7 @@ impl Stage {
       let v = (front.1 - mid as f32) / depth;
       let color = Self::strip_color(v, level);
       for x in x0.max(0)..(x0 + width).min(canvas.width as i32) {
-        canvas.set(x as usize, y as usize, color);
+        canvas.set_dot(x as usize, y as usize, color);
       }
     }
   }
@@ -586,7 +486,7 @@ impl Stage {
   /// The back wall: a panel over each pair of strips, lined up with the
   /// pair's far ends; clean rectangles, biggest on the left, shrinking to the
   /// right; deep blue at the top to sky blue at the bottom.
-  fn draw_back_wall(&self, canvas: &mut Canvas) {
+  fn draw_back_wall(&self, canvas: &mut Dots) {
     let pairs = BANDS / 2;
     let bottom = (BACK_BOTTOM * self.height).round() as usize;
     for k in 0..pairs {
@@ -601,7 +501,7 @@ impl Stage {
         let color = lerp(vfd_palette::WALL_BOTTOM, vfd_palette::WALL_TOP, shade);
         for x in xa.round().max(0.0) as usize..(xb.round().max(0.0) as usize).min(canvas.width) {
           if canvas.get(x, y).is_none() && !self.on_floor(x, y) {
-            canvas.set(x, y, color);
+            canvas.set_dot(x, y, color);
           }
         }
       }
@@ -610,7 +510,7 @@ impl Stage {
 
   /// The right wall: equal-width panels, tops level, bottoms dropping along
   /// a slant toward the viewer.
-  fn draw_side_wall(&self, canvas: &mut Canvas) {
+  fn draw_side_wall(&self, canvas: &mut Dots) {
     for y in 0..canvas.height {
       for x in 0..canvas.width {
         let fx = (x as f32 + 0.5) / self.width;
@@ -629,7 +529,7 @@ impl Stage {
           continue;
         }
         let shade = (bottom - fy) / (bottom - SIDE_TOP).max(1e-3);
-        canvas.set(
+        canvas.set_dot(
           x,
           y,
           lerp(vfd_palette::WALL_BOTTOM, vfd_palette::WALL_TOP, shade),
@@ -872,14 +772,6 @@ mod tests {
   }
 
   #[test]
-  fn resample_keeps_endpoints_and_matches_the_target_count() {
-    let out = resample(&[0.0, 1.0], 5);
-    assert_eq!(out.len(), 5);
-    assert_eq!((out[0], out[4]), (0.0, 1.0));
-    assert_eq!(resample(&[0.3; 12], 12), vec![0.3; 12]);
-  }
-
-  #[test]
   fn clock_text_switches_to_hours_past_an_hour() {
     assert_eq!(clock_text(83_000), "01:23");
     assert_eq!(clock_text(3_723_000), "1:02:03");
@@ -915,7 +807,7 @@ mod tests {
 
   #[test]
   fn back_panels_shrink_to_the_right_and_stand_over_pairs_of_strips() {
-    let canvas = Canvas::new(100, 22);
+    let canvas = Dots::new(100, 22);
     let stage = Stage::new(&canvas);
     let width = |k: usize| {
       let (ua, _) = Stage::lane(2 * k);
@@ -930,10 +822,10 @@ mod tests {
 
   #[test]
   fn walls_never_draw_on_the_floor() {
-    let mut canvas = Canvas::new(100, 22);
+    let mut canvas = Dots::new(100, 22);
     let stage = Stage::new(&canvas);
     stage.draw(&mut canvas, &[0.5; BANDS]);
-    let mut walls = Canvas::new(100, 22);
+    let mut walls = Dots::new(100, 22);
     stage.draw_back_wall(&mut walls);
     stage.draw_side_wall(&mut walls);
     for y in 0..walls.height {
@@ -947,7 +839,7 @@ mod tests {
 
   #[test]
   fn each_strip_row_keeps_one_width_and_each_cell_one_color() {
-    let mut canvas = Canvas::new(100, 22);
+    let mut canvas = Dots::new(100, 22);
     let stage = Stage::new(&canvas);
     stage.draw_strip(&mut canvas, 0, 0.6);
     let rows: Vec<(usize, Vec<usize>)> = (0..canvas.height)

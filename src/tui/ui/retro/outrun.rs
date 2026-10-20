@@ -2,6 +2,8 @@
 //! the spectrum as a neon mountain skyline in front of it, and a magenta
 //! perspective grid scrolling toward the viewer.
 
+use unicode_width::UnicodeWidthStr;
+
 use super::{lerp, Cells, Dots, Frame, State};
 
 /// Points along the skyline.
@@ -121,7 +123,7 @@ pub fn draw(cells: &mut Cells, frame: &Frame, state: &mut State, dt: f32) {
   let title = frame.view.title.as_deref().unwrap_or("").to_uppercase();
   let label = format!("♪ {title}");
   cells.put(
-    w - label.chars().count() as i32 - 2,
+    w - label.width() as i32 - 2,
     1,
     &label,
     (255, 120, 220),

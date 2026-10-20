@@ -308,7 +308,7 @@ These keys also go under `behavior:`. Defaults below are the built-in values whe
 | `enable_lyrics` | `true` | Look up lyrics for each track. Spotify tracks try Spotify first, then fall back to LRCLIB if lyrics are unavailable or the request fails; LRCLIB receives the title, artist and length. |
 | `enable_monthly_recap_prompt` | `true` | Show a popup once a month when your listening recap is ready. |
 | `pin_community_playlist` | `true` | Pin the spotatui community playlist to the top of your Spotify playlists. |
-| `visualizer_style` | `Cava` | Visualizer look: `Cava` or `BarGraph` (case-sensitive). Older `Classic` and `Equalizer` values are accepted as aliases for `Cava`. |
+| `visualizer_style` | `Cava` | Visualizer look: `Cava`, `BarGraph`, `HeadUnit`, `AnalogVu`, `Winamp`, `PhosphorScope`, `Outrun`, `RackEq` or `Cassette` (case-sensitive). Older `Classic` and `Equalizer` values are accepted as aliases for `Cava`. |
 | `stop_after_current_track` | `false` | Pause native Spotify streaming when the current track finishes; does not apply to other sources or remote Connect devices. |
 | `draw_cover_art` | `true` | Enable rendering song/episode cover art; needs a cover-art build. |
 | `cover_art_theme` | `false` | Recolor UI accents from the current cover art, fading on track change. Requires `art-decode`, which `cover-art` includes. |
