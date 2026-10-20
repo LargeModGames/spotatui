@@ -439,8 +439,6 @@ pub struct GuiStrings {
   pub row_menu_hint: &'static str,
   pub folder: &'static str,
   pub filter: &'static str,
-  pub filter_your_library: &'static str,
-  pub no_library_matches: &'static str,
   pub sort_by: &'static str,
   pub filter_count: &'static str,
   pub no_songs_match: &'static str,

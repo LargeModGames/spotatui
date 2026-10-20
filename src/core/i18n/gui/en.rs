@@ -430,8 +430,6 @@ pub const EN: GuiStrings = GuiStrings {
   row_menu_hint: "Right-click or Shift+F10 for more options",
   folder: "Folder",
   filter: "Filter",
-  filter_your_library: "Filter Your Library",
-  no_library_matches: "No matches for “{query}”.",
   sort_by: "Sort by",
   filter_count: "{shown} of {total}",
   no_songs_match: "No songs match “{filter}”.",

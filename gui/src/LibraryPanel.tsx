@@ -250,7 +250,7 @@ export const LibraryPanel = memo(function LibraryPanel({
         <input
           type="search"
           className="library-find"
-          aria-label={s.filter_your_library}
+          aria-label="Filter Your Library"
           placeholder={s.filter}
           autoComplete="off"
           value={needle}
@@ -504,10 +504,10 @@ export function ShowRows({
   ));
 }
 
-function NoMatches({ s, needle }: { s: GuiStrings; needle: string }) {
+function NoMatches({ needle }: { needle: string }) {
   return (
     <p className="library-empty" role="status">
-      {fmt(s.no_library_matches, { query: needle.trim() })}
+      No matches for “{needle.trim()}”.
     </p>
   );
 }
@@ -560,7 +560,7 @@ export const PlaylistRows = memo(function PlaylistRows({
     !showRecent &&
     !showHealth
   ) {
-    return <NoMatches s={s} needle={needle} />;
+    return <NoMatches needle={needle} />;
   }
   const menus = source === "Spotify" || source === "YouTube";
   const pick = (row: SidebarRow) => {
