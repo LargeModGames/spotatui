@@ -260,7 +260,7 @@ The card shows cover art, title, artist, a progress bar and an animated equalize
 
 ## Audio visualizer
 
-Press `v` for the visualizer and `V` to switch between Cava, Bar Graph and Spotify Pitch. Cava and Bar Graph analyse your system audio in real time, so they also react to videos, games and any other sound:
+Press `v` for the visualizer and `V` to switch between Cava, Bar Graph, Head Unit, Analog VU, Winamp, Phosphor Scope, Outrun, Rack EQ, Cassette Deck and Spotify Pitch. All but Spotify Pitch analyse your system audio in real time, so they also react to videos, games and any other sound:
 
 | Platform | Setup |
 |---|---|

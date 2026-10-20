@@ -268,6 +268,7 @@ pub enum ThemePreset {
   Monokai,
   Gruvbox,
   GruvboxLight,
+  GruvboxCove,
   CatppuccinMocha,
   TokyoNight,
   Custom, // When user has manually customized colors
@@ -287,6 +288,7 @@ impl ThemePreset {
       ThemePreset::Monokai,
       ThemePreset::Gruvbox,
       ThemePreset::GruvboxLight,
+      ThemePreset::GruvboxCove,
       ThemePreset::CatppuccinMocha,
       ThemePreset::TokyoNight,
       ThemePreset::Custom,
@@ -306,6 +308,7 @@ impl ThemePreset {
       ThemePreset::Monokai => "Monokai",
       ThemePreset::Gruvbox => "Gruvbox",
       ThemePreset::GruvboxLight => "Gruvbox Light",
+      ThemePreset::GruvboxCove => "Gruvbox Cove",
       ThemePreset::CatppuccinMocha => "Catppuccin Mocha",
       ThemePreset::TokyoNight => "Tokyo Night",
       ThemePreset::Custom => "Custom",
@@ -325,6 +328,7 @@ impl ThemePreset {
       "Monokai" => ThemePreset::Monokai,
       "Gruvbox" => ThemePreset::Gruvbox,
       "Gruvbox Light" => ThemePreset::GruvboxLight,
+      "Gruvbox Cove" => ThemePreset::GruvboxCove,
       "Catppuccin Mocha" => ThemePreset::CatppuccinMocha,
       "Tokyo Night" => ThemePreset::TokyoNight,
       _ => ThemePreset::Custom,
@@ -542,6 +546,29 @@ impl ThemePreset {
         background: Color::Rgb(251, 241, 199),
         header: Color::Rgb(175, 58, 3),             // Orange
         highlighted_lyrics: Color::Rgb(175, 58, 3), // Orange
+      },
+      // Gruvbox Cove: gruvbox dark on bg0 with green as the one primary
+      // accent and aqua as the second. Yellow is kept for nothing but
+      // warnings, so hints read in blue.
+      ThemePreset::GruvboxCove => Theme {
+        analysis_bar: Color::Rgb(184, 187, 38),           // green
+        analysis_bar_text: Color::Rgb(29, 32, 33),        // bg0_h
+        active: Color::Rgb(184, 187, 38),                 // green
+        banner: Color::Rgb(184, 187, 38),                 // green
+        error_border: Color::Rgb(251, 73, 52),            // red
+        error_text: Color::Rgb(251, 73, 52),              // red
+        hint: Color::Rgb(131, 165, 152),                  // blue
+        hovered: Color::Rgb(142, 192, 124),               // aqua
+        inactive: Color::Rgb(146, 131, 116),              // gray
+        playbar_background: Color::Rgb(29, 32, 33),       // bg0_h (recessed)
+        playbar_progress: Color::Rgb(184, 187, 38),       // green
+        playbar_progress_text: Color::Rgb(251, 241, 199), // fg0
+        playbar_text: Color::Rgb(235, 219, 178),          // fg1
+        selected: Color::Rgb(184, 187, 38),               // green
+        text: Color::Rgb(235, 219, 178),                  // fg1
+        background: Color::Rgb(40, 40, 40),               // bg0
+        header: Color::Rgb(184, 187, 38),                 // green
+        highlighted_lyrics: Color::Rgb(184, 187, 38),     // green
       },
       ThemePreset::CatppuccinMocha => Theme {
         analysis_bar: Color::Rgb(166, 227, 161),      // Green

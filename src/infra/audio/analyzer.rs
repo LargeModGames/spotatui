@@ -23,7 +23,15 @@ pub struct SpectrumData {
   /// channel reversed on the left half (treble at the outer edge, bass at the
   /// center), right channel forward on the right half.
   pub bands: Vec<f32>,
+  /// The newest stretch of the capture as a mono mix from -1 to 1, oldest
+  /// first, thinned to `WAVE_POINTS`: what the terminal's oscilloscope-style
+  /// visualizers trace.
+  pub wave: Vec<f32>,
 }
+
+/// Points in `SpectrumData::wave`, and the stretch of audio they cover.
+const WAVE_POINTS: usize = 480;
+const WAVE_SECONDS: f32 = 0.05;
 
 /// The newest samples of the capture as a mono mix from -1 to 1, oldest first,
 /// for a frontend that runs its own analysis.
@@ -73,6 +81,7 @@ impl AudioAnalyzer {
     Self {
       spectrum: SpectrumData {
         bands: vec![0.0; output.len()],
+        wave: Vec::new(),
       },
       pending: Vec::new(),
       output,
@@ -143,6 +152,7 @@ impl AudioAnalyzer {
     self.pending.clear();
 
     mirror_stereo_bands(&self.output, &mut self.spectrum.bands);
+    thin_wave(&self.recent, self.sample_rate, &mut self.spectrum.wave);
 
     self.spectrum.clone()
   }
@@ -155,6 +165,19 @@ impl AudioAnalyzer {
       written: self.written,
     }
   }
+}
+
+/// The newest `WAVE_SECONDS` of `recent`, thinned to `WAVE_POINTS` evenly
+/// spaced samples, oldest first.
+fn thin_wave(recent: &VecDeque<f32>, sample_rate: u32, wave: &mut Vec<f32>) {
+  wave.clear();
+  let span = ((sample_rate as f32 * WAVE_SECONDS) as usize).min(recent.len());
+  if span == 0 {
+    return;
+  }
+  let start = recent.len() - span;
+  let points = WAVE_POINTS.min(span);
+  wave.extend((0..points).map(|i| recent[start + i * span / points]));
 }
 
 fn recent_len(sample_rate: u32) -> usize {
@@ -320,6 +343,21 @@ mod tests {
     assert_eq!(recent.samples, vec![0.5, -0.5, 0.25]);
     assert_eq!(recent.sample_rate, 48_000);
     assert_eq!(recent.written, 3);
+  }
+
+  #[test]
+  fn the_wave_is_the_newest_stretch_thinned_and_oldest_first() {
+    let recent: VecDeque<f32> = (0..10_000).map(|i| i as f32).collect();
+    let mut wave = Vec::new();
+    thin_wave(&recent, 48_000, &mut wave);
+    // 50 ms at 48 kHz is 2400 samples, thinned to 480 points.
+    assert_eq!(wave.len(), WAVE_POINTS);
+    assert_eq!(wave[0], 7_600.0);
+    assert!(wave.windows(2).all(|p| p[1] > p[0]));
+    assert!(*wave.last().unwrap() <= 9_999.0);
+
+    thin_wave(&VecDeque::new(), 48_000, &mut wave);
+    assert!(wave.is_empty());
   }
 
   #[test]
