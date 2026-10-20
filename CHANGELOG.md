@@ -4,6 +4,8 @@
 
 ### Added
 
+- **Filter your playlists in the desktop app**: a filter box under the Your Library chips narrows the playlists of the active source, including the ones inside closed folders.
+
 - **The player bar visualizer takes its colours from the cover**: in the desktop app and the browser GUI on Linux and Windows, the spectrum and the waveform now run through a gradient of the colours on the playing song's cover, darkest at the bass, and fade to the next cover's colours when the album changes. It works for Spotify, YouTube, Qobuz, Subsonic and local files with embedded art; radio and Apple Music keep the accent. A new `visualizer.yml` next to `config.yml` sets every part of the look: the colour source (`cover`, `accent` or your own list, hex accepted), how many cover colours and in what order, if black and grey count, the brightness limits, the blend (`srgb`, `linear` or `oklab`), the fade, and each size, alpha and speed of the bars, caps, glow, pulse and wave lines. spotatui never writes the file, and edits show within a second; a mistyped value keeps its default, a number out of range is clamped, and both show in the status line. See [the themes guide](https://github.com/LargeModGames/spotatui/blob/main/docs/themes.md#player-bar-visualizer-desktop-app-and-browser-gui).
 
 - **The GUI follows your OS reduce-motion setting**: with reduced motion on, the lyrics page and the Room's lyrics column jump to each new line instead of gliding, and switches, folder chevrons and hover slides change without sliding. Turning the setting off brings the motion back, with no reload.

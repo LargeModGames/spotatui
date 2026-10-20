@@ -452,6 +452,46 @@ test("library folders", async ({ page }) => {
   await shot(page, "library-folders");
 });
 
+test("library filter", async ({ page }) => {
+  await openWith(page, [...playing, ...libraryFolders]);
+
+  const panel = page.getByRole("navigation", {
+    name: "Your Library",
+  });
+  const input = panel.getByRole("searchbox", {
+    name: "Filter Your Library",
+    exact: true,
+  });
+  const folder = panel.getByRole("button", {
+    name: /Chill & focus/,
+  });
+  const film = panel.getByRole("button", {
+    name: /Film scores/,
+  });
+
+  // A playlist inside a closed folder must still be found.
+  await folder.waitFor();
+  await input.fill("film");
+  await film.waitFor();
+  await folder.waitFor({ state: "hidden" });
+  await page.mouse.move(0, 0);
+  await shot(page, "library-filter");
+
+  // Clearing the query restores the closed folder.
+  await input.fill("");
+  await folder.waitFor();
+  await film.waitFor({ state: "hidden" });
+
+  // An open folder also stays open after filtering and clearing.
+  await folder.click();
+  await film.waitFor();
+  await input.fill("film");
+  await folder.waitFor({ state: "hidden" });
+  await input.fill("");
+  await folder.waitFor();
+  await film.waitFor();
+});
+
 test("playlist menu", async ({ page }) => {
   await openWith(page, [...playing, ...library]);
   await page

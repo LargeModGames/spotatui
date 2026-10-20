@@ -59,6 +59,16 @@ export function playlistsFor(
   return playlists[PLAYLIST_KEYS[source]].map(sidebarRow);
 }
 
+/** Every search term must occur in the fields; a blank query matches everything. */
+export function matchesFilter(
+  needle: string,
+  ...fields: (string | null | undefined)[]
+): boolean {
+  const terms = needle.toLowerCase().split(/\s+/).filter(Boolean);
+  const haystack = fields.filter(Boolean).join(" ").toLowerCase();
+  return terms.every((term) => haystack.includes(term));
+}
+
 /** The cursor kept inside the list; -1 for an empty list. */
 export function clampCursor(want: number, length: number): number {
   return Math.min(Math.max(want, 0), length - 1);
