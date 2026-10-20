@@ -21,7 +21,7 @@ behavior:
   # --- Toggles ---
   enable_lyrics: true
   enable_media_keys: true
-  stop_after_current_track: false # pause when the current track finishes
+  stop_after_current_track: false # pause native Spotify streaming at track end
   disable_mouse_inputs: false    # true for keyboard-only navigation
   startup_behavior: continue     # continue | play | pause
 

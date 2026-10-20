@@ -36,8 +36,8 @@ behavior:
 
 The same section holds `enable_streaming`, `streaming_device_name` (the name
 in the Connect device list), `streaming_audio_cache` and `streaming_autoplay`.
-Set `streaming_autoplay: false` to disable Spotify's related-songs autoplay after
-the last track in a list or album; restart spotatui for the change to take effect.
+Set `streaming_autoplay: false` to disable Spotify's related-songs autoplay;
+restart spotatui for the change to take effect.
 Autoplay is per device, so this applies only to the spotatui Connect device,
 not your phone or other Connect devices. The bitrate setting controls
 the librespot native player directly; the Spotify app may still describe a

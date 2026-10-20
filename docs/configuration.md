@@ -86,7 +86,7 @@ behavior:
   streaming_device_name: spotatui  # the name in the Connect device list
   streaming_bitrate: 320           # 96, 160, or 320 kbps
   streaming_audio_cache: false     # keep played audio in the streaming cache
-  streaming_autoplay: true         # play related songs when a list or album ends
+  streaming_autoplay: true         # enable Spotify's related-songs autoplay
 ```
 ## Cover art dithering
 
@@ -305,16 +305,16 @@ These keys also go under `behavior:`. Defaults below are the built-in values whe
 | `disable_mouse_inputs` | `false` | Disable mouse inputs for keyboard-only navigation. |
 | `enable_announcements` | `true` | Show one-time announcements from a remote JSON feed. |
 | `announcement_feed_url` | Unset | Override the remote JSON feed URL (HTTPS). |
-| `enable_lyrics` | `true` | Look up lyrics for each track; the title, artist and length go to LRCLIB, or to Spotify for Spotify tracks. |
+| `enable_lyrics` | `true` | Look up lyrics for each track. Spotify tracks try Spotify first, then fall back to LRCLIB if lyrics are unavailable or the request fails; LRCLIB receives the title, artist and length. |
 | `enable_monthly_recap_prompt` | `true` | Show a popup once a month when your listening recap is ready. |
 | `pin_community_playlist` | `true` | Pin the spotatui community playlist to the top of your Spotify playlists. |
 | `visualizer_style` | `Cava` | Visualizer look: `Cava` or `BarGraph` (case-sensitive). Older `Classic` and `Equalizer` values are accepted as aliases for `Cava`. |
-| `stop_after_current_track` | `false` | Pause playback when the current track finishes. |
+| `stop_after_current_track` | `false` | Pause native Spotify streaming when the current track finishes; does not apply to other sources or remote Connect devices. |
 | `draw_cover_art` | `true` | Enable rendering song/episode cover art; needs a cover-art build. |
-| `cover_art_theme` | `false` | Recolor UI accents from the current cover art, fading on track change; needs a cover-art build. |
+| `cover_art_theme` | `false` | Recolor UI accents from the current cover art, fading on track change. Requires `art-decode`, which `cover-art` includes. |
 | `keepawake_enabled` | `true` | Prevent the system from sleeping while music is playing. |
 | `enable_media_keys` | `true` | Let OS media keys, headphone buttons and remote controls (`playerctl`, Now Playing) control playback. |
-| `enable_global_song_count` | `true` | Contribute to the anonymous worldwide song counter: only an increment after 30 seconds of a song, or every 2.5 minutes of radio; no personal info, song names or history. Requires `telemetry`. |
+| `enable_global_song_count` | `true` | Contribute to the anonymous worldwide song counter: an increment after 30 seconds of playback (half the duration for tracks shorter than a minute), or every 2.5 minutes of radio; no personal info, song names or history. Requires `telemetry`. |
 | `enable_discord_rpc` | `true` | Show your current track in Discord. Requires `discord-rpc`. |
 | `discord_rpc_client_id` | Unset | Override the built-in Discord application ID with a string. Requires `discord-rpc`. |
 | `startup_behavior` | `continue` | Playback state at launch: `continue` preserves Spotify's state and resumes a saved non-Spotify session as it was; `play` always starts; `pause` always pauses. |
