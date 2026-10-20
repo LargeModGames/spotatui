@@ -201,20 +201,26 @@ impl Cells<'_> {
     for cy in 0..canvas.height / 4 {
       for cx in 0..canvas.width / 2 {
         let mut bits = 0;
-        let mut counts: Vec<(Rgb, u8)> = Vec::with_capacity(2);
+        // A cell has 8 dots, so at most 8 colors: counted on the stack, in
+        // the order they're first seen.
+        let mut counts = [((0, 0, 0), 0u8); 8];
+        let mut seen = 0;
         for (dx, column) in BITS.iter().enumerate() {
           for (dy, bit) in column.iter().enumerate() {
             if let Some(color) = canvas.get(cx * 2 + dx, cy * 4 + dy) {
               bits |= bit;
-              match counts.iter_mut().find(|(c, _)| *c == color) {
+              match counts[..seen].iter_mut().find(|(c, _)| *c == color) {
                 Some((_, n)) => *n += 1,
-                None => counts.push((color, 1)),
+                None => {
+                  counts[seen] = (color, 1);
+                  seen += 1;
+                }
               }
             }
           }
         }
         // Most dots wins; ties go to the brighter color.
-        let Some((color, _)) = counts
+        let Some((color, _)) = counts[..seen]
           .iter()
           .max_by_key(|(c, n)| (*n, u32::from(c.0) + u32::from(c.1) + u32::from(c.2)))
         else {

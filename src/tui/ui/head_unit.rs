@@ -33,6 +33,7 @@ use ratatui::{
   layout::Rect,
   style::{Color, Modifier, Style},
 };
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::retro::{lerp, resample, rgb, Cells, Dots, Rgb};
 use crate::core::user_config::Theme;
@@ -572,6 +573,18 @@ fn chip(buf: &mut Buffer, area: Rect, x: u16, text: &str, lit: bool, vfd: &Vfd) 
   label.len() as u16
 }
 
+/// The longest start of `text` that fits in `cells` terminal cells.
+fn fit_width(text: &str, cells: usize) -> String {
+  let mut used = 0;
+  text
+    .chars()
+    .take_while(|c| {
+      used += c.width().unwrap_or(0);
+      used <= cells
+    })
+    .collect()
+}
+
 fn draw_header(buf: &mut Buffer, area: Rect, view: &HeadUnitView, vfd: &Vfd) {
   let dim = Style::default().fg(rgb(vfd.label));
   let left = "DSP HEAD UNIT";
@@ -595,19 +608,24 @@ fn draw_header(buf: &mut Buffer, area: Rect, view: &HeadUnitView, vfd: &Vfd) {
       .collect::<String>()
       .trim_end()
       .to_string();
-    let text = if spaced.chars().count() <= room {
+    // Measured in cells: a CJK character takes two.
+    let upper = title.to_uppercase();
+    let text = if spaced.width() <= room {
       spaced
-    } else if title.chars().count() <= room {
-      title.to_uppercase()
     } else {
-      title.to_uppercase().chars().take(room).collect()
+      fit_width(&upper, room)
     };
-    let width = text.chars().count() as u16;
+    let width = text.width() as u16;
     let x = area.x + (area.width.saturating_sub(width)) / 2;
     let x = x.max(area.x + left.len() as u16 + 2);
+    // Stop short of the chip even if centering pushed the title right.
+    let clip = Rect {
+      width: right.saturating_sub(1).saturating_sub(area.x),
+      ..area
+    };
     put_str(
       buf,
-      area,
+      clip,
       x,
       area.y,
       &text,
@@ -871,6 +889,52 @@ mod tests {
     assert_eq!(Stage::strip_color(0.6, 1.0), vfd_palette::LAVENDER);
     assert_eq!(Stage::strip_color(0.9, 1.0), vfd_palette::BLUE);
     assert_ne!(Stage::strip_color(0.9, 0.5), vfd_palette::BLUE);
+  }
+
+  #[test]
+  fn a_cjk_title_fits_the_header_by_width_and_leaves_the_chip_alone() {
+    let theme = ThemePreset::Gruvbox.to_theme();
+    let vfd = Vfd::from_theme(&theme);
+    for (width, title) in [
+      (100u16, "東京事変 群青日和"),
+      (60, "東京事変 群青日和 東京事変 群青日和 東京事変 群青日和"),
+      (60, "Around the World"),
+    ] {
+      let area = Rect::new(0, 0, width, 1);
+      let mut buf = Buffer::empty(area);
+      let view = HeadUnitView {
+        title: Some(title.into()),
+        ..HeadUnitView::default()
+      };
+      draw_header(&mut buf, area, &view, &vfd);
+      let row = screen(&buf);
+      assert!(
+        row.ends_with(" DHE "),
+        "{title:?}: the chip is intact: {row:?}"
+      );
+      assert!(row.starts_with("DSP HEAD UNIT"), "{title:?}: {row:?}");
+      // A wide glyph covers the next cell, so that cell must be blank.
+      for x in 0..width - 1 {
+        if buf[(x, 0)].symbol().width() == 2 {
+          assert_eq!(
+            buf[(x + 1, 0)].symbol(),
+            " ",
+            "{title:?}: covered glyph: {row:?}"
+          );
+        }
+      }
+      // The title starts with its first character, so it was trimmed at the
+      // end if at all.
+      let first = title.chars().next().unwrap().to_uppercase().next().unwrap();
+      assert!(row.contains(first), "{title:?}: {row:?}");
+    }
+  }
+
+  #[test]
+  fn fit_width_counts_cells_not_characters() {
+    assert_eq!(fit_width("東京事変", 5), "東京");
+    assert_eq!(fit_width("東京事変", 8), "東京事変");
+    assert_eq!(fit_width("ABC", 2), "AB");
   }
 
   #[test]
