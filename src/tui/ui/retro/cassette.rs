@@ -44,9 +44,9 @@ pub fn draw(cells: &mut Cells, frame: &Frame, state: &mut State, dt: f32) {
     true,
   );
 
-  // The cassette.
+  // The cassette, kept above the meter rows (they start at `h - 8`).
   let ww = (w * 69 / 100).max(20);
-  let wh = (h / 2).max(6);
+  let wh = shell_height(h);
   let (wx, wy) = ((w - ww) / 2, 4);
   cells.fill(wx, wy, ww, wh, SHELL);
   cells.fill(wx + 2, wy + 1, ww - 4, 3, LABEL_STRIP);
@@ -62,9 +62,6 @@ pub fn draw(cells: &mut Cells, frame: &Frame, state: &mut State, dt: f32) {
   let (rx0, ry0, rw, rh) = (wx + 10, wy + 5, ww - 20, (wh - 7).max(3));
   cells.fill(rx0, ry0, rw, rh, WINDOW);
 
-  if view.is_playing {
-    state.reel_angle = (state.reel_angle + DEGREES_PER_SEC * dt) % 360.0;
-  }
   let progress = match (view.progress_ms, view.duration_ms) {
     (Some(p), Some(d)) if d > 0 => (p as f32 / d as f32).clamp(0.0, 1.0),
     _ => 0.3,
@@ -78,6 +75,9 @@ pub fn draw(cells: &mut Cells, frame: &Frame, state: &mut State, dt: f32) {
     hub_r + 1.0 + (max_r - hub_r - 1.0) * (1.0 - progress),
     hub_r + 1.0 + (max_r - hub_r - 1.0) * progress,
   ];
+  if view.is_playing {
+    advance_reels(&mut state.reel_angles, packs, max_r, dt);
+  }
   for (k, (cx, pack)) in [(cw * 0.22, packs[0]), (cw * 0.78, packs[1])]
     .into_iter()
     .enumerate()
@@ -86,9 +86,8 @@ pub fn draw(cells: &mut Cells, frame: &Frame, state: &mut State, dt: f32) {
     disc(&mut dots, cx, cy, pack, TAPE);
     disc_clear(&mut dots, cx, cy, hub_r + 0.5);
     ring(&mut dots, cx, cy, hub_r, HUB);
-    // Six teeth inside the hub, turning with the reel (the smaller reel
-    // turns faster, as on a real deck).
-    let spin = state.reel_angle * (max_r / pack.max(1.0)) + k as f32 * 30.0;
+    // Six teeth inside the hub, turning with the reel.
+    let spin = state.reel_angles[k] + k as f32 * 30.0;
     for t in 0..6 {
       let a = (t as f32 * 60.0 + spin) * PI / 180.0;
       dots.line(
@@ -147,6 +146,21 @@ pub fn draw(cells: &mut Cells, frame: &Frame, state: &mut State, dt: f32) {
   cells.put(6, h - 2, transport, TEXT, None, true);
 }
 
+/// Rows the cassette shell takes: half the area, but ending above the meter
+/// rows (from `h - 8`) and never under 6.
+fn shell_height(h: i32) -> i32 {
+  (h / 2).min(h - 13).max(6)
+}
+
+/// Turns each reel by its own speed (the smaller pack turns faster, as on a
+/// real deck). Each angle wraps on its own, so the teeth never jump.
+fn advance_reels(angles: &mut [f32; 2], packs: [f32; 2], max_r: f32, dt: f32) {
+  for (angle, pack) in angles.iter_mut().zip(packs) {
+    let rate = DEGREES_PER_SEC * (max_r / pack.max(1.0));
+    *angle = (*angle + rate * dt) % 360.0;
+  }
+}
+
 fn disc(dots: &mut Dots, cx: f32, cy: f32, r: f32, color: (u8, u8, u8)) {
   let mut y = (cy - r).floor();
   while y <= cy + r {
@@ -173,5 +187,72 @@ fn ring(dots: &mut Dots, cx: f32, cy: f32, r: f32, color: (u8, u8, u8)) {
   for i in 0..180 {
     let a = i as f32 * 2.0 * PI / 180.0;
     dots.set(cx + r * a.cos(), cy + r * a.sin(), color);
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use std::time::Instant;
+
+  use ratatui::{buffer::Buffer, layout::Rect, style::Color};
+
+  use super::super::tests::{sample_bands, sample_wave};
+  use super::super::{Audio, Cells, Frame, State};
+  use super::*;
+  use crate::tui::ui::head_unit::HeadUnitView;
+
+  #[test]
+  fn the_shell_stays_above_the_meters_in_short_areas() {
+    let bands = sample_bands(24);
+    let wave = sample_wave();
+    let view = HeadUnitView {
+      title: Some("Side A".into()),
+      is_playing: true,
+      ..HeadUnitView::default()
+    };
+    for h in [19u16, 20, 22, 24, 30] {
+      let area = Rect::new(0, 0, 80, h);
+      let mut buf = Buffer::empty(area);
+      let frame = Frame {
+        audio: Audio {
+          bands: &bands,
+          wave: &wave,
+        },
+        view: &view,
+        now: Instant::now(),
+      };
+      let mut cells = Cells {
+        buf: &mut buf,
+        area,
+      };
+      draw(&mut cells, &frame, &mut State::default(), 0.0);
+      let shell = Color::Rgb(SHELL.0, SHELL.1, SHELL.2);
+      for y in (h - 8)..h {
+        for x in 0..80 {
+          assert_ne!(
+            buf[(x, y)].bg,
+            shell,
+            "the shell reaches meter row {y} at height {h}"
+          );
+        }
+      }
+    }
+  }
+
+  #[test]
+  fn the_reels_turn_smoothly_across_the_wrap() {
+    // Unequal packs, so a shared angle scaled per reel would jump on the wrap.
+    let (packs, max_r, dt) = ([5.3, 9.1], 11.0, 1.0 / 60.0);
+    let mut angles = [0.0f32; 2];
+    for _ in 0..(60 * 10) {
+      let before = angles;
+      advance_reels(&mut angles, packs, max_r, dt);
+      for k in 0..2 {
+        // The six teeth repeat every 60 degrees: compare within that turn.
+        let step = (angles[k] - before[k]).rem_euclid(60.0);
+        let expected = DEGREES_PER_SEC * (max_r / packs[k]) * dt;
+        assert!((step - expected).abs() < 1e-3, "reel {k} jumped by {step}");
+      }
+    }
   }
 }

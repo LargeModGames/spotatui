@@ -308,7 +308,9 @@ pub struct State {
   pub rack_peaks: Vec<Peak>,
   pub scope_trails: VecDeque<Vec<f32>>,
   pub outrun_phase: f32,
-  pub reel_angle: f32,
+  /// Each reel's own angle, so the two turn at their own speeds without a
+  /// jump when one wraps.
+  pub reel_angles: [f32; 2],
 }
 
 impl State {
