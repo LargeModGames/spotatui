@@ -233,6 +233,11 @@ const JUMP_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis
 
 /// Wait until the playback Spotify reports no longer names `old`. Gives up after [`JUMP_SETTLE`].
 async fn wait_for_playback_to_move_on(cli: &mut CliApp, old: String) {
+  // A failure already in flight (from the device probe or an earlier action)
+  // is not ours to clear; bail out without polling.
+  if !cli.net.app.lock().await.api_error().is_empty() {
+    return;
+  }
   let deadline = tokio::time::Instant::now() + JUMP_SETTLE;
   loop {
     // Wraps the request too, so a slow or rate-gated one cannot stretch the wait.
@@ -242,6 +247,19 @@ async fn wait_for_playback_to_move_on(cli: &mut CliApp, old: String) {
     )
     .await;
     if fetched.is_err() {
+      return;
+    }
+    // Clear and stop only when this poll created a new error, so a pre-existing
+    // failure is preserved rather than dismissed.
+    let poll_failed = {
+      let mut app = cli.net.app.lock().await;
+      let failed = !app.api_error().is_empty();
+      if failed {
+        app.clear_api_error();
+      }
+      failed
+    };
+    if poll_failed {
       return;
     }
     if cli
