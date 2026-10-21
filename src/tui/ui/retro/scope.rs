@@ -25,10 +25,15 @@ pub fn draw(cells: &mut Cells, frame: &Frame, state: &mut State) {
   );
   cells.put(w - 18, 0, "PHOSPHOR  P31", (60, 140, 80), None, false);
 
-  let wave = frame.audio.wave.to_vec();
-  state.scope_trails.push_back(wave.clone());
-  while state.scope_trails.len() > TRAILS.len() {
-    state.scope_trails.pop_front();
+  // A new sweep only when the analyzer sends a new wave: a redraw with the
+  // same audio (mouse movement, a resize) would otherwise fill every trail
+  // with one wave and the fade would vanish.
+  let wave = frame.audio.wave;
+  if state.scope_trails.back().map(Vec::as_slice) != Some(wave) {
+    state.scope_trails.push_back(wave.to_vec());
+    while state.scope_trails.len() > TRAILS.len() {
+      state.scope_trails.pop_front();
+    }
   }
 
   let (x0, y0, sw, sh) = (4, 2, w - 8, h - 5);
@@ -56,7 +61,8 @@ pub fn draw(cells: &mut Cells, frame: &Frame, state: &mut State) {
     dots.set(x, ch / 2.0 - 1.0, GRID);
     dots.set(x, ch / 2.0 + 1.0, GRID);
   }
-  // Sweeps, oldest and faintest first.
+  // Sweeps, oldest and faintest first. Screen rows grow downward, so a
+  // positive sample is drawn above the center line.
   let first = TRAILS.len() - state.scope_trails.len();
   for (sweep, brightness) in state.scope_trails.iter().zip(&TRAILS[first..]) {
     let color = lerp(BG, TRACE, *brightness);
@@ -64,9 +70,9 @@ pub fn draw(cells: &mut Cells, frame: &Frame, state: &mut State) {
     for x in 0..dots.width.saturating_sub(1) {
       dots.line(
         x as f32,
-        ch / 2.0 + points[x] * ch * 0.42,
+        ch / 2.0 - points[x] * ch * 0.42,
         x as f32 + 1.0,
-        ch / 2.0 + points[x + 1] * ch * 0.42,
+        ch / 2.0 - points[x + 1] * ch * 0.42,
         color,
       );
     }
@@ -96,4 +102,62 @@ pub fn draw(cells: &mut Cells, frame: &Frame, state: &mut State) {
     None,
     false,
   );
+}
+
+#[cfg(test)]
+mod tests {
+  use std::time::Instant;
+
+  use ratatui::{buffer::Buffer, layout::Rect, style::Color};
+
+  use super::super::tests::sample_bands;
+  use super::super::{Audio, Cells, Frame, State};
+  use super::*;
+  use crate::tui::ui::head_unit::HeadUnitView;
+
+  fn draw_wave(buf: &mut Buffer, state: &mut State, wave: &[f32]) {
+    let bands = sample_bands(24);
+    let view = HeadUnitView::default();
+    let frame = Frame {
+      audio: Audio {
+        bands: &bands,
+        wave,
+      },
+      view: &view,
+      now: Instant::now(),
+    };
+    let area = buf.area;
+    draw(&mut Cells { buf, area }, &frame, state);
+  }
+
+  #[test]
+  fn a_redraw_with_the_same_wave_adds_no_sweep() {
+    let mut buf = Buffer::empty(Rect::new(0, 0, 80, 20));
+    let mut state = State::default();
+    let first = vec![0.3; 480];
+    for _ in 0..6 {
+      draw_wave(&mut buf, &mut state, &first);
+    }
+    assert_eq!(state.scope_trails.len(), 1, "six redraws of one wave");
+    draw_wave(&mut buf, &mut state, &[-0.3; 480]);
+    assert_eq!(state.scope_trails.len(), 2, "a new wave is a new sweep");
+  }
+
+  #[test]
+  fn a_positive_wave_is_drawn_above_the_center_line() {
+    let (w, h) = (80u16, 20u16);
+    let mut buf = Buffer::empty(Rect::new(0, 0, w, h));
+    draw_wave(&mut buf, &mut State::default(), &[0.8; 480]);
+    // The screen spans rows 2..2 + (h - 5); its center line is halfway.
+    let center = 2.0 + f32::from(h - 5) / 2.0;
+    let trace = Color::Rgb(TRACE.0, TRACE.1, TRACE.2);
+    let rows: Vec<u16> = (0..h)
+      .filter(|&y| (0..w).any(|x| buf[(x, y)].fg == trace))
+      .collect();
+    assert!(!rows.is_empty(), "the trace is drawn");
+    assert!(
+      rows.iter().all(|&y| f32::from(y) + 1.0 <= center),
+      "trace rows {rows:?} should sit above the center at {center}"
+    );
+  }
 }

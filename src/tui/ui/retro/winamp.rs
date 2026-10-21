@@ -84,11 +84,12 @@ pub fn draw(cells: &mut Cells, frame: &Frame, state: &mut State, dt: f32) {
   let mid = osc.height as f32 / 2.0;
   for x in 0..osc.width.saturating_sub(1) {
     let (a, b) = (wave[x], wave[x + 1]);
+    // Rows grow downward: positive samples go above the middle.
     osc.line(
       x as f32,
-      mid + a * mid * 0.9,
+      mid - a * mid * 0.9,
       x as f32 + 1.0,
-      mid + b * mid * 0.9,
+      mid - b * mid * 0.9,
       LCD,
     );
   }
@@ -110,4 +111,54 @@ pub fn draw(cells: &mut Cells, frame: &Frame, state: &mut State, dt: f32) {
   cells.put(12, y, "■  ▶|   [EQ] [PL]   ", DIM, None, false);
   cells.put(33, y, "shuffle", on(view.shuffle), None, false);
   cells.put(42, y, "repeat", on(view.repeat), None, false);
+}
+
+#[cfg(test)]
+mod tests {
+  use std::time::Instant;
+
+  use ratatui::{buffer::Buffer, layout::Rect, style::Color};
+
+  use super::super::tests::sample_bands;
+  use super::super::{Audio, Cells, Frame, State};
+  use super::*;
+  use crate::tui::ui::head_unit::HeadUnitView;
+
+  #[test]
+  fn the_scope_strip_draws_a_positive_wave_above_its_middle() {
+    let (w, h) = (80u16, 20u16);
+    let area = Rect::new(0, 0, w, h);
+    let mut buf = Buffer::empty(area);
+    let bands = sample_bands(24);
+    let view = HeadUnitView::default();
+    let frame = Frame {
+      audio: Audio {
+        bands: &bands,
+        wave: &[0.8; 480],
+      },
+      view: &view,
+      now: Instant::now(),
+    };
+    draw(
+      &mut Cells {
+        buf: &mut buf,
+        area,
+      },
+      &frame,
+      &mut State::default(),
+      0.0,
+    );
+    // The strip is four rows from `h - 6`; its middle is between the second
+    // and third.
+    let osc_y = h - 6;
+    let lcd = Color::Rgb(LCD.0, LCD.1, LCD.2);
+    let rows: Vec<u16> = (osc_y..osc_y + 4)
+      .filter(|&y| (6..w).any(|x| buf[(x, y)].fg == lcd))
+      .collect();
+    assert!(!rows.is_empty(), "the trace is drawn");
+    assert!(
+      rows.iter().all(|&y| y < osc_y + 2),
+      "trace rows {rows:?} should be in the strip's top half (from {osc_y})"
+    );
+  }
 }

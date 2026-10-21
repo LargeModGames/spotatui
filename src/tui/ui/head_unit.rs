@@ -93,15 +93,20 @@ pub fn fold_stereo(bands: &[f32]) -> Vec<f32> {
     .collect()
 }
 
+/// The draw interval the meter's easing was tuned at: the visualizer's 16 ms
+/// animation tick.
+const FRAME_SECONDS: f32 = 1.0 / 60.0;
+
 #[derive(Debug, Default)]
 struct HeadUnitState {
   /// The latest row, one value per strip.
   live: Vec<f32>,
   level: f32,
+  last: Option<Instant>,
 }
 
 impl HeadUnitState {
-  fn update(&mut self, bands: &[f32]) {
+  fn update(&mut self, bands: &[f32], now: Instant) {
     self.live = resample(bands, BANDS);
     // RMS of the row, eased so the meter swings like a needle, not a strobe.
     let rms = if self.live.is_empty() {
@@ -110,7 +115,18 @@ impl HeadUnitState {
       (self.live.iter().map(|v| v * v).sum::<f32>() / self.live.len() as f32).sqrt()
     };
     let target = (rms * 1.4).clamp(0.0, 1.0);
-    let ease = if target > self.level { 0.6 } else { 0.15 };
+    // The easing runs on time, not on draws, so extra redraws (mouse
+    // movement, a resize) don't speed the needle up. The first frame counts
+    // as one tick; a stall is capped so the needle doesn't jump.
+    let dt = self
+      .last
+      .map_or(FRAME_SECONDS, |t| {
+        now.saturating_duration_since(t).as_secs_f32()
+      })
+      .min(0.25);
+    self.last = Some(now);
+    let per_frame: f32 = if target > self.level { 0.6 } else { 0.15 };
+    let ease = 1.0 - (1.0 - per_frame).powf(dt / FRAME_SECONDS);
     self.level += (target - self.level) * ease;
   }
 }
@@ -212,7 +228,7 @@ pub fn render(
   bands: &[f32],
   theme: &Theme,
   view: &HeadUnitView,
-  _now: Instant,
+  now: Instant,
 ) {
   if area.width < 12 || area.height < 4 {
     return;
@@ -223,7 +239,7 @@ pub fn render(
   }
   STATE.with(|state| {
     let mut state = state.borrow_mut();
-    state.update(&row);
+    state.update(&row, now);
     draw(buf, area, theme, view, &state);
   });
 }
@@ -935,6 +951,32 @@ mod tests {
     assert_eq!(fit_width("東京事変", 5), "東京");
     assert_eq!(fit_width("東京事変", 8), "東京事変");
     assert_eq!(fit_width("ABC", 2), "AB");
+  }
+
+  #[test]
+  fn the_meter_eases_on_time_not_on_redraws() {
+    let t0 = Instant::now();
+    let loud = [0.9; BANDS];
+    // One frame's worth of time, drawn once or ten times, moves it the same.
+    let mut once = HeadUnitState::default();
+    once.update(&loud, t0);
+    once.update(&loud, t0 + std::time::Duration::from_millis(16));
+    let mut many = HeadUnitState::default();
+    many.update(&loud, t0);
+    for _ in 0..10 {
+      many.update(&loud, t0 + std::time::Duration::from_millis(16));
+    }
+    assert!(
+      (once.level - many.level).abs() < 1e-6,
+      "{} vs {}",
+      once.level,
+      many.level
+    );
+    // At the 60 fps it was tuned at, a rising step still covers 60%.
+    let mut tuned = HeadUnitState::default();
+    tuned.update(&loud, t0);
+    let target = (0.9f32 * 1.4).clamp(0.0, 1.0);
+    assert!((tuned.level - 0.6 * target).abs() < 1e-4, "{}", tuned.level);
   }
 
   #[test]
