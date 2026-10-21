@@ -128,17 +128,14 @@ pub async fn handle_matches(
         // nor turn a successful jump into a failed command.
         let api_error_before = cli.net.app.lock().await.api_error().to_owned();
 
-        let old_id = if api_error_before.is_empty() {
-          cli
-            .net
-            .handle_network_event(IoEvent::GetCurrentPlayback)
-            .await;
-          let id = cli.net.app.lock().await.cached_playback_item_id();
+        cli
+          .net
+          .handle_network_event(IoEvent::GetCurrentPlayback)
+          .await;
+        let old_id = cli.net.app.lock().await.cached_playback_item_id();
+        if api_error_before.is_empty() {
           cli.net.app.lock().await.clear_api_error();
-          id
-        } else {
-          cli.net.app.lock().await.cached_playback_item_id()
-        };
+        }
 
         let (direction, amount) = JumpDirection::from_matches(matches);
         for _ in 0..amount {
