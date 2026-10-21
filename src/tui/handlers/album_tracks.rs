@@ -193,7 +193,7 @@ fn handle_save_album_event(app: &mut App) {
 mod tests {
   use super::*;
   use crate::core::action::OpenTarget;
-  use crate::core::app::{ActiveBlock, RecommendationsContext};
+  use crate::core::app::{ActiveBlock, RecommendationsContext, RouteId};
   use crate::core::pagination::Paged;
   use crate::core::plugin_api::{AlbumInfo, SavedAlbumInfo};
   use crate::core::user_config::UserConfig;
@@ -332,12 +332,18 @@ mod tests {
   }
 
   #[test]
-  fn on_esc() {
+  fn esc_leaves_album_tracks_in_hover_mode() {
     let mut app = App::default();
+    app.push_navigation_stack(RouteId::AlbumTracks, ActiveBlock::AlbumTracks);
+    assert_eq!(
+      app.get_current_route().active_block,
+      ActiveBlock::AlbumTracks
+    );
 
-    handler(Key::Esc, &mut app);
+    crate::tui::handlers::handle_app(Key::Esc, &mut app);
 
-    let current_route = app.get_current_route();
-    assert_eq!(current_route.active_block, ActiveBlock::Empty);
+    let route = app.get_current_route();
+    assert_eq!(route.active_block, ActiveBlock::Empty);
+    assert_eq!(route.hovered_block, ActiveBlock::AlbumTracks);
   }
 }

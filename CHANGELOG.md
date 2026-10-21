@@ -26,9 +26,15 @@
 
 - **Shared interface language tables**: `behavior.language` selects `auto`, `en`, `zh-Hans`, or `zh-Hant`. The terminal and desktop/browser interfaces now use one typed English catalog, with locale detection and live language switching. Chinese tables follow in stacked translation PRs; until each area lands, selecting Chinese shows its English fallback. CLI output and logs stay English.
 
+### Changed
+
+- **Theme-aware folder icons in the terminal**: playlist folders in the sidebar and the playlist picker dialog now use a text glyph (`▸`) that inherits the active theme's text and highlight colors instead of a fixed-color folder emoji ([#882](https://github.com/LargeModGames/spotatui/issues/882)).
+
 ### Fixed
 
 - **Local Files folders and track names sort case-insensitively**: both sorts compared names by raw byte order, so every capital letter sorted before every lowercase one and mixed-case libraries looked unsorted. The folder list and the name fallback for untagged tracks now compare lowercased names, with byte order as a stable tiebreak ([#824](https://github.com/LargeModGames/spotatui/issues/824)).
+
+- **Radio falls back to station information for blank titles**: empty or dash-only ICY titles no longer blank the playbar subtitle or the artist sent to media integrations ([#820](https://github.com/LargeModGames/spotatui/issues/820)).
 
 - **The page no longer scrolls past the player bar when a list has explicit songs** in the desktop app and the browser GUI: the hidden screen-reader text next to each E badge had no anchor, so it stretched the document below the window and the whole page could scroll into empty space. The text is now anchored and clipped, so only the panels inside the page scroll ([#878](https://github.com/LargeModGames/spotatui/issues/878)).
 

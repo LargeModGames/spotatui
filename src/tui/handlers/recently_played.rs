@@ -104,7 +104,7 @@ fn selected_recent_track(app: &App) -> Option<&TrackInfo> {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::core::app::ActiveBlock;
+  use crate::core::app::{ActiveBlock, RouteId};
 
   fn recent(uri: Option<&str>, name: &str) -> TrackInfo {
     TrackInfo {
@@ -161,8 +161,8 @@ mod tests {
   fn on_left_press() {
     let mut app = App::default();
     app.set_current_route_state(
-      Some(ActiveBlock::AlbumTracks),
-      Some(ActiveBlock::AlbumTracks),
+      Some(ActiveBlock::RecentlyPlayed),
+      Some(ActiveBlock::RecentlyPlayed),
     );
 
     handler(Key::Left, &mut app);
@@ -172,12 +172,18 @@ mod tests {
   }
 
   #[test]
-  fn on_esc() {
+  fn esc_leaves_recently_played_in_hover_mode() {
     let mut app = App::default();
+    app.push_navigation_stack(RouteId::RecentlyPlayed, ActiveBlock::RecentlyPlayed);
+    assert_eq!(
+      app.get_current_route().active_block,
+      ActiveBlock::RecentlyPlayed
+    );
 
-    handler(Key::Esc, &mut app);
+    crate::tui::handlers::handle_app(Key::Esc, &mut app);
 
-    let current_route = app.get_current_route();
-    assert_eq!(current_route.active_block, ActiveBlock::Empty);
+    let route = app.get_current_route();
+    assert_eq!(route.active_block, ActiveBlock::Empty);
+    assert_eq!(route.hovered_block, ActiveBlock::RecentlyPlayed);
   }
 }

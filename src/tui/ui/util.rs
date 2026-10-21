@@ -36,6 +36,11 @@ pub fn get_artist_highlight_state(app: &App, block_to_match: ArtistBlock) -> (bo
   }
 }
 
+/// Prefix for folder rows in the sidebar and the playlist picker. A text
+/// glyph with no emoji presentation, so it takes the theme's text color (an
+/// emoji such as 📁 is drawn as a fixed-color picture no theme can recolor).
+pub const FOLDER_ICON: &str = "\u{25B8}";
+
 /// Bold key hint for help bars, e.g. the "↑/↓" in "↑/↓ Navigate".
 pub fn hint_span(key: &'static str, theme: Theme) -> Span<'static> {
   Span::styled(
