@@ -47,6 +47,9 @@ pub fn handler(key: Key, app: &mut App) {
       }
       close_sort_menu(app);
     }
+    k if k == app.user_config.keys.back => {
+      close_sort_menu(app);
+    }
     // Quick select by shortcut character (lowercase = ascending, uppercase = descending)
     Key::Char(c) => {
       // Find field matching this shortcut
@@ -141,5 +144,16 @@ mod tests {
 
     assert_eq!(app.artist_sort.field, SortField::Default);
     assert!(app.view.sort_menu_visible);
+  }
+
+  #[test]
+  fn the_back_key_closes_the_sort_menu() {
+    let mut app = app_with_open_menu(SortContext::PlaylistTracks);
+
+    handler(app.user_config.keys.back, &mut app);
+
+    assert!(!app.view.sort_menu_visible);
+    assert!(app.view.sort_context.is_none());
+    assert_eq!(app.get_current_route().active_block, ActiveBlock::Empty);
   }
 }

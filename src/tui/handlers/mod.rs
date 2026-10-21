@@ -92,6 +92,9 @@ pub fn handle_app(key: Key, app: &mut App) {
       Key::Esc | Key::Char('q') => {
         app.apply(Action::ClosePopup);
       }
+      k if k == app.user_config.keys.back => {
+        app.apply(Action::ClosePopup);
+      }
       k if common_key_events::up_event(k, &app.user_config.keys) => {
         app.view.plugin_popup_scroll = app.view.plugin_popup_scroll.saturating_sub(1);
       }
