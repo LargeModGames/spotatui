@@ -123,12 +123,22 @@ pub async fn handle_matches(
         cli.mark(f).await?;
       }
       if matches.get_count("next") > 0 || matches.get_count("previous") > 0 {
-        // Fetch current playback first so we know what track we're skipping from
-        cli
-          .net
-          .handle_network_event(IoEvent::GetCurrentPlayback)
-          .await;
-        let old_id = cli.net.app.lock().await.cached_playback_item_id();
+        // Fetch current playback first so we know what track we're skipping from.
+        // Aa failure here must not clobber an error raised by an earlier command action,
+        // nor turn a successful jump into a failed command.
+        let api_error_before = cli.net.app.lock().await.api_error().to_owned();
+
+        let old_id = if api_error_before.is_empty() {
+          cli
+            .net
+            .handle_network_event(IoEvent::GetCurrentPlayback)
+            .await;
+          let id = cli.net.app.lock().await.cached_playback_item_id();
+          cli.net.app.lock().await.clear_api_error();
+          id
+        } else {
+          cli.net.app.lock().await.cached_playback_item_id()
+        };
 
         let (direction, amount) = JumpDirection::from_matches(matches);
         for _ in 0..amount {
@@ -138,7 +148,11 @@ pub async fn handle_matches(
         // Nothing playing: the status line has no old track to be wrong about,
         // and waiting would only spend the shared rate window.
         if let Some(old_id) = old_id {
+          let api_error_before_wait = cli.net.app.lock().await.api_error().to_owned();
           wait_for_playback_to_move_on(&mut cli, old_id).await;
+          if api_error_before_wait.is_empty() {
+            cli.net.app.lock().await.clear_api_error();
+          }
         }
       }
       if let Some(vol) = matches.get_one::<String>("volume") {
