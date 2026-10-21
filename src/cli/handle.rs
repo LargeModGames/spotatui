@@ -262,7 +262,7 @@ async fn wait_for_playback_to_move_on(cli: &mut CliApp, old: Option<String>) {
     }
     let current_id = cli.net.app.lock().await.cached_playback_item_id();
     let moved_on = match old.as_deref() {
-      Some(old) => current_id.as_deref() != Some(old),
+      Some(old) => current_id.as_deref().is_some_and(|id| id != old),
       None => current_id.is_some(),
     };
     if moved_on {
