@@ -739,8 +739,13 @@ fn draw_digits(buf: &mut Buffer, area: Rect, x: u16, text: &str, lit: Rgb, vfd: 
 fn draw_readout(buf: &mut Buffer, area: Rect, view: &HeadUnitView, level: f32, vfd: &Vfd) {
   let clock = view.progress_ms.map(clock_text);
   let shown = clock.clone().unwrap_or_else(|| "--:--".to_string());
-  // Ghost-only "88:88" when nothing is playing.
-  let lit = if clock.is_some() { vfd.cap } else { vfd.bg };
+  // When nothing is playing, "88:88" with every segment in the unlit ghost
+  // color, as on a stopped unit.
+  let lit = if clock.is_some() {
+    vfd.cap
+  } else {
+    vfd.ghost(vfd.cap)
+  };
   let digits = shown.replace('-', "8");
   let mut x = area.x + METER_WIDTH + 1;
   x += draw_digits(buf, area, x, &digits, lit, vfd) + 1;
@@ -977,6 +982,28 @@ mod tests {
     tuned.update(&loud, t0);
     let target = (0.9f32 * 1.4).clamp(0.0, 1.0);
     assert!((tuned.level - 0.6 * target).abs() < 1e-4, "{}", tuned.level);
+  }
+
+  #[test]
+  fn the_idle_clock_shows_its_ghost_segments() {
+    let theme = ThemePreset::Gruvbox.to_theme();
+    let vfd = Vfd::from_theme(&theme);
+    let area = Rect::new(0, 0, 60, 3);
+    let mut buf = Buffer::empty(area);
+    draw_readout(&mut buf, area, &HeadUnitView::default(), 0.0, &vfd);
+    let ghost = rgb(vfd.ghost(vfd.cap));
+    // The clock's digits start past the meter column.
+    let x0 = METER_WIDTH + 1;
+    let segments: Vec<Color> = (0..3)
+      .flat_map(|y| (x0..x0 + 16).map(move |x| (x, y)))
+      .filter(|&(x, y)| buf[(x, y)].symbol() != " ")
+      .map(|(x, y)| buf[(x, y)].fg)
+      .collect();
+    assert!(!segments.is_empty(), "the idle clock draws its segments");
+    assert!(
+      segments.iter().all(|&c| c == ghost && c != rgb(vfd.bg)),
+      "idle segments use the ghost color, not the background: {segments:?}"
+    );
   }
 
   #[test]
