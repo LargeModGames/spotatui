@@ -612,6 +612,16 @@
       "contributions": [
         "platform"
       ]
+    },
+    {
+      "login": "OpenR00t",
+      "name": "OpenR00t",
+      "avatar_url": "https://avatars.githubusercontent.com/u/17520570?v=4",
+      "profile": "https://github.com/OpenR00t",
+      "contributions": [
+        "code",
+        "design"
+      ]
     }
   ],
   "contributorsPerLine": 7,
