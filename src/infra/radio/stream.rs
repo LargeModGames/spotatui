@@ -154,7 +154,7 @@ pub async fn open_radio_stream(url: &str) -> Result<OpenedStream> {
           // Parse errors on one metadata block are transient — keep the last
           // good title rather than blanking the playbar.
           if let Ok(meta) = meta {
-            let title = meta.stream_title().map(str::to_owned);
+            let title = clean_stream_title(meta.stream_title());
             if let Ok(mut np) = cell.lock() {
               *np = title;
             }
@@ -175,9 +175,33 @@ pub async fn open_radio_stream(url: &str) -> Result<OpenedStream> {
   })
 }
 
+fn clean_stream_title(raw: Option<&str>) -> Option<String> {
+  let title = raw?.trim();
+  if title.chars().all(|c| c == '-' || c.is_whitespace()) {
+    None
+  } else {
+    Some(title.to_string())
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn blank_stream_titles_clear_to_none() {
+    for raw in [None, Some(""), Some("   "), Some("-"), Some(" - ")] {
+      assert_eq!(clean_stream_title(raw), None, "{raw:?}");
+    }
+  }
+
+  #[test]
+  fn real_stream_titles_are_trimmed_and_kept() {
+    assert_eq!(
+      clean_stream_title(Some("  Daft Punk - Get Lucky ")),
+      Some("Daft Punk - Get Lucky".to_string())
+    );
+  }
 
   /// Spike/smoke test for the load-bearing seam: request ICY metadata through
   /// `stream-download`, read `icy-metaint` off its response headers, and pull
