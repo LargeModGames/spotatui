@@ -142,9 +142,10 @@ pub async fn handle_matches(
           cli.jump(&direction).await;
         }
 
-        // Nothing playing: the status line has no old track to be wrong about,
-        // and waiting would only spend the shared rate window.
-        if let Some(old_id) = old_id {
+        // Wait for the jump to land before printing. Even when nothing was
+        // playing before (old_id is None), the device may start playback after
+        // the jump, so wait until any item appears rather 
+        {
           let api_error_before_wait = cli.net.app.lock().await.api_error().to_owned();
           wait_for_playback_to_move_on(&mut cli, old_id).await;
           if api_error_before_wait.is_empty() {
@@ -229,7 +230,7 @@ const JUMP_SETTLE: std::time::Duration = std::time::Duration::from_secs(2);
 const JUMP_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
 
 /// Wait until the playback Spotify reports no longer names `old`. Gives up after [`JUMP_SETTLE`].
-async fn wait_for_playback_to_move_on(cli: &mut CliApp, old: String) {
+async fn wait_for_playback_to_move_on(cli: &mut CliApp, old: Option<String>) {
   // A failure already in flight (from the device probe or an earlier action)
   // is not ours to clear; bail out without polling.
   if !cli.net.app.lock().await.api_error().is_empty() {
@@ -259,15 +260,12 @@ async fn wait_for_playback_to_move_on(cli: &mut CliApp, old: String) {
     if poll_failed {
       return;
     }
-    if cli
-      .net
-      .app
-      .lock()
-      .await
-      .cached_playback_item_id()
-      .as_deref()
-      != Some(old.as_str())
-    {
+    let current_id = cli.net.app.lock().await.cached_playback_item_id();
+    let moved_on = match old.as_deref() {
+      Some(old) => current_id.as_deref() != Some(old),
+      None => current_id.is_some(),
+    };
+    if moved_on {
       return;
     }
     let now = tokio::time::Instant::now();
@@ -715,26 +713,31 @@ mod tests {
     .expect("episode jump test timed out");
   }
 
-  /// Nothing playing: no old item to wait past, so the jump must not poll.
+  /// Nothing playing before the jump: playback may start only after the
+  /// saved-device retry lands, so the wait must hold until an item appears
+  /// rather than reading a stale "no track playing" status.
   #[tokio::test]
-  async fn a_jump_with_nothing_playing_does_not_wait() {
+  async fn a_jump_from_idle_waits_for_playback_to_start() {
     tokio::time::timeout(std::time::Duration::from_secs(10), async {
-      let idle = playback_body(serde_json::Value::Null);
-      let (net, seen, server, _state_dir, _fake) = network_playing(vec![idle]).await;
+      let (net, _seen, server, _state_dir, _fake) = network_playing(vec![
+        playback_body(serde_json::Value::Null),
+        playback_body(serde_json::Value::Null),
+        playback_json("1e0Yox5H9f7EP1YWpjpabe", "Legion"),
+      ])
+      .await;
       let matches = crate::cli::playback_subcommand()
         .try_get_matches_from(["playback", "--next", "--format=%t"])
         .unwrap();
 
-      let _ = handle_matches(&matches, "playback".to_string(), net, UserConfig::new()).await;
+      let output = handle_matches(&matches, "playback".to_string(), net, UserConfig::new())
+        .await
+        .expect("an idle jump that starts playing should print a status");
       server.abort();
 
-      let fetches = seen
-        .lock()
-        .unwrap()
-        .iter()
-        .filter(|line| is_playback_fetch(line))
-        .count();
-      assert_eq!(fetches, 2, "the pre-jump check and the status line");
+      assert!(
+        output.contains("Legion"),
+        "expected the new track 'Legion', but got: {output}"
+      );
     })
     .await
     .expect("idle jump test timed out");
