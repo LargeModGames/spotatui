@@ -144,7 +144,7 @@ pub async fn handle_matches(
 
         // Wait for the jump to land before printing. Even when nothing was
         // playing before (old_id is None), the device may start playback after
-        // the jump, so wait until any item appears rather 
+        // the jump, so wait until any item appears rather
         {
           let api_error_before_wait = cli.net.app.lock().await.api_error().to_owned();
           wait_for_playback_to_move_on(&mut cli, old_id).await;
