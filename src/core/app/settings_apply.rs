@@ -82,7 +82,9 @@ impl App {
     }
   }
 
-  /// Cycles Cava, Bar Graph, then the Spotify pitch view while a Spotify track plays.
+  /// Cycles through every style in `VisualizerStyle::all()` order (Cava, Bar
+  /// Graph, Head Unit, Analog VU, Winamp, Phosphor Scope, Outrun, Rack EQ,
+  /// Cassette Deck), then the Spotify pitch view while a Spotify track plays.
   /// The pitch view is not saved: it is the default for every Spotify track.
   pub(crate) fn cycle_visualizer_style(&mut self) {
     let style = self.user_config.behavior.visualizer_style;

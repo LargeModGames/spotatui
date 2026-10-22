@@ -37,6 +37,7 @@ const lists: SourcePlaylists = {
   qobuz: [],
   youtube: [],
   apple_music: [],
+  apple_music_uncounted: [],
   radio: [],
   saved_albums: [],
   saved_albums_has_more: false,

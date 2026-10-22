@@ -56,7 +56,14 @@ export function playlistsFor(
       count: null,
       image: station.image_url,
     }));
-  return playlists[PLAYLIST_KEYS[source]].map(sidebarRow);
+  // A Music row whose count Music has not given carries a placeholder 0.
+  const uncounted = new Set(
+    source === "AppleMusic" ? playlists.apple_music_uncounted : [],
+  );
+  return playlists[PLAYLIST_KEYS[source]].map((playlist) => {
+    const row = sidebarRow(playlist);
+    return uncounted.has(row.uri) ? { ...row, count: null } : row;
+  });
 }
 
 /** Every search term must occur in the fields; a blank query matches everything. */

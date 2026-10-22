@@ -17,6 +17,7 @@ spotatui comes with several built-in theme presets. Access them via `Alt-,` (`Ct
 | Monokai          | Vibrant colors on dark background           |
 | Gruvbox          | Warm retro groove colors                    |
 | Gruvbox Light    | Light variant with warm colors              |
+| Gruvbox Cove     | Gruvbox dark on bg0, green accent, aqua second, yellow only for warnings |
 | Catppuccin Mocha | Popular pastel dark theme                   |
 | Tokyo Night      | The [Tokyo Night](https://github.com/folke/tokyonight.nvim) palette |
 

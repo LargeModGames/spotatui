@@ -1,6 +1,7 @@
 use crate::core::app::{section_at, AnalysisState, App, PITCH_NAMES};
 use crate::core::user_config::{normalize_tick_rate_milliseconds, VisualizerStyle};
 use crate::tui::layout::main_layout_margin;
+use crate::tui::ui::{head_unit, retro};
 use ratatui::{
   layout::{Constraint, Layout, Rect},
   style::{Color, Style},
@@ -59,6 +60,13 @@ pub fn draw(f: &mut Frame<'_>, app: &App) {
       match visualizer_style {
         VisualizerStyle::Cava => "Cava",
         VisualizerStyle::BarGraph => app.strings().screens.bar_graph,
+        VisualizerStyle::HeadUnit => app.strings().screens.head_unit,
+        VisualizerStyle::AnalogVu => app.strings().screens.analog_vu,
+        VisualizerStyle::Winamp => app.strings().screens.winamp,
+        VisualizerStyle::PhosphorScope => app.strings().screens.phosphor_scope,
+        VisualizerStyle::Outrun => app.strings().screens.outrun,
+        VisualizerStyle::RackEq => app.strings().screens.rack_eq,
+        VisualizerStyle::Cassette => app.strings().screens.cassette_deck,
       },
       app.strings().screens.spectrum,
     )
@@ -142,6 +150,28 @@ pub fn draw(f: &mut Frame<'_>, app: &App) {
         inner_area,
         app.user_config.theme.analysis_bar.into(),
       ),
+      VisualizerStyle::HeadUnit => head_unit::render(
+        f.buffer_mut(),
+        inner_area,
+        &spectrum.bands,
+        &app.user_config.theme,
+        &head_unit_view(app),
+        Instant::now(),
+      ),
+      style => {
+        if let Some(retro_style) = retro_style(style) {
+          let view = head_unit_view(app);
+          let frame = retro::Frame {
+            audio: retro::Audio {
+              bands: &spectrum.bands,
+              wave: &spectrum.wave,
+            },
+            view: &view,
+            now: Instant::now(),
+          };
+          retro::render(retro_style, f.buffer_mut(), inner_area, &frame);
+        }
+      }
     }
   } else {
     // No audio capture available
@@ -168,6 +198,37 @@ pub fn draw(f: &mut Frame<'_>, app: &App) {
       .block(bar_chart_block)
       .style(Style::default().fg(app.user_config.theme.text.into()));
     f.render_widget(empty_p, visualizer_area);
+  }
+}
+
+/// The retro style a visualizer style draws, if it is one.
+fn retro_style(style: VisualizerStyle) -> Option<retro::Retro> {
+  match style {
+    VisualizerStyle::AnalogVu => Some(retro::Retro::AnalogVu),
+    VisualizerStyle::Winamp => Some(retro::Retro::Winamp),
+    VisualizerStyle::PhosphorScope => Some(retro::Retro::PhosphorScope),
+    VisualizerStyle::Outrun => Some(retro::Retro::Outrun),
+    VisualizerStyle::RackEq => Some(retro::Retro::RackEq),
+    VisualizerStyle::Cassette => Some(retro::Retro::Cassette),
+    VisualizerStyle::Cava | VisualizerStyle::BarGraph | VisualizerStyle::HeadUnit => None,
+  }
+}
+
+/// The Head Unit readout, from the source-agnostic playback snapshot so it
+/// reads the same for every source.
+fn head_unit_view(app: &App) -> head_unit::HeadUnitView {
+  use rspotify::model::RepeatState;
+  match crate::infra::media_metadata::current_playback_snapshot(app) {
+    Some(snapshot) => head_unit::HeadUnitView {
+      title: Some(snapshot.metadata.title),
+      progress_ms: Some(snapshot.progress_ms),
+      duration_ms: Some(snapshot.metadata.duration_ms).filter(|&d| d > 0),
+      is_playing: snapshot.is_playing,
+      shuffle: snapshot.shuffle,
+      repeat: snapshot.repeat.is_some_and(|r| r != RepeatState::Off),
+      live: snapshot.is_live,
+    },
+    None => head_unit::HeadUnitView::default(),
   }
 }
 
@@ -385,6 +446,9 @@ pub fn visualizer_bar_count(style: VisualizerStyle, inner_width: u16) -> usize {
     VisualizerStyle::Cava => {
       ((inner_width + 1) / usize::from(CAVA_BAR_FOOTPRINT)).clamp(2, MAX_CAVA_BARS)
     }
+    // One bar per band and channel: the renderer folds the mirrored halves.
+    VisualizerStyle::HeadUnit => head_unit::band_count() * 2,
+    style => retro_style(style).map_or(2, retro::Retro::bar_count),
   }
 }
 

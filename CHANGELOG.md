@@ -5,6 +5,9 @@
 ### Added
 
 - **Filter your playlists in the desktop app**: a filter box under the Your Library chips narrows the playlists of the active source, including the ones inside closed folders.
+- **Seven new visualizer styles**: `V` on the visualizer screen now also cycles through **Head Unit** (an early-2000s car-stereo display: a floor of spectrum strips in perspective under a wall of panels, drawn in Braille dots), **Analog VU** (two needle meters, left and right, with a peak lamp), **Winamp** (scanlined bars with falling peak caps and an oscilloscope strip), **Phosphor Scope** (a green CRT trace with fading phosphor trails and a measured Vpp and frequency), **Outrun** (a striped synthwave sun that pulses with the bass behind a spectrum skyline and a scrolling grid), **Rack EQ** (left and right LED ladders per band with falling peak LEDs) and **Cassette Deck** (turning reels that wind the tape across as the song plays, LED level bars and a tape counter). The choice is saved as `visualizer_style` in `config.yml`. The analyzer now also hands the terminal the last 50 ms of the waveform with each spectrum frame, which the scope styles draw.
+
+- **Gruvbox Cove theme preset**: Gruvbox dark on the standard bg0 background, with green as the main accent, aqua as the second colour, blue hints and yellow kept for warnings only. Pick it with `Alt-,` or set `preset: "Gruvbox Cove"` in `config.yml`.
 
 - **The player bar visualizer takes its colours from the cover**: in the desktop app and the browser GUI on Linux and Windows, the spectrum and the waveform now run through a gradient of the colours on the playing song's cover, darkest at the bass, and fade to the next cover's colours when the album changes. It works for Spotify, YouTube, Qobuz, Subsonic and local files with embedded art; radio and Apple Music keep the accent. A new `visualizer.yml` next to `config.yml` sets every part of the look: the colour source (`cover`, `accent` or your own list, hex accepted), how many cover colours and in what order, if black and grey count, the brightness limits, the blend (`srgb`, `linear` or `oklab`), the fade, and each size, alpha and speed of the bars, caps, glow, pulse and wave lines. spotatui never writes the file, and edits show within a second; a mistyped value keeps its default, a number out of range is clamped, and both show in the status line. See [the themes guide](https://github.com/LargeModGames/spotatui/blob/main/docs/themes.md#player-bar-visualizer-desktop-app-and-browser-gui).
 
@@ -28,7 +31,17 @@
 
 - **Shared interface language tables**: `behavior.language` selects `auto`, `en`, `zh-Hans`, or `zh-Hant`. The terminal and desktop/browser interfaces now use one typed English catalog, with locale detection and live language switching. Chinese tables follow in stacked translation PRs; until each area lands, selecting Chinese shows its English fallback. CLI output and logs stay English.
 
+### Changed
+
+- **Theme-aware folder icons in the terminal**: playlist folders in the sidebar and the playlist picker dialog now use a text glyph (`▸`) that inherits the active theme's text and highlight colors instead of a fixed-color folder emoji ([#882](https://github.com/LargeModGames/spotatui/issues/882)).
+
 ### Fixed
+
+- **Apple Music playlists show their real song counts** in the desktop app and the browser GUI: every playlist in Your Library, "All songs" included, said `0 songs`, because the count was never read from Music. It now is, one playlist at a time, which adds about 8 ms per playlist to loading the sidebar; a playlist whose count Music cannot read shows no number rather than a wrong 0 ([#891](https://github.com/LargeModGames/spotatui/issues/891)).
+
+- **Local Files folders and track names sort case-insensitively**: both sorts compared names by raw byte order, so every capital letter sorted before every lowercase one and mixed-case libraries looked unsorted. The folder list and the name fallback for untagged tracks now compare lowercased names, with byte order as a stable tiebreak ([#824](https://github.com/LargeModGames/spotatui/issues/824)).
+
+- **Radio falls back to station information for blank titles**: empty or dash-only ICY titles no longer blank the playbar subtitle or the artist sent to media integrations ([#820](https://github.com/LargeModGames/spotatui/issues/820)).
 
 - **The page no longer scrolls past the player bar when a list has explicit songs** in the desktop app and the browser GUI: the hidden screen-reader text next to each E badge had no anchor, so it stretched the document below the window and the whole page could scroll into empty space. The text is now anchored and clipped, so only the panels inside the page scroll ([#878](https://github.com/LargeModGames/spotatui/issues/878)).
 

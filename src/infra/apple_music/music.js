@@ -145,10 +145,19 @@ function run(argv) {
         }
     }
     switch (op) {
-    case 'playlists':
-        return JSON.stringify(page(browsablePlaylists(), argv[1], function(p) {
-            return {id: p.persistentID(), name: p.name()};
-        }));
+    case 'playlists': {
+        // A count is one Apple Event per playlist (about 8ms); the bulk read
+        // `music.playlists.tracks.length` answers 0, so it cannot replace it.
+        const count = function(list) {
+            try { return list.tracks.length; } catch (e) { return null; }
+        };
+        const result = page(browsablePlaylists(), argv[1], function(p) {
+            return {id: p.persistentID(), name: p.name(), count: count(p)};
+        });
+        // The first page also sizes the library, for the "All songs" row.
+        if (result.offset === 0) result.library = count(music.libraryPlaylists[0]);
+        return JSON.stringify(result);
+    }
     case 'tracks':
         return JSON.stringify(trackPage(playlist(argv[1]), argv[2]));
     case 'search':

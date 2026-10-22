@@ -66,6 +66,7 @@ const playlists: SourcePlaylists = {
   qobuz: [],
   youtube: [],
   apple_music: [],
+  apple_music_uncounted: [],
   radio: [track("Score radio", "radio:https://radio.example")],
   saved_albums: [],
   saved_albums_has_more: false,

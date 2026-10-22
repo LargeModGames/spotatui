@@ -224,11 +224,36 @@ pub enum VisualizerStyle {
   Cava,
   /// BarGraph mode: Uses tui-bar-graph with Braille patterns for high-resolution display
   BarGraph,
+  /// Head Unit mode: a 2000s car-stereo VFD spectrum in perspective, with
+  /// peak caps, a level meter and a segment-digit clock
+  HeadUnit,
+  /// Analog VU: two backlit 1970s hi-fi needle meters, left and right
+  AnalogVu,
+  /// Winamp: the classic player's scanlined bars, peak caps and scope strip
+  Winamp,
+  /// Phosphor Scope: a green CRT oscilloscope with phosphor trails
+  PhosphorScope,
+  /// Outrun: synthwave sun, spectrum skyline and a scrolling neon grid
+  Outrun,
+  /// Rack EQ: an 80s rack-unit analyzer with left/right LED ladders
+  RackEq,
+  /// Cassette Deck: turning reels, LED level bars and a tape counter
+  Cassette,
 }
 
 impl VisualizerStyle {
   pub fn all() -> &'static [VisualizerStyle] {
-    &[VisualizerStyle::Cava, VisualizerStyle::BarGraph]
+    &[
+      VisualizerStyle::Cava,
+      VisualizerStyle::BarGraph,
+      VisualizerStyle::HeadUnit,
+      VisualizerStyle::AnalogVu,
+      VisualizerStyle::Winamp,
+      VisualizerStyle::PhosphorScope,
+      VisualizerStyle::Outrun,
+      VisualizerStyle::RackEq,
+      VisualizerStyle::Cassette,
+    ]
   }
 
   pub fn next(&self) -> Self {

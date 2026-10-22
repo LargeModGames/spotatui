@@ -510,7 +510,7 @@ mod tests {
   }
 
   #[test]
-  fn v_cycles_cava_bar_graph_and_the_pitch_view_while_a_spotify_track_plays() {
+  fn v_cycles_every_style_and_the_pitch_view_while_a_spotify_track_plays() {
     let (mut app, _rx) = app_on_the_analysis_screen();
     app.sync_audio_analysis(Some("track1"));
 
@@ -527,18 +527,23 @@ mod tests {
       VisualizerStyle::BarGraph
     );
 
+    for style in &VisualizerStyle::all()[2..] {
+      app.cycle_visualizer_style();
+      assert_eq!(app.user_config.behavior.visualizer_style, *style);
+    }
+
     app.cycle_visualizer_style();
     assert!(app.pitch_view_shows());
     assert_eq!(
       app.user_config.behavior.visualizer_style,
-      VisualizerStyle::BarGraph
+      VisualizerStyle::Cassette
     );
   }
 
   #[test]
   fn v_skips_the_pitch_view_without_a_spotify_track() {
     let (mut app, _rx) = app_on_the_analysis_screen();
-    app.user_config.behavior.visualizer_style = VisualizerStyle::BarGraph;
+    app.user_config.behavior.visualizer_style = VisualizerStyle::Cassette;
     app.sync_audio_analysis(None);
 
     app.cycle_visualizer_style();
@@ -553,7 +558,7 @@ mod tests {
   #[test]
   fn the_style_action_still_cycles_away_from_the_analysis_screen() {
     let (mut app, _rx) = app_with_events();
-    app.user_config.behavior.visualizer_style = VisualizerStyle::BarGraph;
+    app.user_config.behavior.visualizer_style = VisualizerStyle::Cassette;
     app.sync_audio_analysis(Some("track1"));
 
     app.cycle_visualizer_style();

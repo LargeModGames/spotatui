@@ -57,6 +57,7 @@ const empty: SourcePlaylists = {
   qobuz: [],
   youtube: [],
   apple_music: [],
+  apple_music_uncounted: [],
   radio: [],
   saved_albums: [],
   saved_albums_has_more: false,
@@ -140,6 +141,20 @@ describe("playlistsFor", () => {
     expect(playlistsFor(playlists, "Qobuz")).toEqual([]);
     expect(playlistsFor(playlists, "AppleMusic")).toEqual([
       { uri: "applemusic:library", name: "All songs", count: 0, image: null },
+    ]);
+    // A Music row whose count Music has not given shows none, not 0.
+    expect(
+      playlistsFor(
+        { ...playlists, apple_music_uncounted: ["applemusic:library"] },
+        "AppleMusic",
+      ),
+    ).toEqual([
+      {
+        uri: "applemusic:library",
+        name: "All songs",
+        count: null,
+        image: null,
+      },
     ]);
   });
 });

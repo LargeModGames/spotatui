@@ -594,6 +594,13 @@ impl App {
     &self.apple_music.playlists
   }
 
+  /// Whether Music has not given this sidebar row's count (yet), so its 0 is
+  /// not a real one.
+  #[cfg_attr(not(feature = "gui"), allow(dead_code))]
+  pub(crate) fn apple_music_count_unknown(&self, uri: &str) -> bool {
+    self.apple_music.uncounted.contains(uri)
+  }
+
   /// Forget the track list or search being loaded. The sidebar's playlists
   /// load in a slot of their own and are not affected.
   pub(crate) fn cancel_apple_music_browse(&mut self) {
@@ -627,6 +634,9 @@ impl App {
         public: None,
         image_url: None,
       }];
+      // "All songs" has no count until the first page sizes the library.
+      self.apple_music.uncounted =
+        std::collections::HashSet::from([crate::infra::apple_music::LIBRARY_URI.to_string()]);
       self.display_revisions.bump(DisplayDomain::Library);
       self.dispatch_without_spinner(IoEvent::AppleMusicPage {
         request,
@@ -721,9 +731,36 @@ impl App {
     not(all(feature = "apple-music", target_os = "macos")),
     allow(dead_code)
   )]
-  pub(crate) fn append_apple_music_playlists(&mut self, playlists: Vec<PlaylistInfo>) {
+  pub(crate) fn append_apple_music_playlists(
+    &mut self,
+    playlists: Vec<PlaylistInfo>,
+    uncounted: Vec<String>,
+  ) {
     self.apple_music.playlists.extend(playlists);
+    self.apple_music.uncounted.extend(uncounted);
     self.display_revisions.bump(DisplayDomain::Library);
+  }
+
+  /// The "All songs" row is built before Music answers; the first playlists
+  /// page sizes it, or says Music could not (`None`), and the row stays
+  /// without a count.
+  #[cfg_attr(
+    not(all(feature = "apple-music", target_os = "macos")),
+    allow(dead_code)
+  )]
+  pub(crate) fn set_apple_music_library_count(&mut self, count: Option<u32>) {
+    let Some(count) = count else { return };
+    let library = crate::infra::apple_music::LIBRARY_URI;
+    if let Some(row) = self
+      .apple_music
+      .playlists
+      .iter_mut()
+      .find(|p| p.uri == library)
+    {
+      row.track_count = count;
+      self.apple_music.uncounted.remove(library);
+      self.display_revisions.bump(DisplayDomain::Library);
+    }
   }
 
   #[cfg(test)]
@@ -2158,5 +2195,34 @@ mod tests {
       Ok(IoEvent::StartPlayback(Some(ref context), Some(ref uris), Some(0)))
         if *context == playlist && uris[..] == [track]
     ));
+  }
+
+  #[cfg(all(feature = "apple-music", target_os = "macos"))]
+  #[test]
+  fn apple_music_all_songs_row_takes_the_library_count() {
+    use crate::infra::apple_music::LIBRARY_URI;
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), None);
+    app.set_active_source(Source::AppleMusic);
+    app.load_source_sidebar(Source::AppleMusic);
+    // Until Music sizes the library, the row's 0 is not a count.
+    assert!(app.apple_music_count_unknown(LIBRARY_URI));
+    app.set_apple_music_library_count(None);
+    assert!(app.apple_music_count_unknown(LIBRARY_URI));
+
+    app.set_apple_music_library_count(Some(5390));
+    let all_songs = &app.apple_music_playlists()[0];
+    assert_eq!(
+      (all_songs.uri.as_str(), all_songs.track_count),
+      (LIBRARY_URI, 5390)
+    );
+    assert!(!app.apple_music_count_unknown(LIBRARY_URI));
+
+    // A playlist Music could not count stays unknown; a reload starts over.
+    let playlist = "applemusic:playlist:0123456789ABCDEF";
+    app.append_apple_music_playlists(Vec::new(), vec![playlist.to_string()]);
+    assert!(app.apple_music_count_unknown(playlist));
+    app.load_source_sidebar(Source::AppleMusic);
+    assert!(!app.apple_music_count_unknown(playlist));
   }
 }

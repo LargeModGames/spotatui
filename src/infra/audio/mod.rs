@@ -94,6 +94,7 @@ pub use analyzer::SpectrumData;
 #[allow(dead_code)]
 pub struct SpectrumData {
   pub bands: Vec<f32>,
+  pub wave: Vec<f32>,
 }
 
 #[cfg(not(any(

@@ -1135,13 +1135,13 @@ fn draw_add_track_to_playlist_picker_dialog(f: &mut Frame<'_>, app: &App) {
       .map(|row| {
         let label = match row {
           // Same folder rendering as the sidebar (ui/library.rs): back rows
-          // ("← name") as-is, other folders with a 📁 prefix.
+          // ("← name") as-is, other folders with the FOLDER_ICON prefix.
           PlaylistPickerRow::Folder(folder) => {
             let name = folder.display_name(app.strings());
             if name.starts_with('\u{2190}') {
               name.into_owned()
             } else {
-              format!("\u{1F4C1} {name}")
+              format!("{} {name}", super::util::FOLDER_ICON)
             }
           }
           PlaylistPickerRow::Playlist(playlist) => {
@@ -1958,7 +1958,11 @@ mod playlist_picker_localization_tests {
           }
           text.push('\n');
         }
-        let prefix = if back { "← " } else { "📁 " };
+        let prefix = if back {
+          "← ".to_string()
+        } else {
+          format!("{} ", super::super::util::FOLDER_ICON)
+        };
         assert!(
           text.contains(&format!(
             "{prefix}{}",

@@ -1,6 +1,9 @@
 //! A bounded, serial Music worker, separate from the serial IoEvent pump.
 //! A foreign start returns after pause, or proof that its Apple Event was not delivered.
-use super::{parse_playlists, parse_snapshot, parse_tracks, parse_uri, Browse, Command, MusicUri};
+use super::{
+  parse_playlists, parse_snapshot, parse_tracks, parse_uri, Browse, Command, MusicUri,
+  PlaylistsPage,
+};
 use crate::{core::app::App, infra::network::IoEvent};
 use anyhow::{bail, ensure, Result};
 use std::{
@@ -436,13 +439,20 @@ async fn worker<C: Client>(weak: Weak<Mutex<App>>, mut rx: mpsc::Receiver<Work>,
         }
         let next = result.and_then(|json| {
           if request == Browse::Playlists {
-            let page = parse_playlists(&json)?;
+            let PlaylistsPage {
+              page,
+              uncounted,
+              library,
+            } = parse_playlists(&json)?;
             ensure!(
               page.offset == offset,
               "Music library changed during loading; reload it"
             );
             let end = page.next;
-            app.append_apple_music_playlists(page.items);
+            app.append_apple_music_playlists(page.items, uncounted);
+            if let Some(count) = library {
+              app.set_apple_music_library_count(count);
+            }
             Ok((end, page.total))
           } else {
             let page = parse_tracks(&json)?;

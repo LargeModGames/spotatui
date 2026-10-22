@@ -385,6 +385,9 @@ pub(crate) struct SourcePlaylists {
   youtube: Vec<PlaylistInfo>,
   /// The Music app's playlists, led by an "All songs" row; empty off macOS.
   apple_music: Vec<PlaylistInfo>,
+  /// The `apple_music` rows whose count Music has not given: their
+  /// `track_count` of 0 is a placeholder, so the page shows no count.
+  apple_music_uncounted: Vec<String>,
   /// Stations are playable rows (`radio:<url>`), not playlists.
   radio: Vec<TrackInfo>,
   /// Spotify's saved albums cached so far; `OpenLibrary(Albums)` fetches them.
@@ -1359,6 +1362,12 @@ fn playlists(app: &App) -> SourcePlaylists {
           .to_string(),
         ..playlist.clone()
       })
+      .collect(),
+    apple_music_uncounted: app
+      .apple_music_playlists()
+      .iter()
+      .filter(|playlist| app.apple_music_count_unknown(&playlist.uri))
+      .map(|playlist| playlist.uri.clone())
       .collect(),
     radio: app.radio_stations().clone(),
     saved_albums: saved_albums(app),
@@ -2587,18 +2596,21 @@ mod tests {
   #[test]
   fn apple_library_labels_refresh_by_uri_and_leave_user_playlists_literal() {
     let (mut app, _rx) = app();
-    app.append_apple_music_playlists(vec![
-      PlaylistInfo {
-        uri: "applemusic:library".into(),
-        name: "All songs".into(),
-        ..crate::core::test_helpers::playlist_info("p", "All songs", "", false)
-      },
-      PlaylistInfo {
-        uri: "applemusic:playlist:mine".into(),
-        name: "All songs".into(),
-        ..crate::core::test_helpers::playlist_info("p", "All songs", "", false)
-      },
-    ]);
+    app.append_apple_music_playlists(
+      vec![
+        PlaylistInfo {
+          uri: "applemusic:library".into(),
+          name: "All songs".into(),
+          ..crate::core::test_helpers::playlist_info("p", "All songs", "", false)
+        },
+        PlaylistInfo {
+          uri: "applemusic:playlist:mine".into(),
+          name: "All songs".into(),
+          ..crate::core::test_helpers::playlist_info("p", "All songs", "", false)
+        },
+      ],
+      Vec::new(),
+    );
     for language in [Language::En, Language::ZhHans, Language::ZhHant] {
       app.user_config.behavior.language = language;
       app.refresh_language();
@@ -2608,6 +2620,26 @@ mod tests {
       assert_eq!(rows[1].name, "All songs");
       assert_eq!(app.apple_music_playlists()[0].name, "All songs");
     }
+  }
+
+  #[test]
+  fn apple_music_rows_without_a_count_are_listed_as_uncounted() {
+    let (mut app, _rx) = app();
+    let row = |uri: &str| PlaylistInfo {
+      uri: uri.into(),
+      ..crate::core::test_helpers::playlist_info("p", "x", "", false)
+    };
+    app.append_apple_music_playlists(
+      vec![
+        row("applemusic:playlist:counted"),
+        row("applemusic:playlist:unreadable"),
+      ],
+      vec!["applemusic:playlist:unreadable".into()],
+    );
+    assert_eq!(
+      playlists(&app).apple_music_uncounted,
+      ["applemusic:playlist:unreadable"]
+    );
   }
 
   #[test]

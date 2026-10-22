@@ -15,6 +15,11 @@ export type SourcePlaylists = { spotify: Array<PlaylistInfo>, local: Array<Playl
  */
 apple_music: Array<PlaylistInfo>, 
 /**
+ * The `apple_music` rows whose count Music has not given: their
+ * `track_count` of 0 is a placeholder, so the page shows no count.
+ */
+apple_music_uncounted: Array<string>, 
+/**
  * Stations are playable rows (`radio:<url>`), not playlists.
  */
 radio: Array<TrackInfo>, 

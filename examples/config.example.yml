@@ -18,6 +18,13 @@ behavior:
   # home | recently_played | podcasts | discover | artists | album_list | stats
   startup_route: home
 
+  # --- Toggles ---
+  enable_lyrics: true
+  enable_media_keys: true
+  stop_after_current_track: false # pause native Spotify streaming at track end
+  disable_mouse_inputs: false    # true for keyboard-only navigation
+  startup_behavior: continue     # continue | play | pause
+
   # --- Default sorting ("<field>" or "<field>:desc") ---
   # playlist_tracks: default | name | date_added | artist | album | duration
   # saved_albums:    default | name | date_added | artist | release_date

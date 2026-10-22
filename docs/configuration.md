@@ -7,7 +7,7 @@ spotatui reads `config.yml` from the app config directory:
 
 You can also point spotatui at a specific config file with `--config <path>`.
 
-All fields are optional; omitted values use the built-in defaults. A complete, commented example lives in [`examples/config.example.yml`](../examples/config.example.yml).
+All fields are optional; omitted values use the built-in defaults. A commented example of commonly used settings lives in [`examples/config.example.yml`](../examples/config.example.yml).
 
 Simple values (numbers, toggles, icons, positions) can also be changed live in the in-app **Settings** screen (`Alt+,`, or `Ctrl+,` on macOS; the desktop app has a Settings page). Press the search key (`/` by default) there to fuzzy-filter the rows by name or by their key in this file, so you can reach a setting without scrolling for it. Structured config (`format:` templates, `tables:` columns, and `playbar_control_labels`) is file-only. Edit the file while the app is closed: saving from the Settings screen rewrites the `behavior`, `theme`, and `keybindings` sections, but your `format:`, `tables:`, and `plugin_commands:` sections survive in-app saves untouched.
 
@@ -86,6 +86,7 @@ behavior:
   streaming_device_name: spotatui  # the name in the Connect device list
   streaming_bitrate: 320           # 96, 160, or 320 kbps
   streaming_audio_cache: false     # keep played audio in the streaming cache
+  streaming_autoplay: true         # enable Spotify's related-songs autoplay
 ```
 ## Cover art dithering
 
@@ -259,7 +260,7 @@ The card shows cover art, title, artist, a progress bar and an animated equalize
 
 ## Audio visualizer
 
-Press `v` for the visualizer and `V` to switch between Cava, Bar Graph and Spotify Pitch. Cava and Bar Graph analyse your system audio in real time, so they also react to videos, games and any other sound:
+Press `v` for the visualizer and `V` to switch between Cava, Bar Graph, Head Unit, Analog VU, Winamp, Phosphor Scope, Outrun, Rack EQ, Cassette Deck and Spotify Pitch. All but Spotify Pitch analyse your system audio in real time, so they also react to videos, games and any other sound:
 
 | Platform | Setup |
 |---|---|
@@ -291,6 +292,35 @@ behavior:
 - `small_terminal_width` / `small_terminal_height` are the responsive-layout breakpoints. At or above `small_terminal_width` columns the app uses the wide layout (search box inside the sidebar); below it the search box gets its own full-width top row. `enforce_wide_search_bar: true` forces the full-width search row regardless of width.
 - Unknown position strings fall back to the default with a warning.
 - Mouse hit-testing follows every arrangement automatically.
+
+## Other behavior keys
+
+These keys also go under `behavior:`. Defaults below are the built-in values when a key is omitted; most can also be changed in Settings.
+
+| Key | Default | What it does |
+|-----|---------|--------------|
+| `enable_text_emphasis` | `true` | Enable bold/italic text styling. |
+| `show_loading_indicator` | `true` | Show loading status in the UI. |
+| `group_folders_first` | `false` | List folders at the top of the Playlists tab. |
+| `disable_mouse_inputs` | `false` | Disable mouse inputs for keyboard-only navigation. |
+| `enable_announcements` | `true` | Show one-time announcements from a remote JSON feed. |
+| `announcement_feed_url` | Unset | Override the remote JSON feed URL (HTTPS). |
+| `enable_lyrics` | `true` | Look up lyrics for each track. Spotify tracks try Spotify first, then fall back to LRCLIB if lyrics are unavailable or the request fails; LRCLIB receives the title, artist and length. |
+| `enable_monthly_recap_prompt` | `true` | Show a popup once a month when your listening recap is ready. |
+| `pin_community_playlist` | `true` | Pin the spotatui community playlist to the top of your Spotify playlists. |
+| `visualizer_style` | `Cava` | Visualizer look: `Cava`, `BarGraph`, `HeadUnit`, `AnalogVu`, `Winamp`, `PhosphorScope`, `Outrun`, `RackEq` or `Cassette` (case-sensitive). Older `Classic` and `Equalizer` values are accepted as aliases for `Cava`. |
+| `stop_after_current_track` | `false` | Pause native Spotify streaming when the current track finishes; does not apply to other sources or remote Connect devices. |
+| `draw_cover_art` | `true` | Enable rendering song/episode cover art; needs a cover-art build. |
+| `cover_art_theme` | `false` | Recolor UI accents from the current cover art, fading on track change. Requires `art-decode`, which `cover-art` includes. |
+| `keepawake_enabled` | `true` | Prevent the system from sleeping while music is playing. |
+| `enable_media_keys` | `true` | Let OS media keys, headphone buttons and remote controls (`playerctl`, Now Playing) control playback. |
+| `enable_global_song_count` | `true` | Contribute to the anonymous worldwide song counter: an increment after 30 seconds of playback (half the duration for tracks shorter than a minute), or every 2.5 minutes of radio; no personal info, song names or history. Requires `telemetry`. |
+| `enable_discord_rpc` | `true` | Show your current track in Discord. Requires `discord-rpc`. |
+| `discord_rpc_client_id` | Unset | Override the built-in Discord application ID with a string. Requires `discord-rpc`. |
+| `startup_behavior` | `continue` | Playback state at launch: `continue` preserves Spotify's state and resumes a saved non-Spotify session as it was; `play` always starts; `pause` always pauses. |
+| `disable_auto_update` | `false` | Skip the automatic update check on startup; use `spotatui update` to update manually. Requires `self-update`. |
+
+The `discord-rpc`, `telemetry` and `self-update` features are in the default build. Every release binary includes cover art, but a plain `cargo run` does not; build with `--features cover-art` for the cover-art keys above.
 
 ## Icons
 

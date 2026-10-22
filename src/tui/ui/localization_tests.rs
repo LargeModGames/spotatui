@@ -138,7 +138,7 @@ fn synthetic_source_rows_follow_live_language_changes_without_renaming_user_play
   apple_library.uri = "applemusic:library".to_string();
   let mut apple_user = playlist_info("user", "All songs", "Music", false);
   apple_user.uri = "applemusic:playlist:user".to_string();
-  app.append_apple_music_playlists(vec![apple_library, apple_user]);
+  app.append_apple_music_playlists(vec![apple_library, apple_user], Vec::new());
   let mut qobuz_favorites = playlist_info("synthetic", "Favorite tracks", "User", false);
   qobuz_favorites.uri = "qobuz:favorites:tracks".to_string();
   let mut qobuz_user = playlist_info("user", "Favorite tracks", "User", false);

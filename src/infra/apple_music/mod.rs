@@ -282,6 +282,19 @@ struct WirePage<T> {
   total: usize,
   /// Absent from older helpers, which never skipped an entry.
   next: Option<usize>,
+  /// The library's track count: sent with the first playlists page only,
+  /// and null when Music could not read it.
+  #[serde(default, deserialize_with = "present")]
+  library: Option<Option<u32>>,
+}
+
+/// Tells a field Music sent as null (`Some(None)`) from one it left out (`None`).
+fn present<'de, D, T>(deserializer: D) -> std::result::Result<Option<T>, D::Error>
+where
+  D: serde::Deserializer<'de>,
+  T: Deserialize<'de>,
+{
+  T::deserialize(deserializer).map(Some)
 }
 
 impl<T> WirePage<T> {
@@ -323,25 +336,43 @@ pub(crate) fn parse_tracks(json: &str) -> Result<Page<TrackInfo>> {
   })
 }
 
-pub(crate) fn parse_playlists(json: &str) -> Result<Page<PlaylistInfo>> {
+/// One page of Music's playlists.
+pub(crate) struct PlaylistsPage {
+  pub page: Page<PlaylistInfo>,
+  /// The page's playlists whose count Music could not read.
+  pub uncounted: Vec<String>,
+  /// The library's track count, on the first page only; `Some(None)` when
+  /// Music could not read it.
+  pub library: Option<Option<u32>>,
+}
+
+pub(crate) fn parse_playlists(json: &str) -> Result<PlaylistsPage> {
   #[derive(Deserialize)]
   struct Playlist {
     id: String,
     name: String,
+    /// Absent from older helpers, and null when Music could not read it.
+    count: Option<u32>,
   }
   let wire: WirePage<Playlist> = serde_json::from_str(json).context("Invalid Music playlists")?;
   validate_page(&wire)?;
   let next = wire.next();
+  let library = wire.library;
+  let mut uncounted = Vec::new();
   let items = wire
     .items
     .into_iter()
     .map(|p| {
+      let uri = format!("applemusic:playlist:{}", persistent_id(&p.id)?);
+      if p.count.is_none() {
+        uncounted.push(uri.clone());
+      }
       Ok(PlaylistInfo {
         generated_name: None,
-        uri: format!("applemusic:playlist:{}", persistent_id(&p.id)?),
+        uri,
         name: p.name,
         owner: "Music".into(),
-        track_count: 0,
+        track_count: p.count.unwrap_or(0),
         id: None,
         owner_id: None,
         collaborative: false,
@@ -350,11 +381,15 @@ pub(crate) fn parse_playlists(json: &str) -> Result<Page<PlaylistInfo>> {
       })
     })
     .collect::<Result<_>>()?;
-  Ok(Page {
-    items,
-    next,
-    offset: wire.offset,
-    total: wire.total,
+  Ok(PlaylistsPage {
+    page: Page {
+      items,
+      next,
+      offset: wire.offset,
+      total: wire.total,
+    },
+    uncounted,
+    library,
   })
 }
 
@@ -395,6 +430,9 @@ pub(crate) struct RemoteState {
   pub browse: Option<Browse>,
   pub tracks: Vec<TrackInfo>,
   pub playlists: Vec<PlaylistInfo>,
+  /// The sidebar rows whose count Music has not given (yet); the GUI shows
+  /// them without one rather than as empty.
+  pub uncounted: std::collections::HashSet<String>,
   pub playing_list: Option<PlayingList>,
   /// Music's shuffle setting as last read while a track was loaded. Stopped,
   /// Music reports it off whatever the user chose, so that read is ignored.
@@ -494,7 +532,32 @@ mod tests {
     // Older helpers send no next: it follows the rows.
     let page =
       parse_playlists(r#"{"items":[{"id":"0123456789ABCDEF","name":"x"}],"offset":3,"total":9}"#)
-        .unwrap();
+        .unwrap()
+        .page;
     assert_eq!(page.next, 4);
+  }
+
+  #[test]
+  fn apple_music_playlists_carry_their_track_counts() {
+    let parsed = parse_playlists(
+      r#"{"items":[{"id":"0123456789ABCDEF","name":"x","count":84},
+                   {"id":"FEDCBA9876543210","name":"y","count":null}],
+          "offset":0,"total":2,"library":5390}"#,
+    )
+    .unwrap();
+    let counts: Vec<u32> = parsed.page.items.iter().map(|p| p.track_count).collect();
+    assert_eq!(counts, [84, 0]);
+    // A count Music could not read is reported, not passed off as empty.
+    assert_eq!(parsed.uncounted, ["applemusic:playlist:FEDCBA9876543210"]);
+    assert_eq!(parsed.library, Some(Some(5390)));
+    // Only the first page sizes the library, and a null size is unknown.
+    let later = parse_playlists(
+      r#"{"items":[{"id":"0123456789ABCDEF","name":"x","count":1}],"offset":3,"total":9}"#,
+    )
+    .unwrap();
+    assert_eq!((later.library, later.uncounted.len()), (None, 0));
+    let unreadable =
+      parse_playlists(r#"{"items":[],"offset":0,"total":0,"library":null}"#).unwrap();
+    assert_eq!(unreadable.library, Some(None));
   }
 }
