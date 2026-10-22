@@ -2,7 +2,7 @@ use crate::core::app::SearchResult;
 use crate::core::user_config::UserConfig;
 use crate::infra::network::{IoEvent, Network};
 
-use super::util::{Flag, Format, FormatType, JumpDirection, Type};
+use super::util::{next_repeat_state, Flag, Format, FormatType, JumpDirection, Type};
 
 use anyhow::{anyhow, Result};
 use reqwest::Method;
@@ -357,7 +357,7 @@ impl CliApp {
       Flag::Repeat => {
         self
           .net
-          .handle_network_event(IoEvent::Repeat(c.repeat_state))
+          .handle_network_event(IoEvent::Repeat(next_repeat_state(c.repeat_state)))
           .await;
       }
     }

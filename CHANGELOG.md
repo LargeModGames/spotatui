@@ -36,6 +36,8 @@
 
 ### Fixed
 
+- **`playback --repeat` now advances repeat modes** from Off to Context to Track instead of sending the current mode ([#816](https://github.com/LargeModGames/spotatui/issues/816)).
+
 - **Apple Music playlists show their real song counts** in the desktop app and the browser GUI: every playlist in Your Library, "All songs" included, said `0 songs`, because the count was never read from Music. It now is, one playlist at a time, which adds about 8 ms per playlist to loading the sidebar; a playlist whose count Music cannot read shows no number rather than a wrong 0 ([#891](https://github.com/LargeModGames/spotatui/issues/891)).
 
 - **Local Files folders and track names sort case-insensitively**: both sorts compared names by raw byte order, so every capital letter sorted before every lowercase one and mixed-case libraries looked unsorted. The folder list and the name fallback for untagged tracks now compare lowercased names, with byte order as a stable tiebreak ([#824](https://github.com/LargeModGames/spotatui/issues/824)).
