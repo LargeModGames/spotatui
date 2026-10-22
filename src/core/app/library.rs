@@ -299,7 +299,7 @@ impl App {
   }
 
   fn sort_saved_albums(&mut self) {
-    use crate::core::sort::sort_by_key_with_order;
+    use crate::core::sort::{sort_by_key_with_order, SortOrder};
 
     let sort_state = self.album_sort;
 
@@ -323,6 +323,11 @@ impl App {
         // order chronologically; an album without one sorts first.
         SortField::ReleaseDate => sort_by_key_with_order(&mut page.items, sort_state.order, |a| {
           a.album.release_date.clone()
+        }),
+        // The library arrives newest saved first, whatever order the user
+        // picked since, so Default is always descending by `added_at`.
+        SortField::Default => sort_by_key_with_order(&mut page.items, SortOrder::Descending, |a| {
+          a.added_at.clone()
         }),
         _ => {}
       }
@@ -1246,6 +1251,54 @@ mod tests {
       .filter_map(|a| a.album.id.as_deref())
       .collect();
     assert_eq!(ids, ["new", "mid", "old", "undated"]);
+  }
+
+  fn saved_album_ids(app: &App) -> Vec<&str> {
+    app.library.saved_albums.pages[0]
+      .items
+      .iter()
+      .filter_map(|a| a.album.id.as_deref())
+      .collect()
+  }
+
+  fn app_with_saved_albums_in_library_order() -> App {
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    let mut page = saved_album_page(0, &["zebra", "apple", "mango"], false);
+    let added = [
+      "2024-05-17T00:00:00+00:00",
+      "2020-01-01T00:00:00+00:00",
+      "2010-01-01T00:00:00+00:00",
+    ];
+    let names = ["Zebra", "Apple", "Mango"];
+    for ((item, at), name) in page.items.iter_mut().zip(added).zip(names) {
+      item.added_at = at.to_string();
+      item.album.name = name.to_string();
+    }
+    app.library.saved_albums.upsert_page_by_offset(page);
+    app
+  }
+
+  #[test]
+  fn default_sort_restores_the_saved_album_library_order() {
+    let mut app = app_with_saved_albums_in_library_order();
+
+    app.apply_sort_field(SortContext::SavedAlbums, SortField::Name);
+    assert_eq!(saved_album_ids(&app), ["apple", "mango", "zebra"]);
+
+    app.apply_sort_field(SortContext::SavedAlbums, SortField::Default);
+    assert_eq!(saved_album_ids(&app), ["zebra", "apple", "mango"]);
+  }
+
+  #[test]
+  fn default_sort_twice_keeps_the_newest_saved_album_first() {
+    let mut app = app_with_saved_albums_in_library_order();
+
+    app.apply_sort_field(SortContext::SavedAlbums, SortField::Name);
+    app.apply_sort_field(SortContext::SavedAlbums, SortField::Default);
+    app.apply_sort_field(SortContext::SavedAlbums, SortField::Default);
+
+    assert_eq!(saved_album_ids(&app), ["zebra", "apple", "mango"]);
   }
 
   #[test]
