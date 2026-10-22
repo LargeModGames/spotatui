@@ -118,6 +118,30 @@
   color: var(--panel);
 }
 
+.library-find {
+  flex-shrink: 0;
+  align-self: stretch;
+  min-width: 0;
+  height: 32px;
+  box-sizing: border-box;
+  margin: 0 16px 8px;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: var(--raised);
+  color: var(--text);
+  font: 14px var(--sans);
+}
+
+.library-find:hover {
+  background: var(--hover);
+}
+
+.library-find:focus {
+  outline: none;
+  border-color: var(--text);
+}
+
 .library-sort {
   display: flex;
   justify-content: flex-end;

@@ -1164,6 +1164,12 @@ fn render_local_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect, view: 
     };
     title_spans.push(Span::styled(format!(" | {}", message), msg_style));
   }
+  for seg in app.plugin_playbar_segments.values() {
+    title_spans.push(Span::styled(
+      format!(" | {}", seg),
+      Style::default().fg(app.user_config.theme.playbar_text.into()),
+    ));
+  }
 
   let title_block = Block::default()
     .borders(Borders::ALL)
@@ -2288,13 +2294,12 @@ mod tests {
   /// Collect every rendered cell symbol in `area` into one string for substring
   /// assertions.
   #[cfg(any(feature = "local-files", feature = "qobuz"))]
-  fn rendered_text(area: Rect, view: &LocalPlaybarView) -> String {
+  fn rendered_text(app: &App, area: Rect, view: &LocalPlaybarView) -> String {
     use ratatui::{backend::TestBackend, Terminal};
 
-    let app = App::default();
     let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
     terminal
-      .draw(|f| render_local_playbar(f, &app, area, view))
+      .draw(|f| render_local_playbar(f, app, area, view))
       .unwrap();
     let buffer = terminal.backend().buffer();
     (0..area.height)
@@ -2322,7 +2327,7 @@ mod tests {
       show_modes: true,
       quality: None,
     };
-    let content = rendered_text(Rect::new(0, 0, 160, 6), &view);
+    let content = rendered_text(&App::default(), Rect::new(0, 0, 160, 6), &view);
 
     assert!(
       content.contains("My Local Song"),
@@ -2366,11 +2371,47 @@ mod tests {
       show_modes: true,
       quality: None,
     };
-    let content = rendered_text(Rect::new(0, 0, 160, 6), &view);
+    let content = rendered_text(&App::default(), Rect::new(0, 0, 160, 6), &view);
     assert!(content.contains("Paused"), "should show Paused: {content}");
     assert!(
       !content.contains('/') || !content.contains("1/1"),
       "a single-track session should not show a queue indicator: {content}"
+    );
+  }
+
+  /// `set_playbar` text has to survive on every source playbar. The local
+  /// renderer shares this path with Subsonic, Qobuz, radio, YouTube, the
+  /// queue, and Apple Music.
+  #[cfg(feature = "local-files")]
+  #[test]
+  fn local_playbar_shows_plugin_segments() {
+    let mut app = App::default();
+    app
+      .plugin_playbar_segments
+      .insert("clock".to_string(), "plugin-clock".to_string());
+    app.set_status_message("status", 10);
+    let view = LocalPlaybarView {
+      source_label: "Local",
+      name: "Track".to_string(),
+      artists: "Artist".to_string(),
+      is_playing: true,
+      position_ms: 0,
+      duration_ms: 200_000,
+      volume_percent: 50,
+      queue_position: None,
+      live: false,
+      show_modes: true,
+      quality: None,
+    };
+    let content = rendered_text(&app, Rect::new(0, 0, 160, 6), &view);
+
+    assert!(
+      content.find("status").unwrap() < content.find("plugin-clock").unwrap(),
+      "plugin playbar text should follow the status message: {content}"
+    );
+    assert!(
+      content.contains(" | plugin-clock"),
+      "plugin playbar text should follow the title: {content}"
     );
   }
 
@@ -2390,7 +2431,7 @@ mod tests {
       show_modes: true,
       quality: Some("FLAC 16/44.1".to_string()),
     };
-    let content = rendered_text(Rect::new(0, 0, 160, 6), &view);
+    let content = rendered_text(&App::default(), Rect::new(0, 0, 160, 6), &view);
     assert!(
       content.contains("Artist \u{2022} FLAC 16/44.1"),
       "the delivered format should follow the artists: {content}"
@@ -2400,7 +2441,7 @@ mod tests {
       artists: String::new(),
       ..view
     };
-    let content = rendered_text(Rect::new(0, 0, 160, 6), &no_artists);
+    let content = rendered_text(&App::default(), Rect::new(0, 0, 160, 6), &no_artists);
     assert!(
       content.contains("FLAC 16/44.1") && !content.contains('\u{2022}'),
       "no separator without artists: {content}"
@@ -2426,7 +2467,7 @@ mod tests {
       show_modes: false,
       quality: None,
     };
-    let content = rendered_text(Rect::new(0, 0, 160, 6), &view);
+    let content = rendered_text(&App::default(), Rect::new(0, 0, 160, 6), &view);
 
     assert!(
       content.contains("SomaFM Groove Salad"),
@@ -2569,7 +2610,8 @@ mod tests {
     app.user_config.behavior.language = Language::ZhHant;
     app.refresh_language();
     let title = render_playbar_template(&app, false, &values);
-
+    assert!(title.contains("隨機播放"));
+    assert!(title.contains("音量：50%"));
     assert!(title.contains("Desk {volume}"));
     app.user_config.format.playbar_status =
       crate::core::format::Template::parse("Volume: {volume}% / {device}", FORMAT_KEYS).unwrap();

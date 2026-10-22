@@ -4,6 +4,7 @@
 
 ### Added
 
+- **Filter your playlists in the desktop app**: a filter box under the Your Library chips narrows the playlists of the active source, including the ones inside closed folders.
 - **Seven new visualizer styles**: `V` on the visualizer screen now also cycles through **Head Unit** (an early-2000s car-stereo display: a floor of spectrum strips in perspective under a wall of panels, drawn in Braille dots), **Analog VU** (two needle meters, left and right, with a peak lamp), **Winamp** (scanlined bars with falling peak caps and an oscilloscope strip), **Phosphor Scope** (a green CRT trace with fading phosphor trails and a measured Vpp and frequency), **Outrun** (a striped synthwave sun that pulses with the bass behind a spectrum skyline and a scrolling grid), **Rack EQ** (left and right LED ladders per band with falling peak LEDs) and **Cassette Deck** (turning reels that wind the tape across as the song plays, LED level bars and a tape counter). The choice is saved as `visualizer_style` in `config.yml`. The analyzer now also hands the terminal the last 50 ms of the waveform with each spectrum frame, which the scope styles draw.
 
 - **Gruvbox Cove theme preset**: Gruvbox dark on the standard bg0 background, with green as the main accent, aqua as the second colour, blue hints and yellow kept for warnings only. Pick it with `Alt-,` or set `preset: "Gruvbox Cove"` in `config.yml`.
@@ -38,6 +39,8 @@
 
 - **Saved Albums goes back to newest saved first on Default**: picking Default in the sort menu after another sort left the list in that order until the next refetch, because Default had no case in the sort. It now orders each page by when the album was saved, newest first, whatever the previous order was ([#817](https://github.com/LargeModGames/spotatui/issues/817)).
 
+- **`playback --repeat` now advances repeat modes** from Off to Context to Track instead of sending the current mode ([#816](https://github.com/LargeModGames/spotatui/issues/816)).
+
 - **Apple Music playlists show their real song counts** in the desktop app and the browser GUI: every playlist in Your Library, "All songs" included, said `0 songs`, because the count was never read from Music. It now is, one playlist at a time, which adds about 8 ms per playlist to loading the sidebar; a playlist whose count Music cannot read shows no number rather than a wrong 0 ([#891](https://github.com/LargeModGames/spotatui/issues/891)).
 
 - **Local Files folders and track names sort case-insensitively**: both sorts compared names by raw byte order, so every capital letter sorted before every lowercase one and mixed-case libraries looked unsorted. The folder list and the name fallback for untagged tracks now compare lowercased names, with byte order as a stable tiebreak ([#824](https://github.com/LargeModGames/spotatui/issues/824)).
@@ -55,6 +58,8 @@
 - **A clear hint when ALSA has no default device**: with PipeWire but no ALSA bridge, pressing play used to show a cut-off "Connection Refused" error. The status line now says ALSA has no default device and suggests installing `pipewire-alsa`, and the native streaming docs have a No sound section ([#848](https://github.com/LargeModGames/spotatui/issues/848)).
 
 - **Subsonic usernames with special characters can log in**: a username with `+`, `&`, `#`, `%`, `=` or a space is now percent-encoded in every request, so the server no longer answers with error 40 ([#814](https://github.com/LargeModGames/spotatui/issues/814)).
+
+- **Plugin playbar text stays while another source plays**: text a plugin sets with `spotatui.set_playbar` now stays in the playbar title for Local Files, Subsonic, Qobuz, internet radio, YouTube, the queue, and Apple Music, after any status message, as it already did for Spotify ([#823](https://github.com/LargeModGames/spotatui/issues/823)).
 
 ## [v0.46.0] 2026-10-14
 

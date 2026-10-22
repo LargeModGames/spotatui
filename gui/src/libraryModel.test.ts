@@ -13,6 +13,7 @@ import {
   createsPlaylists,
   focusAfterAsk,
   libraryTree,
+  matchesFilter,
   listPlayRequest,
   loadExpanded,
   nearEnd,
@@ -155,6 +156,23 @@ describe("playlistsFor", () => {
         image: null,
       },
     ]);
+  });
+});
+
+describe("matchesFilter", () => {
+  it("matches every word in any field, ignoring case", () => {
+    expect(matchesFilter("ROAD", "Road trip")).toBe(true);
+    expect(matchesFilter("trip road", "Road trip")).toBe(true);
+    expect(matchesFilter("  trip   ROAD  ", "Road trip")).toBe(true);
+    expect(matchesFilter("adele 21", "21", "Adele")).toBe(true);
+    expect(matchesFilter("adele 25", "21", "Adele")).toBe(false);
+    expect(matchesFilter("nyt", "The Daily", null)).toBe(false);
+  });
+
+  it("matches everything for a blank query", () => {
+    expect(matchesFilter("", "Road trip")).toBe(true);
+    expect(matchesFilter("   ", "Road trip")).toBe(true);
+    expect(matchesFilter("", null, undefined)).toBe(true);
   });
 });
 

@@ -98,6 +98,8 @@ const rows = (
     view?: View;
     expanded?: string[];
     playlists?: SourcePlaylists;
+    needle?: string;
+    s?: typeof EN;
   } = {},
 ) => {
   const open = vi.fn();
@@ -115,6 +117,8 @@ const rows = (
       expanded={new Set(options.expanded ?? [])}
       onToggle={onToggle}
       onMenu={onMenu}
+      needle={options.needle}
+      s={options.s}
     />
   );
   return { tree, open, send, onToggle, onMenu };
@@ -171,6 +175,10 @@ describe("LibraryPanel header and filters", () => {
     const html = panel("Spotify", { ...payload, folders: null });
     expect(html).not.toContain("aria-expanded");
     expect(html).toContain('title="Road trip');
+  });
+
+  it("labels the library search separately from the list page filter", () => {
+    expect(panel("Local")).toContain('aria-label="Filter Your Library"');
   });
 });
 
@@ -306,6 +314,63 @@ describe("PlaylistRows", () => {
       { x: 200, y: 60 },
       row,
     );
+  });
+
+  it("finds playlists inside closed folders without indentation", () => {
+    const { tree, onToggle } = rows("Spotify", {
+      needle: "trip ROAD",
+    });
+
+    expect(titles(tree)).toEqual(["Road trip"]);
+    expect(titled(tree, "Road trip").props.style).toBeUndefined();
+    expect(onToggle).not.toHaveBeenCalled();
+  });
+
+  it("filters fixed rows and playlists from other sources", () => {
+    expect(titles(rows("Spotify", { needle: "liked" }).tree)).toEqual([
+      "Liked Songs",
+    ]);
+    expect(titles(rows("Spotify", { needle: "recently" }).tree)).toEqual([
+      "Recently played",
+    ]);
+    expect(titles(rows("Local", { needle: "health" }).tree)).toEqual([
+      "Library health",
+    ]);
+    expect(titles(rows("Local", { needle: "rip" }).tree)).toEqual(["Rips"]);
+    expect(titles(rows("YouTube", { needle: "watch" }).tree)).toEqual([
+      "Watch later",
+    ]);
+    expect(titles(rows("Local", { needle: "recently" }).tree)).toEqual([]);
+  });
+
+  it("announces no matches when only a folder name matches", () => {
+    const html = renderToStaticMarkup(
+      rows("Spotify", { needle: "moods" }).tree,
+    );
+
+    expect(html).toContain('role="status"');
+    expect(html).toContain("No matches for “moods”.");
+    expect(html).not.toContain('title="Moods"');
+  });
+
+  it("keeps the existing folder view for blank queries", () => {
+    for (const expanded of [[], ["spotify:user:me:folder:moods"]]) {
+      const original = renderToStaticMarkup(rows("Spotify", { expanded }).tree);
+      const blank = renderToStaticMarkup(
+        rows("Spotify", { expanded, needle: "   " }).tree,
+      );
+
+      expect(blank).toBe(original);
+    }
+  });
+
+  it("matches the displayed translated titles of fixed rows", () => {
+    const s = { ...EN, liked_songs: "Lieblingssongs" };
+
+    expect(titles(rows("Local", { needle: "lieblings", s }).tree)).toEqual([
+      "Lieblingssongs",
+    ]);
+    expect(titles(rows("Local", { needle: "liked", s }).tree)).toEqual([]);
   });
 });
 

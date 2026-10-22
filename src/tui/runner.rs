@@ -69,12 +69,20 @@ fn dj_captures_key_before_back(app: &App) -> bool {
   app.get_current_route().active_block == ActiveBlock::AiDj
 }
 
+/// An open plugin popup or sort menu gets every key, the back key included.
+fn modal_captures_key_before_back(app: &App) -> bool {
+  app.plugin_popup.is_some() || app.get_current_route().active_block == ActiveBlock::SortMenu
+}
+
 /// Blocks that must see the configurable back key *before* the runner acts on it
 /// themselves. Ordering is the whole point, so this is one predicate rather than
 /// two conditions spelled out at the call site: a screen that is missing here has
 /// its route popped instead of receiving the key, however well its own handler
 /// copes with it.
 fn key_reaches_handlers_before_back(app: &App, key: Key) -> bool {
+  if modal_captures_key_before_back(app) {
+    return true;
+  }
   #[cfg(feature = "ai-dj")]
   if dj_captures_key_before_back(app) {
     return true;
@@ -153,8 +161,11 @@ fn dispatch_key(key: Key, app: &mut App) -> bool {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::core::action::Action;
   use crate::core::app::TrackTableContext;
   use crate::core::geometry::Viewport;
+  use crate::core::plugin_api::PluginPopup;
+  use crate::core::sort::SortContext;
   use rspotify::model::idtypes::PlaylistId;
   use std::{sync::mpsc::channel, time::SystemTime};
 
@@ -445,6 +456,50 @@ mod tests {
     assert!(!dispatch_key(app.user_config.keys.back, &mut app));
 
     assert_ne!(app.get_current_route().id, RouteId::TrackTable);
+  }
+
+  #[test]
+  fn the_back_key_closes_the_sort_menu_and_keeps_the_playlist_open() {
+    let mut app = app();
+    app.push_navigation_stack(RouteId::TrackTable, ActiveBlock::TrackTable);
+    app.view.sort_context = Some(SortContext::PlaylistTracks);
+    app.view.sort_menu_visible = true;
+    app.set_current_route_state(Some(ActiveBlock::SortMenu), None);
+
+    assert!(!dispatch_key(app.user_config.keys.back, &mut app));
+
+    assert!(!app.view.sort_menu_visible);
+    assert_eq!(app.get_current_route().id, RouteId::TrackTable);
+    assert_eq!(
+      app.get_current_route().active_block,
+      ActiveBlock::Empty,
+      "close_sort_menu leaves the active block empty until another click or key focuses it"
+    );
+  }
+
+  #[test]
+  fn the_back_key_closes_a_plugin_popup_without_leaving_the_screen() {
+    let mut app = app();
+    app.apply(Action::ShowPopup(PluginPopup {
+      title: "t".into(),
+      lines: vec![],
+    }));
+
+    assert!(!dispatch_key(app.user_config.keys.back, &mut app));
+
+    assert!(app.plugin_popup.is_none());
+    assert_eq!(app.get_current_route().id, RouteId::Home);
+
+    app.push_navigation_stack(RouteId::TrackTable, ActiveBlock::TrackTable);
+    app.apply(Action::ShowPopup(PluginPopup {
+      title: "t".into(),
+      lines: vec![],
+    }));
+
+    assert!(!dispatch_key(app.user_config.keys.back, &mut app));
+
+    assert!(app.plugin_popup.is_none());
+    assert_eq!(app.get_current_route().id, RouteId::TrackTable);
   }
 
   /// `y` at the exit prompt is the one keypress that ends the process, and the

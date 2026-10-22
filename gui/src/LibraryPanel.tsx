@@ -32,6 +32,7 @@ import {
   createsPlaylists,
   focusAfterAsk,
   libraryTree,
+  matchesFilter,
   loadExpanded,
   nearEnd,
   openRow,
@@ -101,6 +102,7 @@ export const LibraryPanel = memo(function LibraryPanel({
   const active = source?.active ?? null;
   const spotify = active === "Spotify";
   const [chosen, setChosen] = useState<Filter>("Playlists");
+  const [needle, setNeedle] = useState("");
   // Albums, Artists and Podcasts exist for Spotify only; another source shows its playlists.
   const filter = spotify ? chosen : "Playlists";
   const [albumPick, setAlbumPick] = useState<string | null>(null);
@@ -244,6 +246,17 @@ export const LibraryPanel = memo(function LibraryPanel({
           </button>
         ))}
       </div>
+      {filter === "Playlists" && (
+        <input
+          type="search"
+          className="library-find"
+          aria-label={s.filter_your_library}
+          placeholder={s.filter}
+          autoComplete="off"
+          value={needle}
+          onChange={(event) => setNeedle(event.target.value)}
+        />
+      )}
       {filter === "Albums" && (
         <SortSelect
           label={s.sort_albums}
@@ -269,6 +282,7 @@ export const LibraryPanel = memo(function LibraryPanel({
         {filter === "Playlists" && (
           <PlaylistRows
             s={s}
+            needle={needle}
             playlists={playlists}
             source={active}
             unmatched={unmatched}
@@ -490,9 +504,18 @@ export function ShowRows({
   ));
 }
 
+function NoMatches({ s, needle }: { s: GuiStrings; needle: string }) {
+  return (
+    <p className="library-empty" role="status">
+      {fmt(s.no_library_matches, { query: needle.trim() })}
+    </p>
+  );
+}
+
 /** Liked Songs, Recently played, the active source's playlists or stations, and Library health. */
 export const PlaylistRows = memo(function PlaylistRows({
   s = EN,
+  needle = "",
   playlists,
   source,
   unmatched,
@@ -504,6 +527,7 @@ export const PlaylistRows = memo(function PlaylistRows({
   onMenu,
 }: {
   s?: GuiStrings;
+  needle?: string;
   playlists: SourcePlaylists | null;
   source: Source | null;
   unmatched: number;
@@ -515,11 +539,29 @@ export const PlaylistRows = memo(function PlaylistRows({
   onToggle: (uri: string) => void;
   onMenu: OpenMenu;
 }) {
+  const filtering = needle.trim() !== "";
   const tree =
-    playlists && source === "Spotify" && playlists.folders
+    !filtering && playlists && source === "Spotify" && playlists.folders
       ? libraryTree(playlists.folders, playlists.spotify, expanded)
       : null;
-  const rows = playlists && source ? playlistsFor(playlists, source) : [];
+  const rows = (
+    playlists && source ? playlistsFor(playlists, source) : []
+  ).filter((row) => matchesFilter(needle, row.name));
+
+  const showLiked = matchesFilter(needle, s.liked_songs);
+  const showRecent =
+    source === "Spotify" && matchesFilter(needle, s.recently_played);
+  const showHealth = matchesFilter(needle, s.library_health);
+
+  if (
+    filtering &&
+    rows.length === 0 &&
+    !showLiked &&
+    !showRecent &&
+    !showHealth
+  ) {
+    return <NoMatches s={s} needle={needle} />;
+  }
   const menus = source === "Spotify" || source === "YouTube";
   const pick = (row: SidebarRow) => {
     if (!source) return;
@@ -558,19 +600,21 @@ export const PlaylistRows = memo(function PlaylistRows({
   );
   return (
     <>
-      <Row
-        s={s}
-        cover={
-          <span className="liked-tile" aria-hidden="true">
-            <Glyph name="heart" size={20} filled />
-          </span>
-        }
-        title={s.liked_songs}
-        subline={s.playlist}
-        current={view.page === "liked"}
-        onClick={() => open({ page: "liked" })}
-      />
-      {source === "Spotify" && (
+      {showLiked && (
+        <Row
+          s={s}
+          cover={
+            <span className="liked-tile" aria-hidden="true">
+              <Glyph name="heart" size={20} filled />
+            </span>
+          }
+          title={s.liked_songs}
+          subline={s.playlist}
+          current={view.page === "liked"}
+          onClick={() => open({ page: "liked" })}
+        />
+      )}
+      {showRecent && (
         <Row
           s={s}
           cover={
@@ -600,22 +644,24 @@ export const PlaylistRows = memo(function PlaylistRows({
             ),
           )
         : rows.map((row) => playlistRow(row, row.uri))}
-      <Row
-        s={s}
-        cover={<Cover src={null} size={48} fallback="link" />}
-        title={s.library_health}
-        subline={
-          unmatched > 0 ? (
-            <span className="warn">
-              {fmt(s.unmatched_count, { count: unmatched })}
-            </span>
-          ) : (
-            s.playlist_sync
-          )
-        }
-        current={view.page === "health"}
-        onClick={() => open({ page: "health" })}
-      />
+      {showHealth && (
+        <Row
+          s={s}
+          cover={<Cover src={null} size={48} fallback="link" />}
+          title={s.library_health}
+          subline={
+            unmatched > 0 ? (
+              <span className="warn">
+                {fmt(s.unmatched_count, { count: unmatched })}
+              </span>
+            ) : (
+              s.playlist_sync
+            )
+          }
+          current={view.page === "health"}
+          onClick={() => open({ page: "health" })}
+        />
+      )}
     </>
   );
 });

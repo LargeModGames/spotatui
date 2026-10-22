@@ -122,6 +122,14 @@ impl Flag {
   }
 }
 
+pub fn next_repeat_state(state: RepeatState) -> RepeatState {
+  match state {
+    RepeatState::Off => RepeatState::Context,
+    RepeatState::Context => RepeatState::Track,
+    RepeatState::Track => RepeatState::Off,
+  }
+}
+
 // Possible directions to jump to
 pub enum JumpDirection {
   Next,
@@ -426,5 +434,12 @@ mod tests {
       render_format("%h - %a (%u)", &values, &UserConfig::new()),
       "Pod - None (spotify:show:1)"
     );
+  }
+
+  #[test]
+  fn repeat_cycles_off_context_track_off() {
+    assert_eq!(next_repeat_state(RepeatState::Off), RepeatState::Context);
+    assert_eq!(next_repeat_state(RepeatState::Context), RepeatState::Track);
+    assert_eq!(next_repeat_state(RepeatState::Track), RepeatState::Off);
   }
 }
