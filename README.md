@@ -242,6 +242,7 @@ Everyone who helped, with code or without. To get on this list, see [Recognition
     <tr>
       <td align="center" valign="top" width="14.28%"><a href="https://codedbearder.com"><img src="https://avatars.githubusercontent.com/u/1291396?v=4?s=100" width="100px;" alt="Arnar"/><br /><sub><b>Arnar</b></sub></a><br /><a href="#platform-arnarg" title="Packaging/porting to new platform">📦</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/OpenR00t"><img src="https://avatars.githubusercontent.com/u/17520570?v=4?s=100" width="100px;" alt="OpenR00t"/><br /><sub><b>OpenR00t</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=OpenR00t" title="Code">💻</a> <a href="#design-OpenR00t" title="Design">🎨</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/montionugera"><img src="https://avatars.githubusercontent.com/u/5601426?v=4?s=100" width="100px;" alt="Pasit Nusso"/><br /><sub><b>Pasit Nusso</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=montionugera" title="Code">💻</a></td>
     </tr>
   </tbody>
 </table>
