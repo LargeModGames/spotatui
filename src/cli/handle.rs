@@ -2,6 +2,7 @@ use crate::core::user_config::UserConfig;
 use crate::infra::network::{search::SPOTIFY_SEARCH_LIMIT, IoEvent, Network};
 
 use super::{
+  clap::check_play_uri_flags,
   util::{Flag, JumpDirection, Type},
   CliApp,
 };
@@ -144,6 +145,7 @@ pub async fn handle_matches(
       let format = matches.get_one::<String>("format").unwrap();
 
       if let Some(uri) = matches.get_one::<String>("uri") {
+        check_play_uri_flags(uri, queue, random).map_err(|e| anyhow!(e))?;
         cli.play_uri(uri.to_string(), queue, random).await;
       } else if let Some(name) = matches.get_one::<String>("name") {
         let category = Type::play_from_matches(matches);
@@ -397,6 +399,37 @@ mod tests {
     })
     .await
     .expect("playback probe test timed out");
+  }
+
+  #[tokio::test]
+  async fn play_uri_flags_its_kind_cannot_honor_fail_before_playback_changes() {
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+      for (uri, flag) in [
+        ("spotify:album:1", "--queue"),
+        ("spotify:track:1", "--random"),
+      ] {
+        let (net, seen, server, _state_dir, _fake) = recording_network().await;
+        let matches = crate::cli::play_subcommand()
+          .try_get_matches_from(["play", "--uri", uri, flag])
+          .unwrap();
+
+        let result = handle_matches(&matches, "play".to_string(), net, UserConfig::new()).await;
+        server.abort();
+
+        let error = result.unwrap_err().to_string();
+        assert!(error.contains(flag), "{uri} {flag}: {error}");
+        let seen = seen.lock().unwrap();
+        assert!(
+          !seen.iter().any(|line| {
+            line.starts_with("PUT /v1/me/player/play")
+              || line.starts_with("POST /v1/me/player/queue")
+          }),
+          "{uri} {flag}: {seen:?}"
+        );
+      }
+    })
+    .await
+    .expect("play flag test timed out");
   }
 
   #[tokio::test]

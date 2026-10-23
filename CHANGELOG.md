@@ -37,6 +37,8 @@
 
 ### Fixed
 
+- **`play --uri` refuses a `--queue` or `--random` its URI cannot honor**: `--queue` with an album, artist, playlist or show URI replaced the playback instead of queueing, and `--random` with anything but a playlist URI was ignored. Both now exit with an error before playback changes ([#827](https://github.com/LargeModGames/spotatui/issues/827)).
+
 - **Saved Albums goes back to newest saved first on Default**: picking Default in the sort menu after another sort left the list in that order until the next refetch, because Default had no case in the sort. It now orders each page by when the album was saved, newest first, whatever the previous order was ([#817](https://github.com/LargeModGames/spotatui/issues/817)).
 
 - **`playback --repeat` now advances repeat modes** from Off to Context to Track instead of sending the current mode ([#816](https://github.com/LargeModGames/spotatui/issues/816)).
