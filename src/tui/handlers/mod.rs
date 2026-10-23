@@ -53,6 +53,7 @@ use crate::core::source::Source;
 use crate::tui::event::Key;
 
 pub use announcement_prompt::dismiss as dismiss_announcement;
+pub(crate) use dialog::playlist_picker_captures_key;
 pub use input::handler as input_handler;
 pub use mouse::handler as mouse_handler;
 
@@ -121,6 +122,13 @@ pub fn handle_app(key: Key, app: &mut App) {
     && (app.view.help_filter_editing || key == app.user_config.keys.search)
   {
     help_menu::handler(key, app);
+    return;
+  }
+
+  // The add-to-playlist picker's search is an inline input too: typed playlist
+  // names must not trigger global bindings.
+  if dialog::playlist_picker_captures_key(app, key) {
+    handle_block_events(key, app);
     return;
   }
 

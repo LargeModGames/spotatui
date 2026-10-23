@@ -163,6 +163,10 @@ pub struct ViewState {
   pub playlist_picker_selected_index: usize,
   /// Folder ID the add-to-playlist picker dialog is viewing (0 = root)
   pub playlist_picker_folder_id: usize,
+  /// Search query narrowing the add-to-playlist picker to matching playlists
+  pub playlist_picker_filter: String,
+  /// Whether typed keys are currently editing [`Self::playlist_picker_filter`]
+  pub playlist_picker_filter_editing: bool,
 
   // Friends screen state
   /// Cursor position in the friends list
