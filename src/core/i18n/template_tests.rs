@@ -339,6 +339,18 @@ fn every_typed_message_fills_its_placeholders_and_preserves_all_arguments() {
       ["SENTINEL_DOWN_中", "SENTINEL_UP_中"]
     );
     check!(
+      "popups.playlist_picker_search_hint",
+      strings
+        .popups
+        .playlist_picker_search_hint("SENTINEL_KEY_中"),
+      ["SENTINEL_KEY_中"]
+    );
+    check!(
+      "popups.no_matching_playlists",
+      strings.popups.no_matching_playlists("SENTINEL_QUERY_中"),
+      ["SENTINEL_QUERY_中"]
+    );
+    check!(
       "popups.mirror_onto",
       strings.popups.mirror_onto("SENTINEL_NAME_中"),
       ["SENTINEL_NAME_中"]

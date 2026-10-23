@@ -1091,6 +1091,7 @@ fn draw_add_track_to_playlist_picker_dialog(f: &mut Frame<'_>, app: &App) {
     .margin(1)
     .constraints([
       Constraint::Length(2),
+      Constraint::Length(1),
       Constraint::Min(3),
       Constraint::Length(1),
     ])
@@ -1109,6 +1110,41 @@ fn draw_add_track_to_playlist_picker_dialog(f: &mut Frame<'_>, app: &App) {
   .style(app.user_config.theme.base_style());
   f.render_widget(header, vchunks[0]);
 
+  let theme = app.user_config.theme;
+  let popups = &app.strings().popups;
+  let filter = app.view.playlist_picker_filter.as_str();
+  let search_line = if app.view.playlist_picker_filter_editing {
+    Line::from(vec![
+      Span::styled(
+        popups.playlist_picker_search_prompt,
+        Style::default().fg(theme.active.into()),
+      ),
+      Span::raw(filter),
+      Span::styled("▏", Style::default().fg(theme.active.into())),
+      Span::styled(
+        popups.playlist_picker_search_edit_hint,
+        Style::default().fg(theme.inactive.into()),
+      ),
+    ])
+  } else if !filter.is_empty() {
+    Line::from(vec![
+      Span::styled(
+        popups.playlist_picker_search_prompt,
+        Style::default().fg(theme.active.into()),
+      ),
+      Span::raw(filter),
+    ])
+  } else {
+    Line::from(Span::styled(
+      popups.playlist_picker_search_hint(&app.user_config.keys.search.to_string()),
+      Style::default().fg(theme.inactive.into()),
+    ))
+  };
+  f.render_widget(
+    Paragraph::new(search_line).style(theme.base_style()),
+    vchunks[1],
+  );
+
   let mut list_state = ListState::default();
   // Rows follow the active source: local YouTube playlists under the YouTube
   // source, editable Spotify playlists plus folder rows otherwise (must stay
@@ -1116,10 +1152,15 @@ fn draw_add_track_to_playlist_picker_dialog(f: &mut Frame<'_>, app: &App) {
   let picker_rows = app.playlist_picker_items();
 
   if picker_rows.is_empty() {
-    let empty_text = Paragraph::new(app.strings().popups.no_editable_playlists)
+    let empty_message = if filter.trim().is_empty() {
+      popups.no_editable_playlists.to_string()
+    } else {
+      popups.no_matching_playlists(filter.trim())
+    };
+    let empty_text = Paragraph::new(empty_message)
       .style(Style::default().fg(app.user_config.theme.inactive.into()))
       .alignment(Alignment::Center);
-    f.render_widget(empty_text, vchunks[1]);
+    f.render_widget(empty_text, vchunks[2]);
   } else {
     let is_own_playlist = |playlist: &crate::core::plugin_api::PlaylistInfo| -> bool {
       // Local YouTube playlists carry no owner id — they are always the
@@ -1170,7 +1211,7 @@ fn draw_add_track_to_playlist_picker_dialog(f: &mut Frame<'_>, app: &App) {
       .highlight_style(Style::default().fg(app.user_config.theme.hovered.into()))
       .highlight_symbol("▶ ");
 
-    f.render_stateful_widget(list, vchunks[1], &mut list_state);
+    f.render_stateful_widget(list, vchunks[2], &mut list_state);
   }
 
   let footer = Paragraph::new(app.strings().popups.playlist_picker_controls(
@@ -1179,7 +1220,7 @@ fn draw_add_track_to_playlist_picker_dialog(f: &mut Frame<'_>, app: &App) {
   ))
   .style(Style::default().fg(app.user_config.theme.inactive.into()))
   .alignment(Alignment::Center);
-  f.render_widget(footer, vchunks[2]);
+  f.render_widget(footer, vchunks[3]);
 }
 
 fn draw_playlist_sync_picker_dialog(f: &mut Frame<'_>, app: &App) {
@@ -2045,6 +2086,34 @@ mod playlist_picker_localization_tests {
   use crate::core::app::{PlaylistFolder, PlaylistFolderItem};
   use crate::core::i18n::Language;
   use ratatui::{backend::TestBackend, Terminal};
+
+  #[test]
+  fn the_playlist_picker_shows_the_search_hint_query_and_no_match_message() {
+    let mut app = App::default();
+    let render = |app: &App| {
+      let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+      terminal
+        .draw(|frame| draw_add_track_to_playlist_picker_dialog(frame, app))
+        .unwrap();
+      let buffer = terminal.backend().buffer();
+      (0..buffer.area.height)
+        .map(|y| {
+          (0..buffer.area.width)
+            .map(|x| buffer[(x, y)].symbol())
+            .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+    };
+
+    assert!(render(&app).contains("/ search playlists"));
+
+    app.view.playlist_picker_filter = "zzz".to_string();
+    app.view.playlist_picker_filter_editing = true;
+    let text = render(&app);
+    assert!(text.contains("Search: zzz"), "{text}");
+    assert!(text.contains("No playlists match \"zzz\""), "{text}");
+  }
 
   #[test]
   fn the_playlist_picker_relabels_generated_folders_and_back_rows_without_renaming_user_folders() {

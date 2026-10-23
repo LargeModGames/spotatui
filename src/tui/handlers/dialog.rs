@@ -1,4 +1,5 @@
 use super::common_key_events;
+use super::filter_input::{self, FilterEdit};
 use crate::core::action::Action;
 use crate::core::app::{ActiveBlock, App, DialogContext, PlaylistPickerRow, RouteId};
 use crate::tui::event::Key;
@@ -62,7 +63,70 @@ fn handle_confirmation_dialog(key: Key, app: &mut App, dialog_context: DialogCon
   }
 }
 
+/// Whether the add-to-playlist picker's search must see `key` before the
+/// global bindings and the runner's back key claim it.
+pub(crate) fn playlist_picker_captures_key(app: &App, key: Key) -> bool {
+  app.get_current_route().active_block
+    == ActiveBlock::Dialog(DialogContext::AddTrackToPlaylistPicker)
+    && (app.view.playlist_picker_filter_editing
+      || key == app.user_config.keys.search
+      || (key == Key::Esc && !app.view.playlist_picker_filter.is_empty()))
+}
+
+fn clear_playlist_picker_filter(app: &mut App) {
+  app.view.playlist_picker_filter.clear();
+  app.view.playlist_picker_filter_editing = false;
+  app.view.playlist_picker_selected_index = 0;
+}
+
+fn handle_playlist_picker_filter_input(key: Key, app: &mut App) {
+  let row_count = app.playlist_picker_items().len();
+  match key {
+    Key::Down if row_count > 0 => {
+      app.view.playlist_picker_selected_index =
+        (app.view.playlist_picker_selected_index + 1) % row_count;
+      return;
+    }
+    Key::Up if row_count > 0 => {
+      app.view.playlist_picker_selected_index = app
+        .view
+        .playlist_picker_selected_index
+        .checked_sub(1)
+        .unwrap_or(row_count - 1);
+      return;
+    }
+    _ => {}
+  }
+  match filter_input::apply(key, &mut app.view.playlist_picker_filter) {
+    FilterEdit::Cancel => clear_playlist_picker_filter(app),
+    FilterEdit::Confirm => {
+      if app.view.playlist_picker_filter.trim().is_empty() {
+        clear_playlist_picker_filter(app);
+      } else {
+        app.view.playlist_picker_filter_editing = false;
+      }
+    }
+    FilterEdit::Changed => app.view.playlist_picker_selected_index = 0,
+    FilterEdit::Ignored => {}
+  }
+}
+
 fn handle_add_to_playlist_picker(key: Key, app: &mut App) {
+  if app.view.playlist_picker_filter_editing {
+    handle_playlist_picker_filter_input(key, app);
+    return;
+  }
+  if key == app.user_config.keys.search {
+    app.view.playlist_picker_filter.clear();
+    app.view.playlist_picker_filter_editing = true;
+    app.view.playlist_picker_selected_index = 0;
+    return;
+  }
+  if key == Key::Esc && !app.view.playlist_picker_filter.is_empty() {
+    clear_playlist_picker_filter(app);
+    return;
+  }
+
   // Rows follow the active source: local YouTube playlists under YouTube,
   // editable Spotify playlists plus navigable folder rows otherwise.
   let picker_rows = app.playlist_picker_items();
@@ -346,6 +410,174 @@ mod tests {
       }
       _ => panic!("expected add-track event"),
     }
+  }
+
+  fn picker_with_nested_playlists() -> (App, std::sync::mpsc::Receiver<IoEvent>) {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    *app.user_mut() = Some(user_info("spotatui-owner"));
+    *app.all_playlists_mut() = vec![
+      playlist_info(
+        "37i9dQZF1DXcBWIGoYBM5M",
+        "Quiet Mornings",
+        "spotatui-owner",
+        false,
+      ),
+      playlist_info(
+        "37i9dQZF1DWZqd5JICZI0u",
+        "Quiet Followed",
+        "friend-owner",
+        false,
+      ),
+      playlist_info(
+        "37i9dQZF1DX4WYpdgoIcn6",
+        "Road Trip",
+        "spotatui-owner",
+        false,
+      ),
+    ];
+    *app.playlist_folder_items_mut() = vec![
+      PlaylistFolderItem::Folder(PlaylistFolder {
+        generated_name: false,
+        name: "Mixes".to_string(),
+        current_id: 0,
+        target_id: 1,
+      }),
+      PlaylistFolderItem::Playlist {
+        index: 0,
+        current_id: 1,
+      },
+      PlaylistFolderItem::Playlist {
+        index: 1,
+        current_id: 0,
+      },
+      PlaylistFolderItem::Playlist {
+        index: 2,
+        current_id: 0,
+      },
+    ];
+    *app.playlists_mut() = Some(Paged {
+      total: 3,
+      ..Default::default()
+    });
+    app.begin_add_track_to_playlist_flow(
+      Some("0000000000000000000001".to_string()),
+      "Track".to_string(),
+    );
+    assert_eq!(
+      app.get_current_route().active_block,
+      ActiveBlock::Dialog(DialogContext::AddTrackToPlaylistPicker)
+    );
+    (app, rx)
+  }
+
+  fn type_text(app: &mut App, text: &str) {
+    for c in text.chars() {
+      handler(Key::Char(c), app);
+    }
+  }
+
+  #[test]
+  fn picker_search_finds_editable_playlists_inside_folders() {
+    let (mut app, rx) = picker_with_nested_playlists();
+
+    handler(app.user_config.keys.search, &mut app);
+    assert!(app.view.playlist_picker_filter_editing);
+    type_text(&mut app, "quiet");
+
+    let rows = app.playlist_picker_items();
+    assert_eq!(rows.len(), 1);
+    assert!(
+      matches!(rows[0], PlaylistPickerRow::Playlist(p) if p.name == "Quiet Mornings"),
+      "{rows:?}"
+    );
+
+    handler(Key::Enter, &mut app);
+    assert!(!app.view.playlist_picker_filter_editing);
+    assert_eq!(app.view.playlist_picker_filter, "quiet");
+
+    handler(Key::Enter, &mut app);
+    assert!(rx.try_recv().is_ok(), "Enter should add the track");
+    assert_ne!(
+      app.get_current_route().active_block,
+      ActiveBlock::Dialog(DialogContext::AddTrackToPlaylistPicker)
+    );
+  }
+
+  #[test]
+  fn picker_search_takes_letters_that_are_otherwise_picker_keys() {
+    let (mut app, rx) = picker_with_nested_playlists();
+
+    handler(app.user_config.keys.search, &mut app);
+    type_text(&mut app, "jkqHML");
+
+    assert_eq!(app.view.playlist_picker_filter, "jkqHML");
+    assert!(matches!(
+      app.get_current_route().active_block,
+      ActiveBlock::Dialog(DialogContext::AddTrackToPlaylistPicker)
+    ));
+    assert!(app.playlist_picker_items().is_empty());
+    assert!(rx.try_recv().is_err());
+  }
+
+  #[test]
+  fn picker_search_arrows_move_the_selection_while_typing() {
+    let (mut app, _rx) = picker_with_nested_playlists();
+    app.view.playlist_picker_filter_editing = true;
+    app.view.playlist_picker_filter = "r".to_string();
+    assert_eq!(app.playlist_picker_items().len(), 2);
+
+    handler(Key::Down, &mut app);
+    assert_eq!(app.view.playlist_picker_selected_index, 1);
+    handler(Key::Down, &mut app);
+    assert_eq!(app.view.playlist_picker_selected_index, 0);
+    handler(Key::Up, &mut app);
+    assert_eq!(app.view.playlist_picker_selected_index, 1);
+    assert_eq!(app.view.playlist_picker_filter, "r");
+  }
+
+  #[test]
+  fn picker_search_matching_is_smart_case_and_ands_terms() {
+    let (mut app, _rx) = picker_with_nested_playlists();
+
+    app.view.playlist_picker_filter = "trip road".to_string();
+    assert_eq!(app.playlist_picker_items().len(), 1);
+    app.view.playlist_picker_filter = "road quiet".to_string();
+    assert!(app.playlist_picker_items().is_empty());
+    app.view.playlist_picker_filter = "ROAD".to_string();
+    assert!(app.playlist_picker_items().is_empty());
+    app.view.playlist_picker_filter = "Road".to_string();
+    assert_eq!(app.playlist_picker_items().len(), 1);
+  }
+
+  #[test]
+  fn esc_clears_the_picker_search_before_closing_the_picker() {
+    let (mut app, _rx) = picker_with_nested_playlists();
+    handler(app.user_config.keys.search, &mut app);
+    type_text(&mut app, "road");
+    handler(Key::Enter, &mut app);
+
+    assert!(playlist_picker_captures_key(&app, Key::Esc));
+    handler(Key::Esc, &mut app);
+    assert!(app.view.playlist_picker_filter.is_empty());
+    assert!(matches!(
+      app.get_current_route().active_block,
+      ActiveBlock::Dialog(DialogContext::AddTrackToPlaylistPicker)
+    ));
+    assert!(!playlist_picker_captures_key(&app, Key::Esc));
+    assert_eq!(app.playlist_picker_items().len(), 2);
+  }
+
+  #[test]
+  fn closing_the_picker_forgets_its_search() {
+    let (mut app, _rx) = picker_with_nested_playlists();
+    app.view.playlist_picker_filter = "road".to_string();
+    app.view.playlist_picker_filter_editing = true;
+
+    app.clear_dialog_state();
+
+    assert!(app.view.playlist_picker_filter.is_empty());
+    assert!(!app.view.playlist_picker_filter_editing);
   }
 
   #[test]
