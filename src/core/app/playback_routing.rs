@@ -240,6 +240,16 @@ impl App {
     u128::try_from(duration_ms.saturating_sub(progress_ms)).ok()
   }
 
+  /// The id of the item the cached playback names. The cached context deliberately, not
+  /// [`App::playing_item`], which resolves the owner first.
+  pub(crate) fn cached_playback_item_id(&self) -> Option<String> {
+    match self.current_playback_context.as_ref()?.item.as_ref()? {
+      PlayableItem::Track(track) => track.id.as_ref().map(|id| id.id().to_string()),
+      PlayableItem::Episode(episode) => Some(episode.id.id().to_string()),
+      _ => None,
+    }
+  }
+
   /// Mark the track-end poll as spent for the cached playback state.
   pub(crate) fn spend_track_end_poll(&mut self) {
     self.track_end_polled_for = self.current_playback_context.as_ref().map(|c| c.timestamp);
