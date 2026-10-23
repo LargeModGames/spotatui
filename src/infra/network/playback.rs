@@ -1337,9 +1337,6 @@ impl PlaybackNetwork for Network {
         }
       }
       Ok(None) => {
-        // No playback is live: drop the stale context so a later read cannot
-        // render the track that was playing before.
-        app.current_playback_context = None;
         #[cfg(feature = "streaming")]
         app.forget_handed_off_playback();
         #[cfg(feature = "streaming")]
