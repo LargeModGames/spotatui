@@ -37,6 +37,8 @@
 
 ### Fixed
 
+- **Jump and Listening Party keys can be rebound in Settings**: the Keybindings tab now includes Jump to Start, Jump to End and Listening Party ([#828](https://github.com/LargeModGames/spotatui/issues/828)).
+
 - **Saved Albums goes back to newest saved first on Default**: picking Default in the sort menu after another sort left the list in that order until the next refetch, because Default had no case in the sort. It now orders each page by when the album was saved, newest first, whatever the previous order was ([#817](https://github.com/LargeModGames/spotatui/issues/817)).
 
 - **`playback --repeat` now advances repeat modes** from Off to Context to Track instead of sending the current mode ([#816](https://github.com/LargeModGames/spotatui/issues/816)).
