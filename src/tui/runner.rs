@@ -87,6 +87,9 @@ fn key_reaches_handlers_before_back(app: &App, key: Key) -> bool {
   if dj_captures_key_before_back(app) {
     return true;
   }
+  if handlers::playlist_picker_captures_key(app, key) {
+    return true;
+  }
   help_menu_captures_key_before_back(app, key)
 }
 
@@ -389,6 +392,21 @@ mod tests {
     ] {
       assert_eq!(frame_cursor_position(&app, block), None);
     }
+  }
+
+  #[test]
+  fn playlist_picker_search_captures_back_key_while_editing() {
+    let mut app = app();
+    app.push_navigation_stack(
+      RouteId::Dialog,
+      ActiveBlock::Dialog(crate::core::app::DialogContext::AddTrackToPlaylistPicker),
+    );
+    app.view.playlist_picker_filter_editing = true;
+
+    assert!(!dispatch_key(Key::Char('q'), &mut app));
+
+    assert_eq!(app.view.playlist_picker_filter, "q");
+    assert_eq!(app.get_current_route().id, RouteId::Dialog);
   }
 
   #[test]

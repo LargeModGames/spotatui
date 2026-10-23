@@ -41,6 +41,10 @@ pub struct PopupStrings {
   pub no_editable_playlists: &'static str,
   pub collaborative_playlist_template: &'static str,
   pub playlist_picker_controls_template: &'static str,
+  pub playlist_picker_search_prompt: &'static str,
+  pub playlist_picker_search_edit_hint: &'static str,
+  pub playlist_picker_search_hint_template: &'static str,
+  pub no_matching_playlists_template: &'static str,
   pub mirror_playlist: &'static str,
   pub selected_playlist: &'static str,
   pub mirror_onto_template: &'static str,
@@ -162,6 +166,10 @@ pub const EN: PopupStrings = PopupStrings {
   no_editable_playlists: "No editable playlists available",
   collaborative_playlist_template: "{name} - {owner} (collab)",
   playlist_picker_controls_template: "Enter add/open | q cancel | {down}/{up} or arrows move | H/M/L jump",
+  playlist_picker_search_prompt: "Search: ",
+  playlist_picker_search_edit_hint: "  Enter: apply  Esc: clear",
+  playlist_picker_search_hint_template: "{key} search playlists",
+  no_matching_playlists_template: "No playlists match \"{query}\"",
   mirror_playlist: "Mirror Playlist",
   selected_playlist: "Selected playlist",
   mirror_onto_template: "Mirror \"{name}\" onto:",
@@ -286,6 +294,10 @@ pub const ZH_HANS: PopupStrings = PopupStrings {
   collaborative_playlist_template: "{name} - {owner}（协作）",
   playlist_picker_controls_template:
     "Enter 添加/打开 | q 取消 | {down}/{up} 或方向键移动 | H/M/L 跳转",
+  playlist_picker_search_prompt: "搜索：",
+  playlist_picker_search_edit_hint: "  Enter：应用  Esc：清除",
+  playlist_picker_search_hint_template: "{key} 搜索播放列表",
+  no_matching_playlists_template: "没有匹配“{query}”的播放列表",
   mirror_playlist: "镜像播放列表",
   selected_playlist: "所选播放列表",
   mirror_onto_template: "将“{name}”镜像到：",
@@ -411,6 +423,10 @@ pub const ZH_HANT: PopupStrings = PopupStrings {
   collaborative_playlist_template: "{name} - {owner}（協作）",
   playlist_picker_controls_template:
     "Enter 加入/開啟 | q 取消 | {down}/{up} 或方向鍵移動 | H/M/L 跳轉",
+  playlist_picker_search_prompt: "搜尋：",
+  playlist_picker_search_edit_hint: "  Enter：套用  Esc：清除",
+  playlist_picker_search_hint_template: "{key} 搜尋播放清單",
+  no_matching_playlists_template: "沒有符合「{query}」的播放清單",
   mirror_playlist: "鏡像播放清單",
   selected_playlist: "所選播放清單",
   mirror_onto_template: "將「{name}」鏡像到：",
@@ -537,6 +553,14 @@ impl PopupStrings {
       self.playlist_picker_controls_template,
       &[("down", down), ("up", up)],
     )
+  }
+
+  pub fn playlist_picker_search_hint(&self, key: &str) -> String {
+    super::format_template(self.playlist_picker_search_hint_template, &[("key", key)])
+  }
+
+  pub fn no_matching_playlists(&self, query: &str) -> String {
+    super::format_template(self.no_matching_playlists_template, &[("query", query)])
   }
 
   pub fn mirror_onto(&self, name: &str) -> String {

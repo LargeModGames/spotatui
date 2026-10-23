@@ -30,6 +30,19 @@ pub enum PlaylistPickerRow<'a> {
   Playlist(&'a PlaylistInfo),
 }
 
+/// Whether every whitespace-separated term occurs in `name`. Matching is
+/// case-insensitive unless the term contains an uppercase character.
+fn playlist_name_matches(name: &str, terms: &[&str]) -> bool {
+  let lowered = name.to_lowercase();
+  terms.iter().all(|term| {
+    if term.chars().any(char::is_uppercase) {
+      name.contains(term)
+    } else {
+      lowered.contains(&term.to_lowercase())
+    }
+  })
+}
+
 /// Which stage of the "Create Playlist" form we are on
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub enum CreatePlaylistStage {
@@ -107,6 +120,8 @@ impl App {
     self.pending_playlist_track_removal = None;
     self.view.playlist_picker_selected_index = 0;
     self.view.playlist_picker_folder_id = 0;
+    self.view.playlist_picker_filter.clear();
+    self.view.playlist_picker_filter_editing = false;
   }
 
   pub fn clear_dialog_state(&mut self) {
@@ -154,7 +169,27 @@ impl App {
   /// local YouTube playlists under YouTube (flat), otherwise the user's
   /// editable Spotify playlists plus folder rows scoped to
   /// `playlist_picker_folder_id`, mirroring the sidebar's folder navigation.
+  /// A non-empty `playlist_picker_filter` replaces the folder view with a flat
+  /// list of the matching destinations from every folder.
   pub fn playlist_picker_items(&self) -> Vec<PlaylistPickerRow<'_>> {
+    let terms: Vec<&str> = self
+      .view
+      .playlist_picker_filter
+      .split_whitespace()
+      .collect();
+    if !terms.is_empty() {
+      let candidates = if self.active_source == Source::YouTube {
+        self.youtube_playlists.iter().collect()
+      } else {
+        self.editable_playlists()
+      };
+      return candidates
+        .into_iter()
+        .filter(|playlist| playlist_name_matches(&playlist.name, &terms))
+        .map(PlaylistPickerRow::Playlist)
+        .collect();
+    }
+
     if self.active_source == Source::YouTube {
       return self
         .youtube_playlists
