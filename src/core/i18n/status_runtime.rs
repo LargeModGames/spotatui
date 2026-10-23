@@ -43,11 +43,49 @@ pub const EN: RuntimeStatusStrings = RuntimeStatusStrings {
 
 // Keep ..EN so new English fields compile before their translations are added.
 #[allow(clippy::needless_update)]
-pub const ZH_HANS: RuntimeStatusStrings = RuntimeStatusStrings { ..EN };
+pub const ZH_HANS: RuntimeStatusStrings = RuntimeStatusStrings {
+  local_file_missing: "找不到本地文件：{path}",
+  mcp_listening: "MCP 服务器正在监听 127.0.0.1:{port}",
+  mcp_start_failed: "MCP 服务器启动失败：{error}",
+  native_start_failed: "内置播放器未能启动，暂时使用 Spotify Connect。请重启 spotatui 以恢复内置播放。",
+  premium_required: "播放需要 Spotify Premium",
+  native_offline: "无法连接 Spotify：已停用内置播放",
+  saved_device_unavailable: "保存的设备不可用，正在使用 {device}",
+  apple_music_needs_macos: "Apple Music 播放需要 macOS",
+  feature_missing: "此 spotatui 未编译 `{feature}` 功能，无法播放此内容。",
+  spotify_login_failed: "Spotify 登录失败：{error}。按 `d` 并选择 Spotify 重试。",
+  song_counter_title: "全球播放计数",
+  song_counter_body: "\nspotatui 可以为全球计数器贡献数据，\n统计所有用户播放的歌曲总数。\n\n隐私：此功能完全匿名。\n• 不收集个人信息\n• 不收集歌曲名、艺人或收听历史\n• 每首歌播放满 30 秒后，仅将计数加一",
+  song_counter_question: "\n是否参与？(Y/n): ",
+  song_counter_save_failed: "无法将选择保存到 {path}（配置可能为只读）。请在该文件的 `behavior:` 下设置 `enable_global_song_count`，以关闭此提示。\n",
+  song_counter_thanks: "感谢参与！\n",
+  song_counter_opted_out: "已选择不参与。你可随时在“设置 → 行为”中更改。\n",
+  forgetting_spotify_login: "\n正在清除保存的 Spotify 登录信息…",
+  ..EN
+};
 
 // Keep ..EN so new English fields compile before their translations are added.
 #[allow(clippy::needless_update)]
-pub const ZH_HANT: RuntimeStatusStrings = RuntimeStatusStrings { ..EN };
+pub const ZH_HANT: RuntimeStatusStrings = RuntimeStatusStrings {
+  local_file_missing: "找不到本機檔案：{path}",
+  mcp_listening: "MCP 伺服器正在監聽 127.0.0.1:{port}",
+  mcp_start_failed: "MCP 伺服器啟動失敗：{error}",
+  native_start_failed: "內建串流未能啟動，暫時使用 Spotify Connect。請重新啟動 spotatui 以恢復內建串流。",
+  premium_required: "播放需要 Spotify Premium",
+  native_offline: "無法連線至 Spotify：已停用內建串流",
+  saved_device_unavailable: "儲存的裝置無法使用，正在使用 {device}",
+  apple_music_needs_macos: "Apple Music 播放需要 macOS",
+  feature_missing: "此 spotatui 未編譯 `{feature}` 功能，無法播放此內容。",
+  spotify_login_failed: "Spotify 登入失敗：{error}。按 `d` 並選擇 Spotify 重試。",
+  song_counter_title: "全球播放計數",
+  song_counter_body: "\nspotatui 可以為全球計數器貢獻資料，\n統計所有使用者播放的歌曲總數。\n\n隱私：此功能完全匿名。\n• 不收集個人資訊\n• 不收集歌曲名稱、藝人或聆聽紀錄\n• 每首歌播放滿 30 秒後，僅將計數加一",
+  song_counter_question: "\n是否參與？(Y/n): ",
+  song_counter_save_failed: "無法將選擇儲存至 {path}（設定檔可能為唯讀）。請在該檔案的 `behavior:` 下設定 `enable_global_song_count`，以關閉此提示。\n",
+  song_counter_thanks: "感謝參與！\n",
+  song_counter_opted_out: "已選擇不參與。你可隨時在「設定 → 行為」中變更。\n",
+  forgetting_spotify_login: "\n正在清除儲存的 Spotify 登入資訊…",
+  ..EN
+};
 
 // The full table is shipped on every feature leg; some producers are optional.
 // Each helper's callers sit behind an optional source or frontend, so only the
