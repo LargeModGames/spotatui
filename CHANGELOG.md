@@ -37,6 +37,8 @@
 
 ### Fixed
 
+- **A sparse listening history still returns the DJ vibe and what is playing**: with fewer than five qualifying plays, `get_listening_history` keeps the vibe from `set_dj_vibe`, the current track, and the same structured keys as a full history (`period`, `total_plays`, `top_artists`, `top_tracks`, `top_albums`, `recent`, `now_playing`, `vibe`). The reply still leads with the line that asks what the listener feels like ([#830](https://github.com/LargeModGames/spotatui/issues/830)).
+
 - **Saved Albums goes back to newest saved first on Default**: picking Default in the sort menu after another sort left the list in that order until the next refetch, because Default had no case in the sort. It now orders each page by when the album was saved, newest first, whatever the previous order was ([#817](https://github.com/LargeModGames/spotatui/issues/817)).
 
 - **`playback --repeat` now advances repeat modes** from Off to Context to Track instead of sending the current mode ([#816](https://github.com/LargeModGames/spotatui/issues/816)).
