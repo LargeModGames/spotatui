@@ -124,7 +124,7 @@ pub async fn handle_matches(
       }
       if matches.get_count("next") > 0 || matches.get_count("previous") > 0 {
         // Fetch current playback first so we know what track we're skipping from.
-        // Aa failure here must not clobber an error raised by an earlier command action,
+        // A failure here must not clobber an error raised by an earlier command action,
         // nor turn a successful jump into a failed command.
         let api_error_before = cli.net.app.lock().await.api_error().to_owned();
 
@@ -144,7 +144,7 @@ pub async fn handle_matches(
 
         // Wait for the jump to land before printing. Even when nothing was
         // playing before (old_id is None), the device may start playback after
-        // the jump, so wait until any item appears rather
+        // the jump, so wait until any item appears
         {
           let api_error_before_wait = cli.net.app.lock().await.api_error().to_owned();
           wait_for_playback_to_move_on(&mut cli, old_id).await;
