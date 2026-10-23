@@ -52,6 +52,20 @@ spotify:playlist: or spotify:show: URI";
   }
 }
 
+/// Refuses a `--queue` or `--random` that the kind of `--uri` cannot honor.
+///
+/// Clap sees the kind of a `--name` search through its category flags, but the
+/// kind of a URI is only in the string.
+pub(super) fn check_play_uri_flags(uri: &str, queue: bool, random: bool) -> Result<(), String> {
+  if queue && !uri.starts_with("spotify:track:") {
+    return Err("--queue works only with a spotify:track: URI".to_string());
+  }
+  if random && !uri.starts_with("spotify:playlist:") {
+    return Err("--random works only with a spotify:playlist: URI".to_string());
+  }
+  Ok(())
+}
+
 pub fn playback_subcommand() -> Command {
   Command::new("playback")
     .version(env!("CARGO_PKG_VERSION"))
@@ -475,6 +489,58 @@ mod tests {
     ] {
       let error = parse_spotify_uri(uri).unwrap_err();
       assert!(error.starts_with("expected a spotify:track:"), "{error}");
+    }
+  }
+
+  #[test]
+  fn play_uri_flags_refuse_queue_with_a_context_uri() {
+    for uri in [
+      "spotify:album:1",
+      "spotify:artist:1",
+      "spotify:playlist:1",
+      "spotify:show:1",
+    ] {
+      let error = check_play_uri_flags(uri, true, false).unwrap_err();
+      assert!(error.contains("--queue"), "{uri}: {error}");
+    }
+  }
+
+  #[test]
+  fn play_uri_flags_refuse_random_with_a_non_playlist_uri() {
+    for uri in [
+      "spotify:track:1",
+      "spotify:album:1",
+      "spotify:artist:1",
+      "spotify:show:1",
+    ] {
+      let error = check_play_uri_flags(uri, false, true).unwrap_err();
+      assert!(error.contains("--random"), "{uri}: {error}");
+    }
+  }
+
+  #[test]
+  fn play_uri_flags_allow_queue_with_a_track_uri() {
+    assert_eq!(check_play_uri_flags("spotify:track:1", true, false), Ok(()));
+  }
+
+  #[test]
+  fn play_uri_flags_allow_random_with_a_playlist_uri() {
+    assert_eq!(
+      check_play_uri_flags("spotify:playlist:1", false, true),
+      Ok(())
+    );
+  }
+
+  #[test]
+  fn play_uri_flags_allow_any_kind_without_flags() {
+    for uri in [
+      "spotify:track:1",
+      "spotify:album:1",
+      "spotify:artist:1",
+      "spotify:playlist:1",
+      "spotify:show:1",
+    ] {
+      assert_eq!(check_play_uri_flags(uri, false, false), Ok(()), "{uri}");
     }
   }
 }
