@@ -162,6 +162,10 @@ pub struct SettingsStrings {
   pub keys_next_page_description: &'static str,
   pub keys_previous_page_name: &'static str,
   pub keys_previous_page_description: &'static str,
+  pub keys_jump_to_start_name: &'static str,
+  pub keys_jump_to_start_description: &'static str,
+  pub keys_jump_to_end_name: &'static str,
+  pub keys_jump_to_end_description: &'static str,
   pub keys_toggle_playback_name: &'static str,
   pub keys_toggle_playback_description: &'static str,
   pub keys_seek_backwards_name: &'static str,
@@ -194,6 +198,8 @@ pub struct SettingsStrings {
   pub keys_jump_to_context_description: &'static str,
   pub keys_manage_devices_name: &'static str,
   pub keys_manage_devices_description: &'static str,
+  pub keys_listening_party_name: &'static str,
+  pub keys_listening_party_description: &'static str,
   pub keys_decrease_volume_name: &'static str,
   pub keys_decrease_volume_description: &'static str,
   pub keys_increase_volume_name: &'static str,
@@ -661,6 +667,14 @@ impl SettingsStrings {
         self.keys_previous_page_name,
         self.keys_previous_page_description,
       ),
+      "keys.jump_to_start" => (
+        self.keys_jump_to_start_name,
+        self.keys_jump_to_start_description,
+      ),
+      "keys.jump_to_end" => (
+        self.keys_jump_to_end_name,
+        self.keys_jump_to_end_description,
+      ),
       "keys.toggle_playback" => (
         self.keys_toggle_playback_name,
         self.keys_toggle_playback_description,
@@ -709,6 +723,10 @@ impl SettingsStrings {
       "keys.manage_devices" => (
         self.keys_manage_devices_name,
         self.keys_manage_devices_description,
+      ),
+      "keys.listening_party" => (
+        self.keys_listening_party_name,
+        self.keys_listening_party_description,
       ),
       "keys.decrease_volume" => (
         self.keys_decrease_volume_name,

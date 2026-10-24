@@ -1169,15 +1169,20 @@ async fn history_outcome(
     summary.vibe = app.dj.vibe.clone();
   }
 
-  if summary.is_sparse() {
-    return ToolOutcome::ok_localized(|strings| {
-      strings
-        .status
-        .tools
-        .history_sparse(summary.total_plays, tool_period_label(period, strings))
-    });
-  }
+  history_result(&summary, period)
+}
 
+/// The listening-history reply, sparse or not.
+///
+/// A brief with fewer than five qualifying plays still leads with the
+/// ask-the-user sentence, and still carries the current track, the stored vibe,
+/// and the same structured keys as a full history. The vibe is the standing
+/// steer `set_dj_vibe` writes, and a fresh profile is exactly when an agent
+/// needs to read it back.
+fn history_result(
+  summary: &brief::TasteBrief,
+  period: crate::infra::history::RecapPeriod,
+) -> ToolOutcome {
   let structured = json!({
     "period": summary.period_label,
     "total_plays": summary.total_plays,
@@ -1189,7 +1194,22 @@ async fn history_outcome(
     "vibe": summary.vibe,
   });
   ToolOutcome::data_localized(
-    |strings| summary.display_block(strings, tool_period_label(period, strings)),
+    |strings| {
+      if summary.is_sparse() {
+        let tools = &strings.status.tools;
+        let mut text =
+          tools.history_sparse(summary.total_plays, tool_period_label(period, strings));
+        if let Some(now) = &summary.now_playing {
+          text.push_str(&tools.brief_now(now));
+        }
+        if let Some(vibe) = &summary.vibe {
+          text.push_str(&tools.brief_vibe(vibe));
+        }
+        text
+      } else {
+        summary.display_block(strings, tool_period_label(period, strings))
+      }
+    },
     structured,
   )
 }
@@ -1928,5 +1948,143 @@ mod tests {
     assert_eq!(playlists[0]["owned"], true);
     assert_eq!(playlists[1]["owned"], false);
     assert!(outcome.text.contains("Mine"));
+  }
+
+  #[test]
+  fn sparse_history_still_returns_the_vibe() {
+    use crate::core::i18n::Language;
+    let summary = super::brief::TasteBrief {
+      period_label: "the last 30 days",
+      total_plays: 0,
+      vibe: Some("mellow piano".into()),
+      ..Default::default()
+    };
+    let outcome = super::history_result(&summary, RecapPeriod::ThirtyDays);
+
+    assert!(outcome.text.contains("mellow piano"));
+    assert!(outcome.text.contains("Ask the user"));
+    assert!(outcome.text.contains("The listener asked for"));
+    assert!(!outcome.is_error);
+    assert_eq!(outcome.display_text(Language::En), outcome.text.as_str());
+    assert_eq!(outcome.structured.unwrap()["vibe"], json!("mellow piano"));
+  }
+
+  #[test]
+  fn sparse_history_still_returns_now_playing() {
+    let summary = super::brief::TasteBrief {
+      period_label: "the last 30 days",
+      total_plays: 0,
+      now_playing: Some("Song by Artist".into()),
+      vibe: None,
+      ..Default::default()
+    };
+    let outcome = super::history_result(&summary, RecapPeriod::ThirtyDays);
+
+    assert!(outcome.text.contains("Currently playing:"));
+    assert!(outcome.text.contains("Song by Artist"));
+    assert!(!outcome.text.contains("The listener asked for"));
+    let structured = outcome.structured.unwrap();
+    assert_eq!(structured["now_playing"], json!("Song by Artist"));
+    assert!(structured["vibe"].is_null());
+  }
+
+  #[test]
+  fn sparse_history_payload_has_the_same_keys_as_full_history() {
+    let sparse = super::brief::TasteBrief {
+      period_label: "the last 30 days",
+      total_plays: 0,
+      top_artists: vec![],
+      now_playing: None,
+      vibe: None,
+      ..Default::default()
+    };
+    let full = super::brief::TasteBrief {
+      period_label: "the last 30 days",
+      total_plays: 10,
+      top_artists: vec!["Radiohead".into()],
+      ..Default::default()
+    };
+    let sparse_outcome = super::history_result(&sparse, RecapPeriod::ThirtyDays);
+    let full_outcome = super::history_result(&full, RecapPeriod::ThirtyDays);
+    assert_eq!(
+      sparse_outcome.text,
+      crate::core::i18n::EN
+        .status
+        .tools
+        .history_sparse(0, "the last 30 days")
+    );
+    let sparse_data = sparse_outcome.structured.unwrap();
+    let full_data = full_outcome.structured.unwrap();
+    let expected = [
+      "period",
+      "total_plays",
+      "top_artists",
+      "top_tracks",
+      "top_albums",
+      "recent",
+      "now_playing",
+      "vibe",
+    ];
+
+    assert_eq!(
+      sparse_data
+        .as_object()
+        .unwrap()
+        .keys()
+        .collect::<std::collections::BTreeSet<_>>(),
+      full_data
+        .as_object()
+        .unwrap()
+        .keys()
+        .collect::<std::collections::BTreeSet<_>>()
+    );
+    assert_eq!(sparse_data.as_object().unwrap().len(), expected.len());
+    for key in expected {
+      assert!(sparse_data.get(key).is_some(), "{key}");
+    }
+    assert!(sparse_data["vibe"].is_null());
+    assert!(sparse_data["now_playing"].is_null());
+    assert_eq!(sparse_data["top_artists"], json!([]));
+    assert_eq!(sparse_data["total_plays"], json!(0));
+    assert_eq!(sparse_data["period"], json!("the last 30 days"));
+  }
+
+  #[test]
+  fn sparse_history_threshold_stays_at_five() {
+    let below = super::brief::TasteBrief {
+      period_label: "the last 30 days",
+      total_plays: 4,
+      ..Default::default()
+    };
+    assert!(super::history_result(&below, RecapPeriod::ThirtyDays)
+      .text
+      .contains("Ask the user"));
+
+    let enough = super::brief::TasteBrief {
+      period_label: "the last 30 days",
+      total_plays: 5,
+      ..Default::default()
+    };
+    let outcome = super::history_result(&enough, RecapPeriod::ThirtyDays);
+    assert!(!outcome.text.contains("Ask the user"));
+    assert_eq!(
+      outcome.text,
+      enough.display_block(&crate::core::i18n::EN, "the last 30 days")
+    );
+  }
+
+  #[test]
+  fn full_history_still_uses_the_prompt_block() {
+    let summary = super::brief::TasteBrief {
+      period_label: "the last 30 days",
+      total_plays: 10,
+      top_artists: vec!["Radiohead".into()],
+      vibe: Some("mellow piano".into()),
+      ..Default::default()
+    };
+    let outcome = super::history_result(&summary, RecapPeriod::ThirtyDays);
+
+    assert_eq!(outcome.text, summary.to_prompt_block());
+    assert_eq!(outcome.structured.unwrap()["vibe"], json!("mellow piano"));
   }
 }

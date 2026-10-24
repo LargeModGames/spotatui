@@ -577,6 +577,20 @@ impl App {
             }
           }
         }
+        "keys.jump_to_start" => {
+          if let SettingValue::Key(v) = &setting.value {
+            if let Ok(key) = crate::core::user_config::parse_key_public(v.clone()) {
+              self.user_config.keys.jump_to_start = key;
+            }
+          }
+        }
+        "keys.jump_to_end" => {
+          if let SettingValue::Key(v) = &setting.value {
+            if let Ok(key) = crate::core::user_config::parse_key_public(v.clone()) {
+              self.user_config.keys.jump_to_end = key;
+            }
+          }
+        }
         "keys.toggle_playback" => {
           if let SettingValue::Key(v) = &setting.value {
             if let Ok(key) = crate::core::user_config::parse_key_public(v.clone()) {
@@ -686,6 +700,13 @@ impl App {
           if let SettingValue::Key(v) = &setting.value {
             if let Ok(key) = crate::core::user_config::parse_key_public(v.clone()) {
               self.user_config.keys.manage_devices = key;
+            }
+          }
+        }
+        "keys.listening_party" => {
+          if let SettingValue::Key(v) = &setting.value {
+            if let Ok(key) = crate::core::user_config::parse_key_public(v.clone()) {
+              self.user_config.keys.listening_party = key;
             }
           }
         }
