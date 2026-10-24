@@ -2988,26 +2988,28 @@ mod tests {
     app.user_config.behavior.language = Language::ZhHant;
     app.refresh_language();
     let changed = pushed(&diff(&before, &app, Language::En), "playlist_sync");
-    assert!(changed["payload"]["links"][0]["last_line"]
-      .as_str()
-      .unwrap()
-      .contains("{added} 五月天"));
+    assert_eq!(
+      changed["payload"]["links"][0]["last_line"],
+      "{added} 五月天：已新增 2 首，已移除 1 首，3 首未對應"
+    );
+    assert_eq!(
+      changed["payload"]["last_summary"],
+      "播放清單同步（模擬執行）：新增 2 首，移除 1 首，未對應 3 首"
+    );
 
     let mut failed = report;
     failed.error = Some("{added} HTTP 503".to_string());
     failed.links[0].outcome = LinkOutcome::Failed("{name} HTTP 503".into());
     app.finish_playlist_sync(failed);
     let localized = playlist_sync(&app);
-    assert!(localized
-      .last_summary
-      .as_deref()
-      .unwrap()
-      .contains("{added} HTTP 503"));
-    assert!(localized.links[0]
-      .last_line
-      .as_deref()
-      .unwrap()
-      .contains("{name} HTTP 503"));
+    assert_eq!(
+      localized.last_summary.as_deref(),
+      Some("播放清單同步失敗：{added} HTTP 503")
+    );
+    assert_eq!(
+      localized.links[0].last_line.as_deref(),
+      Some("{added} 五月天：失敗（{name} HTTP 503）")
+    );
   }
 
   #[test]

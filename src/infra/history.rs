@@ -3754,7 +3754,15 @@ mod tests {
       assert_eq!(tracks[0].uri, english[0].uri);
       assert_eq!(tracks[0].value, 3_720_000);
     }
-
+    assert_eq!(
+      aggregate_top_tracks_with(&records, 10, &ZH_HANS)[0].detail,
+      "2 次播放 · 1 小时 2 分钟"
+    );
+    assert_eq!(
+      aggregate_top_artists_with(&records, 10, &ZH_HANT)[0].detail,
+      "曲目播放 2 次 · 1 小時 2 分鐘"
+    );
     assert_eq!(period_label(RecapPeriod::Year), "This Year");
+    assert_eq!(period_label_with(RecapPeriod::Year, &ZH_HANT), "今年");
   }
 }

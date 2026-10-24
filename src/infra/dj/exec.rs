@@ -138,6 +138,13 @@ mod tests {
       if language == Language::En {
         assert_eq!(result.display_text(language), result.text);
         assert_eq!(status, format!("MCP: {}", result.text));
+      } else {
+        assert!(!status.contains("DJ vibe set to"));
+        assert!(status.contains(if language == Language::ZhHans {
+          "DJ 氛围已设为"
+        } else {
+          "DJ 氛圍已設為"
+        }));
       }
     }
   }
@@ -164,7 +171,7 @@ mod tests {
     );
     assert_eq!(
       result.display_text(Language::ZhHant),
-      crate::core::i18n::ZH_HANT.status.tools.shutting_down
+      "spotatui 正在關閉，未執行此請求"
     );
   }
 

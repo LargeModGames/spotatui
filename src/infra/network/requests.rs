@@ -802,7 +802,7 @@ mod tests {
       assert!(text.contains("客廳 {body}"));
       assert!(text.contains("raw {status}"));
       assert!(text.ends_with("[PUT /v1/me/player?device_id=客廳]"));
-
+      assert!(!text.contains("did not join after its login"));
       assert_eq!(error.to_string(), english);
     }
   }
@@ -819,11 +819,11 @@ mod tests {
     );
     assert_eq!(
       error_text(&error, Language::ZhHans),
-      crate::core::i18n::ZH_HANS.status.infra.playlist_changed
+      "播放列表在加载后发生了变化，请重新打开后再试"
     );
     assert_eq!(
       error_text(&error, Language::ZhHant),
-      crate::core::i18n::ZH_HANT.status.infra.playlist_changed
+      "播放清單在載入後發生了變更，請重新開啟後再試"
     );
     let raw = anyhow!("unknown speaker reply {name}", name = "{type}");
     assert_eq!(
