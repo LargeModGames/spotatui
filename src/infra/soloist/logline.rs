@@ -25,13 +25,14 @@ fn message(line: &str) -> &str {
   }
 }
 
-fn number_after<'a>(text: &'a str, marker: &str) -> Option<&'a str> {
+/// The digits after `marker`, and the text after those digits.
+fn number_after<'a>(text: &'a str, marker: &str) -> Option<(&'a str, &'a str)> {
   let start = text.find(marker)? + marker.len();
   let rest = text[start..].trim_start();
   let end = rest
     .find(|c: char| !c.is_ascii_digit())
     .unwrap_or(rest.len());
-  (end > 0).then(|| &rest[..end])
+  (end > 0).then(|| rest.split_at(end))
 }
 
 pub fn parse_line(line: &str) -> Option<LogEvent> {
@@ -58,8 +59,7 @@ pub fn parse_line(line: &str) -> Option<LogEvent> {
   if text.contains("login failed") {
     return Some(LogEvent::LoginFailed);
   }
-  if let Some(count) = number_after(text, "client expires in ") {
-    let after = &text[text.find(count)? + count.len()..];
+  if let Some((count, after)) = number_after(text, "client expires in ") {
     return Some(LogEvent::ExpiresIn {
       count: count.parse().ok()?,
       unit: after
@@ -80,11 +80,12 @@ pub fn parse_line(line: &str) -> Option<LogEvent> {
   }
   if trimmed.starts_with("sample rate: ") {
     return number_after(trimmed, "sample rate: ")?
+      .0
       .parse()
       .ok()
       .map(LogEvent::SampleRate);
   }
-  if let Some(bitrate) = number_after(text, "FileStreamer file average bitrate: ") {
+  if let Some((bitrate, _)) = number_after(text, "FileStreamer file average bitrate: ") {
     return bitrate.parse().ok().map(LogEvent::AverageBitrate);
   }
   None
@@ -209,6 +210,18 @@ mod tests {
       parse_line(line),
       Some(LogEvent::ExpiresIn {
         count: 88,
+        unit: "days".to_string()
+      })
+    );
+  }
+
+  #[test]
+  fn the_expiry_unit_follows_the_count_even_when_the_digits_appear_earlier() {
+    let line = "build 1.3.10 client expires in 10 days";
+    assert_eq!(
+      parse_line(line),
+      Some(LogEvent::ExpiresIn {
+        count: 10,
         unit: "days".to_string()
       })
     );
