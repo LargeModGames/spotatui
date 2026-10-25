@@ -39,7 +39,7 @@ cargo install --locked spotatui
 cargo binstall spotatui
 ```
 
-`cargo install` builds the Spotify-only default. For the other sources, album art, the MCP server, the AI DJ and the Soloist engine, use the `--features` line from [Which build has which features](#which-build-has-which-features). `cargo binstall` fetches the release binary, which already has all of them.
+`cargo install` builds the Spotify-only default. For the other sources, album art, the MCP server, the AI DJ and the Soloist engine, use the `--features` line from [Which build has which features](#which-build-has-which-features). `cargo binstall` fetches the release binary, which already has all of them, when a release artifact matches your platform.
 
 ### Windows (winget)
 

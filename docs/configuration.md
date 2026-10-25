@@ -78,7 +78,7 @@ behavior:
 
 ## Native streaming
 
-Builds with the `streaming` feature play Spotify themselves as a Connect device. These fields also appear in Settings; a change takes effect after a restart, except `playback_engine`, which switches at once.
+Builds with the `streaming` feature play Spotify themselves as a Connect device. These fields also appear in Settings; a change takes effect after a restart, except `playback_engine`, which switches at once while `enable_streaming` is on.
 
 ```yaml
 behavior:

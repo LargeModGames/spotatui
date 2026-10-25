@@ -11,6 +11,7 @@
 
 - **A build with the Soloist engine.** The prebuilt binaries and the desktop app have it. With `cargo install`, add `--features soloist` (see [Which build has which features](installation.md#which-build-has-which-features)).
 - **Spotify Premium.**
+- **Native Streaming on** (`enable_streaming: true`, the default). Soloist runs behind the same Connect device, so it starts only when Native Streaming is on.
 - **A supported system:** Linux (x86_64, arm64, arm32), macOS on Apple Silicon, or Windows x86_64. Spotify has no Soloist build for Intel Macs, so the Soloist settings do not show there.
 - **A Soloist API key** from Spotify's developer dashboard.
 - **The Spotify app** on a computer or a phone on the same network, once, to pair.
@@ -26,7 +27,7 @@ Every step is in Settings:
    On Windows, Windows Firewall asks if Soloist can use the network. Allow it, or a phone or another computer cannot pair with it.
 2. **Get an API key.** Select **Soloist API Key** and press `o` (or click **Get a key**). Spotify's developer dashboard opens in your browser. Make a Soloist API key there and copy it.
 3. **Enter the key.** Edit the **Soloist API Key** row (Enter in the terminal), paste the key, confirm it, and save. spotatui keeps the key in `soloist_credentials.yml` next to `config.yml` and shows only dots in Settings.
-4. **Switch the engine.** Set **Playback Engine** to **Soloist** and save. spotatui stops librespot and starts Soloist. You do not have to restart spotatui.
+4. **Switch the engine.** Set **Playback Engine** to **Soloist** and save. spotatui stops librespot and starts Soloist. With Native Streaming on, you do not have to restart spotatui.
 5. **Pair once.** A window asks you to pick spotatui in Spotify. Open Spotify on a computer or phone on the same network, open its device menu, and pick **spotatui** (or the name you set in `streaming_device_name`). The window closes by itself when Soloist logs in, and spotatui shows "Paired: spotatui plays through Soloist."
    Right after the first pairing, Soloist restarts once to apply the audio quality. Soloist keeps the login, so you pair only once.
 
@@ -42,7 +43,7 @@ spotatui turns Soloist's volume normalization off.
 
 ## Switch back
 
-Set **Playback Engine** back to **librespot** and save. spotatui stops Soloist and starts native streaming again, without a restart. The Soloist download, the key and the pairing stay, so a later switch back to Soloist is immediate.
+Set **Playback Engine** back to **librespot** and save. spotatui stops Soloist and starts native streaming again. With Native Streaming on, you do not have to restart spotatui. The Soloist download, the key and the pairing stay, so a later switch back to Soloist is immediate.
 
 ## In the config file
 
