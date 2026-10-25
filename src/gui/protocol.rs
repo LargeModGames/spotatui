@@ -254,6 +254,8 @@ const GUI_SETTINGS: &[(&str, &str)] = &[
   #[cfg(feature = "soloist")]
   ("behavior.soloist_path", "streaming"),
   #[cfg(feature = "soloist")]
+  ("behavior.soloist_api_key", "streaming"),
+  #[cfg(feature = "soloist")]
   ("behavior.soloist_audio_quality", "streaming"),
   #[cfg(feature = "discord-rpc")]
   ("behavior.enable_discord_rpc", "integrations"),

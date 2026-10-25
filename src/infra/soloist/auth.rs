@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 pub const KEY_ENV: &str = "SPOTATUI_SOLOIST_API_KEY";
 
@@ -22,12 +22,12 @@ impl std::fmt::Debug for ApiKey {
   }
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 struct Saved {
   api_key: String,
 }
 
-fn read_saved(path: &Path) -> Option<String> {
+pub fn read_saved(path: &Path) -> Option<String> {
   let text = std::fs::read_to_string(path).ok()?;
   serde_yaml::from_str::<Saved>(&text)
     .ok()
@@ -42,6 +42,24 @@ pub fn key_with(env: Option<String>, saved: Option<String>) -> Option<ApiKey> {
     .map(|key| key.trim().to_string())
     .find(|key| !key.is_empty())
     .map(ApiKey)
+}
+
+/// Write the key to the credentials file; a blank key removes the file.
+pub fn save_key(path: &Path, key: &str) -> anyhow::Result<()> {
+  let key = key.trim();
+  if key.is_empty() {
+    return match std::fs::remove_file(path) {
+      Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error.into()),
+      _ => Ok(()),
+    };
+  }
+  if let Some(dir) = path.parent() {
+    std::fs::create_dir_all(dir)?;
+  }
+  let text = serde_yaml::to_string(&Saved {
+    api_key: key.to_string(),
+  })?;
+  crate::core::auth::write_private_file_atomic(path, text.as_bytes())
 }
 
 pub fn current_key() -> Option<ApiKey> {
@@ -80,5 +98,16 @@ mod tests {
     let path = dir.path().join("soloist_credentials.yml");
     std::fs::write(&path, "api_key: abc\n").unwrap();
     assert_eq!(read_saved(&path).as_deref(), Some("abc"));
+  }
+
+  #[test]
+  fn a_saved_key_reads_back_and_a_blank_one_removes_the_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("spotatui").join("soloist_credentials.yml");
+    save_key(&path, " k: ey ").unwrap();
+    assert_eq!(read_saved(&path).as_deref(), Some("k: ey"));
+    save_key(&path, "").unwrap();
+    assert!(!path.exists());
+    save_key(&path, "").unwrap();
   }
 }

@@ -18,6 +18,9 @@ pub struct SettingsStrings {
   pub behavior_soloist_path_description: &'static str,
   pub soloist_download_button: &'static str,
   pub soloist_downloading_button: &'static str,
+  pub behavior_soloist_api_key_name: &'static str,
+  pub behavior_soloist_api_key_description: &'static str,
+  pub soloist_get_key_button: &'static str,
   pub behavior_soloist_audio_quality_name: &'static str,
   pub behavior_soloist_audio_quality_description: &'static str,
   pub behavior_local_music_path_description: &'static str,
@@ -400,6 +403,10 @@ impl SettingsStrings {
       "behavior.soloist_path" => (
         self.behavior_soloist_path_name,
         self.behavior_soloist_path_description,
+      ),
+      "behavior.soloist_api_key" => (
+        self.behavior_soloist_api_key_name,
+        self.behavior_soloist_api_key_description,
       ),
       "behavior.soloist_audio_quality" => (
         self.behavior_soloist_audio_quality_name,

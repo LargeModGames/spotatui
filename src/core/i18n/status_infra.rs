@@ -201,6 +201,10 @@ pub struct InfraStatusStrings {
   pub soloist_downloaded_next_launch: &'static str,
   pub soloist_download_failed: &'static str,
   pub soloist_no_build: &'static str,
+  pub soloist_key_saved: &'static str,
+  pub soloist_key_restarting: &'static str,
+  pub soloist_key_env_wins: &'static str,
+  pub soloist_key_save_failed: &'static str,
   pub native_recovery_dropped: &'static str,
   pub native_recovery_failed: &'static str,
   pub native_lost_recovering: &'static str,
@@ -338,6 +342,9 @@ impl InfraStatusStrings {
   }
   pub fn soloist_download_failed(&self, error: &str) -> String {
     super::format_template(self.soloist_download_failed, &[("error", error)])
+  }
+  pub fn soloist_key_save_failed(&self, error: &str) -> String {
+    super::format_template(self.soloist_key_save_failed, &[("error", error)])
   }
   pub fn soloist_key_missing(&self, path: &str) -> String {
     super::format_template(self.soloist_key_missing, &[("path", path)])
@@ -1016,10 +1023,10 @@ pub const EN: InfraStatusStrings = InfraStatusStrings {
   soloist_not_executable: "Soloist at {path} is not executable: chmod +x {path}",
   soloist_wrong_cpu: "This Soloist build does not run on this CPU. In Settings, Soloist Path, pick Download from Spotify.",
   soloist_start_failed: "Soloist could not start: {error}",
-  soloist_key_missing: "Soloist needs an API key: set SPOTATUI_SOLOIST_API_KEY or put api_key in {path}.",
+  soloist_key_missing: "Soloist needs an API key. In Settings, Soloist API Key, pick Get a key, then enter the key (it is saved in {path}).",
   soloist_not_paired: "Pair spotatui: open Spotify on a computer on this network and pick 'spotatui'.",
   soloist_offline: "Soloist cannot reach Spotify.",
-  soloist_bad_key: "Soloist rejected the API key.",
+  soloist_bad_key: "Soloist rejected the API key. In Settings, Soloist API Key, enter a new one.",
   soloist_expired: "Soloist build expired. In Settings, Soloist Path, pick Download from Spotify for a new one.",
   soloist_expires_soon: "Soloist build expires in {count} {unit}: download a new one soon.",
   soloist_dir_in_use: "Another Soloist uses spotatui's Soloist data folder.",
@@ -1039,6 +1046,10 @@ pub const EN: InfraStatusStrings = InfraStatusStrings {
   soloist_downloaded_next_launch: "Soloist downloaded. spotatui uses it from the next launch.",
   soloist_download_failed: "Soloist download failed: {error}",
   soloist_no_build: "Spotify has no Soloist build for this system.",
+  soloist_key_saved: "Soloist API key saved.",
+  soloist_key_restarting: "Soloist API key saved; restarting Soloist with it.",
+  soloist_key_env_wins: "Soloist API key saved, but SPOTATUI_SOLOIST_API_KEY is set and wins over it.",
+  soloist_key_save_failed: "Could not save the Soloist API key: {error}",
   native_recovery_dropped: "Native recovery failed; playback request dropped: {error}",
   native_recovery_failed: "Native recovery failed: {error}",
   native_lost_recovering: "Native streaming connection lost; attempting recovery.",

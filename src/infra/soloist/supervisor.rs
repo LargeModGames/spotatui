@@ -97,6 +97,13 @@ pub async fn stop(timeout: Duration) {
   }
 }
 
+/// `stop`, after which `start` works again; true when no supervisor runs any more.
+pub async fn stop_for_restart(timeout: Duration) -> bool {
+  stop(timeout).await;
+  shared().shutting_down.store(false, Ordering::SeqCst);
+  !running()
+}
+
 enum Outcome {
   Exited(Exit),
   Fatal(Notice),

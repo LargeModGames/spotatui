@@ -166,29 +166,95 @@ impl App {
     {
       item.value = SettingValue::String(path.clone());
     }
-    let behavior = &self.user_config.behavior;
-    let engine_on = behavior.playback_engine == crate::core::user_config::PlaybackEngine::Soloist;
-    let start = (engine_on
-      && behavior.enable_streaming
-      && !self.native_backend_pending
-      && !crate::infra::soloist::supervisor::running())
-    .then(|| {
-      crate::infra::soloist::startup::SoloistStart::from_behavior(
-        behavior,
-        self.runtime_state.volume_percent,
-        None,
-        false,
-      )
-    });
+    let engine_on = self.user_config.behavior.playback_engine
+      == crate::core::user_config::PlaybackEngine::Soloist;
+    let start = self.soloist_start_now();
     match (engine_on, start.is_some()) {
       (false, _) => self.set_status_message(strings.soloist_downloaded_engine_off, 10),
       (true, false) => self.set_status_message(strings.soloist_downloaded_next_launch, 8),
-      (true, true) => {
-        self.set_status_message(strings.soloist_downloaded, 4);
-        self.soloist_starting();
-      }
+      (true, true) => self.set_status_message(strings.soloist_downloaded, 4),
     }
     start
+  }
+
+  /// The start to run when the Soloist engine is on and nothing starts or runs it.
+  pub(crate) fn soloist_start_now(
+    &mut self,
+  ) -> Option<crate::infra::soloist::startup::SoloistStart> {
+    let behavior = &self.user_config.behavior;
+    if behavior.playback_engine != crate::core::user_config::PlaybackEngine::Soloist
+      || !behavior.enable_streaming
+      || self.native_backend_pending
+      || crate::infra::soloist::supervisor::running()
+    {
+      return None;
+    }
+    let start = crate::infra::soloist::startup::SoloistStart::from_behavior(
+      behavior,
+      self.runtime_state.volume_percent,
+      None,
+      false,
+    );
+    self.soloist_starting();
+    Some(start)
+  }
+
+  /// `soloist_credentials.yml`, beside `config.yml`.
+  fn soloist_key_file(&self) -> Option<std::path::PathBuf> {
+    let config = &self.user_config.path_to_config.as_ref()?.config_file_path;
+    Some(config.parent()?.join("soloist_credentials.yml"))
+  }
+
+  pub(crate) fn saved_soloist_key(&self) -> String {
+    self
+      .soloist_key_file()
+      .and_then(|path| crate::infra::soloist::auth::read_saved(&path))
+      .unwrap_or_default()
+  }
+
+  /// Write a changed API key row, then restart the engine on it so a bad key shows at once.
+  pub(crate) fn save_soloist_key_row(&mut self) {
+    let env_key = std::env::var(crate::infra::soloist::auth::KEY_ENV).ok();
+    self.save_soloist_key_row_with(env_key);
+  }
+
+  fn save_soloist_key_row_with(&mut self, env_key: Option<String>) {
+    use crate::infra::soloist::auth;
+    let Some(key) = self
+      .settings_items
+      .iter()
+      .find_map(|item| match &item.value {
+        SettingValue::Secret(key) if item.id == "behavior.soloist_api_key" => {
+          Some(key.trim().to_string())
+        }
+        _ => None,
+      })
+    else {
+      return;
+    };
+    let Some(path) = self.soloist_key_file() else {
+      return;
+    };
+    if key == self.saved_soloist_key().trim() {
+      return;
+    }
+    let strings = self.strings().status.infra;
+    if let Err(e) = auth::save_key(&path, &key) {
+      self.set_error_status_message(strings.soloist_key_save_failed(&e.to_string()), 10);
+      return;
+    }
+    let behavior = &self.user_config.behavior;
+    if auth::key_with(env_key, None).is_some() {
+      self.set_status_message(strings.soloist_key_env_wins, 10);
+    } else if !key.is_empty()
+      && behavior.playback_engine == crate::core::user_config::PlaybackEngine::Soloist
+      && behavior.enable_streaming
+    {
+      self.set_status_message(strings.soloist_key_restarting, 4);
+      self.dispatch_without_spinner(IoEvent::RestartSoloist);
+    } else {
+      self.set_status_message(strings.soloist_key_saved, 4);
+    }
   }
 
   pub(crate) fn soloist_notice(&mut self, notice: crate::infra::soloist::Notice) {
@@ -351,6 +417,74 @@ mod tests {
 
     assert!(start.is_some());
     assert!(app.native_backend_pending);
+  }
+
+  fn key_row(value: &str) -> crate::core::app::SettingItem {
+    crate::core::app::SettingItem {
+      id: "behavior.soloist_api_key".to_string(),
+      name: String::new(),
+      description: String::new(),
+      value: SettingValue::Secret(value.to_string()),
+    }
+  }
+
+  fn soloist_app_with_config(dir: &std::path::Path) -> (App, std::sync::mpsc::Receiver<IoEvent>) {
+    let (mut app, rx) = session_free_app();
+    app.user_config.path_to_config = Some(crate::core::user_config::UserConfigPaths {
+      config_file_path: dir.join("config.yml"),
+    });
+    app.user_config.behavior.enable_streaming = true;
+    app.user_config.behavior.playback_engine = PlaybackEngine::Soloist;
+    (app, rx)
+  }
+
+  #[test]
+  fn a_new_key_is_saved_beside_the_config_and_restarts_soloist() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut app, rx) = soloist_app_with_config(dir.path());
+    app.settings_items = vec![key_row(" new-key ")];
+
+    app.save_soloist_key_row_with(None);
+
+    let file = dir.path().join("soloist_credentials.yml");
+    assert_eq!(
+      crate::infra::soloist::auth::read_saved(&file).as_deref(),
+      Some("new-key")
+    );
+    assert_eq!(app.saved_soloist_key(), "new-key");
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::RestartSoloist)));
+  }
+
+  #[test]
+  fn an_unchanged_key_or_an_env_key_restarts_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut app, rx) = soloist_app_with_config(dir.path());
+    std::fs::write(
+      dir.path().join("soloist_credentials.yml"),
+      "api_key: same\n",
+    )
+    .unwrap();
+    app.settings_items = vec![key_row("same")];
+    app.save_soloist_key_row_with(None);
+    assert!(rx.try_recv().is_err());
+
+    app.settings_items = vec![key_row("other")];
+    app.save_soloist_key_row_with(Some("env-key".to_string()));
+    assert_eq!(app.saved_soloist_key(), "other");
+    assert!(rx.try_recv().is_err());
+    assert_eq!(
+      app.status_message(),
+      Some(app.strings().status.infra.soloist_key_env_wins)
+    );
+  }
+
+  #[test]
+  fn the_key_row_offers_the_dashboard_button() {
+    let app = make_app_simple();
+    assert_eq!(
+      app.setting_button_label("behavior.soloist_api_key"),
+      Some(("Get a key", false))
+    );
   }
 
   #[test]

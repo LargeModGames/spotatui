@@ -35,6 +35,18 @@ impl SoloistStart {
   }
 }
 
+/// Stop a running Soloist, then start it again with the saved settings and key.
+pub(crate) async fn restart(app: Arc<Mutex<App>>) {
+  if !supervisor::stop_for_restart(std::time::Duration::from_secs(5)).await {
+    log::warn!("soloist: the old engine did not stop; not restarting");
+    return;
+  }
+  let start = app.lock().await.soloist_start_now();
+  if let Some(start) = start {
+    deferred_soloist_startup(app, start);
+  }
+}
+
 /// Runs after the first frame, like librespot's deferred start.
 pub(crate) fn deferred_soloist_startup(app: Arc<Mutex<App>>, start: SoloistStart) {
   tokio::spawn(async move {

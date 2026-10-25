@@ -977,6 +977,8 @@ impl App {
         _ => {}
       }
     }
+    #[cfg(feature = "soloist")]
+    self.save_soloist_key_row();
     self.refresh_language();
     self.refresh_settings_labels();
     #[cfg(feature = "art-decode")]

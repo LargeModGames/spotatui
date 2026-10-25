@@ -112,6 +112,7 @@ pub(crate) fn setting_requirement(id: &str) -> Requirement {
     | "behavior.streaming_autoplay"
     | "behavior.playback_engine"
     | "behavior.soloist_path"
+    | "behavior.soloist_api_key"
     | "behavior.soloist_audio_quality"
     | "keys.jump_to_album"
     | "keys.jump_to_artist_album"
@@ -133,11 +134,13 @@ pub(crate) fn setting_requirement(id: &str) -> Requirement {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SettingButton {
   DownloadSoloist,
+  GetSoloistKey,
 }
 
 pub(crate) fn setting_button(id: &str) -> Option<SettingButton> {
   match id {
     "behavior.soloist_path" if cfg!(feature = "soloist") => Some(SettingButton::DownloadSoloist),
+    "behavior.soloist_api_key" if cfg!(feature = "soloist") => Some(SettingButton::GetSoloistKey),
     _ => None,
   }
 }
@@ -151,6 +154,7 @@ impl App {
         (strings.soloist_downloading_button, true)
       }
       SettingButton::DownloadSoloist => (strings.soloist_download_button, false),
+      SettingButton::GetSoloistKey => (strings.soloist_get_key_button, false),
     })
   }
 
@@ -159,6 +163,9 @@ impl App {
       Some(SettingButton::DownloadSoloist) => {
         #[cfg(feature = "soloist")]
         self.download_soloist();
+      }
+      Some(SettingButton::GetSoloistKey) => {
+        self.open_external_url("https://developer.spotify.com/dashboard/soloist");
       }
       None => {}
     }
@@ -563,6 +570,16 @@ impl App {
             .clone()
             .unwrap_or_default(),
         ),
+      },
+      #[cfg(all(
+        feature = "soloist",
+        not(all(target_os = "macos", target_arch = "x86_64"))
+      ))]
+      SettingItem {
+        id: "behavior.soloist_api_key".to_string(),
+        name: strings.behavior_soloist_api_key_name.to_string(),
+        description: strings.behavior_soloist_api_key_description.to_string(),
+        value: SettingValue::Secret(self.saved_soloist_key()),
       },
       #[cfg(all(
         feature = "soloist",
