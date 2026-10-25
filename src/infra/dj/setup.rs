@@ -1657,5 +1657,10 @@ mod tests {
       assert!(claude.label_with(strings).contains("claude"));
       assert!(claude.note_with(strings).contains("PATH"));
     }
+    assert_eq!(claude.label_with(&ZH_HANS), "claude（无需 API key）");
+    assert_eq!(
+      claude.note_with(&ZH_HANT),
+      "使用你的 Claude Pro/Max 方案 · 不在 PATH 中"
+    );
   }
 }

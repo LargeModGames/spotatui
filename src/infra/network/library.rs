@@ -3260,8 +3260,8 @@ mod folder_label_tests {
     let cached = structurize_playlist_folders(&nodes, &[]);
     for (strings, fallback) in [
       (&EN, "Unnamed Folder"),
-      (&ZH_HANS, ZH_HANS.status.infra.unnamed_folder),
-      (&ZH_HANT, ZH_HANT.status.infra.unnamed_folder),
+      (&ZH_HANS, "未命名文件夹"),
+      (&ZH_HANT, "未命名資料夾"),
     ] {
       assert_eq!(
         names(&cached, strings),

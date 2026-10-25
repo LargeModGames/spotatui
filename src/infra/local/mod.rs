@@ -723,16 +723,8 @@ mod tests {
     let cached = futures::executor::block_on(LocalSource::new(root).playlists()).unwrap();
     for (strings, root_label, unknown_track) in [
       (&EN, "(root)", "Unknown Track"),
-      (
-        &ZH_HANS,
-        ZH_HANS.status.infra.local_root_folder,
-        ZH_HANS.status.infra.local_unknown_track,
-      ),
-      (
-        &ZH_HANT,
-        ZH_HANT.status.infra.local_root_folder,
-        ZH_HANT.status.infra.local_unknown_track,
-      ),
+      (&ZH_HANS, "（根目录）", "未知曲目"),
+      (&ZH_HANT, "（根目錄）", "未知曲目"),
     ] {
       let source = LocalSource::new(root);
       let playlists = futures::executor::block_on(source.playlists()).unwrap();

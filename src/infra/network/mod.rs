@@ -2867,12 +2867,7 @@ mod tests {
     .expect("reading the table must release the lock before writing status");
     assert_eq!(
       app.lock().await.status_message(),
-      Some(
-        crate::core::i18n::ZH_HANT
-          .status
-          .infra
-          .spotify_not_connected
-      )
+      Some("Spotify 未連線。請按 `d` 並選擇 Spotify 登入。")
     );
     {
       let mut app = app.lock().await;
@@ -2882,12 +2877,7 @@ mod tests {
     network.start_party(sync::ControlMode::HostOnly).await;
     assert_eq!(
       app.lock().await.status_message(),
-      Some(
-        crate::core::i18n::ZH_HANS
-          .status
-          .infra
-          .spotify_not_connected
-      )
+      Some("Spotify 未连接。请按 `d` 并选择 Spotify 登录。")
     );
     app.lock().await.use_english_messages();
     network.start_party(sync::ControlMode::HostOnly).await;
