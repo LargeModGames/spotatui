@@ -408,19 +408,23 @@ async fn connect(
   None
 }
 
-/// Seed the quality keys for accounts that appeared since the spawn; true when Soloist must restart to read them.
-fn seed_new_accounts(config: &Config, before: &BTreeSet<String>) -> bool {
-  let present = prefs::user_dirs(&config.data_dir);
-  let fresh = prefs::unseeded(&present, &prefs::seeded(&config.data_dir));
+/// Seed the quality keys for accounts that appeared since the spawn: `None` while Soloist
+/// has written no account prefs yet, else whether Soloist must restart to read them.
+fn seed_new_accounts(data_dir: &Path, quality: u8, before: &BTreeSet<String>) -> Option<bool> {
+  let present = prefs::user_dirs(data_dir);
+  if present.is_empty() {
+    return None;
+  }
+  let fresh = prefs::unseeded(&present, &prefs::seeded(data_dir));
   if fresh.is_empty() {
-    return false;
+    return Some(false);
   }
-  if let Err(error) = prefs::write_quality(&config.data_dir, config.quality) {
+  if let Err(error) = prefs::write_quality(data_dir, quality) {
     warn!("soloist: could not write the quality prefs: {error}");
-    return false;
+    return Some(false);
   }
-  let _ = prefs::mark_seeded(&config.data_dir, &present);
-  fresh.iter().any(|user| !before.contains(user))
+  let _ = prefs::mark_seeded(data_dir, &present);
+  Some(fresh.iter().any(|user| !before.contains(user)))
 }
 
 async fn run_once(
@@ -524,6 +528,8 @@ async fn run_once(
   let mut quality = PendingQuality::default();
   let mut log_open = true;
   let mut seed_restart = false;
+  // Soloist writes a new account's prefs just after it reports the login.
+  let mut seed_watch = false;
   let offline_at = tokio::time::Instant::now() + OFFLINE_AFTER;
   let mut offline_pending = !users_before.is_empty();
   let outcome = loop {
@@ -575,12 +581,18 @@ async fn run_once(
           if logged_in && !seen.logged_in {
             seen.logged_in = true;
             offline_pending = false;
-            seed_restart = seed_new_accounts(config, &users_before);
+            seed_watch = true;
             if std::mem::take(first_login) {
               app
                 .lock()
                 .await
                 .soloist_logged_in(config.startup_behavior, config.startup_shuffle);
+            }
+          }
+          if seed_watch {
+            if let Some(restart) = seed_new_accounts(&config.data_dir, config.quality, &users_before) {
+              seed_watch = false;
+              seed_restart = restart;
             }
           }
           let snapshot = link.snapshot();
@@ -666,5 +678,29 @@ mod job {
         CloseHandle(self.0);
       }
     }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn the_seed_waits_for_the_account_prefs_then_restarts_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let before = BTreeSet::new();
+    assert_eq!(seed_new_accounts(dir.path(), 5, &before), None);
+
+    let user = dir.path().join("settings").join("Users").join("someone");
+    std::fs::create_dir_all(&user).unwrap();
+    std::fs::write(user.join("prefs"), "app.first=1\n").unwrap();
+
+    assert_eq!(seed_new_accounts(dir.path(), 5, &before), Some(true));
+    let prefs = std::fs::read_to_string(user.join("prefs")).unwrap();
+    assert!(
+      prefs.contains("audio.play_bitrate_enumeration=5\n"),
+      "{prefs}"
+    );
+    assert_eq!(seed_new_accounts(dir.path(), 5, &before), Some(false));
   }
 }
