@@ -112,7 +112,8 @@ impl App {
   /// TCP: `is_connected` true, Spirc commands silently dropped).
   #[cfg(feature = "streaming")]
   pub fn force_native_streaming_recovery(&mut self, reselect_device: bool) {
-    if !self.native_should_drive() {
+    // A librespot recovery would clear Soloist's device id.
+    if !self.native_should_drive() || self.soloist_engine_installed() {
       return;
     }
     let position_ms = u32::try_from(self.song_progress_ms).unwrap_or(u32::MAX);

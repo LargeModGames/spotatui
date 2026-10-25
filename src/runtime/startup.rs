@@ -286,7 +286,26 @@ pub(super) async fn prepare_frontend(boot: Boot) -> FrontendHandles {
   // UI is up (see `deferred_streaming_startup`) instead of gating the first
   // frame for seconds (worst case tens of seconds).
   #[cfg(feature = "streaming")]
-  let streaming_attempted = user_config.behavior.enable_streaming && spotify.is_some();
+  let engine = super::streaming::effective_engine(
+    user_config.behavior.playback_engine,
+    cfg!(feature = "soloist"),
+    cfg!(all(target_os = "macos", target_arch = "x86_64")),
+  );
+  #[cfg(feature = "streaming")]
+  if engine != user_config.behavior.playback_engine && user_config.behavior.enable_streaming {
+    let mut app = app.lock().await;
+    let message = app.strings().status.infra.soloist_engine_unavailable;
+    app.set_status_message(message, 8);
+  }
+  // In soloist mode no Spirc device starts: Soloist is the device.
+  #[cfg(feature = "streaming")]
+  let streaming_attempted = user_config.behavior.enable_streaming
+    && spotify.is_some()
+    && engine == crate::core::user_config::PlaybackEngine::Librespot;
+  #[cfg(feature = "soloist")]
+  let soloist_attempted = user_config.behavior.enable_streaming
+    && spotify.is_some()
+    && engine == crate::core::user_config::PlaybackEngine::Soloist;
 
   // Create shared atomic for real-time position updates from native player
   // This avoids lock contention - the player event handler can update position
@@ -568,6 +587,24 @@ pub(super) async fn prepare_frontend(boot: Boot) -> FrontendHandles {
     });
   }
 
+  #[cfg(feature = "soloist")]
+  if soloist_attempted {
+    app.lock().await.soloist_starting();
+    super::streaming::soloist::deferred_soloist_startup(
+      Arc::clone(&app),
+      super::streaming::soloist::SoloistStart::from_behavior(
+        &user_config.behavior,
+        runtime_state.volume_percent,
+        if restore_playback.is_some() {
+          None
+        } else {
+          Some(initial_startup_behavior)
+        },
+        initial_shuffle_enabled,
+      ),
+    );
+  }
+
   let cloned_app = Arc::clone(&app);
   info!("spawning spotify network event handler");
   tokio::spawn(async move {
@@ -606,6 +643,9 @@ pub(super) async fn prepare_frontend(boot: Boot) -> FrontendHandles {
       let startup_behavior_runs_here = !streaming_attempted;
       #[cfg(not(feature = "streaming"))]
       let startup_behavior_runs_here = true;
+      // Soloist fires it at its first login.
+      #[cfg(feature = "soloist")]
+      let startup_behavior_runs_here = startup_behavior_runs_here && !soloist_attempted;
       if startup_behavior_runs_here {
         match initial_startup_behavior {
           StartupBehavior::Continue => {}
@@ -732,6 +772,8 @@ pub(super) async fn shutdown_frontend(
 
   #[cfg(feature = "streaming")]
   let native_teardown = park_native_playback_before_exit(app).await;
+  #[cfg(feature = "soloist")]
+  crate::infra::soloist::supervisor::stop(std::time::Duration::from_millis(1500)).await;
 
   // Stop the collector and all network work it owns before the final sync and
   // clear. In particular, a pause-triggered now-playing push must not race the

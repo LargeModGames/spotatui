@@ -51,14 +51,23 @@ fn include_native_streaming_device(
     _ => return,
   };
 
-  // The parked row matches by id: another device can carry the same name.
-  if let Some(device) = payload.devices.iter_mut().find(|device| {
-    if parked {
-      device.id.as_deref() == Some(device_id.as_str())
-    } else {
-      device.name.eq_ignore_ascii_case(device_name)
-    }
-  }) {
+  // Match by id first: another device can carry the same name. Only a live
+  // backend falls back to the name, for a row that has no id yet.
+  let position = payload
+    .devices
+    .iter()
+    .position(|device| device.id.as_deref() == Some(device_id.as_str()))
+    .or_else(|| {
+      (!parked)
+        .then(|| {
+          payload
+            .devices
+            .iter()
+            .position(|device| device.name.eq_ignore_ascii_case(device_name))
+        })
+        .flatten()
+    });
+  if let Some(device) = position.map(|index| &mut payload.devices[index]) {
     if parked {
       device.is_active = false;
     } else if device.id.is_none() {

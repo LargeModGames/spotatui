@@ -358,13 +358,100 @@ impl App {
   pub fn spotify_external_device_active(&self) -> bool {
     #[cfg(feature = "streaming")]
     {
-      self.current_playback_context.is_some()
+      // Soloist keeps its own queue: a queued Spotify track goes to it, never to librespot.
+      (self.current_playback_context.is_some() || self.soloist_engine_installed())
         && !self.is_native_streaming_active_for_playback()
         && !self.native_parked_owns_context()
     }
     #[cfg(not(feature = "streaming"))]
     {
       self.current_playback_context.is_some()
+    }
+  }
+
+  /// Whether the Soloist engine runs in place of librespot.
+  #[cfg(feature = "streaming")]
+  pub fn soloist_engine_installed(&self) -> bool {
+    #[cfg(feature = "soloist")]
+    {
+      self.soloist_link.is_some()
+    }
+    #[cfg(not(feature = "soloist"))]
+    {
+      false
+    }
+  }
+
+  /// Whether a Spotify command goes to Soloist: its device is the active one,
+  /// or no device is and Soloist is logged in.
+  pub fn soloist_is_target(&self) -> bool {
+    #[cfg(feature = "soloist")]
+    {
+      let Some(link) = self.soloist_link.as_ref() else {
+        return false;
+      };
+      self.playback_owner() == PlaybackOwner::Spotify
+        && soloist_targets(
+          link.snapshot().logged_in,
+          self
+            .current_playback_context
+            .as_ref()
+            .and_then(|context| context.device.id.as_deref()),
+          link.device_id(),
+        )
+    }
+    #[cfg(not(feature = "soloist"))]
+    {
+      false
+    }
+  }
+
+  /// Write Soloist's live state over the polled context when the context is Soloist's.
+  #[cfg(feature = "soloist")]
+  pub(crate) fn overlay_soloist_onto(&self, context: &mut rspotify::model::CurrentPlaybackContext) {
+    let Some(link) = self.soloist_link.as_ref() else {
+      return;
+    };
+    if context.device.id.as_deref() != Some(link.device_id()) {
+      return;
+    }
+    overlay_soloist(
+      context,
+      &link.snapshot(),
+      chrono::Utc::now().timestamp_millis(),
+    );
+  }
+
+  /// Apply the overlay to the stored context and restart the tick's position clock from it.
+  #[cfg(feature = "soloist")]
+  pub(super) fn overlay_soloist_snapshot(&mut self) {
+    let Some(mut context) = self.current_playback_context.take() else {
+      return;
+    };
+    self.overlay_soloist_onto(&mut context);
+    if let Some(progress) = context.progress {
+      self.song_progress_ms = progress.num_milliseconds().max(0) as u128;
+      self.instant_since_last_current_playback_poll = Instant::now();
+    }
+    self.current_playback_context = Some(context);
+  }
+
+  /// The stream Soloist reports, worded like the Qobuz badge, while it plays for us.
+  pub(crate) fn soloist_quality_label(&self) -> Option<String> {
+    #[cfg(feature = "soloist")]
+    {
+      if !self.soloist_is_target() {
+        return None;
+      }
+      self
+        .soloist_link
+        .as_ref()
+        .and_then(|link| link.quality())
+        .map(|quality| quality.label())
+    }
+    #[cfg(not(feature = "soloist"))]
+    {
+      None
     }
   }
 
@@ -679,11 +766,14 @@ impl App {
       .current_playback_context
       .as_ref()
       .map(|ctx| ctx.device.name.clone());
-    let quality = snapshot
+    let item_uri = snapshot
       .as_ref()
-      .and_then(|snapshot| snapshot.item_uri.as_deref())
-      .filter(|uri| uri.starts_with("qobuz:"))
-      .and_then(|_| self.qobuz_quality_label());
+      .and_then(|snapshot| snapshot.item_uri.as_deref());
+    let quality = match item_uri {
+      Some(uri) if uri.starts_with("qobuz:") => self.qobuz_quality_label(),
+      Some(uri) if uri.starts_with("spotify:") => self.soloist_quality_label(),
+      _ => None,
+    };
     let context_name = self.playback_context_name(snapshot.as_ref());
     let view = (
       snapshot,
@@ -744,6 +834,42 @@ pub(crate) fn context_display_name(
       .map(|(_, name)| name.clone()),
     _ => None,
   }
+}
+
+/// By id only: another device can carry the name "spotatui".
+#[cfg(feature = "soloist")]
+fn soloist_targets(logged_in: bool, active_device_id: Option<&str>, soloist_id: &str) -> bool {
+  match active_device_id {
+    Some(id) => id == soloist_id,
+    None => logged_in,
+  }
+}
+
+#[cfg(feature = "soloist")]
+fn overlay_soloist(
+  context: &mut rspotify::model::CurrentPlaybackContext,
+  snapshot: &crate::infra::soloist::link::Snapshot,
+  now_ms: i64,
+) {
+  use crate::infra::soloist::protocol::Repeat;
+  context.is_playing = snapshot.status.is_playing();
+  if let Some(anchor) = snapshot.position {
+    let position = if context.is_playing {
+      anchor.at(now_ms)
+    } else {
+      anchor.position_ms
+    };
+    context.progress = Some(chrono::Duration::milliseconds(position as i64));
+  }
+  if let Some(volume) = snapshot.volume {
+    context.device.volume_percent = Some(u32::from(volume));
+  }
+  context.shuffle_state = snapshot.shuffle;
+  context.repeat_state = match snapshot.repeat {
+    Repeat::Off => rspotify::model::RepeatState::Off,
+    Repeat::Context => rspotify::model::RepeatState::Context,
+    Repeat::Track => rspotify::model::RepeatState::Track,
+  };
 }
 
 #[cfg(test)]
@@ -1183,5 +1309,110 @@ mod tests {
     app.claim_decoded_sink(Source::Qobuz);
     assert!(!app.native_should_drive());
     assert!(!app.native_context_should_drive());
+  }
+}
+
+#[cfg(all(test, feature = "soloist"))]
+mod soloist_tests {
+  use super::*;
+  use crate::core::app::test_support::*;
+  use crate::infra::soloist::protocol::{Event, PlaybackState, PositionAnchor, Repeat, Status};
+  use crate::infra::soloist::SoloistLink;
+
+  const SOLOIST_ID: &str = "soloist-device";
+
+  fn app_with_soloist() -> (App, Arc<SoloistLink>) {
+    let mut app = make_app_simple();
+    let (link, _rx) = SoloistLink::test_pair(SOLOIST_ID);
+    app.install_soloist_link(link.clone());
+    (app, link)
+  }
+
+  fn soloist_context() -> rspotify::model::CurrentPlaybackContext {
+    let mut context = make_external_context();
+    context.device.id = Some(SOLOIST_ID.to_string());
+    context.device.name = "spotatui".to_string();
+    context.is_playing = false;
+    context
+  }
+
+  fn playing_state() -> Event {
+    Event::State(Box::new(PlaybackState {
+      status: Status::Playing,
+      item_uri: Some("spotify:track:x".to_string()),
+      item_is_episode: false,
+      context_uri: None,
+      position: Some(PositionAnchor {
+        position_ms: 5_000,
+        timestamp_ms: chrono::Utc::now().timestamp_millis(),
+        speed: 1.0,
+      }),
+      volume: Some(30),
+      is_active: true,
+      shuffle: true,
+      repeat: Repeat::Track,
+    }))
+  }
+
+  #[test]
+  fn soloist_targets_matches_by_id_not_name() {
+    assert!(soloist_targets(false, Some(SOLOIST_ID), SOLOIST_ID));
+    assert!(!soloist_targets(true, Some("phone"), SOLOIST_ID));
+    assert!(soloist_targets(true, None, SOLOIST_ID));
+    assert!(!soloist_targets(false, None, SOLOIST_ID));
+  }
+
+  #[test]
+  fn soloist_is_the_target_when_no_device_is_active() {
+    let (mut app, link) = app_with_soloist();
+    assert!(!app.soloist_is_target(), "not logged in yet");
+    app.apply_soloist_event(
+      &link,
+      &Event::Auth {
+        logged_in: true,
+        is_active: false,
+      },
+    );
+    assert!(app.soloist_is_target());
+    app.current_playback_context = Some(make_external_context());
+    assert!(!app.soloist_is_target(), "another device plays");
+  }
+
+  #[test]
+  fn overlay_writes_the_websocket_state_onto_soloists_context() {
+    let (mut app, link) = app_with_soloist();
+    app.current_playback_context = Some(soloist_context());
+    app.apply_soloist_event(&link, &playing_state());
+
+    let context = app.current_playback_context.as_ref().unwrap();
+    assert!(context.is_playing);
+    assert!(context.shuffle_state);
+    assert_eq!(context.repeat_state, rspotify::model::RepeatState::Track);
+    assert_eq!(context.device.volume_percent, Some(30));
+    assert!(context.progress.unwrap().num_milliseconds() >= 5_000);
+    assert!(app.song_progress_ms >= 5_000);
+  }
+
+  #[test]
+  fn overlay_ignores_another_device() {
+    let (mut app, link) = app_with_soloist();
+    app.current_playback_context = Some(make_external_context());
+    app.apply_soloist_event(&link, &playing_state());
+
+    let context = app.current_playback_context.as_ref().unwrap();
+    assert!(!context.shuffle_state);
+    assert_eq!(context.device.volume_percent, Some(50));
+  }
+
+  #[test]
+  fn poll_overlay_keeps_websocket_state_over_a_lagging_cluster() {
+    let (mut app, link) = app_with_soloist();
+    app.current_playback_context = Some(soloist_context());
+    app.apply_soloist_event(&link, &playing_state());
+
+    let mut polled = soloist_context();
+    app.overlay_soloist_onto(&mut polled);
+    assert!(polled.is_playing);
+    assert_eq!(polled.device.volume_percent, Some(30));
   }
 }

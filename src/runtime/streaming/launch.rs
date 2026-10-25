@@ -206,6 +206,7 @@ async fn deferred_streaming_startup_inner(ctx: DeferredStreamingContext) {
   // streaming). This used to run inline in the network task before the pump
   // started; the decision's outcome now dispatches through the pump.
   let device_name = streaming_player.device_name().to_string();
+  let device_id = streaming_player.device_id();
   let saved_device_id = ctx.app.lock().await.saved_spotify_device_id();
   let mut devices_snapshot = None;
   if let Ok(devices) =
@@ -225,6 +226,7 @@ async fn deferred_streaming_startup_inner(ctx: DeferredStreamingContext) {
     saved_device_id,
     devices_snapshot.as_deref(),
     &device_name,
+    Some(&device_id),
     strings,
   );
 

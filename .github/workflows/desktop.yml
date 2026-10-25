@@ -26,7 +26,7 @@ jobs:
         os: ${{ github.event_name == 'pull_request' && fromJSON('["ubuntu-24.04"]') || fromJSON('["ubuntu-24.04", "macos-latest", "windows-latest"]') }}
     env:
       # Keep in sync with the spotatui dependency's features in desktop/Cargo.toml.
-      FEATURES: "telemetry,gui,streaming,discord-rpc,self-update,scripting,mcp-server,mpris,macos-media,windows-media,local-files,subsonic,internet-radio,youtube,qobuz,apple-music,audio-viz,audio-viz-cpal"
+      FEATURES: "telemetry,gui,streaming,discord-rpc,self-update,scripting,mcp-server,mpris,macos-media,windows-media,local-files,subsonic,internet-radio,youtube,qobuz,soloist,apple-music,audio-viz,audio-viz-cpal"
     defaults:
       run:
         shell: bash

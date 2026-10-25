@@ -327,6 +327,26 @@ impl App {
             self.user_config.behavior.streaming_autoplay = *v;
           }
         }
+        #[cfg(feature = "soloist")]
+        "behavior.playback_engine" => {
+          if let SettingValue::Cycle(v, _) = &setting.value {
+            self.user_config.behavior.playback_engine =
+              crate::core::user_config::PlaybackEngine::from_name(v);
+          }
+        }
+        #[cfg(feature = "soloist")]
+        "behavior.soloist_path" => {
+          if let SettingValue::String(v) = &setting.value {
+            self.user_config.behavior.soloist_path = trimmed(v);
+          }
+        }
+        #[cfg(feature = "soloist")]
+        "behavior.soloist_audio_quality" => {
+          if let SettingValue::Cycle(v, _) = &setting.value {
+            self.user_config.behavior.soloist_audio_quality =
+              crate::core::user_config::SoloistQuality::from_name(v);
+          }
+        }
         "behavior.enable_announcements" => {
           if let SettingValue::Bool(v) = &setting.value {
             self.user_config.behavior.enable_announcements = *v;
@@ -1038,7 +1058,12 @@ impl App {
 }
 
 /// A text setting without its padding; empty means unset.
-#[cfg(any(feature = "subsonic", feature = "local-files", feature = "youtube"))]
+#[cfg(any(
+  feature = "subsonic",
+  feature = "local-files",
+  feature = "youtube",
+  feature = "soloist"
+))]
 fn trimmed(value: &str) -> Option<String> {
   Some(value.trim().to_string()).filter(|value| !value.is_empty())
 }

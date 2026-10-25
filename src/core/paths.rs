@@ -62,6 +62,24 @@ pub(crate) fn qobuz_credentials_path() -> Option<PathBuf> {
   app_config_dir().map(|dir| dir.join("qobuz_credentials.yml"))
 }
 
+/// The Soloist API key: `<config dir>/soloist_credentials.yml`.
+#[cfg(feature = "soloist")]
+pub(crate) fn soloist_credentials_path() -> Option<PathBuf> {
+  app_config_dir().map(|dir| dir.join("soloist_credentials.yml"))
+}
+
+/// Soloist's own data dir (device id, paired session, prefs): `<state dir>/soloist`.
+#[cfg(feature = "soloist")]
+pub(crate) fn soloist_data_dir() -> Option<PathBuf> {
+  app_state_dir().map(|dir| dir.join("soloist"))
+}
+
+/// Soloist's playback cache: `<cache dir>/soloist`.
+#[cfg(feature = "soloist")]
+pub(crate) fn soloist_cache_dir() -> Option<PathBuf> {
+  app_cache_dir().map(|dir| dir.join("soloist"))
+}
+
 /// The player-bar visualizer's look: `<config dir>/visualizer.yml`, never written by the app.
 #[cfg(feature = "gui")]
 pub(crate) fn visualizer_config_path() -> Option<PathBuf> {

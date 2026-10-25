@@ -57,6 +57,11 @@ impl App {
       self.dispatch(IoEvent::AddItemToQueue(uri));
       return;
     }
+    // Soloist reports no track end, so nothing would take over after its current track.
+    if self.soloist_is_target() {
+      self.set_status_message(self.strings().status.infra.soloist_queue_refused, 4);
+      return;
+    }
     let name = track.display_name(self.strings()).to_owned();
     self.native_queue.push(track);
     info!(

@@ -454,6 +454,23 @@ struct Deferred {
   owner: PlaybackOwner,
 }
 
+/// The transports a Soloist target serves over its WebSocket, with no Spotify request.
+#[cfg(feature = "soloist")]
+fn soloist_ws_transport(io_event: &IoEvent) -> bool {
+  matches!(
+    io_event,
+    IoEvent::PausePlayback
+      | IoEvent::StartPlayback(None, None, None)
+      | IoEvent::NextTrack
+      | IoEvent::PreviousTrack
+      | IoEvent::ForcePreviousTrack
+      | IoEvent::Seek(_)
+      | IoEvent::ChangeVolume(_)
+      | IoEvent::Shuffle(_)
+      | IoEvent::Repeat(_)
+  )
+}
+
 /// Whether `queued`, the owner at deferral time, still holds the sink under
 /// `now`. librespot and an external device are one Spotify owner: a poll can
 /// flip between them inside one window.
@@ -1180,6 +1197,11 @@ impl Network {
     let Some(left) = left else {
       return Some(io_event);
     };
+    // These go to Soloist over its loopback WebSocket, never to Spotify's servers.
+    #[cfg(feature = "soloist")]
+    if soloist_ws_transport(&io_event) && self.app.lock().await.soloist_is_target() {
+      return Some(io_event);
+    }
     if !self.defers_rate_limited {
       tokio::time::sleep(left).await;
       return Some(io_event);

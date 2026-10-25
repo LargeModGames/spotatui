@@ -194,6 +194,8 @@ impl Default for App {
       last_dispatched_volume: None,
       #[cfg(feature = "streaming")]
       streaming_player: None,
+      #[cfg(feature = "soloist")]
+      soloist_link: None,
       decoded_repeat: RepeatMode::Off,
       decoded_shuffle: false,
       #[cfg(feature = "local-files")]

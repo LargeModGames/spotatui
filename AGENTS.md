@@ -9,7 +9,7 @@ when working with code in this repository. `CLAUDE.md` imports it: edit this fil
 # Full build (native streaming + audio viz + Lua scripting + OS integrations)
 cargo run
 
-# Slim build - no librespot/audio/scripting; fastest iteration, one of CI's eight legs
+# Slim build - no librespot/audio/scripting; fastest iteration, one of CI's nine legs
 cargo run --no-default-features --features telemetry,tui
 
 # With the alternative sources (Local/Subsonic/Radio/YouTube/Qobuz). These are NOT
@@ -33,18 +33,19 @@ cargo test --no-default-features --features telemetry,tui
 
 These slim commands are the *fast local gate*, not the full picture. GitHub Actions
 (`.github/workflows/ci.yml`) runs `check`, `test`, and `clippy` on `ubuntu-latest`
-across an **eight-leg** feature matrix, plus one `macos-latest` job (below):
+across a **nine-leg** feature matrix, plus one `macos-latest` job (below):
 
 | Leg | Features |
 |-----|----------|
 | `default` | a plain `cargo test`: streaming + audio-viz-cpal + scripting + self-update + OS integrations |
-| `all-sources` | the **Linux** release feature set from `cd.yml` (adds cover-art, mcp-server, ai-dj, audio-viz, all five sources) |
+| `all-sources` | the **Linux** release feature set from `cd.yml` (adds cover-art, mcp-server, ai-dj, audio-viz, all five sources, soloist) |
 | `mcp-only` | `telemetry,tui,mcp-server` |
 | `ai-dj-only` | `telemetry,tui,ai-dj` |
 | `slim` | `telemetry,tui` |
 | `headless` | `telemetry` - one of three legs without `tui`. `mod tui` is feature-gated, so this leg turns any `crate::tui` import from core/infra/cli into a compile error - what keeps a second frontend from silently re-coupling to the terminal one |
 | `headless-streaming` | `telemetry,streaming` - `check` + `clippy` only, no `test` job. Proves native-streaming startup (`runtime/streaming/`) and the player-event wiring type-check and pass clippy with no terminal frontend in scope. Its two entry points carry `allow(dead_code)` there, so the leg does not prove they are live |
 | `gui` | `telemetry,gui,streaming,discord-rpc,self-update,scripting,mcp-server,mpris,local-files,subsonic,internet-radio,youtube,qobuz,audio-viz,audio-viz-cpal` - the third leg without `tui`: the Linux feature set a `spotatui-gui` build carries, the five sources and the player bar's visualizer included. `check`, `clippy` and `test` |
+| `soloist` | the `gui` leg's list plus `tui,soloist`: the Soloist engine with both frontends (the GUI `owns_sound` arm, the TUI badge). `check`, `clippy` and `test` |
 
 - Every CI leg passes `--locked`; the local commands do not. Regenerate
   `Cargo.lock` after any `Cargo.toml` edit or all legs fail at once.
@@ -81,7 +82,7 @@ across an **eight-leg** feature matrix, plus one `macos-latest` job (below):
   `cargo clippy --manifest-path desktop/Cargo.toml -- -D warnings` and
   `cargo test --manifest-path desktop/Cargo.toml`.
 - **Two locks.** `desktop/` has its own committed `Cargo.lock`, separate from the
-  root `Cargo.lock` the eight legs check. Desktop jobs run **without**
+  root `Cargo.lock` the nine legs check. Desktop jobs run **without**
   `--locked`, so a root dependency change only makes the desktop lock stale: the
   job prints a `::warning::` and keeps going. Refresh it in the release commit
   (`how_to_release.md` step 1), together with the `desktop/Cargo.toml` version.
@@ -343,7 +344,7 @@ same predicate the row uses, so the two cannot disagree.
 
 ### Config & on-disk files
 
-Seven files, seven owners - a value that changes as the app runs goes in state,
+Eight files, eight owners - a value that changes as the app runs goes in state,
 never config:
 
 | File | Owner | Contents |
@@ -354,6 +355,7 @@ never config:
 | `last_session.yml` (state dir) | `core/persisted_playback.rs` | non-Spotify playback + native queue |
 | `playlist_sync.yml` (state dir) | `core/playlist_sync/store.rs` | playlist links + match cache |
 | `qobuz_credentials.yml` (config dir) | `infra/qobuz/auth.rs` | the Qobuz login token (feature `qobuz`) |
+| `soloist_credentials.yml` (config dir) | `infra/soloist/auth.rs` (read only) | the Soloist API key (feature `soloist`); `SPOTATUI_SOLOIST_API_KEY` wins over it. Soloist owns its own `<state dir>/soloist/` and `<cache dir>/soloist/`; `infra/soloist/` writes only its playback keys (quality, normalization) in `settings/Users/*/prefs` and two `.spotatui-*` dot-files there |
 | `visualizer.yml` (config dir) | `core/visualizer_look.rs` (read only) | the GUI player-bar visualizer's look; `runtime/gui.rs` reads it at launch and again on each edit (feature `gui`, only where `gui::visualizer::AVAILABLE`) |
 
 - All paths resolve through `core/paths.rs`, never `dirs::` directly.
@@ -402,6 +404,10 @@ never config:
   macOS rows enable it). Its code sits behind
   `all(feature = "apple-music", target_os = "macos")`; the `Source` variant and
   the `App` state compile everywhere so callers need no `#[cfg]`.
+- `soloist` (pulls `streaming`) is the opt-in Spotify Soloist engine behind
+  spotatui's own device: `behavior.playback_engine: soloist` starts the binary
+  the user downloaded instead of a librespot Spirc device. Not in `default`;
+  `all-sources`, the release rows in cd.yml and the macOS job carry it.
 - `scripting` (mlua Lua plugins) is default-on and gates `src/infra/scripting/` +
   `src/cli/plugin.rs`; the slim gate never compiles it, so verify scripting
   changes with a default `cargo test`.
@@ -432,6 +438,7 @@ reads a file in that directory. Other agents must open it.
 | Decoded repeat/shuffle | `src/infra/queue/AGENTS.md` |
 | Radio tune-in | `src/infra/radio/AGENTS.md` |
 | Qobuz streaming | `src/infra/qobuz/AGENTS.md` |
+| The Soloist engine | `src/infra/soloist/AGENTS.md` |
 
 ### Alternative sources (Local / Subsonic / Radio / YouTube / Qobuz)
 

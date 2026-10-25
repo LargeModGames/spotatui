@@ -3,6 +3,12 @@ use super::SettingsStrings;
 pub const EN: SettingsStrings = SettingsStrings {
   behavior_ytdlp_path_description: "The yt-dlp program YouTube runs; empty looks it up on PATH",
   behavior_ytdlp_path_name: "yt-dlp Path",
+  behavior_playback_engine_name: "Playback Engine",
+  behavior_playback_engine_description: "What plays Spotify behind the Native Streaming device (applies on restart). Soloist is Spotify's own player: download it from developer.spotify.com/documentation/soloist and set its API key in SPOTATUI_SOLOIST_API_KEY or soloist_credentials.yml. Other local programs can read the key from Soloist's command line.",
+  behavior_soloist_path_name: "Soloist Path",
+  behavior_soloist_path_description: "The Soloist program the Soloist engine runs",
+  behavior_soloist_audio_quality_name: "Soloist Audio Quality",
+  behavior_soloist_audio_quality_description: "The stream Soloist asks for (applies on restart). Lossless needs Premium in a lossless market; if Soloist still streams lossy, pick spotatui in the Spotify mobile app's device menu and set Lossless.",
   behavior_local_music_path_description: "The folder Local Files reads",
   behavior_local_music_path_name: "Music Folder",
   behavior_subsonic_password_description: "Saved in config.yml; SPOTATUI_SUBSONIC_PASSWORD overrides it",

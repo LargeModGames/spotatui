@@ -38,7 +38,9 @@ worth knowing before adding an event:
   the sink. One held back by a rate-limit window is stamped with the
   `PlaybackOwner` at deferral time, dropped at the flush when the owner changed,
   and otherwise re-sent on the pump's channel so the routers see it.
-  A new IoEvent must be classified against all four lists.
+  A new IoEvent must be classified against all four lists. One exception skips
+  the hold: while the Soloist engine is the target, the transports it serves over
+  its loopback WebSocket (`soloist_ws_transport`) go through at once.
 
 ### Listening Party / sync
 

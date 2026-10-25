@@ -37,6 +37,7 @@ spotatui = { path = "..", default-features = false, features = [
   "internet-radio",
   "youtube",
   "qobuz",
+  "soloist",
   "apple-music",
   "audio-viz",
   "audio-viz-cpal",

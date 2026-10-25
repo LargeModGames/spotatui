@@ -562,7 +562,9 @@ fn playbar_controls_available(app: &App) -> bool {
   }
 
   if app.current_playback_context.as_ref().is_some_and(|ctx| {
-    ctx.item.is_some() || (app.is_streaming_active && app.native_device_id.is_some())
+    ctx.item.is_some()
+      || (app.is_streaming_active && app.native_device_id.is_some())
+      || app.soloist_is_target()
   }) {
     return true;
   }
@@ -768,6 +770,33 @@ fn draw_playbar_controls(f: &mut Frame<'_>, app: &App, controls_area: Rect) {
     ));
     f.render_widget(control, hitbox.rect);
   }
+}
+
+/// A badge on the free left part of the controls row, up to the first control.
+fn draw_playbar_badge(f: &mut Frame<'_>, app: &App, controls_area: Rect, badge: String) {
+  let first_control = playbar_control_hitboxes_in_area_localized(
+    controls_area,
+    &app.user_config.behavior,
+    &playbar_supported_controls(app),
+    &app.strings().screens,
+  )
+  .into_iter()
+  .map(|hitbox| hitbox.rect.x)
+  .min()
+  .unwrap_or_else(|| controls_area.right());
+  let width = first_control
+    .saturating_sub(controls_area.x)
+    .saturating_sub(1);
+  if width == 0 || controls_area.height == 0 {
+    return;
+  }
+  let style = Style::default()
+    .fg(app.user_config.theme.playbar_text.into())
+    .add_modifier(app.user_config.behavior.emphasis(Modifier::DIM));
+  f.render_widget(
+    Paragraph::new(Span::styled(badge, style)),
+    Rect::new(controls_area.x, controls_area.y, width, 1),
+  );
 }
 
 #[cfg(feature = "cover-art")]
@@ -1566,6 +1595,9 @@ pub fn draw_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
         );
       f.render_widget(artist, artist_area);
       draw_playbar_controls(f, app, playbar_areas.controls_area);
+      if let Some(quality) = app.soloist_quality_label() {
+        draw_playbar_badge(f, app, playbar_areas.controls_area, quality);
+      }
 
       let progress_ms = match app.seek_ms {
         Some(seek_ms) => seek_ms,
@@ -1649,7 +1681,8 @@ pub fn draw_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       }
 
       drew_playbar = true;
-    } else if app.is_streaming_active && app.native_device_id.is_some() {
+    } else if (app.is_streaming_active && app.native_device_id.is_some()) || app.soloist_is_target()
+    {
       let shuffle_text = if current_playback_context.shuffle_state {
         app.strings().screens.on
       } else {
@@ -2445,6 +2478,31 @@ mod tests {
     assert!(
       content.contains("FLAC 16/44.1") && !content.contains('\u{2022}'),
       "no separator without artists: {content}"
+    );
+  }
+
+  #[test]
+  fn playbar_badge_fills_the_free_left_part_of_the_controls_row() {
+    let app = App::default();
+    let area = Rect::new(0, 0, 100, 1);
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 1)).unwrap();
+    terminal
+      .draw(|f| {
+        draw_playbar_controls(f, &app, area);
+        draw_playbar_badge(f, &app, area, "FLAC 44.1".to_string());
+      })
+      .unwrap();
+    let row: String = terminal
+      .backend()
+      .buffer()
+      .content()
+      .iter()
+      .map(|cell| cell.symbol())
+      .collect();
+    assert!(row.starts_with("FLAC 44.1"), "badge at the left: {row}");
+    assert!(
+      row.trim_end().len() > "FLAC 44.1".len(),
+      "controls kept: {row}"
     );
   }
 

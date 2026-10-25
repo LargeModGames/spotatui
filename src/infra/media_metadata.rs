@@ -175,7 +175,7 @@ fn playback_snapshot_with(
   let context_uri = context
     .and_then(|ctx| ctx.context.as_ref())
     .map(|context| context.uri.clone());
-  let source = if app.is_streaming_active {
+  let source = if app.is_streaming_active || app.soloist_is_target() {
     match app.native_playback_origin.unwrap_or_else(|| {
       if context_uri.is_some() {
         NativePlaybackOrigin::Context

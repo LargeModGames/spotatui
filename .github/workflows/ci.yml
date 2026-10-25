@@ -44,7 +44,7 @@ jobs:
           # whenever a feature is added there, or the release build becomes the
           # first place a break shows up.
           - name: all-sources
-            args: "--locked --no-default-features --features telemetry,tui,streaming,discord-rpc,cover-art,self-update,scripting,mcp-server,ai-dj,audio-viz,mpris,local-files,subsonic,internet-radio,youtube,qobuz"
+            args: "--locked --no-default-features --features telemetry,tui,streaming,discord-rpc,cover-art,self-update,scripting,mcp-server,ai-dj,audio-viz,mpris,local-files,subsonic,internet-radio,youtube,qobuz,soloist"
           # `mcp-server` and `ai-dj` are two front doors on the same `dj-core`
           # implementation, and each has to build without the other: the
           # field-level `#[cfg(feature = "ai-dj")]` on `DjState::setup` exists
@@ -77,6 +77,10 @@ jobs:
           # frontend.
           - name: gui
             args: "--locked --no-default-features --features telemetry,gui,streaming,discord-rpc,self-update,scripting,mcp-server,mpris,local-files,subsonic,internet-radio,youtube,qobuz,audio-viz,audio-viz-cpal"
+          # The Soloist engine with both frontends: the GUI `owns_sound` arm and
+          # the TUI badge. all-sources carries `soloist` without `gui`.
+          - name: soloist
+            args: "--locked --no-default-features --features telemetry,tui,gui,streaming,discord-rpc,self-update,scripting,mcp-server,mpris,local-files,subsonic,internet-radio,youtube,qobuz,audio-viz,audio-viz-cpal,soloist"
     env:
       RUSTFLAGS: "-C linker-features=-lld"
     steps:
@@ -107,7 +111,7 @@ jobs:
           - name: default
             args: "--locked"
           - name: all-sources
-            args: "--locked --no-default-features --features telemetry,tui,streaming,discord-rpc,cover-art,self-update,scripting,mcp-server,ai-dj,audio-viz,mpris,local-files,subsonic,internet-radio,youtube,qobuz"
+            args: "--locked --no-default-features --features telemetry,tui,streaming,discord-rpc,cover-art,self-update,scripting,mcp-server,ai-dj,audio-viz,mpris,local-files,subsonic,internet-radio,youtube,qobuz,soloist"
           # See the check job for why the two single-door DJ legs exist.
           - name: mcp-only
             args: "--locked --no-default-features --features telemetry,tui,mcp-server"
@@ -121,6 +125,10 @@ jobs:
           # See the check job for why the gui leg exists.
           - name: gui
             args: "--locked --no-default-features --features telemetry,gui,streaming,discord-rpc,self-update,scripting,mcp-server,mpris,local-files,subsonic,internet-radio,youtube,qobuz,audio-viz,audio-viz-cpal"
+          # The Soloist engine with both frontends: the GUI `owns_sound` arm and
+          # the TUI badge. all-sources carries `soloist` without `gui`.
+          - name: soloist
+            args: "--locked --no-default-features --features telemetry,tui,gui,streaming,discord-rpc,self-update,scripting,mcp-server,mpris,local-files,subsonic,internet-radio,youtube,qobuz,audio-viz,audio-viz-cpal,soloist"
     env:
       RUSTFLAGS: "-C linker-features=-lld"
     steps:
@@ -209,7 +217,7 @@ jobs:
           - name: default
             args: "--locked"
           - name: all-sources
-            args: "--locked --no-default-features --features telemetry,tui,streaming,discord-rpc,cover-art,self-update,scripting,mcp-server,ai-dj,audio-viz,mpris,local-files,subsonic,internet-radio,youtube,qobuz"
+            args: "--locked --no-default-features --features telemetry,tui,streaming,discord-rpc,cover-art,self-update,scripting,mcp-server,ai-dj,audio-viz,mpris,local-files,subsonic,internet-radio,youtube,qobuz,soloist"
           # See the check job for why the two single-door DJ legs exist.
           - name: mcp-only
             args: "--locked --no-default-features --features telemetry,tui,mcp-server"
@@ -226,6 +234,10 @@ jobs:
           # See the check job for why the gui leg exists.
           - name: gui
             args: "--locked --no-default-features --features telemetry,gui,streaming,discord-rpc,self-update,scripting,mcp-server,mpris,local-files,subsonic,internet-radio,youtube,qobuz,audio-viz,audio-viz-cpal"
+          # The Soloist engine with both frontends: the GUI `owns_sound` arm and
+          # the TUI badge. all-sources carries `soloist` without `gui`.
+          - name: soloist
+            args: "--locked --no-default-features --features telemetry,tui,gui,streaming,discord-rpc,self-update,scripting,mcp-server,mpris,local-files,subsonic,internet-radio,youtube,qobuz,audio-viz,audio-viz-cpal,soloist"
     env:
       RUSTFLAGS: "-C linker-features=-lld"
     steps:
@@ -268,7 +280,7 @@ jobs:
     runs-on: macos-latest
     needs: prepare
     env:
-      FEATURES: "telemetry,tui,streaming,discord-rpc,cover-art,self-update,scripting,mcp-server,ai-dj,audio-viz-cpal,portaudio-backend,macos-media,local-files,subsonic,internet-radio,youtube,qobuz,apple-music"
+      FEATURES: "telemetry,tui,streaming,discord-rpc,cover-art,self-update,scripting,mcp-server,ai-dj,audio-viz-cpal,portaudio-backend,macos-media,local-files,subsonic,internet-radio,youtube,qobuz,soloist,apple-music"
     steps:
       - uses: actions/checkout@master
       - uses: dtolnay/rust-toolchain@stable

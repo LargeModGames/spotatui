@@ -24,6 +24,10 @@ impl App {
     if let Some(player) = &self.streaming_player {
       player.pause();
     }
+    #[cfg(feature = "soloist")]
+    if let Some(link) = &self.soloist_link {
+      link.pause();
+    }
     if let Some(ctx) = &mut self.current_playback_context {
       ctx.is_playing = false;
     }

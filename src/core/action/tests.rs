@@ -273,6 +273,28 @@ fn toggle_shuffle_flips_the_spotify_shuffle_state() {
   assert!(matches!(rx.try_recv(), Ok(IoEvent::Shuffle(true))));
 }
 
+#[test]
+fn cycle_repeat_on_a_remote_device_dispatches_the_next_state() {
+  use rspotify::model::RepeatState;
+  for (current, next) in [
+    (RepeatState::Off, RepeatState::Context),
+    (RepeatState::Context, RepeatState::Track),
+    (RepeatState::Track, RepeatState::Off),
+  ] {
+    let (mut app, rx) = app_with_channel();
+    let mut ctx = playback_context(true, false);
+    ctx.repeat_state = current;
+    app.current_playback_context = Some(ctx);
+
+    app.apply(Action::CycleRepeat);
+
+    match rx.try_recv() {
+      Ok(IoEvent::Repeat(state)) => assert_eq!(state, next),
+      _other => panic!("expected Repeat (IoEvent is not Debug)"),
+    }
+  }
+}
+
 // --- transport without a Spotify session ---
 
 #[test]

@@ -110,6 +110,9 @@ pub(crate) fn setting_requirement(id: &str) -> Requirement {
     | "behavior.streaming_bitrate"
     | "behavior.streaming_audio_cache"
     | "behavior.streaming_autoplay"
+    | "behavior.playback_engine"
+    | "behavior.soloist_path"
+    | "behavior.soloist_audio_quality"
     | "keys.jump_to_album"
     | "keys.jump_to_artist_album"
     | "keys.jump_to_context"
@@ -482,6 +485,57 @@ impl App {
         name: strings.behavior_streaming_autoplay_name.to_string(),
         description: strings.behavior_streaming_autoplay_description.to_string(),
         value: SettingValue::Bool(self.user_config.behavior.streaming_autoplay),
+      },
+      // Soloist has no build for Intel Macs.
+      #[cfg(all(
+        feature = "soloist",
+        not(all(target_os = "macos", target_arch = "x86_64"))
+      ))]
+      SettingItem {
+        id: "behavior.playback_engine".to_string(),
+        name: strings.behavior_playback_engine_name.to_string(),
+        description: strings.behavior_playback_engine_description.to_string(),
+        value: SettingValue::Cycle(
+          self.user_config.behavior.playback_engine.name().to_string(),
+          crate::core::user_config::PlaybackEngine::options(),
+        ),
+      },
+      #[cfg(all(
+        feature = "soloist",
+        not(all(target_os = "macos", target_arch = "x86_64"))
+      ))]
+      SettingItem {
+        id: "behavior.soloist_path".to_string(),
+        name: strings.behavior_soloist_path_name.to_string(),
+        description: strings.behavior_soloist_path_description.to_string(),
+        value: SettingValue::String(
+          self
+            .user_config
+            .behavior
+            .soloist_path
+            .clone()
+            .unwrap_or_default(),
+        ),
+      },
+      #[cfg(all(
+        feature = "soloist",
+        not(all(target_os = "macos", target_arch = "x86_64"))
+      ))]
+      SettingItem {
+        id: "behavior.soloist_audio_quality".to_string(),
+        name: strings.behavior_soloist_audio_quality_name.to_string(),
+        description: strings
+          .behavior_soloist_audio_quality_description
+          .to_string(),
+        value: SettingValue::Cycle(
+          self
+            .user_config
+            .behavior
+            .soloist_audio_quality
+            .name()
+            .to_string(),
+          crate::core::user_config::SoloistQuality::options(),
+        ),
       },
       SettingItem {
         id: "behavior.startup_behavior".to_string(),

@@ -129,6 +129,8 @@ mod session;
 mod settings_apply;
 mod settings_schema;
 mod shuffle_repeat;
+#[cfg(feature = "soloist")]
+mod soloist;
 mod status;
 mod tick;
 mod transport;
@@ -563,6 +565,9 @@ pub struct App {
   /// Reference to the native streaming player for direct control (bypasses event channel)
   #[cfg(feature = "streaming")]
   pub streaming_player: Option<Arc<crate::infra::player::StreamingPlayer>>,
+  /// The running Soloist engine; `streaming_player` stays `None` while it is set.
+  #[cfg(feature = "soloist")]
+  soloist_link: Option<Arc<crate::infra::soloist::SoloistLink>>,
   /// Player-global repeat mode for the decoded (non-Spotify) sources
   /// (Local / Subsonic / YouTube). Decoded sources have no Spotify
   /// `current_playback_context`, so their repeat lives here instead of in

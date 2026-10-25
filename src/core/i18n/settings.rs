@@ -12,6 +12,12 @@ pub use zh_hant::ZH_HANT;
 pub struct SettingsStrings {
   pub behavior_ytdlp_path_description: &'static str,
   pub behavior_ytdlp_path_name: &'static str,
+  pub behavior_playback_engine_name: &'static str,
+  pub behavior_playback_engine_description: &'static str,
+  pub behavior_soloist_path_name: &'static str,
+  pub behavior_soloist_path_description: &'static str,
+  pub behavior_soloist_audio_quality_name: &'static str,
+  pub behavior_soloist_audio_quality_description: &'static str,
   pub behavior_local_music_path_description: &'static str,
   pub behavior_local_music_path_name: &'static str,
   pub behavior_subsonic_password_description: &'static str,
@@ -384,6 +390,18 @@ impl SettingsStrings {
       "behavior.ytdlp_path" => (
         self.behavior_ytdlp_path_name,
         self.behavior_ytdlp_path_description,
+      ),
+      "behavior.playback_engine" => (
+        self.behavior_playback_engine_name,
+        self.behavior_playback_engine_description,
+      ),
+      "behavior.soloist_path" => (
+        self.behavior_soloist_path_name,
+        self.behavior_soloist_path_description,
+      ),
+      "behavior.soloist_audio_quality" => (
+        self.behavior_soloist_audio_quality_name,
+        self.behavior_soloist_audio_quality_description,
       ),
       "behavior.local_music_path" => (
         self.behavior_local_music_path_name,

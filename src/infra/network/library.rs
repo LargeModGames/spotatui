@@ -30,8 +30,6 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 
 #[cfg(feature = "streaming")]
-use crate::infra::player::StreamingPlayer;
-#[cfg(feature = "streaming")]
 use librespot_core::SpotifyUri;
 #[cfg(feature = "streaming")]
 use librespot_metadata::{
@@ -446,14 +444,20 @@ async fn fetch_playlist_tracks_page(
   }
 }
 
+/// The native player's session, else the shared one, so a build or engine without librespot playback still reads folders.
 #[cfg(feature = "streaming")]
 async fn streaming_session(app: &Arc<Mutex<App>>) -> anyhow::Result<librespot_core::Session> {
   let player = {
     let app_guard = app.lock().await;
     app_guard.streaming_player.clone()
+  };
+  if let Some(player) = player {
+    return Ok(player.session());
   }
-  .ok_or_else(|| anyhow!("native streaming session is unavailable"))?;
-  Ok(player.session())
+  crate::infra::spotify::session::current()
+    .await
+    .map(|session| session.session().clone())
+    .map_err(|_| anyhow!("native streaming session is unavailable"))
 }
 
 #[cfg(feature = "streaming")]
@@ -1354,20 +1358,17 @@ async fn finish_playlists_fetch(
 
   #[cfg(feature = "streaming")]
   let folder_nodes = {
-    let streaming_player = {
-      let app = app.lock().await;
-      app.streaming_player.clone()
-    };
-    let nodes = fetch_rootlist_folders(streaming_player.clone()).await;
+    let session = streaming_session(&app).await.ok();
+    let nodes = fetch_rootlist_folders(session.as_ref()).await;
     // Spotify-owned playlists (Release Radar, daylist, the Mixes, editorial
     // lists) sit in the rootlist, but the Development Mode Web API leaves
     // them out of `me/playlists`. Resolve those rootlist-only ids through the
     // librespot session so they show up in the sidebar. Their owner is
     // Spotify, so opening one takes the external-playlist librespot fallback.
-    if let (Some(nodes), Some(player)) = (nodes.as_ref(), streaming_player) {
+    if let (Some(nodes), Some(session)) = (nodes.as_ref(), session.as_ref()) {
       let missing = rootlist_only_playlist_ids(nodes, &all_playlists);
       if !missing.is_empty() {
-        let resolved = resolve_rootlist_only_playlists(&player.session(), &missing).await;
+        let resolved = resolve_rootlist_only_playlists(session, &missing).await;
         log::debug!(
           "rootlist-only playlists: {} missing from the Web API, {} resolved via librespot",
           missing.len(),
@@ -2805,10 +2806,9 @@ mod tests {
 
 #[cfg(feature = "streaming")]
 async fn fetch_rootlist_folders(
-  streaming_player: Option<Arc<StreamingPlayer>>,
+  session: Option<&librespot_core::Session>,
 ) -> Option<Vec<PlaylistFolderNode>> {
-  let player = streaming_player?;
-  let session = player.session();
+  let session = session?;
 
   let bytes = match session.spclient().get_rootlist(0, Some(100_000)).await {
     Ok(bytes) => bytes,

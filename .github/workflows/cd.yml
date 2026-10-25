@@ -28,31 +28,33 @@ jobs:
           # there, which is why `portaudio-backend` stays on the macOS rows).
           # The youtube source needs a yt-dlp binary at runtime (ffmpeg
           # recommended); without one it shows an actionable error.
+          # `soloist` adds the opt-in Soloist engine; it needs the Soloist binary
+          # the user downloads from Spotify, so nothing changes until it is set.
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             artifact_prefix: linux-x86_64 # most Linux distros
             binary_postfix: ""
-            audio_features: "audio-viz,mpris,local-files,subsonic,internet-radio,youtube,qobuz"
+            audio_features: "audio-viz,mpris,local-files,subsonic,internet-radio,youtube,qobuz,soloist"
           - os: ubuntu-24.04-arm # free native ARM64 runner for public repos
             target: aarch64-unknown-linux-gnu
             artifact_prefix: linux-aarch64 # Raspberry Pi 4/5, ARM servers, Asahi Linux
             binary_postfix: ""
-            audio_features: "audio-viz,mpris,local-files,subsonic,internet-radio,youtube,qobuz"
+            audio_features: "audio-viz,mpris,local-files,subsonic,internet-radio,youtube,qobuz,soloist"
           - os: macos-15-intel # Intel runner for x86_64 (available until Aug 2027)
             target: x86_64-apple-darwin
             artifact_prefix: macos-x86_64
             binary_postfix: ""
-            audio_features: "audio-viz-cpal,portaudio-backend,macos-media,local-files,subsonic,internet-radio,youtube,qobuz,apple-music"
+            audio_features: "audio-viz-cpal,portaudio-backend,macos-media,local-files,subsonic,internet-radio,youtube,qobuz,soloist,apple-music"
           - os: macos-latest # Apple Silicon runner for aarch64
             target: aarch64-apple-darwin
             artifact_prefix: macos-aarch64
             binary_postfix: ""
-            audio_features: "audio-viz-cpal,portaudio-backend,macos-media,local-files,subsonic,internet-radio,youtube,qobuz,apple-music"
+            audio_features: "audio-viz-cpal,portaudio-backend,macos-media,local-files,subsonic,internet-radio,youtube,qobuz,soloist,apple-music"
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact_prefix: windows-x86_64
             binary_postfix: ".exe"
-            audio_features: "audio-viz-cpal,windows-media,local-files,subsonic,internet-radio,youtube,qobuz"
+            audio_features: "audio-viz-cpal,windows-media,local-files,subsonic,internet-radio,youtube,qobuz,soloist"
 
     steps:
       - name: Checkout sources

@@ -482,7 +482,7 @@ fn owns_sound(app: &App) -> bool {
   matches!(
     app.playback_owner(),
     PlaybackOwner::Queue | PlaybackOwner::Decoded | PlaybackOwner::NativeSpotify
-  )
+  ) || app.soloist_is_target()
 }
 
 /// Send the media controls `app`'s state when they must hear of it.
