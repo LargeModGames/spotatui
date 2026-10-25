@@ -12,6 +12,7 @@
 ## Features
 
 - **[Native streaming](native-streaming.md):** play Spotify in spotatui itself, and where else Spotify can play.
+- **[Soloist](soloist.md):** play Spotify through Spotify's own player, for lossless audio or an account that native streaming cannot play.
 - **[CLI](cli.md):** control spotatui from your shell.
 - **[Playlist sync](playlist-sync.md):** mirror one playlist onto other sources.
 - **[Listening Party](listening-party.md):** listen in sync with friends.

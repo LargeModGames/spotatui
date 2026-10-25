@@ -78,7 +78,7 @@ behavior:
 
 ## Native streaming
 
-Builds with the `streaming` feature play Spotify themselves as a Connect device. These fields also appear in Settings; a change takes effect after a restart.
+Builds with the `streaming` feature play Spotify themselves as a Connect device. These fields also appear in Settings; a change takes effect after a restart, except `playback_engine`, which switches at once.
 
 ```yaml
 behavior:
@@ -87,7 +87,12 @@ behavior:
   streaming_bitrate: 320           # 96, 160, or 320 kbps
   streaming_audio_cache: false     # keep played audio in the streaming cache
   streaming_autoplay: true         # enable Spotify's related-songs autoplay
+  playback_engine: librespot       # or soloist: Spotify's own player (feature `soloist`)
+  soloist_path: /path/to/soloist   # the Soloist program; Settings can download it
+  soloist_audio_quality: lossless  # normal, high, very_high or lossless
 ```
+
+The Soloist API key is in `soloist_credentials.yml` next to `config.yml` (`api_key: ...`), or in `SPOTATUI_SOLOIST_API_KEY`. The setup is in [Soloist](soloist.md).
 ## Cover art dithering
 
 Build with `--features cover-art` to show the cover-art settings. Dithering is off by default and does not turn on cover art where terminal support has disabled it; `draw_cover_art_forced` still controls the basic-terminal fallback.

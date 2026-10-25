@@ -94,7 +94,7 @@ Then:
 
 Local Files, Subsonic, Internet Radio, YouTube and Qobuz play through spotatui's own audio engine. Apple Music plays in the Music app, and spotatui is its remote. The setup of each source is in [Configuration](docs/configuration.md).
 
-Spotify plays in spotatui itself, on any Spotify Connect device, or on Cast and Connect speakers on your network. See [Where Spotify plays](docs/native-streaming.md#where-spotify-plays).
+Spotify plays in spotatui itself, on any Spotify Connect device, or on Cast and Connect speakers on your network. See [Where Spotify plays](docs/native-streaming.md#where-spotify-plays). For lossless audio, or an account that native streaming cannot play, spotatui can run Spotify's own player: see [Soloist](docs/soloist.md).
 
 ## Learn more
 

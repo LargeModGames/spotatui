@@ -6,7 +6,7 @@ spotatui includes **native Spotify Connect** support, allowing it to play audio 
 
 spotatui talks to Spotify the way the official app does. Press `d` to pick where the music plays:
 
-- **spotatui itself**, through native streaming (this page). Recommended.
+- **spotatui itself**, through native streaming (this page). Recommended. spotatui can also run Spotify's own player behind the same device: see [Soloist](soloist.md).
 - **Any Spotify Connect device**: the official app on your computer or phone, or [spotifyd](https://github.com/Spotifyd/spotifyd). Start that device first; it then shows up in the `d` list. If spotifyd does not show up, see [its logging docs](https://github.com/Spotifyd/spotifyd#logging).
 - **Speakers on your network**: Google Cast devices and Spotify Connect speakers on the LAN.
 
@@ -51,6 +51,10 @@ directory, for example `$XDG_CACHE_HOME/spotatui/streaming_cache` when
 
 - Native streaming is **enabled by default** when built with the `streaming` feature
 - Premium account is required
+
+## Tracks fail one after another
+
+If track after track fails with "couldn't be played natively" and the [log](configuration.md#logging) shows `error audio key 0 1`, Spotify refuses librespot the audio keys for your account. A spotatui update cannot change that. After three failed tracks in a row, spotatui offers to set up [Soloist](soloist.md), Spotify's own player, which plays those accounts.
 
 ## No sound
 
