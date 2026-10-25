@@ -205,6 +205,89 @@ impl App {
     Some(start)
   }
 
+  pub(crate) fn stand_by_librespot(
+    &mut self,
+    recovery_tx: tokio::sync::mpsc::UnboundedSender<crate::infra::player::StreamingRecoveryRequest>,
+  ) {
+    self.librespot_standby = Some(recovery_tx);
+  }
+
+  /// The settings name Soloist, and this system has a Soloist build.
+  pub(crate) fn soloist_engine_selected(&self) -> bool {
+    self.user_config.behavior.playback_engine == crate::core::user_config::PlaybackEngine::Soloist
+      && !cfg!(all(target_os = "macos", target_arch = "x86_64"))
+  }
+
+  /// Playback Engine changed in Settings: switch now, without a restart.
+  pub(crate) fn playback_engine_changed(&mut self) {
+    if !self.user_config.behavior.enable_streaming {
+      return;
+    }
+    let strings = self.strings().status.infra;
+    let message = if self.soloist_engine_selected() {
+      strings.engine_switching_soloist
+    } else {
+      strings.engine_switching_librespot
+    };
+    self.set_status_message(message, 4);
+    self.dispatch_without_spinner(IoEvent::ApplyPlaybackEngine);
+  }
+
+  /// After Soloist stopped: give the device to the engine the settings name; the Soloist start, if any.
+  pub(crate) fn apply_playback_engine(
+    &mut self,
+  ) -> Option<crate::infra::soloist::startup::SoloistStart> {
+    if self.soloist_engine_selected() {
+      self.stop_librespot_for_soloist();
+      return self.soloist_start_now();
+    }
+    if let Some(recovery_tx) = self.librespot_standby.take() {
+      self.streaming_recovery_tx = Some(recovery_tx);
+    }
+    if self.streaming_player.is_some() || !self.user_config.behavior.enable_streaming {
+      return None;
+    }
+    // Soloist's id; librespot registers its own.
+    self.native_device_id = None;
+    self.native_backend_pending = self.streaming_recovery_tx.as_ref().is_some_and(|tx| {
+      tx.send(crate::infra::player::StreamingRecoveryRequest {
+        reselect_device: false,
+        restore_playback: false,
+        continue_after_track: None,
+        reacquire: false,
+      })
+      .is_ok()
+    });
+    if !self.native_backend_pending {
+      let message = self.strings().status.infra.engine_next_launch;
+      self.set_status_message(message, 8);
+    }
+    None
+  }
+
+  /// Shut librespot down before Soloist registers the same device name; keep its recovery sender.
+  fn stop_librespot_for_soloist(&mut self) {
+    if let Some(recovery_tx) = self.streaming_recovery_tx.take() {
+      self.librespot_standby = Some(recovery_tx);
+    }
+    self.pause_native_playback();
+    if let Some(player) = self.streaming_player.take() {
+      player.shutdown();
+      // The last handle joins librespot's player thread: drop it off the lock.
+      tokio::task::spawn_blocking(move || drop(player));
+    }
+    self.native_parked = false;
+    self.native_backend_pending = false;
+    self.native_playback_recovery = None;
+    self.native_load_watchdog = None;
+    self.is_streaming_active = false;
+    self.native_activation_pending = false;
+    self.native_device_id = None;
+    self.native_is_playing = Some(false);
+    self.native_track_info = None;
+    self.display_revisions.bump(DisplayDomain::Playback);
+  }
+
   /// `soloist_credentials.yml`, beside `config.yml`.
   fn soloist_key_file(&self) -> Option<std::path::PathBuf> {
     let config = &self.user_config.path_to_config.as_ref()?.config_file_path;
@@ -218,13 +301,14 @@ impl App {
       .unwrap_or_default()
   }
 
-  /// Write a changed API key row, then restart the engine on it so a bad key shows at once.
-  pub(crate) fn save_soloist_key_row(&mut self) {
+  /// Write a changed API key row, then restart the engine on it so a bad key shows at once;
+  /// true when that restart is dispatched.
+  pub(crate) fn save_soloist_key_row(&mut self) -> bool {
     let env_key = std::env::var(crate::infra::soloist::auth::KEY_ENV).ok();
-    self.save_soloist_key_row_with(env_key);
+    self.save_soloist_key_row_with(env_key)
   }
 
-  fn save_soloist_key_row_with(&mut self, env_key: Option<String>) {
+  fn save_soloist_key_row_with(&mut self, env_key: Option<String>) -> bool {
     use crate::infra::soloist::auth;
     let Some(key) = self
       .settings_items
@@ -236,31 +320,33 @@ impl App {
         _ => None,
       })
     else {
-      return;
+      return false;
     };
     let Some(path) = self.soloist_key_file() else {
-      return;
+      return false;
     };
     if key == self.saved_soloist_key().trim() {
-      return;
+      return false;
     }
     let strings = self.strings().status.infra;
     if let Err(e) = auth::save_key(&path, &key) {
       self.set_error_status_message(strings.soloist_key_save_failed(&e.to_string()), 10);
-      return;
+      return false;
     }
-    let behavior = &self.user_config.behavior;
     if auth::key_with(env_key, None).is_some() {
       self.set_status_message(strings.soloist_key_env_wins, 10);
-    } else if !key.is_empty()
-      && behavior.playback_engine == crate::core::user_config::PlaybackEngine::Soloist
-      && behavior.enable_streaming
-    {
-      self.set_status_message(strings.soloist_key_restarting, 4);
-      self.dispatch_without_spinner(IoEvent::RestartSoloist);
-    } else {
-      self.set_status_message(strings.soloist_key_saved, 4);
+      return false;
     }
+    if key.is_empty()
+      || !self.soloist_engine_selected()
+      || !self.user_config.behavior.enable_streaming
+    {
+      self.set_status_message(strings.soloist_key_saved, 4);
+      return false;
+    }
+    self.set_status_message(strings.soloist_key_restarting, 4);
+    self.dispatch_without_spinner(IoEvent::ApplyPlaybackEngine);
+    true
   }
 
   pub(crate) fn soloist_notice(&mut self, notice: crate::infra::soloist::Notice) {
@@ -461,7 +547,7 @@ mod tests {
       Some("new-key")
     );
     assert_eq!(app.saved_soloist_key(), "new-key");
-    assert!(matches!(rx.try_recv(), Ok(IoEvent::RestartSoloist)));
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::ApplyPlaybackEngine)));
   }
 
   #[test]
@@ -517,6 +603,65 @@ mod tests {
       app.status_message(),
       Some(app.strings().status.infra.soloist_paired)
     );
+  }
+
+  #[test]
+  fn an_engine_change_in_settings_dispatches_the_switch() {
+    let (mut app, rx) = session_free_app();
+    app.user_config.behavior.enable_streaming = true;
+    app.settings_items = vec![crate::core::app::SettingItem {
+      id: "behavior.playback_engine".to_string(),
+      name: String::new(),
+      description: String::new(),
+      value: SettingValue::Cycle(
+        PlaybackEngine::Soloist.name().to_string(),
+        PlaybackEngine::options(),
+      ),
+    }];
+
+    app.apply_settings_changes();
+
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::ApplyPlaybackEngine)));
+    assert_eq!(
+      app.status_message(),
+      Some(app.strings().status.infra.engine_switching_soloist)
+    );
+  }
+
+  #[test]
+  fn a_switch_to_soloist_keeps_the_librespot_sender_aside_and_starts_soloist() {
+    let mut app = make_app_simple();
+    let (tx, _recovery_rx) = tokio::sync::mpsc::unbounded_channel();
+    app.streaming_recovery_tx = Some(tx);
+    app.native_device_id = Some("librespot-device".to_string());
+    app.user_config.behavior.enable_streaming = true;
+    app.user_config.behavior.playback_engine = PlaybackEngine::Soloist;
+
+    let start = app.apply_playback_engine();
+
+    assert!(start.is_some());
+    assert!(app.streaming_recovery_tx.is_none());
+    assert!(app.librespot_standby.is_some());
+    assert_eq!(app.native_device_id, None);
+    assert!(app.native_backend_pending);
+    assert!(!app.accept_rebuilt_native_backend());
+  }
+
+  #[test]
+  fn a_switch_to_librespot_asks_the_standby_supervisor_for_an_idle_player() {
+    let mut app = make_app_simple();
+    let (tx, mut recovery_rx) = tokio::sync::mpsc::unbounded_channel();
+    app.stand_by_librespot(tx);
+    app.native_device_id = Some("soloist-device".to_string());
+    app.user_config.behavior.enable_streaming = true;
+
+    assert!(app.apply_playback_engine().is_none());
+
+    let request = recovery_rx.try_recv().unwrap();
+    assert!(!request.restore_playback && !request.reselect_device && !request.reacquire);
+    assert!(app.streaming_recovery_tx.is_some());
+    assert_eq!(app.native_device_id, None);
+    assert!(app.native_backend_pending);
   }
 
   #[test]

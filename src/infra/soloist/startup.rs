@@ -35,13 +35,13 @@ impl SoloistStart {
   }
 }
 
-/// Stop a running Soloist, then start it again with the saved settings and key.
-pub(crate) async fn restart(app: Arc<Mutex<App>>) {
+/// Stop a running Soloist, then start the engine the settings name, with the saved key.
+pub(crate) async fn apply_engine(app: Arc<Mutex<App>>) {
   if !supervisor::stop_for_restart(std::time::Duration::from_secs(5)).await {
-    log::warn!("soloist: the old engine did not stop; not restarting");
+    log::warn!("soloist: the old engine did not stop; not switching");
     return;
   }
-  let start = app.lock().await.soloist_start_now();
+  let start = app.lock().await.apply_playback_engine();
   if let Some(start) = start {
     deferred_soloist_startup(app, start);
   }

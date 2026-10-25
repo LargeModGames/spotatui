@@ -4,7 +4,7 @@ pub const EN: SettingsStrings = SettingsStrings {
   behavior_ytdlp_path_description: "The yt-dlp program YouTube runs; empty looks it up on PATH",
   behavior_ytdlp_path_name: "yt-dlp Path",
   behavior_playback_engine_name: "Playback Engine",
-  behavior_playback_engine_description: "What plays Spotify behind the Native Streaming device (applies on restart). Soloist is Spotify's own player: get it with the Soloist Path button and enter its key in Soloist API Key.",
+  behavior_playback_engine_description: "What plays Spotify behind the Native Streaming device. Soloist is Spotify's own player: get it with the Soloist Path button and enter its key in Soloist API Key.",
   behavior_soloist_path_name: "Soloist Path",
   behavior_soloist_path_description: "The Soloist program the Soloist engine runs. Download from Spotify gets the official build for this system from Spotify; by using Soloist, you accept the Spotify Terms and Conditions of Use.",
   soloist_download_button: "Download from Spotify",

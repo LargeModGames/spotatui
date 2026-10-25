@@ -8,6 +8,12 @@ under `streaming_device_name`, and spotatui starts no librespot Spirc device.
   and `native_parked` is never set, so every librespot path stays off. The owner
   stays `PlaybackOwner::Spotify`; the engine adds narrow
   `App::soloist_is_target()` arms instead of a new owner.
+- The librespot recovery supervisor runs under both engines. Under Soloist its
+  sender waits in `App.librespot_standby`. A Playback Engine change in Settings
+  dispatches `IoEvent::ApplyPlaybackEngine`: Soloist stops, then
+  `App::apply_playback_engine` shuts librespot down before Soloist starts, or
+  moves the sender back and asks for an idle librespot player. A rebuild that
+  ends under Soloist is refused (`accept_rebuilt_native_backend`).
 - Call sites outside this folder and `core/app/soloist.rs` use only the
   ungated bool predicates
   `soloist_is_target()` and `soloist_engine_installed()`.

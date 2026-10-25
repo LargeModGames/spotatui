@@ -79,6 +79,8 @@ pub struct PlayerEventContext {
   pub windows_media_manager: Option<Arc<smtc_tokio::WindowsMediaManager>>,
 }
 
+// Only a frontend launch starts the supervisor (`runtime/startup.rs`).
+#[cfg_attr(not(any(feature = "tui", feature = "gui")), allow(dead_code))]
 pub struct StreamingRecoveryContext {
   pub app: Arc<Mutex<App>>,
   pub shared_position: Arc<AtomicU64>,
@@ -95,6 +97,7 @@ pub struct StreamingRecoveryContext {
   pub windows_media_manager: Option<Arc<smtc_tokio::WindowsMediaManager>>,
 }
 
+#[cfg_attr(not(any(feature = "tui", feature = "gui")), allow(dead_code))]
 pub fn spawn_streaming_recovery_handler(ctx: StreamingRecoveryContext) {
   tokio::spawn(async move {
     handle_streaming_recovery(ctx).await;

@@ -353,9 +353,9 @@ pub enum IoEvent {
   /// Soloist Path row's button). Needs no Spotify login.
   #[cfg(feature = "soloist")]
   DownloadSoloist,
-  /// Stop Soloist and start it again with the saved settings (a new API key).
+  /// Stop Soloist, then start the engine the settings name (a new engine or API key).
   #[cfg(feature = "soloist")]
-  RestartSoloist,
+  ApplyPlaybackEngine,
   /// A DJ tool call that needs the live Spotify client, plus the channel to
   /// answer on.
   ///
@@ -527,7 +527,10 @@ impl Network {
       return true;
     }
     #[cfg(feature = "soloist")]
-    if matches!(io_event, IoEvent::DownloadSoloist | IoEvent::RestartSoloist) {
+    if matches!(
+      io_event,
+      IoEvent::DownloadSoloist | IoEvent::ApplyPlaybackEngine
+    ) {
       return true;
     }
     #[cfg(feature = "streaming")]
@@ -619,7 +622,10 @@ impl Network {
       return true;
     }
     #[cfg(feature = "soloist")]
-    if matches!(io_event, IoEvent::DownloadSoloist | IoEvent::RestartSoloist) {
+    if matches!(
+      io_event,
+      IoEvent::DownloadSoloist | IoEvent::ApplyPlaybackEngine
+    ) {
       return true;
     }
     #[cfg(feature = "ai-dj")]
@@ -1037,8 +1043,8 @@ impl Network {
         crate::infra::soloist::download::run(std::sync::Arc::clone(&self.app)).await;
       }
       #[cfg(feature = "soloist")]
-      IoEvent::RestartSoloist => {
-        crate::infra::soloist::startup::restart(std::sync::Arc::clone(&self.app)).await;
+      IoEvent::ApplyPlaybackEngine => {
+        crate::infra::soloist::startup::apply_engine(std::sync::Arc::clone(&self.app)).await;
       }
       #[cfg(any(feature = "mcp-server", feature = "ai-dj"))]
       IoEvent::DjToolCall(payload) => {

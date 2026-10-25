@@ -329,14 +329,21 @@ pub(super) async fn prepare_frontend(boot: Boot) -> FrontendHandles {
   #[cfg(feature = "streaming")]
   let (streaming_recovery_tx, streaming_recovery_rx) =
     tokio::sync::mpsc::unbounded_channel::<player::StreamingRecoveryRequest>();
-  // The supervisor that drains this channel starts inside
-  // `deferred_streaming_startup`, so install the sender on the same
-  // condition; otherwise a recovery request would latch
-  // `native_backend_pending` on a channel nobody reads.
+  // The supervisor that drains this channel starts below for either engine,
+  // so install the sender on the same condition; otherwise a recovery request
+  // would latch `native_backend_pending` on a channel nobody reads.
   #[cfg(feature = "streaming")]
   if streaming_attempted {
     let mut app_mut = app.lock().await;
     app_mut.streaming_recovery_tx = Some(streaming_recovery_tx.clone());
+  }
+  // Soloist mode keeps the sender aside, for a switch to librespot in Settings.
+  #[cfg(feature = "soloist")]
+  if soloist_attempted {
+    app
+      .lock()
+      .await
+      .stand_by_librespot(streaming_recovery_tx.clone());
   }
 
   // Initialize MPRIS D-Bus integration for desktop media control
@@ -535,6 +542,37 @@ pub(super) async fn prepare_frontend(boot: Boot) -> FrontendHandles {
   #[cfg(all(feature = "windows-media", target_os = "windows"))]
   let windows_media_for_events = windows_media_manager.clone();
 
+  #[cfg(feature = "streaming")]
+  let streaming_config = {
+    let behavior = &user_config.behavior;
+    player::StreamingConfig {
+      device_name: behavior.streaming_device_name.clone(),
+      bitrate: crate::core::user_config::streaming_bitrate_or_default(behavior.streaming_bitrate),
+      audio_cache: behavior.streaming_audio_cache,
+      autoplay: behavior.streaming_autoplay,
+      cache_path: crate::infra::spotify::credentials::get_default_cache_path(),
+      initial_volume: runtime_state.volume_percent,
+    }
+  };
+  // The recovery supervisor builds every librespot player after the first one,
+  // and under Soloist the first one too, on a switch in Settings.
+  #[cfg(feature = "streaming")]
+  if user_config.behavior.enable_streaming && spotify.is_some() {
+    player::spawn_streaming_recovery_handler(player::StreamingRecoveryContext {
+      app: Arc::clone(&app),
+      shared_position: Arc::clone(&shared_position_for_events),
+      shared_is_playing: Arc::clone(&shared_is_playing_for_events),
+      recovery_rx: streaming_recovery_rx,
+      recovery_tx: streaming_recovery_tx.clone(),
+      streaming_config: streaming_config.clone(),
+      #[cfg(all(feature = "mpris", target_os = "linux"))]
+      mpris_manager: mpris_for_events.clone(),
+      #[cfg(all(feature = "macos-media", target_os = "macos"))]
+      macos_media_manager: macos_media_for_events.clone(),
+      #[cfg(all(feature = "windows-media", target_os = "windows"))]
+      windows_media_manager: windows_media_for_events.clone(),
+    });
+  }
   // Kick off the deferred native-streaming startup: account probe, librespot
   // handshake, player event handler, and saved-device startup decision all
   // run on a background task while the UI renders (see
@@ -554,17 +592,9 @@ pub(super) async fn prepare_frontend(boot: Boot) -> FrontendHandles {
     // parks itself for replay instead of erroring (the task clears this and
     // replays whatever parked when it finishes, whatever the outcome).
     app.lock().await.native_backend_pending = true;
-    let behavior = &user_config.behavior;
     deferred_streaming_startup(DeferredStreamingContext {
       app: Arc::clone(&app),
-      streaming_config: player::StreamingConfig {
-        device_name: behavior.streaming_device_name.clone(),
-        bitrate: crate::core::user_config::streaming_bitrate_or_default(behavior.streaming_bitrate),
-        audio_cache: behavior.streaming_audio_cache,
-        autoplay: behavior.streaming_autoplay,
-        cache_path: crate::infra::spotify::credentials::get_default_cache_path(),
-        initial_volume: runtime_state.volume_percent,
-      },
+      streaming_config,
       device_startup_behavior,
       // A restored non-Spotify session owns the startup play/pause decision;
       // otherwise the deferred task fires it once the device is selected.
@@ -575,7 +605,6 @@ pub(super) async fn prepare_frontend(boot: Boot) -> FrontendHandles {
       },
       initial_shuffle_enabled,
       recovery_tx: streaming_recovery_tx,
-      recovery_rx: streaming_recovery_rx,
       shared_position: shared_position_for_events,
       shared_is_playing: shared_is_playing_for_events,
       #[cfg(all(feature = "mpris", target_os = "linux"))]

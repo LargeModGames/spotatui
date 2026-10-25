@@ -198,6 +198,8 @@ impl Default for App {
       soloist_link: None,
       #[cfg(feature = "soloist")]
       soloist_downloading: false,
+      #[cfg(feature = "soloist")]
+      librespot_standby: None,
       soloist_pairing: false,
       decoded_repeat: RepeatMode::Off,
       decoded_shuffle: false,

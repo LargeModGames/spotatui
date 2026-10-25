@@ -43,7 +43,7 @@ across a **nine-leg** feature matrix, plus one `macos-latest` job (below):
 | `ai-dj-only` | `telemetry,tui,ai-dj` |
 | `slim` | `telemetry,tui` |
 | `headless` | `telemetry` - one of three legs without `tui`. `mod tui` is feature-gated, so this leg turns any `crate::tui` import from core/infra/cli into a compile error - what keeps a second frontend from silently re-coupling to the terminal one |
-| `headless-streaming` | `telemetry,streaming` - `check` + `clippy` only, no `test` job. Proves native-streaming startup (`runtime/streaming/`) and the player-event wiring type-check and pass clippy with no terminal frontend in scope. Its two entry points carry `allow(dead_code)` there, so the leg does not prove they are live |
+| `headless-streaming` | `telemetry,streaming` - `check` + `clippy` only, no `test` job. Proves native-streaming startup (`runtime/streaming/`) and the player-event wiring type-check and pass clippy with no terminal frontend in scope. Its entry points carry `allow(dead_code)` there, so the leg does not prove they are live |
 | `gui` | `telemetry,gui,streaming,discord-rpc,self-update,scripting,mcp-server,mpris,local-files,subsonic,internet-radio,youtube,qobuz,audio-viz,audio-viz-cpal` - the third leg without `tui`: the Linux feature set a `spotatui-gui` build carries, the five sources and the player bar's visualizer included. `check`, `clippy` and `test` |
 | `soloist` | the `gui` leg's list plus `tui,soloist`: the Soloist engine with both frontends (the GUI `owns_sound` arm, the TUI badge). `check`, `clippy` and `test` |
 

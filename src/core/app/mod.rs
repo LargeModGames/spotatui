@@ -571,6 +571,10 @@ pub struct App {
   /// A Soloist download from Spotify runs.
   #[cfg(feature = "soloist")]
   soloist_downloading: bool,
+  /// The librespot recovery sender while Soloist is the engine, for a switch back.
+  #[cfg(feature = "soloist")]
+  librespot_standby:
+    Option<tokio::sync::mpsc::UnboundedSender<crate::infra::player::StreamingRecoveryRequest>>,
   /// The Soloist pairing guide shows: Soloist waits for its first login.
   soloist_pairing: bool,
   /// Player-global repeat mode for the decoded (non-Spotify) sources

@@ -111,6 +111,8 @@ impl App {
 
     let mut settings_error: Option<String> = None;
     let sources_before = self.source_settings();
+    #[cfg(feature = "soloist")]
+    let engine_before = self.user_config.behavior.playback_engine;
     // What is actually on screen right now, put back by the reconciliation at
     // the end so an adaptive-theme fade continues from it.
     let theme_before = self.user_config.theme;
@@ -978,7 +980,9 @@ impl App {
       }
     }
     #[cfg(feature = "soloist")]
-    self.save_soloist_key_row();
+    if !self.save_soloist_key_row() && self.user_config.behavior.playback_engine != engine_before {
+      self.playback_engine_changed();
+    }
     self.refresh_language();
     self.refresh_settings_labels();
     #[cfg(feature = "art-decode")]
