@@ -1264,6 +1264,7 @@ async fn handle_player_events(
           let mut app = app.lock().await;
           let strings = app.strings();
           app.set_status_message(strings.status.infra.native_many_unavailable, 20);
+          app.offer_soloist_setup();
         }
       }
       PlayerEvent::Loading {

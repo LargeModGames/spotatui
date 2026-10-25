@@ -54,6 +54,7 @@ import { Room } from "./Room";
 import { Search } from "./Search";
 import { Session } from "./Session";
 import { Settings } from "./Settings";
+import { SoloistOfferDialog } from "./SoloistOfferDialog";
 import { SoloistPairingDialog } from "./SoloistPairingDialog";
 import { Stats } from "./Stats";
 import { Toast } from "./Toast";
@@ -723,6 +724,11 @@ export function Shell({
       <SoloistPairingDialog
         guide={channels.status?.payload.soloist_pairing ?? null}
         send={send}
+      />
+      <SoloistOfferDialog
+        offer={channels.status?.payload.soloist_offer ?? null}
+        send={send}
+        onSetUp={() => open({ page: "settings" })}
       />
     </TrackActionsContext.Provider>
   );

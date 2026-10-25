@@ -359,6 +359,10 @@ pub enum Action {
   },
   /// Close the Soloist pairing guide; pairing in Spotify still works after.
   DismissSoloistPairing,
+  /// Answer the offer to set up Soloist: open Settings at the Playback Engine row, or close it.
+  AnswerSoloistOffer {
+    set_up: bool,
+  },
   /// Open the monthly recap in the browser and close its popup.
   OpenRecap,
   /// Close the recap popup without opening the recap.

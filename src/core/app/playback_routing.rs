@@ -400,8 +400,45 @@ impl App {
     }
   }
 
-  /// Whether a Spotify command goes to Soloist: its device is the active one,
-  /// or no device is and Soloist is logged in.
+  /// Whether the offer to set up Soloist shows.
+  pub fn soloist_offer_shows(&self) -> bool {
+    self.soloist_offer
+  }
+
+  /// Offer Soloist once per run, when this build can run it and librespot is the engine.
+  #[cfg(feature = "streaming")]
+  pub(crate) fn offer_soloist_setup(&mut self) {
+    #[cfg(feature = "soloist")]
+    if !self.soloist_offered
+      && !self.soloist_engine_selected()
+      && !cfg!(all(target_os = "macos", target_arch = "x86_64"))
+    {
+      self.soloist_offered = true;
+      self.soloist_offer = true;
+      self.display_revisions.bump(DisplayDomain::Status);
+    }
+  }
+
+  pub(crate) fn answer_soloist_offer(&mut self, set_up: bool) {
+    if !self.soloist_offer {
+      return;
+    }
+    self.soloist_offer = false;
+    self.display_revisions.bump(DisplayDomain::Status);
+    if set_up {
+      self.view.settings_category = SettingsCategory::Behavior;
+      self.open_settings_screen();
+      if let Some(index) = self
+        .settings_items
+        .iter()
+        .position(|item| item.id == "behavior.playback_engine")
+      {
+        self.view.settings_selected_index = index;
+      }
+    }
+  }
+
+  /// Whether a Spotify command goes to Soloist: its device is the active one,  /// or no device is and Soloist is logged in.
   pub fn soloist_is_target(&self) -> bool {
     #[cfg(feature = "soloist")]
     {

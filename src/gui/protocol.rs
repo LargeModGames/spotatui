@@ -341,6 +341,18 @@ pub(crate) struct StatusPayload {
   api_error: Option<String>,
   /// The Soloist pairing guide to show in a modal.
   soloist_pairing: Option<SoloistPairingGuide>,
+  /// The offer to set up Soloist to show in a modal.
+  soloist_offer: Option<SoloistOffer>,
+}
+
+#[derive(Serialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
+pub(crate) struct SoloistOffer {
+  title: &'static str,
+  body: &'static str,
+  steps: [&'static str; 3],
+  set_up: &'static str,
+  not_now: &'static str,
 }
 
 #[derive(Serialize)]
@@ -882,6 +894,20 @@ fn channel_message(
             ],
             waiting: strings.soloist_pair_waiting,
             close: strings.soloist_pair_close,
+          }
+        }),
+        soloist_offer: app.soloist_offer_shows().then(|| {
+          let strings = &app.strings().popups;
+          SoloistOffer {
+            title: strings.soloist_offer_title,
+            body: strings.soloist_offer_body,
+            steps: [
+              strings.soloist_offer_step_download,
+              strings.soloist_offer_step_key,
+              strings.soloist_offer_step_engine,
+            ],
+            set_up: strings.soloist_offer_set_up,
+            not_now: strings.soloist_offer_not_now,
           }
         }),
       },
@@ -1705,6 +1731,25 @@ mod tests {
 
     let closed = apply_from_page(&mut app, &action_frame(Action::DismissSoloistPairing));
     assert!(pushed(&closed, "status")["payload"]["soloist_pairing"].is_null());
+  }
+
+  #[cfg(feature = "soloist")]
+  #[test]
+  fn the_status_channel_carries_the_soloist_offer_until_the_page_answers_it() {
+    let (mut app, _rx) = app();
+    let before = app.display_revisions();
+    app.offer_soloist_setup();
+    let status = pushed(&diff(&before, &app, Language::En), "status");
+    assert_eq!(
+      status["payload"]["soloist_offer"]["set_up"],
+      app.strings().popups.soloist_offer_set_up
+    );
+
+    let answered = apply_from_page(
+      &mut app,
+      &action_frame(Action::AnswerSoloistOffer { set_up: false }),
+    );
+    assert!(pushed(&answered, "status")["payload"]["soloist_offer"].is_null());
   }
 
   fn apply_from_page(app: &mut App, text: &str) -> Vec<ServerMessage> {

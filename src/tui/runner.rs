@@ -686,6 +686,7 @@ pub async fn start_ui(
         }
 
         ui::draw_soloist_pairing(f, &app);
+        ui::draw_soloist_offer(f, &app);
         // Plugin popup overlays every screen.
         ui::draw_plugin_popup(f, &app);
 

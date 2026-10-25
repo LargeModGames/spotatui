@@ -1366,6 +1366,42 @@ pub fn draw_recap_prompt(f: &mut Frame<'_>, app: &App) {
   f.render_widget(paragraph, rect);
 }
 
+/// The offer to set up Soloist, after librespot failed several tracks in a row.
+pub fn draw_soloist_offer(f: &mut Frame<'_>, app: &App) {
+  if !app.soloist_offer_shows() {
+    return;
+  }
+  let strings = &app.strings().popups;
+  let width = std::cmp::min(f.area().width.saturating_sub(4), 70);
+  let rect = f
+    .area()
+    .centered(Constraint::Length(width), Constraint::Length(13));
+  f.render_widget(Clear, rect);
+  let text = vec![
+    Line::from(strings.soloist_offer_body),
+    Line::from(""),
+    Line::from(strings.soloist_offer_step_download),
+    Line::from(strings.soloist_offer_step_key),
+    Line::from(strings.soloist_offer_step_engine),
+    Line::from(""),
+    Line::from(Span::styled(
+      strings.soloist_offer_controls,
+      Style::default().fg(app.user_config.theme.inactive.into()),
+    )),
+  ];
+  let paragraph = Paragraph::new(text)
+    .style(app.user_config.theme.base_style())
+    .wrap(Wrap { trim: false })
+    .block(
+      Block::default()
+        .borders(Borders::ALL)
+        .style(app.user_config.theme.base_style())
+        .border_style(Style::default().fg(app.user_config.theme.active.into()))
+        .title(strings.soloist_offer_title),
+    );
+  f.render_widget(paragraph, rect);
+}
+
 /// The Soloist pairing guide over every screen, until Soloist logs in or Esc closes it.
 pub fn draw_soloist_pairing(f: &mut Frame<'_>, app: &App) {
   let Some(device) = app.soloist_pairing_device() else {
@@ -1431,6 +1467,30 @@ mod soloist_pairing_tests {
 
     crate::tui::handlers::handle_app(Key::Esc, &mut app);
     assert_eq!(app.soloist_pairing_device(), None);
+  }
+
+  #[test]
+  fn the_soloist_offer_lists_the_steps_until_esc_closes_it() {
+    let mut app = App::default();
+    app.offer_soloist_setup();
+    let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+    terminal.draw(|f| draw_soloist_offer(f, &app)).unwrap();
+    let content: String = terminal
+      .backend()
+      .buffer()
+      .content()
+      .iter()
+      .map(|cell| cell.symbol())
+      .collect();
+    let strings = &app.strings().popups;
+    assert!(content.contains(strings.soloist_offer_title), "{content}");
+    assert!(
+      content.contains(strings.soloist_offer_step_key),
+      "{content}"
+    );
+
+    crate::tui::handlers::handle_app(Key::Esc, &mut app);
+    assert!(!app.soloist_offer_shows());
   }
 }
 

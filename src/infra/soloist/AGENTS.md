@@ -14,6 +14,9 @@ under `streaming_device_name`, and spotatui starts no librespot Spirc device.
   `App::apply_playback_engine` shuts librespot down before Soloist starts, or
   moves the sender back and asks for an idle librespot player. A rebuild that
   ends under Soloist is refused (`accept_rebuilt_native_backend`).
+- When librespot fails three tracks in a row (the audio-key block), the player
+  event handler calls `App::offer_soloist_setup`: once per run, a modal offers
+  Soloist and opens Settings at the Playback Engine row.
 - Call sites outside this folder and `core/app/soloist.rs` use only the
   ungated bool predicates
   `soloist_is_target()` and `soloist_engine_installed()`.

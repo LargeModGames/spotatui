@@ -833,6 +833,8 @@ pub fn default_binding(action: &Action) -> Exposure<TuiSurface> {
     Action::OpenRecap => literal(ENTER, "Recap prompt"),
     Action::DismissRecapPrompt => literal(ESC, "Recap prompt"),
     Action::DismissSoloistPairing => literal(ESC, "Soloist pairing guide"),
+    Action::AnswerSoloistOffer { set_up: false } => literal(ESC, "Soloist offer"),
+    Action::AnswerSoloistOffer { set_up: true } => literal(ENTER, "Soloist offer"),
     Action::DisableRecapPrompt => literal("d", "Recap prompt"),
     Action::DismissAnnouncement { .. } => literal(ENTER, "Announcement prompt"),
     Action::OpenAnnouncementUrl { .. } => {
@@ -1449,6 +1451,7 @@ mod tests {
       Action::OpenRecap,
       Action::DismissRecapPrompt,
       Action::DismissSoloistPairing,
+      Action::AnswerSoloistOffer { set_up: true },
       Action::DisableRecapPrompt,
       Action::DismissAnnouncement { id: text() },
       Action::OpenAnnouncementUrl { id: text() },

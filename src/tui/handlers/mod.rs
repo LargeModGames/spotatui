@@ -115,6 +115,15 @@ pub fn handle_app(key: Key, app: &mut App) {
     return;
   }
 
+  if app.soloist_offer_shows() {
+    if key == Key::Enter {
+      app.apply(Action::AnswerSoloistOffer { set_up: true });
+    } else if matches!(key, Key::Esc | Key::Char('q')) || key == app.user_config.keys.back {
+      app.apply(Action::AnswerSoloistOffer { set_up: false });
+    }
+    return;
+  }
+
   // The Soloist pairing guide is a modal too, under the plugin popup.
   if app.soloist_pairing_device().is_some() {
     if matches!(key, Key::Esc | Key::Enter | Key::Char('q')) || key == app.user_config.keys.back {

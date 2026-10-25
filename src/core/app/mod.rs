@@ -577,6 +577,11 @@ pub struct App {
     Option<tokio::sync::mpsc::UnboundedSender<crate::infra::player::StreamingRecoveryRequest>>,
   /// The Soloist pairing guide shows: Soloist waits for its first login.
   soloist_pairing: bool,
+  /// The offer to set up Soloist shows, after librespot failed several tracks in a row.
+  soloist_offer: bool,
+  /// That offer was made in this run; it shows once.
+  #[cfg(feature = "soloist")]
+  soloist_offered: bool,
   /// Player-global repeat mode for the decoded (non-Spotify) sources
   /// (Local / Subsonic / YouTube). Decoded sources have no Spotify
   /// `current_playback_context`, so their repeat lives here instead of in

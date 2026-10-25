@@ -126,6 +126,14 @@ pub struct PopupStrings {
   pub soloist_pair_pick_template: &'static str,
   pub soloist_pair_waiting: &'static str,
   pub soloist_pair_close: &'static str,
+  pub soloist_offer_title: &'static str,
+  pub soloist_offer_body: &'static str,
+  pub soloist_offer_step_download: &'static str,
+  pub soloist_offer_step_key: &'static str,
+  pub soloist_offer_step_engine: &'static str,
+  pub soloist_offer_set_up: &'static str,
+  pub soloist_offer_not_now: &'static str,
+  pub soloist_offer_controls: &'static str,
 }
 
 pub const EN: PopupStrings = PopupStrings {
@@ -252,6 +260,14 @@ pub const EN: PopupStrings = PopupStrings {
   soloist_pair_pick_template: "2. In its device menu, pick '{name}'.",
   soloist_pair_waiting: "Waiting for Spotify…",
   soloist_pair_close: "Close",
+  soloist_offer_title: "Play through Soloist?",
+  soloist_offer_body: "Spotify refuses librespot the audio keys for these tracks, as it does for some accounts. Soloist, Spotify's own player, can play them. It needs Premium. In Settings:",
+  soloist_offer_step_download: "1. Soloist Path: Download from Spotify.",
+  soloist_offer_step_key: "2. Soloist API Key: Get a key, then enter it.",
+  soloist_offer_step_engine: "3. Playback Engine: Soloist.",
+  soloist_offer_set_up: "Set up Soloist",
+  soloist_offer_not_now: "Not now",
+  soloist_offer_controls: "Enter: open Settings   Esc: not now",
 };
 
 // Keep ..EN so new English fields compile before their translations are added.

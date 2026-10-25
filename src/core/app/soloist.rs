@@ -665,6 +665,35 @@ mod tests {
   }
 
   #[test]
+  fn the_soloist_offer_shows_once_and_set_up_opens_the_playback_engine_row() {
+    let mut app = make_app_simple();
+    app.offer_soloist_setup();
+    assert!(app.soloist_offer_shows());
+
+    app.apply(Action::AnswerSoloistOffer { set_up: true });
+
+    assert!(!app.soloist_offer_shows());
+    assert_eq!(
+      app.get_current_route().id,
+      crate::core::app::RouteId::Settings
+    );
+    assert_eq!(
+      app.settings_items[app.view.settings_selected_index].id,
+      "behavior.playback_engine"
+    );
+    app.offer_soloist_setup();
+    assert!(!app.soloist_offer_shows());
+  }
+
+  #[test]
+  fn soloist_is_not_offered_when_it_is_already_the_engine() {
+    let mut app = make_app_simple();
+    app.user_config.behavior.playback_engine = PlaybackEngine::Soloist;
+    app.offer_soloist_setup();
+    assert!(!app.soloist_offer_shows());
+  }
+
+  #[test]
   fn queue_refuses_a_decoded_item_while_soloist_plays() {
     let mut app = make_app_simple();
     let (link, _rx) = SoloistLink::test_pair("soloist-device");
