@@ -190,6 +190,16 @@ pub(crate) struct SettingRow {
   name: String,
   description: String,
   value: SettingRowValue,
+  /// The row's one button; pressing it sends `PressSettingButton`.
+  button: Option<SettingRowButton>,
+}
+
+#[derive(Serialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
+pub(crate) struct SettingRowButton {
+  label: String,
+  /// Its work runs, so the button is off.
+  busy: bool,
 }
 
 #[derive(Serialize)]
@@ -239,6 +249,12 @@ const GUI_SETTINGS: &[(&str, &str)] = &[
   ("behavior.streaming_bitrate", "streaming"),
   ("behavior.streaming_audio_cache", "streaming"),
   ("behavior.streaming_autoplay", "streaming"),
+  #[cfg(feature = "soloist")]
+  ("behavior.playback_engine", "streaming"),
+  #[cfg(feature = "soloist")]
+  ("behavior.soloist_path", "streaming"),
+  #[cfg(feature = "soloist")]
+  ("behavior.soloist_audio_quality", "streaming"),
   #[cfg(feature = "discord-rpc")]
   ("behavior.enable_discord_rpc", "integrations"),
   ("behavior.enable_global_song_count", "integrations"),
@@ -1083,6 +1099,12 @@ fn settings_for(app: &App, phone: bool) -> Vec<SettingRow> {
           _ => item.description.clone(),
         },
         value,
+        button: app
+          .setting_button_label(id)
+          .map(|(label, busy)| SettingRowButton {
+            label: label.to_string(),
+            busy,
+          }),
       })
     })
     .collect()

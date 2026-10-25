@@ -355,7 +355,7 @@ never config:
 | `last_session.yml` (state dir) | `core/persisted_playback.rs` | non-Spotify playback + native queue |
 | `playlist_sync.yml` (state dir) | `core/playlist_sync/store.rs` | playlist links + match cache |
 | `qobuz_credentials.yml` (config dir) | `infra/qobuz/auth.rs` | the Qobuz login token (feature `qobuz`) |
-| `soloist_credentials.yml` (config dir) | `infra/soloist/auth.rs` (read only) | the Soloist API key (feature `soloist`); `SPOTATUI_SOLOIST_API_KEY` wins over it. Soloist owns its own `<state dir>/soloist/` and `<cache dir>/soloist/`; `infra/soloist/` writes only its playback keys (quality, normalization) in `settings/Users/*/prefs` and two `.spotatui-*` dot-files there |
+| `soloist_credentials.yml` (config dir) | `infra/soloist/auth.rs` (read only) | the Soloist API key (feature `soloist`); `SPOTATUI_SOLOIST_API_KEY` wins over it. Soloist owns its own `<state dir>/soloist/` and `<cache dir>/soloist/`; `infra/soloist/` writes only its playback keys (quality, normalization) in `settings/Users/*/prefs` and two `.spotatui-*` dot-files there. `infra/soloist/download.rs` owns `<state dir>/soloist-bin/`, one folder per build it downloaded from Spotify |
 | `visualizer.yml` (config dir) | `core/visualizer_look.rs` (read only) | the GUI player-bar visualizer's look; `runtime/gui.rs` reads it at launch and again on each edit (feature `gui`, only where `gui::visualizer::AVAILABLE`) |
 
 - All paths resolve through `core/paths.rs`, never `dirs::` directly.

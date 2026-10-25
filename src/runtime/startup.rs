@@ -590,9 +590,9 @@ pub(super) async fn prepare_frontend(boot: Boot) -> FrontendHandles {
   #[cfg(feature = "soloist")]
   if soloist_attempted {
     app.lock().await.soloist_starting();
-    super::streaming::soloist::deferred_soloist_startup(
+    crate::infra::soloist::startup::deferred_soloist_startup(
       Arc::clone(&app),
-      super::streaming::soloist::SoloistStart::from_behavior(
+      crate::infra::soloist::startup::SoloistStart::from_behavior(
         &user_config.behavior,
         runtime_state.volume_percent,
         if restore_playback.is_some() {

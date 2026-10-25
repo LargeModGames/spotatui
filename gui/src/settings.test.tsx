@@ -6,6 +6,7 @@ import type { SettingRow } from "./bindings/SettingRow";
 import type { UpdateAsk } from "./bindings/UpdateAsk";
 import type { UpdateStatus } from "./bindings/UpdateStatus";
 import {
+  RowButton,
   SettingControl,
   Settings,
   SettingsSearch,
@@ -19,6 +20,7 @@ const rows: SettingRow[] = [
     group: "playback",
     name: "Seek Duration (ms)",
     description: "Milliseconds to skip when seeking",
+    button: null,
     value: { kind: "number", value: 5000 },
   },
   {
@@ -26,6 +28,7 @@ const rows: SettingRow[] = [
     group: "streaming",
     name: "Streaming Bitrate",
     description: "Audio quality for native streaming",
+    button: null,
     value: {
       kind: "choice",
       value: "320",
@@ -38,6 +41,7 @@ const rows: SettingRow[] = [
     group: "integrations",
     name: "Discord Rich Presence",
     description: "Show the playing track on Discord",
+    button: null,
     value: { kind: "bool", value: true },
   },
   {
@@ -45,6 +49,7 @@ const rows: SettingRow[] = [
     group: "updates",
     name: "Auto-update delay",
     description: "How long a release must be out before it downloads",
+    button: null,
     value: { kind: "text", value: "0" },
   },
 ];
@@ -110,6 +115,7 @@ describe("Settings", () => {
       group: "library",
       name: "Default Playlist Sort",
       description: "How a playlist's tracks are sorted when it opens",
+      button: null,
       value: {
         kind: "choice",
         value: "name:desc",
@@ -134,7 +140,14 @@ describe("Settings", () => {
       id: string,
       name: string,
       value: SettingRow["value"],
-    ): SettingRow => ({ id, group: "sources", name, description: "", value });
+    ): SettingRow => ({
+      id,
+      group: "sources",
+      name,
+      description: "",
+      value,
+      button: null,
+    });
     const shown = [
       rows[0],
       source("behavior.subsonic_url", "Subsonic Server URL", {
@@ -180,6 +193,7 @@ describe("Settings", () => {
       group: "sources",
       name: "Subsonic Password",
       description: "",
+      button: null,
       value: { kind: "secret", set: false },
     };
     const actions = sent(password, (control) => {
@@ -194,6 +208,33 @@ describe("Settings", () => {
         },
       },
     ]);
+  });
+
+  it("a row button sends its press, and a busy one is off", () => {
+    const soloist = (busy: boolean): SettingRow => ({
+      id: "behavior.soloist_path",
+      group: "streaming",
+      name: "Soloist Path",
+      description: "",
+      button: { label: "Download from Spotify", busy },
+      value: { kind: "text", value: "" },
+    });
+    const actions: Action[] = [];
+    const button = byName(
+      <RowButton
+        row={soloist(false)}
+        send={(action) => actions.push(action)}
+      />,
+      "Download from Spotify",
+    );
+    (button.props.onClick as () => void)();
+    expect(actions).toEqual([
+      { PressSettingButton: { id: "behavior.soloist_path" } },
+    ]);
+    expect(page(null, [soloist(true)])).toMatch(
+      /<button[^>]*disabled=""[^>]*>Download from Spotify</,
+    );
+    expect(page(null, rows)).not.toContain("setting-controls");
   });
 
   it("has no Updates section without an updater", () => {
@@ -317,6 +358,7 @@ describe("Settings", () => {
       group: "library",
       name: "Default Playlist Sort",
       description: "",
+      button: null,
       value: {
         kind: "choice",
         value: "default",

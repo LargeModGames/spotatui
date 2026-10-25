@@ -16,6 +16,8 @@ pub struct SettingsStrings {
   pub behavior_playback_engine_description: &'static str,
   pub behavior_soloist_path_name: &'static str,
   pub behavior_soloist_path_description: &'static str,
+  pub soloist_download_button: &'static str,
+  pub soloist_downloading_button: &'static str,
   pub behavior_soloist_audio_quality_name: &'static str,
   pub behavior_soloist_audio_quality_description: &'static str,
   pub behavior_local_music_path_description: &'static str,

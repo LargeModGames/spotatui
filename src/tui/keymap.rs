@@ -510,6 +510,8 @@ pub fn help_entries_for(strings: &crate::core::i18n::Strings) -> Vec<HelpEntry> 
       Binding(|k| k.dj_pick_model),
       help.context_ai_dj,
     ),
+    // Last, so the pinned English table keeps its indices.
+    row(help.settings_button, Literal("o"), help.context_settings),
   ]
 }
 
@@ -749,6 +751,7 @@ pub fn default_binding(action: &Action) -> Exposure<TuiSurface> {
     Action::SetTheme(_) => Unbound(PLUGIN_ONLY),
     Action::SaveSettings => binding(|k| k.save_settings),
     Action::SetSetting { .. } => Unbound("the GUI's settings page sets one row"),
+    Action::PressSettingButton { .. } => literal("o", "Settings"),
     Action::CycleVisualizerStyle => literal("V", "Audio analysis"),
     Action::SetScreenContent { .. } => Unbound(PLUGIN_ONLY),
     Action::ShowScreen(_) => Unbound(PLUGIN_ONLY),
@@ -1439,6 +1442,7 @@ mod tests {
         id: text(),
         value: SettingInput::Bool(true),
       },
+      Action::PressSettingButton { id: text() },
       Action::CycleVisualizerStyle,
       Action::AnswerCommunityPinPrompt { keep: false },
       Action::OpenRecap,

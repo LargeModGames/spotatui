@@ -568,6 +568,9 @@ pub struct App {
   /// The running Soloist engine; `streaming_player` stays `None` while it is set.
   #[cfg(feature = "soloist")]
   soloist_link: Option<Arc<crate::infra::soloist::SoloistLink>>,
+  /// A Soloist download from Spotify runs.
+  #[cfg(feature = "soloist")]
+  soloist_downloading: bool,
   /// Player-global repeat mode for the decoded (non-Spotify) sources
   /// (Local / Subsonic / YouTube). Decoded sources have no Spotify
   /// `current_playback_context`, so their repeat lives here instead of in

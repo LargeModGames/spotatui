@@ -1427,6 +1427,19 @@ fn every_typed_message_fills_its_placeholders_and_preserves_all_arguments() {
       ["SENTINEL_ERROR_中"]
     );
     check!(
+      "status_infra.soloist_downloading",
+      strings.status.infra.soloist_downloading(87),
+      ["87"]
+    );
+    check!(
+      "status_infra.soloist_download_failed",
+      strings
+        .status
+        .infra
+        .soloist_download_failed("SENTINEL_ERROR_中"),
+      ["SENTINEL_ERROR_中"]
+    );
+    check!(
       "status_infra.soloist_key_missing",
       strings.status.infra.soloist_key_missing("SENTINEL_PATH_中"),
       ["SENTINEL_PATH_中"]

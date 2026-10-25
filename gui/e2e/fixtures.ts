@@ -1021,7 +1021,14 @@ function setting(
   description: string,
   value: SettingRow["value"],
 ): SettingRow {
-  return { id: `behavior.${id}`, group, name, description, value };
+  return {
+    id: `behavior.${id}`,
+    group,
+    name,
+    description,
+    value,
+    button: null,
+  };
 }
 
 function visualizerRow(mode: "Spectrum" | "Waveform"): SettingRow {
@@ -1152,6 +1159,16 @@ export const settings: ServerMessage[] = [
             labels: ["96", "160", "320"],
           },
         ),
+        {
+          ...setting(
+            "soloist_path",
+            "streaming",
+            "Soloist Path",
+            "The Soloist program the Soloist engine runs",
+            { kind: "text", value: "" },
+          ),
+          button: { label: "Download from Spotify", busy: false },
+        },
         setting(
           "enable_discord_rpc",
           "integrations",

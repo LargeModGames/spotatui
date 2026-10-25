@@ -349,6 +349,10 @@ pub enum IoEvent {
   /// auth.
   #[cfg(feature = "art-decode")]
   FetchCoverArt(crate::core::art::CoverArtRequest),
+  /// Download the official Soloist build for this system from Spotify (the
+  /// Soloist Path row's button). Needs no Spotify login.
+  #[cfg(feature = "soloist")]
+  DownloadSoloist,
   /// A DJ tool call that needs the live Spotify client, plus the channel to
   /// answer on.
   ///
@@ -519,6 +523,10 @@ impl Network {
     if matches!(io_event, IoEvent::FetchCoverArt(_)) {
       return true;
     }
+    #[cfg(feature = "soloist")]
+    if matches!(io_event, IoEvent::DownloadSoloist) {
+      return true;
+    }
     #[cfg(feature = "streaming")]
     if matches!(
       io_event,
@@ -605,6 +613,10 @@ impl Network {
     }
     #[cfg(feature = "art-decode")]
     if matches!(io_event, IoEvent::FetchCoverArt(_)) {
+      return true;
+    }
+    #[cfg(feature = "soloist")]
+    if matches!(io_event, IoEvent::DownloadSoloist) {
       return true;
     }
     #[cfg(feature = "ai-dj")]
@@ -1016,6 +1028,10 @@ impl Network {
       #[cfg(feature = "art-decode")]
       IoEvent::FetchCoverArt(request) => {
         self.fetch_cover_art(request).await;
+      }
+      #[cfg(feature = "soloist")]
+      IoEvent::DownloadSoloist => {
+        crate::infra::soloist::download::run(std::sync::Arc::clone(&self.app)).await;
       }
       #[cfg(any(feature = "mcp-server", feature = "ai-dj"))]
       IoEvent::DjToolCall(payload) => {

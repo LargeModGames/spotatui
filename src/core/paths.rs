@@ -74,6 +74,12 @@ pub(crate) fn soloist_data_dir() -> Option<PathBuf> {
   app_state_dir().map(|dir| dir.join("soloist"))
 }
 
+/// The Soloist builds spotatui downloaded from Spotify: `<state dir>/soloist-bin`.
+#[cfg(feature = "soloist")]
+pub(crate) fn soloist_bin_dir() -> Option<PathBuf> {
+  app_state_dir().map(|dir| dir.join("soloist-bin"))
+}
+
 /// Soloist's playback cache: `<cache dir>/soloist`.
 #[cfg(feature = "soloist")]
 pub(crate) fn soloist_cache_dir() -> Option<PathBuf> {

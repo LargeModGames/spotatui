@@ -110,6 +110,87 @@ impl App {
     }
   }
 
+  pub(crate) fn soloist_downloading(&self) -> bool {
+    self.soloist_downloading
+  }
+
+  /// Download the official build from Spotify, one download at a time.
+  pub(crate) fn download_soloist(&mut self) {
+    if self.soloist_downloading {
+      return;
+    }
+    self.soloist_downloading = true;
+    self.display_revisions.bump(DisplayDomain::Settings);
+    let started = self.strings().status.infra.soloist_download_started;
+    self.set_status_message(started, 8);
+    self.dispatch_without_spinner(IoEvent::DownloadSoloist);
+  }
+
+  pub(crate) fn soloist_download_progress(&mut self, percent: u8) {
+    let message = self.strings().status.infra.soloist_downloading(percent);
+    self.set_status_message(message, 5);
+  }
+
+  /// Save the new path; the start to run when the engine waits for it.
+  pub(crate) fn soloist_download_finished(
+    &mut self,
+    result: Result<std::path::PathBuf, crate::infra::soloist::download::Failure>,
+  ) -> Option<crate::infra::soloist::startup::SoloistStart> {
+    use crate::infra::soloist::download::Failure;
+    self.soloist_downloading = false;
+    self.display_revisions.bump(DisplayDomain::Settings);
+    let strings = self.strings().status.infra;
+    let path = match result {
+      Ok(path) => path.display().to_string(),
+      Err(Failure::NoBuild) => {
+        self.set_error_status_message(strings.soloist_no_build, 10);
+        return None;
+      }
+      Err(Failure::Failed(error)) => {
+        self.set_error_status_message(strings.soloist_download_failed(&error), 15);
+        return None;
+      }
+    };
+    self.user_config.behavior.soloist_path = Some(path.clone());
+    if let Err(e) = self.user_config.save_config() {
+      let message = self.strings().settings.save_failed(&e.to_string());
+      self.handle_error_with_message(anyhow::anyhow!("Failed to save settings: {}", e), message);
+      return None;
+    }
+    // An open Settings screen saves its staged rows later; they must not put the old path back.
+    for item in self
+      .settings_items
+      .iter_mut()
+      .chain(self.settings_saved_items.iter_mut())
+      .filter(|item| item.id == "behavior.soloist_path")
+    {
+      item.value = SettingValue::String(path.clone());
+    }
+    let behavior = &self.user_config.behavior;
+    let engine_on = behavior.playback_engine == crate::core::user_config::PlaybackEngine::Soloist;
+    let start = (engine_on
+      && behavior.enable_streaming
+      && !self.native_backend_pending
+      && !crate::infra::soloist::supervisor::running())
+    .then(|| {
+      crate::infra::soloist::startup::SoloistStart::from_behavior(
+        behavior,
+        self.runtime_state.volume_percent,
+        None,
+        false,
+      )
+    });
+    match (engine_on, start.is_some()) {
+      (false, _) => self.set_status_message(strings.soloist_downloaded_engine_off, 10),
+      (true, false) => self.set_status_message(strings.soloist_downloaded_next_launch, 8),
+      (true, true) => {
+        self.set_status_message(strings.soloist_downloaded, 4);
+        self.soloist_starting();
+      }
+    }
+    start
+  }
+
   pub(crate) fn soloist_notice(&mut self, notice: crate::infra::soloist::Notice) {
     use crate::infra::soloist::Notice;
     let strings = self.strings().status.infra;
@@ -148,7 +229,12 @@ impl App {
 
 #[cfg(test)]
 mod tests {
+  use crate::core::action::Action;
   use crate::core::app::test_support::*;
+  use crate::core::app::{App, SettingValue};
+  use crate::core::user_config::PlaybackEngine;
+  use crate::infra::network::IoEvent;
+  use crate::infra::soloist::download::Failure;
   use crate::infra::soloist::protocol::{Command, Event, Status};
   use crate::infra::soloist::SoloistLink;
 
@@ -184,6 +270,87 @@ mod tests {
     app.apply_soloist_event(&link, &Event::Playback(Status::Playing));
     app.pause_native_playback();
     assert_eq!(rx.try_recv().ok(), Some(Command::Pause));
+  }
+
+  fn app_with_config(dir: &std::path::Path) -> App {
+    let mut app = make_app_simple();
+    app.user_config.path_to_config = Some(crate::core::user_config::UserConfigPaths {
+      config_file_path: dir.join("config.yml"),
+    });
+    app
+  }
+
+  fn path_row(value: &str) -> crate::core::app::SettingItem {
+    crate::core::app::SettingItem {
+      id: "behavior.soloist_path".to_string(),
+      name: String::new(),
+      description: String::new(),
+      value: SettingValue::String(value.to_string()),
+    }
+  }
+
+  #[test]
+  fn the_download_button_dispatches_one_download_at_a_time() {
+    let (mut app, rx) = session_free_app();
+    let press = || Action::PressSettingButton {
+      id: "behavior.soloist_path".to_string(),
+    };
+    app.apply(press());
+    app.apply(press());
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::DownloadSoloist)));
+    assert!(rx.try_recv().is_err());
+    assert_eq!(
+      app.setting_button_label("behavior.soloist_path"),
+      Some(("Downloading…", true))
+    );
+    app.soloist_download_finished(Err(Failure::Failed("timed out".to_string())));
+    assert!(app.status_message_is_error());
+    assert_eq!(
+      app.setting_button_label("behavior.soloist_path"),
+      Some(("Download from Spotify", false))
+    );
+  }
+
+  #[test]
+  fn a_finished_download_saves_the_path_where_an_open_settings_screen_keeps_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = app_with_config(dir.path());
+    app.settings_items = vec![path_row("")];
+    app.settings_saved_items = vec![path_row("")];
+    let binary = dir.path().join("soloist.exe");
+
+    let start = app.soloist_download_finished(Ok(binary.clone()));
+
+    let path = binary.display().to_string();
+    assert!(start.is_none(), "the librespot engine starts no Soloist");
+    assert_eq!(
+      app.user_config.behavior.soloist_path.as_deref(),
+      Some(path.as_str())
+    );
+    assert!(std::fs::read_to_string(dir.path().join("config.yml"))
+      .unwrap()
+      .contains("soloist_path"));
+    assert_eq!(
+      app.settings_items[0].value,
+      SettingValue::String(path.clone())
+    );
+    assert_eq!(
+      app.settings_saved_items[0].value,
+      SettingValue::String(path)
+    );
+  }
+
+  #[test]
+  fn a_download_starts_soloist_when_the_engine_waits_for_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = app_with_config(dir.path());
+    app.user_config.behavior.enable_streaming = true;
+    app.user_config.behavior.playback_engine = PlaybackEngine::Soloist;
+
+    let start = app.soloist_download_finished(Ok(dir.path().join("soloist")));
+
+    assert!(start.is_some());
+    assert!(app.native_backend_pending);
   }
 
   #[test]

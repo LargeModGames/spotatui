@@ -5,11 +5,13 @@
 //! Rules for this module: `AGENTS.md` next to this file.
 
 pub mod auth;
+pub mod download;
 pub mod link;
 pub mod logline;
 pub mod prefs;
 pub mod process;
 pub mod protocol;
+pub mod startup;
 pub mod supervisor;
 
 use std::path::PathBuf;

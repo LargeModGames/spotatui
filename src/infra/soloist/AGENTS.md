@@ -8,8 +8,8 @@ under `streaming_device_name`, and spotatui starts no librespot Spirc device.
   and `native_parked` is never set, so every librespot path stays off. The owner
   stays `PlaybackOwner::Spotify`; the engine adds narrow
   `App::soloist_is_target()` arms instead of a new owner.
-- Call sites outside this folder, `core/app/soloist.rs` and
-  `runtime/streaming/soloist.rs` use only the ungated bool predicates
+- Call sites outside this folder and `core/app/soloist.rs` use only the
+  ungated bool predicates
   `soloist_is_target()` and `soloist_engine_installed()`.
 - Every write from the supervisor or the WebSocket reader goes through an `App`
   method that checks `Arc::ptr_eq` against the installed link first. A restart
@@ -27,4 +27,6 @@ under `streaming_device_name`, and spotatui starts no librespot Spirc device.
   `audio.normalize_v2=false`) are undocumented internal state; the official
   quality path is the per-device menu in the Spotify mobile app.
   The playbar badge shows what the log measured, never the setting.
-- Never redistribute the Soloist binary: the user downloads it from Spotify.
+- Never host, bundle or redistribute the Soloist binary. The Soloist Path
+  row's button downloads the official build from Spotify's CDN
+  (`download.rs`), and only when the user presses it.

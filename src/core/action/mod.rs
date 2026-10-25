@@ -345,6 +345,11 @@ pub enum Action {
     id: String,
     value: SettingInput,
   },
+  /// Press the button of one settings row (Soloist Path: download from
+  /// Spotify). A row without a button changes nothing.
+  PressSettingButton {
+    id: String,
+  },
   /// Cycle the visualizer style and persist it.
   CycleVisualizerStyle,
   /// Answer the community-playlist pin prompt: keep the pin, or hide it and

@@ -106,6 +106,7 @@ describe("shared browser strings", () => {
       group: "interface",
       name: "語言",
       description: "",
+      button: null,
       value: {
         kind: "choice",
         value: "en",

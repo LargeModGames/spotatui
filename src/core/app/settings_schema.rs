@@ -129,6 +129,53 @@ pub(crate) fn setting_requirement(id: &str) -> Requirement {
   }
 }
 
+/// The one button a settings row can carry, beside its value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SettingButton {
+  DownloadSoloist,
+}
+
+pub(crate) fn setting_button(id: &str) -> Option<SettingButton> {
+  match id {
+    "behavior.soloist_path" if cfg!(feature = "soloist") => Some(SettingButton::DownloadSoloist),
+    _ => None,
+  }
+}
+
+impl App {
+  /// A row's button label, and whether its work runs (the button is then off).
+  pub(crate) fn setting_button_label(&self, id: &str) -> Option<(&'static str, bool)> {
+    let strings = &self.strings().settings;
+    setting_button(id).map(|button| match button {
+      SettingButton::DownloadSoloist if self.soloist_download_runs() => {
+        (strings.soloist_downloading_button, true)
+      }
+      SettingButton::DownloadSoloist => (strings.soloist_download_button, false),
+    })
+  }
+
+  pub(crate) fn press_setting_button(&mut self, id: &str) {
+    match setting_button(id) {
+      Some(SettingButton::DownloadSoloist) => {
+        #[cfg(feature = "soloist")]
+        self.download_soloist();
+      }
+      None => {}
+    }
+  }
+
+  fn soloist_download_runs(&self) -> bool {
+    #[cfg(feature = "soloist")]
+    {
+      self.soloist_downloading()
+    }
+    #[cfg(not(feature = "soloist"))]
+    {
+      false
+    }
+  }
+}
+
 const PLAYLIST_TRACK_SORT_SETTING_OPTIONS: &[&str] = &[
   "default",
   "name",

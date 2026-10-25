@@ -194,6 +194,13 @@ pub struct InfraStatusStrings {
   pub soloist_dropped: &'static str,
   pub soloist_engine_unavailable: &'static str,
   pub soloist_queue_refused: &'static str,
+  pub soloist_download_started: &'static str,
+  pub soloist_downloading: &'static str,
+  pub soloist_downloaded: &'static str,
+  pub soloist_downloaded_engine_off: &'static str,
+  pub soloist_downloaded_next_launch: &'static str,
+  pub soloist_download_failed: &'static str,
+  pub soloist_no_build: &'static str,
   pub native_recovery_dropped: &'static str,
   pub native_recovery_failed: &'static str,
   pub native_lost_recovering: &'static str,
@@ -322,6 +329,15 @@ impl InfraStatusStrings {
   }
   pub fn soloist_start_failed(&self, error: &str) -> String {
     super::format_template(self.soloist_start_failed, &[("error", error)])
+  }
+  pub fn soloist_downloading(&self, percent: u8) -> String {
+    super::format_template(
+      self.soloist_downloading,
+      &[("percent", &percent.to_string())],
+    )
+  }
+  pub fn soloist_download_failed(&self, error: &str) -> String {
+    super::format_template(self.soloist_download_failed, &[("error", error)])
   }
   pub fn soloist_key_missing(&self, path: &str) -> String {
     super::format_template(self.soloist_key_missing, &[("path", path)])
@@ -995,16 +1011,16 @@ pub const EN: InfraStatusStrings = InfraStatusStrings {
   native_restored_paused: "Native playback restored in paused state.",
   native_skip_unavailable: "Couldn't play this track natively (unavailable or blocked); skipping.",
   native_many_unavailable: "Several tracks in a row couldn't be played natively, so playback was stopped. They may be unavailable on your account or region. Press 'd' to switch to an official Spotify Connect device.",
-  soloist_path_unset: "Set behavior.soloist_path to the Soloist binary from developer.spotify.com/documentation/soloist.",
-  soloist_missing: "Soloist not found at {path}. Download it from developer.spotify.com/documentation/soloist.",
+  soloist_path_unset: "Soloist is not installed. In Settings, Soloist Path, pick Download from Spotify.",
+  soloist_missing: "Soloist not found at {path}. In Settings, Soloist Path, pick Download from Spotify.",
   soloist_not_executable: "Soloist at {path} is not executable: chmod +x {path}",
-  soloist_wrong_cpu: "This Soloist build does not run on this CPU. Download the build for this system.",
+  soloist_wrong_cpu: "This Soloist build does not run on this CPU. In Settings, Soloist Path, pick Download from Spotify.",
   soloist_start_failed: "Soloist could not start: {error}",
   soloist_key_missing: "Soloist needs an API key: set SPOTATUI_SOLOIST_API_KEY or put api_key in {path}.",
   soloist_not_paired: "Pair spotatui: open Spotify on a computer on this network and pick 'spotatui'.",
   soloist_offline: "Soloist cannot reach Spotify.",
   soloist_bad_key: "Soloist rejected the API key.",
-  soloist_expired: "Soloist build expired: download a new one from developer.spotify.com/documentation/soloist.",
+  soloist_expired: "Soloist build expired. In Settings, Soloist Path, pick Download from Spotify for a new one.",
   soloist_expires_soon: "Soloist build expires in {count} {unit}: download a new one soon.",
   soloist_dir_in_use: "Another Soloist uses spotatui's Soloist data folder.",
   soloist_keeps_exiting: "Soloist keeps exiting; see the log.",
@@ -1016,6 +1032,13 @@ pub const EN: InfraStatusStrings = InfraStatusStrings {
   soloist_dropped: "Soloist dropped to {quality}.",
   soloist_engine_unavailable: "This build has no Soloist engine; playing through librespot.",
   soloist_queue_refused: "Queueing other sources behind Spotify needs the librespot engine.",
+  soloist_download_started: "Downloading Soloist from Spotify. By using Soloist, you accept the Spotify Terms and Conditions of Use.",
+  soloist_downloading: "Downloading Soloist from Spotify: {percent}%",
+  soloist_downloaded: "Soloist downloaded; starting it.",
+  soloist_downloaded_engine_off: "Soloist downloaded. Set Playback Engine to Soloist to play through it.",
+  soloist_downloaded_next_launch: "Soloist downloaded. spotatui uses it from the next launch.",
+  soloist_download_failed: "Soloist download failed: {error}",
+  soloist_no_build: "Spotify has no Soloist build for this system.",
   native_recovery_dropped: "Native recovery failed; playback request dropped: {error}",
   native_recovery_failed: "Native recovery failed: {error}",
   native_lost_recovering: "Native streaming connection lost; attempting recovery.",

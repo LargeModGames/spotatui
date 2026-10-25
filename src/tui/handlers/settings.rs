@@ -40,6 +40,16 @@ fn handle_navigation(key: Key, app: &mut App) {
     // Enter edit mode
     Key::Enter => enter_edit_mode(app),
 
+    Key::Char('o') => {
+      if let Some(id) = app
+        .settings_items
+        .get(app.view.settings_selected_index)
+        .map(|setting| setting.id.clone())
+      {
+        app.apply(Action::PressSettingButton { id });
+      }
+    }
+
     // Save settings
     key if key == app.effective_save_settings_key() => {
       let _ = save_settings(app);

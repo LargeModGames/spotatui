@@ -4,9 +4,9 @@ use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
+use super::{auth, supervisor, Notice};
 use crate::core::app::App;
 use crate::core::user_config::{BehaviorConfig, StartupBehavior};
-use crate::infra::soloist::{auth, supervisor, Notice};
 
 pub(crate) struct SoloistStart {
   pub soloist_path: Option<String>,

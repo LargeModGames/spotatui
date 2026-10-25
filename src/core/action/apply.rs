@@ -282,6 +282,7 @@ impl App {
           saved: self.save_settings_from_items(),
         };
       }
+      Action::PressSettingButton { id } => self.press_setting_button(&id),
       Action::CycleVisualizerStyle => self.cycle_visualizer_style(),
       Action::AnswerCommunityPinPrompt { keep } => self.answer_community_pin_prompt(keep),
       Action::OpenRecap => self.open_recap(),

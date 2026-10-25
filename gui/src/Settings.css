@@ -167,6 +167,13 @@
   border-color: var(--text);
 }
 
+.setting-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .update-button {
   height: 32px;
   flex-shrink: 0;

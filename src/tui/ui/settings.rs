@@ -258,6 +258,20 @@ fn draw_settings_list(f: &mut Frame<'_>, app: &App, area: Rect) {
           Style::default().fg(app.user_config.theme.inactive.into()),
         ));
       }
+      if let Some((label, busy)) = app
+        .setting_button_label(&setting.id)
+        .filter(|_| is_selected)
+      {
+        let text = if busy {
+          format!("  {label}")
+        } else {
+          format!("  [o] {label}")
+        };
+        spans.push(Span::styled(
+          text,
+          Style::default().fg(app.user_config.theme.hint.into()),
+        ));
+      }
 
       ListItem::new(Line::from(spans))
     })
@@ -566,6 +580,28 @@ mod tests {
       "{rebound_rendered}"
     );
     assert!(!rebound_rendered.contains("Esc/q"), "{rebound_rendered}");
+  }
+
+  #[cfg(feature = "soloist")]
+  #[test]
+  fn only_the_selected_soloist_path_row_names_its_download_key() {
+    let row = |id: &str, name: &str| SettingItem {
+      id: id.to_string(),
+      name: name.to_string(),
+      description: String::new(),
+      value: SettingValue::String(String::new()),
+    };
+    let mut app = filtered_app("", false);
+    app.spotify_connected = true;
+    app.settings_items = vec![
+      row("behavior.soloist_path", "Soloist Path"),
+      row("behavior.ytdlp_path", "yt-dlp Path"),
+    ];
+    app.view.settings_selected_index = 0;
+    let selected = rendered(&app);
+    assert!(selected.contains("[o] Download from Spotify"), "{selected}");
+    app.view.settings_selected_index = 1;
+    assert!(!rendered(&app).contains("Download from Spotify"));
   }
 
   fn rendered(app: &App) -> String {

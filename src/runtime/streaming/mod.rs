@@ -6,8 +6,6 @@ use crate::core::user_config::StartupBehavior;
 
 #[cfg(feature = "streaming")]
 pub(super) mod launch;
-#[cfg(feature = "soloist")]
-pub(super) mod soloist;
 
 /// Soloist runs only when it is compiled in and Spotify ships a build for this CPU.
 #[cfg(all(feature = "streaming", any(feature = "tui", feature = "gui")))]

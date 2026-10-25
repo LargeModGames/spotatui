@@ -39,6 +39,7 @@ pub struct Config {
 #[derive(Default)]
 struct Shared {
   shutting_down: AtomicBool,
+  running: AtomicBool,
   stop: Notify,
   link: StdMutex<Option<Arc<SoloistLink>>>,
   done: StdMutex<Option<oneshot::Receiver<()>>>,
@@ -55,21 +56,28 @@ const STALE_FILES: [&str; 3] = ["ws.addr", "ws.port", "soloist.pid"];
 const START_BUDGET: Duration = Duration::from_secs(20);
 const OFFLINE_AFTER: Duration = Duration::from_secs(15);
 #[cfg(windows)]
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+pub(super) const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 pub fn start(app: Arc<Mutex<App>>, config: Config) {
   let shared = shared().clone();
   if shared.shutting_down.load(Ordering::SeqCst) {
     return;
   }
+  shared.running.store(true, Ordering::SeqCst);
   let (done_tx, done_rx) = oneshot::channel();
   if let Ok(mut done) = shared.done.lock() {
     *done = Some(done_rx);
   }
   tokio::spawn(async move {
     supervise(&app, &config, &shared).await;
+    shared.running.store(false, Ordering::SeqCst);
     let _ = done_tx.send(());
   });
+}
+
+/// A supervisor runs: it starts, watches or restarts Soloist.
+pub fn running() -> bool {
+  shared().running.load(Ordering::SeqCst)
 }
 
 /// Pause, give up the Connect device, and stop the child, waiting at most `timeout`.
