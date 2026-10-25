@@ -297,15 +297,15 @@ pub(super) async fn prepare_frontend(boot: Boot) -> FrontendHandles {
     let message = app.strings().status.infra.soloist_engine_unavailable;
     app.set_status_message(message, 8);
   }
+  #[cfg(feature = "streaming")]
+  let streaming_on = user_config.behavior.enable_streaming && spotify.is_some();
   // In soloist mode no Spirc device starts: Soloist is the device.
   #[cfg(feature = "streaming")]
-  let streaming_attempted = user_config.behavior.enable_streaming
-    && spotify.is_some()
-    && engine == crate::core::user_config::PlaybackEngine::Librespot;
+  let streaming_attempted =
+    streaming_on && engine == crate::core::user_config::PlaybackEngine::Librespot;
   #[cfg(feature = "soloist")]
-  let soloist_attempted = user_config.behavior.enable_streaming
-    && spotify.is_some()
-    && engine == crate::core::user_config::PlaybackEngine::Soloist;
+  let soloist_attempted =
+    streaming_on && engine == crate::core::user_config::PlaybackEngine::Soloist;
 
   // Create shared atomic for real-time position updates from native player
   // This avoids lock contention - the player event handler can update position
@@ -557,7 +557,7 @@ pub(super) async fn prepare_frontend(boot: Boot) -> FrontendHandles {
   // The recovery supervisor builds every librespot player after the first one,
   // and under Soloist the first one too, on a switch in Settings.
   #[cfg(feature = "streaming")]
-  if user_config.behavior.enable_streaming && spotify.is_some() {
+  if streaming_on {
     player::spawn_streaming_recovery_handler(player::StreamingRecoveryContext {
       app: Arc::clone(&app),
       shared_position: Arc::clone(&shared_position_for_events),

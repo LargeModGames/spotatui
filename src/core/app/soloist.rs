@@ -7,7 +7,7 @@ impl App {
     self.soloist_link.clone()
   }
 
-  fn is_current_soloist(&self, link: &Arc<crate::infra::soloist::SoloistLink>) -> bool {
+  pub(crate) fn is_current_soloist(&self, link: &Arc<crate::infra::soloist::SoloistLink>) -> bool {
     self
       .soloist_link
       .as_ref()
@@ -19,12 +19,11 @@ impl App {
     self.native_backend_pending = true;
   }
 
-  pub(crate) fn soloist_restarting(&mut self) {
-    self.native_backend_pending = true;
-  }
-
   /// The engine gave up: starts stop waiting, and a parked one goes out now.
-  pub(crate) fn soloist_failed(&mut self) {
+  pub(crate) fn soloist_failed(&mut self, notice: Option<crate::infra::soloist::Notice>) {
+    if let Some(notice) = notice {
+      self.soloist_notice(notice);
+    }
     self.native_backend_pending = false;
     self.set_soloist_pairing(false);
     self.replay_pending_start_playback();
@@ -58,7 +57,7 @@ impl App {
     link: &Arc<crate::infra::soloist::SoloistLink>,
     event: &crate::infra::soloist::protocol::Event,
   ) {
-    use crate::infra::soloist::protocol::{Command, Event};
+    use crate::infra::soloist::protocol::Event;
     if !self.is_current_soloist(link) {
       return;
     }
@@ -78,13 +77,11 @@ impl App {
       _ => {}
     }
     // A phone cannot start Soloist over a decoded source or Music that owns the sink.
-    if snapshot.status.is_playing()
-      && matches!(
-        self.playback_owner(),
-        PlaybackOwner::Decoded | PlaybackOwner::AppleMusic | PlaybackOwner::Queue
-      )
-    {
-      link.send(Command::Pause);
+    if matches!(
+      self.playback_owner(),
+      PlaybackOwner::Decoded | PlaybackOwner::AppleMusic | PlaybackOwner::Queue
+    ) {
+      link.pause();
     }
     self.overlay_soloist_snapshot();
   }
@@ -114,10 +111,6 @@ impl App {
       }
       Some(_) => {}
     }
-  }
-
-  pub(crate) fn soloist_downloading(&self) -> bool {
-    self.soloist_downloading
   }
 
   /// Download the official build from Spotify, one download at a time.
@@ -250,13 +243,8 @@ impl App {
     // Soloist's id; librespot registers its own.
     self.native_device_id = None;
     self.native_backend_pending = self.streaming_recovery_tx.as_ref().is_some_and(|tx| {
-      tx.send(crate::infra::player::StreamingRecoveryRequest {
-        reselect_device: false,
-        restore_playback: false,
-        continue_after_track: None,
-        reacquire: false,
-      })
-      .is_ok()
+      tx.send(crate::infra::player::StreamingRecoveryRequest::default())
+        .is_ok()
     });
     if !self.native_backend_pending {
       let message = self.strings().status.infra.engine_next_launch;
@@ -433,21 +421,23 @@ mod tests {
     assert_eq!(rx.try_recv().ok(), Some(Command::Pause));
   }
 
-  fn app_with_config(dir: &std::path::Path) -> App {
-    let mut app = make_app_simple();
+  fn with_config(app: &mut App, dir: &std::path::Path) {
     app.user_config.path_to_config = Some(crate::core::user_config::UserConfigPaths {
       config_file_path: dir.join("config.yml"),
     });
+  }
+
+  fn app_with_config(dir: &std::path::Path) -> App {
+    let mut app = make_app_simple();
+    with_config(&mut app, dir);
     app
   }
 
   fn path_row(value: &str) -> crate::core::app::SettingItem {
-    crate::core::app::SettingItem {
-      id: "behavior.soloist_path".to_string(),
-      name: String::new(),
-      description: String::new(),
-      value: SettingValue::String(value.to_string()),
-    }
+    setting(
+      "behavior.soloist_path",
+      SettingValue::String(value.to_string()),
+    )
   }
 
   #[test]
@@ -515,19 +505,15 @@ mod tests {
   }
 
   fn key_row(value: &str) -> crate::core::app::SettingItem {
-    crate::core::app::SettingItem {
-      id: "behavior.soloist_api_key".to_string(),
-      name: String::new(),
-      description: String::new(),
-      value: SettingValue::Secret(value.to_string()),
-    }
+    setting(
+      "behavior.soloist_api_key",
+      SettingValue::Secret(value.to_string()),
+    )
   }
 
   fn soloist_app_with_config(dir: &std::path::Path) -> (App, std::sync::mpsc::Receiver<IoEvent>) {
     let (mut app, rx) = session_free_app();
-    app.user_config.path_to_config = Some(crate::core::user_config::UserConfigPaths {
-      config_file_path: dir.join("config.yml"),
-    });
+    with_config(&mut app, dir);
     app.user_config.behavior.enable_streaming = true;
     app.user_config.behavior.playback_engine = PlaybackEngine::Soloist;
     (app, rx)
@@ -609,15 +595,13 @@ mod tests {
   fn an_engine_change_in_settings_dispatches_the_switch() {
     let (mut app, rx) = session_free_app();
     app.user_config.behavior.enable_streaming = true;
-    app.settings_items = vec![crate::core::app::SettingItem {
-      id: "behavior.playback_engine".to_string(),
-      name: String::new(),
-      description: String::new(),
-      value: SettingValue::Cycle(
+    app.settings_items = vec![setting(
+      "behavior.playback_engine",
+      SettingValue::Cycle(
         PlaybackEngine::Soloist.name().to_string(),
         PlaybackEngine::options(),
       ),
-    }];
+    )];
 
     app.apply_settings_changes();
 

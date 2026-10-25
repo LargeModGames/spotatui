@@ -488,10 +488,7 @@ async fn native_can_claim_player_command(network: &Network) -> bool {
 #[cfg(feature = "soloist")]
 async fn soloist_target(network: &Network) -> Option<Arc<crate::infra::soloist::SoloistLink>> {
   let app = network.app.lock().await;
-  app
-    .soloist_is_target()
-    .then(|| app.soloist_link())
-    .flatten()
+  app.soloist_link().filter(|_| app.soloist_is_target())
 }
 
 /// The saved device to retry a player command on, or `None` to surface the
@@ -2336,11 +2333,7 @@ impl PlaybackNetwork for Network {
       tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         let app = app.lock().await;
-        let same = app.soloist_is_target()
-          && app
-            .soloist_link()
-            .is_some_and(|current| Arc::ptr_eq(&current, &link));
-        if same {
+        if app.soloist_is_target() && app.is_current_soloist(&link) {
           link.send(Command::SkipPrev);
         }
       });
@@ -2508,13 +2501,7 @@ impl PlaybackNetwork for Network {
     }
     #[cfg(feature = "soloist")]
     if let Some(link) = soloist_target(self).await {
-      use crate::infra::soloist::protocol::{repeat_commands, Repeat};
-      let target = match repeat_state {
-        RepeatState::Off => Repeat::Off,
-        RepeatState::Context => Repeat::Context,
-        RepeatState::Track => Repeat::Track,
-      };
-      for command in repeat_commands(target) {
+      for command in crate::infra::soloist::protocol::repeat_commands(repeat_state) {
         link.send(command);
       }
       return;

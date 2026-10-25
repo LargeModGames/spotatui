@@ -438,7 +438,8 @@ impl App {
     }
   }
 
-  /// Whether a Spotify command goes to Soloist: its device is the active one,  /// or no device is and Soloist is logged in.
+  /// Whether a Spotify command goes to Soloist: its device is the active one,
+  /// or no device is and Soloist is logged in.
   pub fn soloist_is_target(&self) -> bool {
     #[cfg(feature = "soloist")]
     {

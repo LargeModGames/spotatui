@@ -8,7 +8,6 @@ pub enum LogEvent {
   Ready { device_id: String },
   WsListening { port: u16 },
   WaitingForLogin,
-  LoggedIn,
   LoginFailed,
   ExpiresIn { count: u32, unit: String },
   Expired,
@@ -19,7 +18,7 @@ pub enum LogEvent {
 }
 
 /// The message part of a line, after the time, level and source field.
-pub fn message(line: &str) -> &str {
+fn message(line: &str) -> &str {
   match line.find("] ") {
     Some(end) if line[..end].contains('[') => &line[end + 2..],
     _ => line,
@@ -55,9 +54,6 @@ pub fn parse_line(line: &str) -> Option<LogEvent> {
   }
   if text.contains("waiting for login") {
     return Some(LogEvent::WaitingForLogin);
-  }
-  if text.contains("logged in as ") {
-    return Some(LogEvent::LoggedIn);
   }
   if text.contains("login failed") {
     return Some(LogEvent::LoginFailed);
@@ -190,8 +186,8 @@ mod tests {
 
   #[test]
   fn parse_line_strips_the_timestamp_prefix() {
-    let line = "2026-10-25 09:50:11.537: 09:50:11.537 I [/f:415                          ] logged in as someone";
-    assert_eq!(parse_line(line), Some(LogEvent::LoggedIn));
+    let line = "2026-10-25 09:50:11.537: 09:50:11.537 I [/f:415                          ] waiting for login";
+    assert_eq!(parse_line(line), Some(LogEvent::WaitingForLogin));
   }
 
   #[test]

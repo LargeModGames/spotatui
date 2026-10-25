@@ -1,4 +1,6 @@
 use crate::core::app::{setting_requirement, App, SettingItem, SettingValue, SettingsCategory};
+use crate::core::user_config::key_to_config_string;
+use crate::tui::event::Key;
 use crate::tui::fuzzy::fuzzy_match;
 use crate::tui::theme::{EmphasisExt, ThemeExt};
 use crate::tui::ui::popups::highlighted_spans;
@@ -35,6 +37,9 @@ pub fn settings_layout(area: Rect) -> [Rect; 3] {
 /// ranges of its name the query covered (empty when the row only survived on
 /// its config id).
 pub type FilteredSetting = (usize, Vec<(usize, usize)>);
+
+/// Presses the selected row's button; global `jump_to_context` keeps the key on other rows.
+pub const BUTTON_KEY: Key = Key::Char('o');
 
 /// Rows that survive the active filter, best match first. With no filter this
 /// is every row in schema order.
@@ -265,7 +270,7 @@ fn draw_settings_list(f: &mut Frame<'_>, app: &App, area: Rect) {
         let text = if busy {
           format!("  {label}")
         } else {
-          format!("  [o] {label}")
+          format!("  [{}] {label}", key_to_config_string(&BUTTON_KEY))
         };
         spans.push(Span::styled(
           text,

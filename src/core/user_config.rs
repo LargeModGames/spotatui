@@ -976,7 +976,7 @@ pub struct BehaviorConfig {
   /// Path to the `yt-dlp` binary used by the YouTube source. `None` resolves
   /// plain `yt-dlp` through `$PATH`.
   pub ytdlp_path: Option<String>,
-  /// What plays behind the Native Streaming device; applies at the next launch.
+  /// What plays behind the Native Streaming device; a change in Settings switches at once.
   pub playback_engine: PlaybackEngine,
   /// Path to the Soloist binary the user downloaded from Spotify.
   pub soloist_path: Option<String>,

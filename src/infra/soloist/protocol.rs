@@ -64,17 +64,18 @@ impl Repeat {
 }
 
 /// The two flags for a repeat target, the one that turns off first.
-pub fn repeat_commands(target: Repeat) -> [Command; 2] {
+pub fn repeat_commands(target: rspotify::model::RepeatState) -> [Command; 2] {
+  use rspotify::model::RepeatState;
   match target {
-    Repeat::Off => [
+    RepeatState::Off => [
       Command::SetRepeatTrack(false),
       Command::SetRepeatContext(false),
     ],
-    Repeat::Context => [
+    RepeatState::Context => [
       Command::SetRepeatTrack(false),
       Command::SetRepeatContext(true),
     ],
-    Repeat::Track => [
+    RepeatState::Track => [
       Command::SetRepeatContext(false),
       Command::SetRepeatTrack(true),
     ],
@@ -262,21 +263,21 @@ mod tests {
   #[test]
   fn repeat_commands_turn_the_other_flag_off_first() {
     assert_eq!(
-      repeat_commands(Repeat::Track),
+      repeat_commands(rspotify::model::RepeatState::Track),
       [
         Command::SetRepeatContext(false),
         Command::SetRepeatTrack(true)
       ]
     );
     assert_eq!(
-      repeat_commands(Repeat::Context),
+      repeat_commands(rspotify::model::RepeatState::Context),
       [
         Command::SetRepeatTrack(false),
         Command::SetRepeatContext(true)
       ]
     );
     assert_eq!(
-      repeat_commands(Repeat::Off),
+      repeat_commands(rspotify::model::RepeatState::Off),
       [
         Command::SetRepeatTrack(false),
         Command::SetRepeatContext(false)

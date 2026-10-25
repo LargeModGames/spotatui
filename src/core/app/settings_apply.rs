@@ -1079,15 +1079,6 @@ mod tests {
   use super::*;
   use crate::core::app::test_support::*;
 
-  fn setting(id: &str, value: SettingValue) -> SettingItem {
-    SettingItem {
-      id: id.to_string(),
-      name: String::new(),
-      description: String::new(),
-      value,
-    }
-  }
-
   #[test]
   fn saving_a_theme_preset_bumps_the_theme_revision_and_an_unrelated_save_does_not() {
     let mut app = make_app_simple();

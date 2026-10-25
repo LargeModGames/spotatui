@@ -6,16 +6,18 @@ use crate::tui::handlers::common_key_events::{
   down_event, left_event, on_down_press_handler, on_up_press_handler, right_event, up_event,
 };
 use crate::tui::handlers::filter_input::{self, FilterEdit};
+pub(super) use crate::tui::ui::settings::BUTTON_KEY;
 use crate::tui::ui::settings::{filtered_setting_indices, selected_setting_position};
 
-/// Presses the selected row's button; global `jump_to_context` keeps the key on other rows.
-pub(super) const BUTTON_KEY: Key = Key::Char('o');
-
-pub(super) fn selected_row_has_button(app: &App) -> bool {
+fn selected_row_id(app: &App) -> Option<&str> {
   app
     .settings_items
     .get(app.view.settings_selected_index)
-    .is_some_and(|setting| app.setting_button_label(&setting.id).is_some())
+    .map(|setting| setting.id.as_str())
+}
+
+pub(super) fn selected_row_has_button(app: &App) -> bool {
+  selected_row_id(app).is_some_and(|id| app.setting_button_label(id).is_some())
 }
 
 pub fn handler(key: Key, app: &mut App) {
@@ -51,11 +53,7 @@ fn handle_navigation(key: Key, app: &mut App) {
     Key::Enter => enter_edit_mode(app),
 
     BUTTON_KEY => {
-      if let Some(id) = app
-        .settings_items
-        .get(app.view.settings_selected_index)
-        .map(|setting| setting.id.clone())
-      {
+      if let Some(id) = selected_row_id(app).map(str::to_string) {
         app.apply(Action::PressSettingButton { id });
       }
     }
@@ -670,7 +668,12 @@ mod tests {
 
     handle_app(BUTTON_KEY, &mut app);
 
-    assert!(app.soloist_downloading());
+    assert_eq!(
+      app
+        .setting_button_label("behavior.soloist_path")
+        .map(|(_, busy)| busy),
+      Some(true)
+    );
     assert_eq!(app.get_current_route().id, RouteId::Settings);
   }
 

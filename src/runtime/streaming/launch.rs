@@ -210,7 +210,7 @@ async fn deferred_streaming_startup_inner(ctx: DeferredStreamingContext) {
     saved_device_id,
     devices_snapshot.as_deref(),
     &device_name,
-    Some(&device_id),
+    &device_id,
     strings,
   );
 

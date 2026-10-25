@@ -45,7 +45,7 @@ fn startup_device_decision(
   saved_device_id: Option<String>,
   devices_snapshot: Option<&[rspotify::model::device::Device]>,
   native_device_name: &str,
-  native_id: Option<&str>,
+  native_id: &str,
   strings: &crate::core::i18n::Strings,
 ) -> StartupDeviceDecision {
   if startup_behavior != StartupBehavior::Play {
@@ -68,7 +68,7 @@ fn startup_device_decision(
             break;
           }
 
-          if by_id.is_none() && native_id.is_some() && device.id.as_deref() == native_id {
+          if by_id.is_none() && device.id.as_deref() == Some(native_id) {
             by_id = device.id.clone();
           }
           if by_name.is_none() && device.name.eq_ignore_ascii_case(native_device_name) {
@@ -174,7 +174,7 @@ mod tests {
       saved_device_id,
       devices_snapshot,
       NATIVE_NAME,
-      Some(NATIVE_ID),
+      NATIVE_ID,
       &crate::core::i18n::EN,
     )
     .event
@@ -277,7 +277,7 @@ mod tests {
       Some(EXTERNAL_ID.to_string()),
       Some(&devices),
       NATIVE_NAME,
-      Some(NATIVE_ID),
+      NATIVE_ID,
       &crate::core::i18n::EN,
     );
 
@@ -323,7 +323,7 @@ mod tests {
       Some(EXTERNAL_ID.to_string()),
       Some(&devices),
       NATIVE_NAME,
-      Some(NATIVE_ID),
+      NATIVE_ID,
       &crate::core::i18n::EN,
     );
 
@@ -347,7 +347,7 @@ mod tests {
       Some(EXTERNAL_ID.to_string()),
       None,
       NATIVE_NAME,
-      Some(NATIVE_ID),
+      NATIVE_ID,
       &crate::core::i18n::EN,
     );
 

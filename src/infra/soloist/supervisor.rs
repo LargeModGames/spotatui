@@ -132,8 +132,7 @@ async fn supervise(app: &Arc<Mutex<App>>, config: &Config, shared: &Shared) {
     match run_once(app, config, shared, reactivate, &mut first_login).await {
       Outcome::Restart { reactivate: again } => reactivate = again,
       Outcome::Fatal(notice) => {
-        notify(app, notice).await;
-        app.lock().await.soloist_failed();
+        app.lock().await.soloist_failed(Some(notice));
         break;
       }
       Outcome::Exited(exit) => {
@@ -141,8 +140,7 @@ async fn supervise(app: &Arc<Mutex<App>>, config: &Config, shared: &Shared) {
         match exit {
           Exit::Stopped => break,
           Exit::Expired => {
-            notify(app, Notice::Expired).await;
-            app.lock().await.soloist_failed();
+            app.lock().await.soloist_failed(Some(Notice::Expired));
             break;
           }
           Exit::DataDirInUse if !retried_dir => {
@@ -150,8 +148,7 @@ async fn supervise(app: &Arc<Mutex<App>>, config: &Config, shared: &Shared) {
             clear_orphan(config).await;
           }
           Exit::DataDirInUse => {
-            notify(app, Notice::DirInUse).await;
-            app.lock().await.soloist_failed();
+            app.lock().await.soloist_failed(Some(Notice::DirInUse));
             break;
           }
           Exit::Crashed(code) => {
@@ -159,13 +156,12 @@ async fn supervise(app: &Arc<Mutex<App>>, config: &Config, shared: &Shared) {
             let now = Instant::now();
             exits.push(now);
             let Some(delay) = process::restart_delay(&exits, now) else {
-              notify(app, Notice::KeepsExiting).await;
-              app.lock().await.soloist_failed();
+              app.lock().await.soloist_failed(Some(Notice::KeepsExiting));
               break;
             };
             {
               let mut app = app.lock().await;
-              app.soloist_restarting();
+              app.soloist_starting();
               app.soloist_notice(Notice::Restarting);
             }
             tokio::select! {
@@ -180,7 +176,7 @@ async fn supervise(app: &Arc<Mutex<App>>, config: &Config, shared: &Shared) {
 }
 
 fn spawn(config: &Config) -> std::io::Result<Child> {
-  let mut command = ProcessCommand::new(&config.path);
+  let mut command = quiet_command(&config.path);
   command
     .args(process::args(&SpawnPlan {
       device_name: &config.device_name,
@@ -189,12 +185,8 @@ fn spawn(config: &Config) -> std::io::Result<Child> {
       cache_dir: &config.cache_dir,
       initial_volume: config.initial_volume,
     }))
-    .stdin(Stdio::null())
     .stdout(Stdio::piped())
-    .stderr(Stdio::piped())
-    .kill_on_drop(true);
-  #[cfg(windows)]
-  command.creation_flags(CREATE_NO_WINDOW);
+    .stderr(Stdio::piped());
   #[cfg(target_os = "linux")]
   // SAFETY: prctl is async-signal-safe; the signal fires when the spawning thread exits.
   unsafe {
@@ -272,6 +264,12 @@ async fn sleep_until(deadline: Option<Instant>) {
 
 fn read_pid(path: &Path) -> Option<u32> {
   std::fs::read_to_string(path).ok()?.trim().parse().ok()
+}
+
+fn remove_stale(data_dir: &Path) {
+  for file in STALE_FILES {
+    let _ = std::fs::remove_file(data_dir.join(file));
+  }
 }
 
 fn quiet_command(program: impl AsRef<std::ffi::OsStr>) -> ProcessCommand {
@@ -446,9 +444,7 @@ async fn run_once(
     return Outcome::Fatal(Notice::StartFailed(error.to_string()));
   }
   clear_orphan(config).await;
-  for file in STALE_FILES {
-    let _ = std::fs::remove_file(config.data_dir.join(file));
-  }
+  remove_stale(&config.data_dir);
   match prefs::write_quality(&config.data_dir, config.quality) {
     Ok(0) => {}
     Ok(written) => {
@@ -632,9 +628,7 @@ async fn run_once(
   }
   app.lock().await.uninstall_soloist_link(&link);
   let _ = std::fs::remove_file(config.data_dir.join(CHILD_PID));
-  for file in STALE_FILES {
-    let _ = std::fs::remove_file(config.data_dir.join(file));
-  }
+  remove_stale(&config.data_dir);
   outcome
 }
 

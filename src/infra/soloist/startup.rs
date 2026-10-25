@@ -50,35 +50,31 @@ pub(crate) async fn apply_engine(app: Arc<Mutex<App>>) {
 /// Runs after the first frame, like librespot's deferred start.
 pub(crate) fn deferred_soloist_startup(app: Arc<Mutex<App>>, start: SoloistStart) {
   tokio::spawn(async move {
-    let fail = |notice: Option<Notice>| {
-      let app = Arc::clone(&app);
-      async move {
-        let mut app = app.lock().await;
-        if let Some(notice) = notice {
-          app.soloist_notice(notice);
-        }
-        app.soloist_failed();
-      }
-    };
     if let Err(unavailable) = crate::infra::spotify::session::current().await {
       log::info!("soloist: not started: {}", unavailable.message());
-      fail(None).await;
+      app.lock().await.soloist_failed(None);
       return;
     }
     let Some(path) = start.soloist_path else {
-      fail(Some(Notice::PathUnset)).await;
+      app.lock().await.soloist_failed(Some(Notice::PathUnset));
       return;
     };
     let Some(key) = auth::current_key() else {
       let file = crate::core::paths::soloist_credentials_path().unwrap_or_default();
-      fail(Some(Notice::KeyMissing(file))).await;
+      app
+        .lock()
+        .await
+        .soloist_failed(Some(Notice::KeyMissing(file)));
       return;
     };
     let (Some(data_dir), Some(cache_dir)) = (
       crate::core::paths::soloist_data_dir(),
       crate::core::paths::soloist_cache_dir(),
     ) else {
-      fail(Some(Notice::StartFailed("no state directory".to_string()))).await;
+      app
+        .lock()
+        .await
+        .soloist_failed(Some(Notice::StartFailed("no state directory".to_string())));
       return;
     };
     supervisor::start(

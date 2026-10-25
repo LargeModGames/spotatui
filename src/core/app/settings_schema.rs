@@ -174,7 +174,7 @@ impl App {
   fn soloist_download_runs(&self) -> bool {
     #[cfg(feature = "soloist")]
     {
-      self.soloist_downloading()
+      self.soloist_downloading
     }
     #[cfg(not(feature = "soloist"))]
     {

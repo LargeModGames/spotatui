@@ -58,14 +58,13 @@ fn include_native_streaming_device(
     .iter()
     .position(|device| device.id.as_deref() == Some(device_id.as_str()))
     .or_else(|| {
-      (!parked)
-        .then(|| {
-          payload
-            .devices
-            .iter()
-            .position(|device| device.name.eq_ignore_ascii_case(device_name))
-        })
-        .flatten()
+      if parked {
+        return None;
+      }
+      payload
+        .devices
+        .iter()
+        .position(|device| device.name.eq_ignore_ascii_case(device_name))
     });
   if let Some(device) = position.map(|index| &mut payload.devices[index]) {
     if parked {
