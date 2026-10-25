@@ -522,6 +522,7 @@ mod tests {
     let mut app = app();
     app.push_navigation_stack(RouteId::Search, ActiveBlock::Input);
     app.soloist_notice(crate::infra::soloist::Notice::NotPaired);
+    assert!(app.soloist_pairing_device().is_some());
 
     assert!(!dispatch_key(app.user_config.keys.back, &mut app));
 
