@@ -63,6 +63,7 @@ pub fn start(app: Arc<Mutex<App>>, config: Config) {
   if shared.shutting_down.load(Ordering::SeqCst) {
     return;
   }
+  clear_stale_stop(&shared);
   shared.running.store(true, Ordering::SeqCst);
   let (done_tx, done_rx) = oneshot::channel();
   if let Ok(mut done) = shared.done.lock() {
@@ -73,6 +74,11 @@ pub fn start(app: Arc<Mutex<App>>, config: Config) {
     shared.running.store(false, Ordering::SeqCst);
     let _ = done_tx.send(());
   });
+}
+
+/// Drop the permit a `stop` left when no supervisor waited, so it cannot stop the next one.
+fn clear_stale_stop(shared: &Shared) {
+  let _ = futures::FutureExt::now_or_never(shared.stop.notified());
 }
 
 /// A supervisor runs: it starts, watches or restarts Soloist.
@@ -684,6 +690,14 @@ mod job {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn a_stop_with_no_supervisor_does_not_stop_the_next_one() {
+    let shared = Shared::default();
+    shared.stop.notify_one();
+    clear_stale_stop(&shared);
+    assert!(futures::FutureExt::now_or_never(shared.stop.notified()).is_none());
+  }
 
   #[test]
   fn the_seed_waits_for_the_account_prefs_then_restarts_once() {
