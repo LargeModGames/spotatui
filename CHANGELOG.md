@@ -1,8 +1,10 @@
 # Changelog
 
-## [Unreleased]
+## [v0.47.0] 2026-10-25
 
 ### Added
+
+- **Play through Spotify Soloist**: set Settings > Playback Engine (`behavior.playback_engine: soloist`) and spotatui's own Connect device plays through Spotify's official Soloist binary instead of librespot. Soloist plays for accounts where librespot fails with `error audio key 0 1` ([#932](https://github.com/LargeModGames/spotatui/issues/932)), and streams lossless where the account allows it; the playbar shows the quality it streams. Settings has a Download from Spotify button for the binary (`o` in the terminal) and a hidden Soloist API Key row. spotatui does not ship the binary. See [the Soloist guide](https://github.com/LargeModGames/spotatui/blob/main/docs/soloist.md).
 
 - **Filter your playlists in the desktop app**: a filter box under the Your Library chips narrows the playlists of the active source, including the ones inside closed folders.
 - **Seven new visualizer styles**: `V` on the visualizer screen now also cycles through **Head Unit** (an early-2000s car-stereo display: a floor of spectrum strips in perspective under a wall of panels, drawn in Braille dots), **Analog VU** (two needle meters, left and right, with a peak lamp), **Winamp** (scanlined bars with falling peak caps and an oscilloscope strip), **Phosphor Scope** (a green CRT trace with fading phosphor trails and a measured Vpp and frequency), **Outrun** (a striped synthwave sun that pulses with the bass behind a spectrum skyline and a scrolling grid), **Rack EQ** (left and right LED ladders per band with falling peak LEDs) and **Cassette Deck** (turning reels that wind the tape across as the song plays, LED level bars and a tape counter). The choice is saved as `visualizer_style` in `config.yml`. The analyzer now also hands the terminal the last 50 ms of the waveform with each spectrum frame, which the scope styles draw.
@@ -29,13 +31,17 @@
 
 - **An E badge on explicit songs** in the track lists: a song the server marks explicit shows a small E at the start of its artist line, in playlists, Liked Songs, albums, an artist's Popular songs, song radio and Recently played ([#838](https://github.com/LargeModGames/spotatui/issues/838)).
 
-- **Shared interface language tables**: `behavior.language` selects `auto`, `en`, `zh-Hans`, or `zh-Hant`. The terminal and desktop/browser interfaces now use one typed English catalog, with locale detection and live language switching. Chinese tables follow in stacked translation PRs; until each area lands, selecting Chinese shows its English fallback. CLI output and logs stay English.
+- **Simplified and Traditional Chinese**: `behavior.language` selects `auto`, `en`, `zh-Hans`, or `zh-Hant`. The terminal, the desktop app and the browser GUI share one set of strings, detect the system language, and switch language live. Screens, settings, dialogs, onboarding and status messages are translated. CLI output and logs stay English.
 
 ### Changed
 
 - **Theme-aware folder icons in the terminal**: playlist folders in the sidebar and the playlist picker dialog now use a text glyph (`▸`) that inherits the active theme's text and highlight colors instead of a fixed-color folder emoji ([#882](https://github.com/LargeModGames/spotatui/issues/882)).
 
 ### Fixed
+
+- **Escape and the back key close more screens in the terminal**: `Esc` now closes the audio analysis screen ([#815](https://github.com/LargeModGames/spotatui/issues/815)) and clears an active playlist or Liked Songs filter, like `q`. The back key now closes the sort menu and a plugin popup instead of leaving them on screen over the previous route ([#831](https://github.com/LargeModGames/spotatui/issues/831)).
+
+- **Lists in the terminal no longer jump when you move up**: the search and library lists kept no scroll position between frames, so the view jumped with each step up. They now scroll only when the cursor reaches the top or bottom edge.
 
 - **A sparse listening history still returns the DJ vibe and what is playing**: with fewer than five qualifying plays, `get_listening_history` keeps the vibe from `set_dj_vibe`, the current track, and the same structured keys as a full history (`period`, `total_plays`, `top_artists`, `top_tracks`, `top_albums`, `recent`, `now_playing`, `vibe`). The reply still leads with the line that asks what the listener feels like ([#830](https://github.com/LargeModGames/spotatui/issues/830)).
 

@@ -6083,7 +6083,7 @@ dependencies = [
 
 [[package]]
 name = "spotatui"
-version = "0.46.0"
+version = "0.47.0"
 dependencies = [
  "aes",
  "anyhow",
@@ -6155,7 +6155,7 @@ dependencies = [
 
 [[package]]
 name = "spotatui-desktop"
-version = "0.46.0"
+version = "0.47.0"
 dependencies = [
  "anyhow",
  "log",

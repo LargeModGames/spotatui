@@ -2,7 +2,7 @@
 # Tauri out of the root package, its CI legs, Nix and crates.io.
 [package]
 name = "spotatui-desktop"
-version = "0.46.0"
+version = "0.47.0"
 edition = "2021"
 rust-version = "1.90"
 publish = false
