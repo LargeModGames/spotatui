@@ -148,7 +148,8 @@ pub fn handle_app(key: Key, app: &mut App) {
     && (app.view.settings_unsaved_prompt_visible
       || app.view.settings_edit_mode
       || app.view.settings_filter_editing
-      || key == app.user_config.keys.search)
+      || key == app.user_config.keys.search
+      || (key == settings::BUTTON_KEY && settings::selected_row_has_button(app)))
   {
     settings::handler(key, app);
     return;
