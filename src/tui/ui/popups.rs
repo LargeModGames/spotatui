@@ -1366,6 +1366,74 @@ pub fn draw_recap_prompt(f: &mut Frame<'_>, app: &App) {
   f.render_widget(paragraph, rect);
 }
 
+/// The Soloist pairing guide over every screen, until Soloist logs in or Esc closes it.
+pub fn draw_soloist_pairing(f: &mut Frame<'_>, app: &App) {
+  let Some(device) = app.soloist_pairing_device() else {
+    return;
+  };
+  let strings = &app.strings().popups;
+  let width = std::cmp::min(f.area().width.saturating_sub(4), 60);
+  let rect = f
+    .area()
+    .centered(Constraint::Length(width), Constraint::Length(9));
+  f.render_widget(Clear, rect);
+  let text = vec![
+    Line::from(strings.soloist_pair_open),
+    Line::from(strings.soloist_pair_pick(device)),
+    Line::from(""),
+    Line::from(Span::styled(
+      strings.soloist_pair_waiting,
+      Style::default().fg(app.user_config.theme.active.into()),
+    )),
+    Line::from(""),
+    Line::from(Span::styled(
+      strings.plugin_close_hint,
+      Style::default().fg(app.user_config.theme.inactive.into()),
+    )),
+  ];
+  let paragraph = Paragraph::new(text)
+    .style(app.user_config.theme.base_style())
+    .wrap(Wrap { trim: false })
+    .block(
+      Block::default()
+        .borders(Borders::ALL)
+        .style(app.user_config.theme.base_style())
+        .border_style(Style::default().fg(app.user_config.theme.active.into()))
+        .title(strings.soloist_pair_title),
+    );
+  f.render_widget(paragraph, rect);
+}
+
+#[cfg(all(test, feature = "soloist"))]
+mod soloist_pairing_tests {
+  use super::*;
+  use crate::tui::event::Key;
+  use ratatui::{backend::TestBackend, Terminal};
+
+  #[test]
+  fn the_pairing_guide_names_the_device_until_esc_closes_it() {
+    let mut app = App::default();
+    app.soloist_notice(crate::infra::soloist::Notice::NotPaired);
+    let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+    terminal.draw(|f| draw_soloist_pairing(f, &app)).unwrap();
+    let content: String = terminal
+      .backend()
+      .buffer()
+      .content()
+      .iter()
+      .map(|cell| cell.symbol())
+      .collect();
+    let pick = app
+      .strings()
+      .popups
+      .soloist_pair_pick(&app.user_config.behavior.streaming_device_name);
+    assert!(content.contains(&pick), "{content}");
+
+    crate::tui::handlers::handle_app(Key::Esc, &mut app);
+    assert_eq!(app.soloist_pairing_device(), None);
+  }
+}
+
 pub fn draw_community_pin_prompt(f: &mut Frame<'_>, app: &App) {
   let width = std::cmp::min(f.area().width.saturating_sub(4), 66);
   let height = 14;

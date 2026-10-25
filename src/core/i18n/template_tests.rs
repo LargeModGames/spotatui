@@ -377,6 +377,11 @@ fn every_typed_message_fills_its_placeholders_and_preserves_all_arguments() {
       ["SENTINEL_NAME_中"]
     );
     check!(
+      "popups.soloist_pair_pick",
+      strings.popups.soloist_pair_pick("SENTINEL_NAME_中"),
+      ["SENTINEL_NAME_中"]
+    );
+    check!(
       "popups.added_tracks_title",
       strings.popups.added_tracks_title(9101),
       ["9101"]

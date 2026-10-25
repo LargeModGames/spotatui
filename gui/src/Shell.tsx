@@ -54,6 +54,7 @@ import { Room } from "./Room";
 import { Search } from "./Search";
 import { Session } from "./Session";
 import { Settings } from "./Settings";
+import { SoloistPairingDialog } from "./SoloistPairingDialog";
 import { Stats } from "./Stats";
 import { Toast } from "./Toast";
 import { TopBar } from "./TopBar";
@@ -717,6 +718,10 @@ export function Shell({
       <AnnouncementDialog
         s={s}
         active={channels.announcement?.payload.active ?? null}
+        send={send}
+      />
+      <SoloistPairingDialog
+        guide={channels.status?.payload.soloist_pairing ?? null}
         send={send}
       />
     </TrackActionsContext.Provider>

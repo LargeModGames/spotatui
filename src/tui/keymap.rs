@@ -832,6 +832,7 @@ pub fn default_binding(action: &Action) -> Exposure<TuiSurface> {
     Action::AnswerCommunityPinPrompt { keep: true } => literal(ENTER, "Community pin prompt"),
     Action::OpenRecap => literal(ENTER, "Recap prompt"),
     Action::DismissRecapPrompt => literal(ESC, "Recap prompt"),
+    Action::DismissSoloistPairing => literal(ESC, "Soloist pairing guide"),
     Action::DisableRecapPrompt => literal("d", "Recap prompt"),
     Action::DismissAnnouncement { .. } => literal(ENTER, "Announcement prompt"),
     Action::OpenAnnouncementUrl { .. } => {
@@ -1447,6 +1448,7 @@ mod tests {
       Action::AnswerCommunityPinPrompt { keep: false },
       Action::OpenRecap,
       Action::DismissRecapPrompt,
+      Action::DismissSoloistPairing,
       Action::DisableRecapPrompt,
       Action::DismissAnnouncement { id: text() },
       Action::OpenAnnouncementUrl { id: text() },

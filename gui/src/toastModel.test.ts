@@ -5,7 +5,12 @@ import { toastView } from "./toastModel";
 const status = (
   api_error: string | null,
   message: string | null = null,
-): StatusPayload => ({ api_error, message, is_error: message !== null });
+): StatusPayload => ({
+  api_error,
+  message,
+  is_error: message !== null,
+  soloist_pairing: null,
+});
 
 describe("toastView", () => {
   it("keeps a dismissed error hidden through the handoff, then shows it again", () => {

@@ -26,6 +26,7 @@ impl App {
   /// The engine gave up: starts stop waiting, and a parked one goes out now.
   pub(crate) fn soloist_failed(&mut self) {
     self.native_backend_pending = false;
+    self.set_soloist_pairing(false);
     self.replay_pending_start_playback();
   }
 
@@ -63,6 +64,11 @@ impl App {
     }
     link.apply(event);
     let snapshot = link.snapshot();
+    if snapshot.logged_in && self.soloist_pairing {
+      self.set_soloist_pairing(false);
+      let paired = self.strings().status.infra.soloist_paired;
+      self.set_status_message(paired, 6);
+    }
     match event {
       Event::Track { .. } | Event::Context(_) | Event::Device { .. } => self.poll_playback_soon(),
       Event::Volume(volume) if snapshot.volume == Some(*volume) => {
@@ -277,7 +283,10 @@ impl App {
         let path = path.display().to_string();
         self.set_error_status_message(strings.soloist_key_missing(&path), 20);
       }
-      Notice::NotPaired => self.set_status_message(strings.soloist_not_paired, 12),
+      Notice::NotPaired => {
+        self.set_status_message(strings.soloist_not_paired, 12);
+        self.set_soloist_pairing(true);
+      }
       Notice::Offline => self.set_status_message(strings.soloist_offline, 8),
       Notice::BadKey => self.set_error_status_message(strings.soloist_bad_key, 15),
       Notice::Expired => self.set_error_status_message(strings.soloist_expired, 20),
@@ -484,6 +493,29 @@ mod tests {
     assert_eq!(
       app.setting_button_label("behavior.soloist_api_key"),
       Some(("Get a key", false))
+    );
+  }
+
+  #[test]
+  fn the_pairing_guide_shows_until_soloist_logs_in() {
+    let mut app = make_app_simple();
+    let (link, _rx) = SoloistLink::test_pair("soloist-device");
+    app.install_soloist_link(link.clone());
+    app.soloist_notice(crate::infra::soloist::Notice::NotPaired);
+    let device = app.user_config.behavior.streaming_device_name.clone();
+    assert_eq!(app.soloist_pairing_device(), Some(device.as_str()));
+
+    let auth = |logged_in| Event::Auth {
+      logged_in,
+      is_active: false,
+    };
+    app.apply_soloist_event(&link, &auth(false));
+    assert!(app.soloist_pairing_device().is_some());
+    app.apply_soloist_event(&link, &auth(true));
+    assert_eq!(app.soloist_pairing_device(), None);
+    assert_eq!(
+      app.status_message(),
+      Some(app.strings().status.infra.soloist_paired)
     );
   }
 

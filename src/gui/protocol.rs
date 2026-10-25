@@ -339,6 +339,17 @@ pub(crate) struct StatusPayload {
   message: Option<String>,
   is_error: bool,
   api_error: Option<String>,
+  /// The Soloist pairing guide to show in a modal.
+  soloist_pairing: Option<SoloistPairingGuide>,
+}
+
+#[derive(Serialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
+pub(crate) struct SoloistPairingGuide {
+  title: &'static str,
+  steps: Vec<String>,
+  waiting: &'static str,
+  close: &'static str,
 }
 
 #[derive(Serialize)]
@@ -861,6 +872,18 @@ fn channel_message(
         api_error: Some(app.api_error())
           .filter(|error| !error.is_empty())
           .map(str::to_string),
+        soloist_pairing: app.soloist_pairing_device().map(|device| {
+          let strings = &app.strings().popups;
+          SoloistPairingGuide {
+            title: strings.soloist_pair_title,
+            steps: vec![
+              strings.soloist_pair_open.to_string(),
+              strings.soloist_pair_pick(device),
+            ],
+            waiting: strings.soloist_pair_waiting,
+            close: strings.soloist_pair_close,
+          }
+        }),
       },
     },
     DisplayDomain::Theme => ServerMessage::Theme {
@@ -1665,6 +1688,23 @@ mod tests {
   fn app() -> (App, Receiver<IoEvent>) {
     let (tx, rx) = std::sync::mpsc::channel();
     (App::new(tx, UserConfig::new(), Some(SystemTime::now())), rx)
+  }
+
+  #[cfg(feature = "soloist")]
+  #[test]
+  fn the_status_channel_carries_the_soloist_pairing_guide_until_the_page_closes_it() {
+    let (mut app, _rx) = app();
+    let before = app.display_revisions();
+    app.soloist_notice(crate::infra::soloist::Notice::NotPaired);
+    let status = pushed(&diff(&before, &app, Language::En), "status");
+    let pick = app
+      .strings()
+      .popups
+      .soloist_pair_pick(&app.user_config.behavior.streaming_device_name);
+    assert_eq!(status["payload"]["soloist_pairing"]["steps"][1], pick);
+
+    let closed = apply_from_page(&mut app, &action_frame(Action::DismissSoloistPairing));
+    assert!(pushed(&closed, "status")["payload"]["soloist_pairing"].is_null());
   }
 
   fn apply_from_page(app: &mut App, text: &str) -> Vec<ServerMessage> {

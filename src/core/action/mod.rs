@@ -357,6 +357,8 @@ pub enum Action {
   AnswerCommunityPinPrompt {
     keep: bool,
   },
+  /// Close the Soloist pairing guide; pairing in Spotify still works after.
+  DismissSoloistPairing,
   /// Open the monthly recap in the browser and close its popup.
   OpenRecap,
   /// Close the recap popup without opening the recap.

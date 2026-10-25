@@ -571,6 +571,8 @@ pub struct App {
   /// A Soloist download from Spotify runs.
   #[cfg(feature = "soloist")]
   soloist_downloading: bool,
+  /// The Soloist pairing guide shows: Soloist waits for its first login.
+  soloist_pairing: bool,
   /// Player-global repeat mode for the decoded (non-Spotify) sources
   /// (Local / Subsonic / YouTube). Decoded sources have no Spotify
   /// `current_playback_context`, so their repeat lives here instead of in

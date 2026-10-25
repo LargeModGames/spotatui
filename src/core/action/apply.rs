@@ -285,6 +285,7 @@ impl App {
       Action::PressSettingButton { id } => self.press_setting_button(&id),
       Action::CycleVisualizerStyle => self.cycle_visualizer_style(),
       Action::AnswerCommunityPinPrompt { keep } => self.answer_community_pin_prompt(keep),
+      Action::DismissSoloistPairing => self.dismiss_soloist_pairing(),
       Action::OpenRecap => self.open_recap(),
       Action::DismissRecapPrompt => self.dismiss_recap_prompt(),
       Action::DisableRecapPrompt => self.disable_recap_prompt(),

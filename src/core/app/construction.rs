@@ -198,6 +198,7 @@ impl Default for App {
       soloist_link: None,
       #[cfg(feature = "soloist")]
       soloist_downloading: false,
+      soloist_pairing: false,
       decoded_repeat: RepeatMode::Off,
       decoded_shuffle: false,
       #[cfg(feature = "local-files")]

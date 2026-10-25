@@ -12,6 +12,7 @@ describe("Toast", () => {
       message: "Added to queue",
       is_error: false,
       api_error: "Spotify refused the request",
+      soloist_pairing: null,
     });
     expect(html).toContain(
       '<div class="sr-only" role="alert">Spotify refused the request</div>',
@@ -22,7 +23,12 @@ describe("Toast", () => {
 
   it("marks an error status message and keeps empty live regions without one", () => {
     expect(
-      toast({ message: "No device", is_error: true, api_error: null }),
+      toast({
+        message: "No device",
+        is_error: true,
+        api_error: null,
+        soloist_pairing: null,
+      }),
     ).toContain('<div class="toast error"><span>No device</span>');
     const empty = toast(null);
     expect(empty).toContain('role="status"></div>');

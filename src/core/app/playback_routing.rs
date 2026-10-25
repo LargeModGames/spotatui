@@ -382,6 +382,24 @@ impl App {
     }
   }
 
+  /// The device name to pick in Spotify while the Soloist pairing guide shows.
+  pub fn soloist_pairing_device(&self) -> Option<&str> {
+    self
+      .soloist_pairing
+      .then_some(self.user_config.behavior.streaming_device_name.as_str())
+  }
+
+  pub(crate) fn dismiss_soloist_pairing(&mut self) {
+    self.set_soloist_pairing(false);
+  }
+
+  pub(super) fn set_soloist_pairing(&mut self, shown: bool) {
+    if self.soloist_pairing != shown {
+      self.soloist_pairing = shown;
+      self.display_revisions.bump(DisplayDomain::Status);
+    }
+  }
+
   /// Whether a Spotify command goes to Soloist: its device is the active one,
   /// or no device is and Soloist is logged in.
   pub fn soloist_is_target(&self) -> bool {

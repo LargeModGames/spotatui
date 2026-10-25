@@ -177,11 +177,39 @@ test("status error", async ({ page }) => {
         message: null,
         is_error: false,
         api_error: "Spotify refused the request: 403 Forbidden",
+        soloist_pairing: null,
       },
     },
   ]);
   await page.getByRole("alert").waitFor();
   await shot(page, "status-error");
+});
+
+test("soloist pairing", async ({ page }) => {
+  await openWith(page, [
+    ...playing,
+    ...library,
+    {
+      kind: "status",
+      rev: 1,
+      payload: {
+        message: null,
+        is_error: false,
+        api_error: null,
+        soloist_pairing: {
+          title: "Pair spotatui with Spotify",
+          steps: [
+            "1. Open Spotify on a computer on this network.",
+            "2. In its device menu, pick 'spotatui'.",
+          ],
+          waiting: "Waiting for Spotify…",
+          close: "Close",
+        },
+      },
+    },
+  ]);
+  await page.getByRole("dialog").waitFor();
+  await shot(page, "soloist-pairing");
 });
 
 test("queue panel", async ({ page }) => {
