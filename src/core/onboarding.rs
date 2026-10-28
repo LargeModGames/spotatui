@@ -40,6 +40,11 @@ pub enum OnboardingAnswer {
   No,
 }
 
+/// The console text of an [`OnboardingPrompt::Confirm`]: the banner, the body, and the question with its `(Y/n)` hint.
+pub(crate) fn confirm_console_text(title: &str, body: &str, question: &str) -> String {
+  format!("\n{BANNER_RULE}\n{title}\n{BANNER_RULE}\n\n{body}\n\n{question} (Y/n): ")
+}
+
 /// Parse one raw console line for [`OnboardingPrompt::Confirm`]: empty input,
 /// `y`, or `yes` (case-insensitive) means yes; anything else means no.
 pub(crate) fn confirm_answer(raw: &str) -> OnboardingAnswer {
@@ -105,6 +110,15 @@ pub trait Onboarding: Send + Sync {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn the_console_confirm_keeps_the_banner_layout_and_adds_the_yes_no_hint() {
+    let text = confirm_console_text("Title", "Body.", "Join?");
+    assert_eq!(
+      text,
+      format!("\n{BANNER_RULE}\nTitle\n{BANNER_RULE}\n\nBody.\n\nJoin? (Y/n): ")
+    );
+  }
 
   #[test]
   fn confirm_answer_treats_empty_y_and_yes_as_yes() {

@@ -829,7 +829,7 @@ mod tests {
   }
 
   #[test]
-  fn first_run_prompts_carry_the_historical_banner_text() {
+  fn first_run_prompts_carry_frontend_neutral_text() {
     let OnboardingPrompt::Confirm {
       title,
       body,
@@ -838,9 +838,9 @@ mod tests {
     assert_eq!(title, "Global Song Counter");
     assert_eq!(
       body,
-      "\nspotatui can contribute to a global counter showing total\nsongs played by all users worldwide.\n\nPrivacy: This feature is completely anonymous.\n• No personal information is collected\n• No song names, artists, or listening history\n• Only a simple increment once a song has played for 30 seconds"
+      "spotatui can contribute to a global counter showing total songs played by all users worldwide.\n\nPrivacy: This feature is completely anonymous.\n• No personal information is collected\n• No song names, artists, or listening history\n• Only a simple increment once a song has played for 30 seconds"
     );
-    assert_eq!(question, "\nWould you like to participate? (Y/n): ");
+    assert_eq!(question, "Would you like to participate?");
   }
 
   #[test]
@@ -863,7 +863,7 @@ mod tests {
     assert!(persisted.contains("volume_percent: 42"));
     assert!(persisted.contains("'#000000'"));
     assert!(onboarding.saw("Global Song Counter"));
-    assert!(onboarding.saw("\nWould you like to participate? (Y/n): "));
+    assert!(onboarding.saw("Would you like to participate?"));
     assert!(onboarding.saw("Thank you for participating!\n"));
   }
 
@@ -895,7 +895,7 @@ mod tests {
     assert!(!user_config.behavior.enable_global_song_count);
     let persisted = std::fs::read_to_string(&config_path).unwrap();
     assert!(persisted.contains("enable_global_song_count: false"));
-    assert!(!onboarding.saw("\nWould you like to participate? (Y/n): "));
+    assert!(!onboarding.saw("Would you like to participate?"));
     assert!(!onboarding.saw("Opted out. You can change this anytime in Settings -> Behavior.\n"));
     assert!(!onboarding.saw("Thank you for participating!\n"));
   }

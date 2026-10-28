@@ -71,26 +71,29 @@ function Question({
       );
     case "Confirm":
       return (
-        <div>
+        <div className="onboarding-question">
           <h2>{ask.title}</h2>
-          <pre>{ask.body}</pre>
+          <p>{ask.body}</p>
           <p>{ask.question}</p>
-          <button
-            disabled={!connected}
-            onClick={() =>
-              onReply({ seq, answer: { kind: "Confirm", yes: true } })
-            }
-          >
-            {s.yes}
-          </button>
-          <button
-            disabled={!connected}
-            onClick={() =>
-              onReply({ seq, answer: { kind: "Confirm", yes: false } })
-            }
-          >
-            {s.no}
-          </button>
+          <div className="onboarding-actions">
+            <button
+              className="onboarding-primary"
+              disabled={!connected}
+              onClick={() =>
+                onReply({ seq, answer: { kind: "Confirm", yes: true } })
+              }
+            >
+              {s.yes}
+            </button>
+            <button
+              disabled={!connected}
+              onClick={() =>
+                onReply({ seq, answer: { kind: "Confirm", yes: false } })
+              }
+            >
+              {s.no}
+            </button>
+          </div>
         </div>
       );
     case "PickSources":

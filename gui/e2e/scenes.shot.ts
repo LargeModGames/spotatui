@@ -14,6 +14,7 @@ import {
   libraryFolders,
   libraryUnavailable,
   onboarding,
+  onboardingConfirm,
   playing,
   podcast,
   podcastSearch,
@@ -58,6 +59,12 @@ test("onboarding", async ({ page }) => {
   await openWith(page, [hello, onboarding]);
   await page.getByText("Choose your music sources").waitFor();
   await shot(page, "onboarding");
+});
+
+test("onboarding question", async ({ page }) => {
+  await openWith(page, [hello, onboardingConfirm]);
+  await page.getByText("Would you like to participate?").waitFor();
+  await shot(page, "onboarding-question");
 });
 
 test("playing", async ({ page }) => {

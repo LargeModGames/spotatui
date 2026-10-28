@@ -391,6 +391,29 @@ button:disabled {
   white-space: pre-wrap;
 }
 
+.onboarding-question {
+  max-width: 560px;
+}
+
+.onboarding-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.onboarding-actions button {
+  height: 40px;
+  padding: 0 20px;
+  border: none;
+  border-radius: 20px;
+  font-weight: 700;
+  background: var(--hover);
+}
+
+.onboarding-actions .onboarding-primary {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
