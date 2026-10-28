@@ -247,6 +247,10 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   // "+ Add Playlist" is the leading row (row 0), above the display items.
   let mut display_list = vec![strings.add_playlist.to_string()];
   display_list.extend(playlist_items);
+  // Past the selectable rows, so the cursor and clicks never reach it.
+  if !app.spotify_connected {
+    display_list.push(strings.empty_spotify(&app.user_config.keys.manage_devices.to_string()));
+  }
 
   draw_selectable_list(
     f,
@@ -437,6 +441,26 @@ mod tests {
       !content.contains("Liked Songs"),
       "Spotify rows need a session: {content}"
     );
+  }
+
+  #[test]
+  fn spotify_scope_without_a_session_shows_the_login_hint_with_the_configured_key() {
+    let mut app = App::default();
+    app.user_config.keys.manage_devices = Key::Char('D');
+    app.view.selected_playlist_index = Some(0);
+    // The default sidebar on a 120-column terminal, with the cursor gutter.
+    let content = rendered(&app, Rect::new(0, 0, 24, 40));
+    assert!(
+      content.contains("(`D`: log in"),
+      "the hint names the rebound key: {content}"
+    );
+  }
+
+  #[test]
+  fn spotify_scope_with_a_session_shows_no_login_hint() {
+    let app = App::default_connected();
+    let content = rendered(&app, Rect::new(0, 0, 60, 40));
+    assert!(!content.contains("log in to Spotify"), "{content}");
   }
 
   #[test]

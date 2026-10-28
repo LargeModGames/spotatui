@@ -22,6 +22,7 @@ pub struct SidebarStrings {
   pub empty_apple_music_template: &'static str,
   pub empty_subsonic_template: &'static str,
   pub empty_qobuz_template: &'static str,
+  pub empty_spotify_template: &'static str,
   pub empty_radio: &'static str,
   pub radio_stations: &'static str,
   pub new_playlist: &'static str,
@@ -57,6 +58,7 @@ pub const EN: SidebarStrings = SidebarStrings {
   empty_apple_music_template: "(press `{key}`, pick Apple Music to load your library)",
   empty_subsonic_template: "(no playlists — configure server, then press `{key}`)",
   empty_qobuz_template: "(not logged in — press `{key}`, pick Qobuz)",
+  empty_spotify_template: "(`{key}`: log in to Spotify)",
   empty_radio: "(no saved stations — search to add)",
   radio_stations: "Radio Stations",
   new_playlist: "+ New Playlist",
@@ -91,6 +93,7 @@ pub const ZH_HANS: SidebarStrings = SidebarStrings {
   empty_apple_music_template: "（按 `{key}` 选择 Apple Music 以载入音乐库）",
   empty_subsonic_template: "（无播放列表：配置服务器后按 `{key}`）",
   empty_qobuz_template: "（未登录：按 `{key}` 选择 Qobuz）",
+  empty_spotify_template: "（未登录：按 `{key}` 选择 Spotify）",
   empty_radio: "（无收藏的电台：搜索后添加）",
   radio_stations: "电台",
   new_playlist: "+ 新建播放列表",
@@ -120,6 +123,7 @@ pub const ZH_HANT: SidebarStrings = SidebarStrings {
   empty_apple_music_template: "（按 `{key}` 選擇 Apple Music 以載入音樂庫）",
   empty_subsonic_template: "（無播放清單：設定伺服器後按 `{key}`）",
   empty_qobuz_template: "（尚未登入：按 `{key}` 選擇 Qobuz）",
+  empty_spotify_template: "（尚未登入：按 `{key}` 選擇 Spotify）",
   empty_radio: "（無收藏的電台：搜尋後加入）",
   radio_stations: "電台",
   new_playlist: "+ 新增播放清單",
@@ -183,5 +187,9 @@ impl SidebarStrings {
 
   pub fn empty_qobuz(&self, key: &str) -> String {
     format_template(self.empty_qobuz_template, &[("key", key)])
+  }
+
+  pub fn empty_spotify(&self, key: &str) -> String {
+    format_template(self.empty_spotify_template, &[("key", key)])
   }
 }

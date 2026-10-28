@@ -804,6 +804,11 @@ fn every_typed_message_fills_its_placeholders_and_preserves_all_arguments() {
       ["SENTINEL_KEY_中"]
     );
     check!(
+      "sidebar.empty_spotify",
+      strings.sidebar.empty_spotify("SENTINEL_KEY_中"),
+      ["SENTINEL_KEY_中"]
+    );
+    check!(
       "status_app.audio_backend_failed",
       strings.status.app.audio_backend_failed("SENTINEL_ERROR_中"),
       ["SENTINEL_ERROR_中"]
