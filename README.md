@@ -251,6 +251,7 @@ Everyone who helped, with code or without. To get on this list, see [Recognition
     <tr>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/zaydmulani09"><img src="https://avatars.githubusercontent.com/u/257340907?v=4?s=100" width="100px;" alt="zayd"/><br /><sub><b>zayd</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=zaydmulani09" title="Code">💻</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/BartholomewJr"><img src="https://avatars.githubusercontent.com/u/348017353?v=4?s=100" width="100px;" alt="BartholomewJr"/><br /><sub><b>BartholomewJr</b></sub></a><br /><a href="#financial-BartholomewJr" title="Financial">💵</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://my-portafolio-plum.vercel.app/"><img src="https://avatars.githubusercontent.com/u/83091452?v=4?s=100" width="100px;" alt="Yiuseppe24"/><br /><sub><b>Yiuseppe24</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=JosephAnderson234" title="Code">💻</a></td>
     </tr>
   </tbody>
 </table>
