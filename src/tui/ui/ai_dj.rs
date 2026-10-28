@@ -691,7 +691,6 @@ fn draw_prompt(f: &mut Frame, app: &App, area: Rect) {
     return;
   }
 
-  let typed: String = app.dj.input.iter().collect();
   // Keep the caret in view on a prompt longer than the box, the same way the
   // search input does.
   let cursor = app.dj.input_cursor as usize;
@@ -701,25 +700,32 @@ fn draw_prompt(f: &mut Frame, app: &App, area: Rect) {
   // put `scroll` past the end of a twenty-character string, so the prompt went
   // blank while the listener kept typing.
   let mut dropped = 0usize;
-  let visible: String = typed
-    .chars()
-    .skip_while(|c| {
+  let skipped = app
+    .dj
+    .input
+    .iter()
+    .take_while(|c| {
       if dropped >= scroll {
         return false;
       }
       dropped += c.width().unwrap_or(0);
       true
     })
-    .collect();
+    .count();
+  // Split at the caret rather than painting it after the whole prompt: with Left,
+  // Home or a mid-prompt Backspace the caret has to sit where the next character
+  // will land, not at the end of the text.
+  let idx = app.dj.input_idx.clamp(skipped, app.dj.input.len());
+  let before: String = app.dj.input[skipped..idx].iter().collect();
+  let after: String = app.dj.input[idx..].iter().collect();
 
-  let mut spans = vec![Span::styled(
-    visible,
-    Style::default().fg(theme.text.into()),
-  )];
+  let text_style = Style::default().fg(theme.text.into());
+  let mut spans = vec![Span::styled(before, text_style)];
   if focused {
     // A painted caret: the hardware cursor is owned by the search box.
     spans.push(Span::styled("▏", Style::default().fg(theme.active.into())));
   }
+  spans.push(Span::styled(after, text_style));
   f.render_widget(Paragraph::new(Line::from(spans)), inner);
 }
 
@@ -1252,6 +1258,18 @@ mod tests {
     assert!(rendered.contains("mellow"), "{rendered}");
     // The caret is drawn, not delegated to the terminal cursor.
     assert!(rendered.contains('▏'), "{rendered}");
+  }
+
+  #[test]
+  fn the_caret_follows_the_cursor_inside_the_prompt() {
+    // Editing earlier text: Left twice from the end of "mellow" puts the caret
+    // between "mell" and "ow", not after the whole prompt.
+    let mut app = app_with(vec![], 40, 12);
+    app.dj.input = "mellow".chars().collect();
+    app.dj.input_idx = 4;
+    app.dj.input_cursor = 4;
+    let rendered = render(&app, 40, 12).join("\n");
+    assert!(rendered.contains("mell▏ow"), "{rendered}");
   }
 
   #[test]
