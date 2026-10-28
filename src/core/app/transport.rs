@@ -90,6 +90,10 @@ impl App {
     // the stale pre-router value and dispatching the same action twice.
     if self.queue_now_is_spotify() {
       let is_playing = self.native_is_playing.unwrap_or(false);
+      #[cfg(feature = "streaming")]
+      if !is_playing && self.refuse_resume_after_unavailable_halt() {
+        return;
+      }
       self.native_is_playing = Some(!is_playing);
       if is_playing {
         self.dispatch(IoEvent::PausePlayback);

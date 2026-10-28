@@ -29,14 +29,17 @@ impl KeepAwake {
     if on == self.requested {
       return;
     }
-    self.requested = on;
-    if self.tx.as_ref().is_some_and(|tx| tx.send(on).is_ok()) {
-      return;
+    let sent = self.tx.as_ref().is_some_and(|tx| tx.send(on).is_ok()) || {
+      // No worker yet, or a failed release panicked and ended it.
+      let tx = spawn_worker(create);
+      let sent = tx.send(on).is_ok();
+      self.tx = Some(tx);
+      sent
+    };
+    // A worker that could not start takes the next request again.
+    if sent {
+      self.requested = on;
     }
-    // No worker yet, or a failed release panicked and ended it.
-    let tx = spawn_worker(create);
-    let _ = tx.send(on);
-    self.tx = Some(tx);
   }
 }
 

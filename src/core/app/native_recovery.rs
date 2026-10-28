@@ -229,6 +229,9 @@ impl App {
   pub(crate) fn halt_native_after_unavailable(&mut self) {
     self.native_unavailable_halt = true;
     self.native_is_playing = Some(false);
+    // A backend rebuild or a queue-slot replay must not start the halted playback again.
+    self.set_native_playback_intent(false);
+    self.queue_slot_desired_playing = false;
   }
 
   #[cfg(feature = "streaming")]
@@ -580,6 +583,27 @@ mod tests {
 
     app.clear_native_unavailable_halt();
     assert!(!app.refuse_resume_after_unavailable_halt());
+  }
+
+  #[test]
+  fn the_unavailable_halt_disarms_the_play_intent_a_rebuild_would_restore() {
+    let mut app = App::default();
+    app.record_native_playback_request(
+      None,
+      Some(vec!["spotify:track:a".to_string()]),
+      Some(0),
+      true,
+      false,
+      RepeatState::Off,
+    );
+
+    app.halt_native_after_unavailable();
+
+    assert!(app
+      .native_playback_recovery
+      .as_ref()
+      .is_some_and(|snapshot| !snapshot.desired_playing));
+    assert!(!app.queue_slot_desired_playing);
   }
 
   #[cfg(feature = "streaming")]

@@ -1467,10 +1467,6 @@ async fn handle_macos_media_events(
       continue;
     }
 
-    if route_remote_spotify_macos_event(&event, &mut *app.lock().await, &shared_is_playing) {
-      continue;
-    }
-
     let play_key = match &event {
       MacMediaEvent::PlayPause => Some(None),
       MacMediaEvent::Play => Some(Some(true)),
@@ -1481,6 +1477,10 @@ async fn handle_macos_media_events(
       if app.lock().await.relay_party_play_key(play) {
         continue;
       }
+    }
+
+    if route_remote_spotify_macos_event(&event, &mut *app.lock().await, &shared_is_playing) {
+      continue;
     }
 
     let Some(player) = player::active_streaming_player(&app).await else {

@@ -71,9 +71,6 @@ export class PartyRoom extends DurableObject {
     server.accept();
 
     const sessionId = crypto.randomUUID();
-    if (isHost) {
-      this.roomControlMode = controlMode;
-    }
 
     const clientIp = request.headers.get("CF-Connecting-IP") ?? "unknown";
     const session: Session = {
@@ -117,6 +114,8 @@ export class PartyRoom extends DurableObject {
     if (isHost) {
       ipEntry.hostCount++;
       this.hostWs = server;
+      // Only the admitted host sets the mode; a rejected one must not change it.
+      this.roomControlMode = controlMode === "shared_control" ? "shared_control" : "host_only";
       this.scheduleInactivityAlarm();
     } else {
       ipEntry.guestCount++;
@@ -134,7 +133,7 @@ export class PartyRoom extends DurableObject {
       this.sendJson(server, {
         type: "room_created",
         code: roomCode,
-        control_mode: controlMode,
+        control_mode: this.roomControlMode,
       });
     } else {
       this.sendJson(server, {
