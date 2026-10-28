@@ -175,7 +175,7 @@ sudo dnf install pipewire
 
 ### macOS
 
-spotatui uses the `portaudio` backend for better stability and bluetooth device support (AirPods, etc.):
+spotatui uses the `portaudio` backend for better stability and bluetooth device support (AirPods, etc.). The prebuilt binaries link it statically, so you only need it to build from source:
 
 ```bash
 brew install portaudio

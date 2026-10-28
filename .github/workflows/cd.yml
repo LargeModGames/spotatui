@@ -75,9 +75,12 @@ jobs:
         if: runner.os == 'Linux'
         run: cargo install cargo-deb --locked
 
+      # Static portaudio, so the install.sh binary runs without Homebrew (checked below).
       - name: Install macOS dependencies
         if: runner.os == 'macOS'
-        run: brew install openssl@3 portaudio
+        run: |
+          brew install openssl@3 portaudio
+          echo "PKG_CONFIG_ALL_STATIC=1" >> "$GITHUB_ENV"
 
       - name: Build release binary
         run: |
@@ -87,6 +90,17 @@ jobs:
             cargo build --release --target ${{ matrix.target }} --no-default-features --features telemetry,tui,streaming,discord-rpc,cover-art,self-update,scripting,mcp-server,ai-dj,${{ matrix.audio_features }}
           fi
         shell: bash
+
+      - name: Check the macOS binary links only system libraries
+        if: runner.os == 'macOS'
+        run: |
+          bin=target/${{ matrix.target }}/release/${{ env.BINARY_NAME }}
+          otool -L "$bin"
+          foreign=$(otool -L "$bin" | tail -n +2 | awk '{print $1}' | grep -v -e '^/System/' -e '^/usr/lib/' || true)
+          if [ -n "$foreign" ]; then
+            echo "::error::$bin links libraries outside /System and /usr/lib: $foreign"
+            exit 1
+          fi
 
       - name: Package binary (Unix)
         if: runner.os != 'Windows'
