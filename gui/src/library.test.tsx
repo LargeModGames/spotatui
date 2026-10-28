@@ -71,6 +71,7 @@ const playlists: SourcePlaylists = {
   saved_albums: [],
   saved_albums_has_more: false,
   followed_artists: [],
+  followed_artists_has_more: false,
   saved_shows: [],
   saved_shows_has_more: false,
   saved_show_ids: [],

@@ -52,6 +52,7 @@ const payload: SourcePlaylists = {
   saved_albums: [],
   saved_albums_has_more: false,
   followed_artists: [],
+  followed_artists_has_more: false,
   saved_shows: [
     {
       id: "show1",

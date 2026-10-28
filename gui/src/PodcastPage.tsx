@@ -104,6 +104,11 @@ export const PodcastPage = memo(function PodcastPage({
   useEffect(() => {
     pager.land(id, episodes.length);
   }, [pager, id, episodes.length]);
+  // A failed page pushes only an error status: the next move or scroll asks again.
+  const errorRev = statusError ? statusRev : null;
+  useEffect(() => {
+    if (errorRev !== null) pager.retry();
+  }, [pager, errorRev]);
   const loadMore = useCallback(() => {
     if (active && page && pager.ask(page)) send({ LoadMore: "ShowEpisodes" });
   }, [active, page, pager, send]);

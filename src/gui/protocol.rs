@@ -437,6 +437,8 @@ pub(crate) struct SourcePlaylists {
   saved_albums_has_more: bool,
   /// Spotify's followed artists cached so far; `OpenLibrary(Artists)` fetches them.
   followed_artists: Vec<ArtistInfo>,
+  /// `LoadMore(SavedArtists)` fetches the next page.
+  followed_artists_has_more: bool,
   /// Spotify's saved podcast shows cached so far; `OpenLibrary(Podcasts)` fetches them.
   saved_shows: Vec<ShowInfo>,
   /// `LoadMore(SavedShows)` fetches the next page.
@@ -1452,6 +1454,7 @@ fn playlists(app: &App) -> SourcePlaylists {
       .iter()
       .flat_map(|page| page.items.iter().cloned())
       .collect(),
+    followed_artists_has_more: app.current_saved_artists_has_more(),
     saved_shows: saved_shows(app),
     saved_shows_has_more: last_page_has_next(&app.library().saved_shows.pages),
     saved_show_ids: app.saved_show_ids_set().iter().cloned().collect(),
@@ -2288,6 +2291,26 @@ mod tests {
 
     let library = &pushed(&diff(&before, &app, Language::En), "library")["payload"];
     assert_eq!(library["followed_artists"][0]["name"], "Avicii");
+    assert_eq!(library["followed_artists_has_more"], false);
+  }
+
+  #[test]
+  fn the_library_payload_says_when_more_followed_artists_remain() {
+    let (mut app, _rx) = app();
+    let before = app.display_revisions();
+
+    app
+      .library_mut()
+      .saved_artists
+      .add_pages(crate::core::pagination::CursorPaged {
+        items: vec![ArtistInfo::default()],
+        next: Some("next".to_string()),
+        cursor_after: Some("a2".to_string()),
+        ..Default::default()
+      });
+
+    let library = &pushed(&diff(&before, &app, Language::En), "library")["payload"];
+    assert_eq!(library["followed_artists_has_more"], true);
   }
 
   #[test]

@@ -524,6 +524,8 @@ pub enum ListTarget {
   SavedAlbums,
   /// The saved-podcasts list (page-flipped, not continuous).
   SavedShows,
+  /// The followed-artists list (cursor-paged, continuous).
+  SavedArtists,
   /// The open show's episode list; the show is resolved at apply time.
   ShowEpisodes,
 }

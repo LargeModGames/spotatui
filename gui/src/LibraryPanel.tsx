@@ -13,7 +13,6 @@ import {
 import { createPortal } from "react-dom";
 import type { Action } from "./bindings/Action";
 import type { ArtistInfo } from "./bindings/ArtistInfo";
-import type { ListTarget } from "./bindings/ListTarget";
 import type { PlaylistSyncPayload } from "./bindings/PlaylistSyncPayload";
 import type { ShowInfo } from "./bindings/ShowInfo";
 import type { Source } from "./bindings/Source";
@@ -44,6 +43,7 @@ import {
   sortAlbums,
   sortArtists,
   sortChoice,
+  libraryPager,
   wantsNextPage,
   type PlaylistRemoval,
   type PlaylistRemovalTarget,
@@ -81,6 +81,7 @@ export const LibraryPanel = memo(function LibraryPanel({
   albumSort,
   artistSort,
   loggedOut = false,
+  errorRev = null,
 }: {
   s?: GuiStrings;
   playlists: SourcePlaylists | null;
@@ -98,6 +99,8 @@ export const LibraryPanel = memo(function LibraryPanel({
   artistSort?: string | null;
   /** True when the server says there is no Spotify session. */
   loggedOut?: boolean;
+  /** The revision of the live error status; null without one. */
+  errorRev?: number | null;
 }) {
   const active = source?.active ?? null;
   const spotify = active === "Spotify";
@@ -135,20 +138,14 @@ export const LibraryPanel = memo(function LibraryPanel({
     : ["Playlists"];
   const compiled = source?.compiled ?? [];
 
-  const pageTarget: ListTarget | null =
-    filter === "Albums"
-      ? "SavedAlbums"
-      : filter === "Podcasts"
-        ? "SavedShows"
-        : null;
-  const pageList =
-    pageTarget === "SavedAlbums"
-      ? playlists?.saved_albums
-      : playlists?.saved_shows;
-  const pageMore =
-    (pageTarget === "SavedAlbums"
-      ? playlists?.saved_albums_has_more
-      : playlists?.saved_shows_has_more) ?? false;
+  const pager = libraryPager(filter, playlists);
+  const pageTarget = pager?.target ?? null;
+  const pageList = pager?.list;
+  const pageMore = pager?.more ?? false;
+  // A failed fetch pushes only an error status, so the next scroll may ask again.
+  useEffect(() => {
+    if (errorRev !== null) askedFor.current = null;
+  }, [errorRev]);
   const nextPage = useCallback(() => {
     const box = rowsBox.current;
     if (!pageTarget || !box) return;

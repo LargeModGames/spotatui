@@ -78,6 +78,8 @@ export interface EpisodePager {
   land(showId: string, length: number): void;
   /** Whether LoadMore should go out for this page now. */
   ask(page: PodcastPage): boolean;
+  /** Let the list on screen ask again, after a fetch that failed. */
+  retry(): void;
 }
 
 export function episodePager(): EpisodePager {
@@ -96,6 +98,9 @@ export function episodePager(): EpisodePager {
       if (!page.has_more || asked) return false;
       asked = true;
       return true;
+    },
+    retry() {
+      asked = false;
     },
   };
 }

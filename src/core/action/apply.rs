@@ -191,6 +191,7 @@ impl App {
         super::ListTarget::SavedTracks => self.get_current_user_saved_tracks_next(),
         super::ListTarget::SavedAlbums => self.get_current_user_saved_albums_next(),
         super::ListTarget::SavedShows => self.get_current_user_saved_shows_next(),
+        super::ListTarget::SavedArtists => self.get_current_user_saved_artists_next(),
         super::ListTarget::ShowEpisodes => self.get_episode_table_next(),
       },
       Action::Sort { context, field } => self.apply_sort_field(context, field),
