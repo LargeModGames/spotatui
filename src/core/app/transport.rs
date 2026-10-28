@@ -194,7 +194,7 @@ impl App {
         );
         if is_playing {
           self.pause_native_playback();
-        } else {
+        } else if !self.refuse_resume_after_unavailable_halt() {
           self.arm_native_play_intent();
           player.play();
           // Update UI state immediately

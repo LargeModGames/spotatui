@@ -1023,6 +1023,7 @@ impl StreamingPlayer {
 
   /// Stop playback
   pub fn stop(&self) {
+    self.cancel_play_after_transfer();
     let _gate = self.skip_resume.gate();
     self.skip_resume.cancel_play();
     if let Err(error) = self.route_command(DeferredPlayerCommand::Stop) {

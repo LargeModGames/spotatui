@@ -225,6 +225,28 @@ impl App {
     self.native_load_watchdog = None;
   }
 
+  #[cfg(feature = "streaming")]
+  pub(crate) fn halt_native_after_unavailable(&mut self) {
+    self.native_unavailable_halt = true;
+    self.native_is_playing = Some(false);
+  }
+
+  #[cfg(feature = "streaming")]
+  pub(crate) fn clear_native_unavailable_halt(&mut self) {
+    self.native_unavailable_halt = false;
+  }
+
+  /// A resume after the guard's stop does nothing in librespot, so say why instead.
+  #[cfg(feature = "streaming")]
+  pub(super) fn refuse_resume_after_unavailable_halt(&mut self) -> bool {
+    if !self.native_unavailable_halt {
+      return false;
+    }
+    let message = self.strings().status.infra.native_many_unavailable;
+    self.set_status_message(message, 20);
+    true
+  }
+
   /// Arm the play intent, keeping the generation of a restore that already
   /// wants play.
   #[cfg(feature = "streaming")]
@@ -542,6 +564,23 @@ impl App {
 #[cfg(all(test, feature = "streaming"))]
 mod tests {
   use super::*;
+
+  #[test]
+  fn a_resume_after_the_unavailable_halt_is_refused_until_a_track_plays() {
+    let mut app = App::default();
+    assert!(!app.refuse_resume_after_unavailable_halt());
+
+    app.halt_native_after_unavailable();
+    assert!(app.refuse_resume_after_unavailable_halt());
+    assert_eq!(app.native_is_playing, Some(false));
+    assert_eq!(
+      app.status_message(),
+      Some(crate::core::i18n::EN.status.infra.native_many_unavailable)
+    );
+
+    app.clear_native_unavailable_halt();
+    assert!(!app.refuse_resume_after_unavailable_halt());
+  }
 
   #[cfg(feature = "streaming")]
   #[test]

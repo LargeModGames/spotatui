@@ -433,6 +433,7 @@ async fn handle_player_events(
   // the next successful Playing.
   let mut consecutive_unavailable: u32 = 0;
   const UNAVAILABLE_ESCALATION_THRESHOLD: u32 = 3;
+  let mut loading_track: Option<String> = None;
 
   // The StreamingPlayer first reconnects its Session/Spirc in place, retaining
   // the Player and buffered audio. Only replace the whole backend when that
@@ -701,6 +702,7 @@ async fn handle_player_events(
         {
           let mut app_lock = app.lock().await;
           app_lock.native_is_playing = Some(true);
+          app_lock.clear_native_unavailable_halt();
           app_lock.observe_native_position(position_ms, true);
           // A real Playing event proves the session is alive: disarm the load
           // watchdog and drop any request parked for its potential recovery.
@@ -1214,6 +1216,13 @@ async fn handle_player_events(
           );
           continue;
         }
+        if !unavailable_is_for_the_loading_track(loading_track.as_deref(), &track_id.to_string()) {
+          info!(
+            "native preload unavailable for track {}; the current track keeps playing",
+            track_id
+          );
+          continue;
+        }
 
         // librespot emits Unavailable when a track can't be loaded — including
         // when Spotify rejects the audio key (`error audio key 0 1`), which makes
@@ -1246,10 +1255,12 @@ async fn handle_player_events(
         // e.g. region-locked or the audio-key block), halt playback instead of
         // letting librespot auto-skip through the entire queue at machine speed;
         // that stampede hammers Spotify and can get the account rate-limited.
+        // A pause only makes Spirc's next load a paused one; a stop cancels that
+        // load, and Spirc takes the Stopped event. A stop that reaches the
+        // player before Spirc's next load retries on the next Unavailable.
         if consecutive_unavailable >= UNAVAILABLE_ESCALATION_THRESHOLD {
-          player.pause();
-          // A pause during a load emits no Paused event.
-          app.lock().await.native_is_playing = Some(false);
+          player.stop();
+          app.lock().await.halt_native_after_unavailable();
           progress_watchdog_armed = false;
           pending_end_of_track = None;
         }
@@ -1272,6 +1283,7 @@ async fn handle_player_events(
         position_ms,
         ..
       } => {
+        loading_track = Some(track_id.to_string());
         let mut app = app.lock().await;
         app.observe_native_loading(track_id.to_string(), position_ms);
         if app.native_load_watchdog.is_some() {
@@ -1357,6 +1369,11 @@ async fn reissue_published_queue_slot(
   if let Err(e) = result {
     info!("failed to reissue queued Spotify track: {}", e);
   }
+}
+
+/// A failed preload also sends Unavailable; only a failed load names the track of the last Loading event.
+fn unavailable_is_for_the_loading_track(loading: Option<&str>, unavailable: &str) -> bool {
+  loading.is_none_or(|loading| loading == unavailable)
 }
 
 fn unavailable_is_transport_related(
@@ -1571,8 +1588,9 @@ mod tests {
   use super::{
     merge_recovery_requests, recovery_needs_native_selection, recovery_watchdog_should_escalate,
     session_disconnect_recovery, should_replay_published_queue_slot, stop_disarms_watchdog,
-    unavailable_is_transport_related, SessionDisconnectReason, SessionDisconnectRecovery,
-    StreamingConnectionState, StreamingRecoveryRequest, STALLED_PLAYBACK_RECOVERY_TIMEOUT,
+    unavailable_is_for_the_loading_track, unavailable_is_transport_related,
+    SessionDisconnectReason, SessionDisconnectRecovery, StreamingConnectionState,
+    StreamingRecoveryRequest, STALLED_PLAYBACK_RECOVERY_TIMEOUT,
   };
   use std::time::Duration;
 
@@ -1600,6 +1618,23 @@ mod tests {
   fn a_stop_at_the_end_of_the_list_disarms_the_watchdog_unless_the_session_is_lost() {
     assert!(stop_disarms_watchdog(false));
     assert!(!stop_disarms_watchdog(true));
+  }
+
+  #[test]
+  fn a_failed_preload_does_not_count_as_an_unavailable_load() {
+    let loading = Some("spotify:track:playing");
+    assert!(!unavailable_is_for_the_loading_track(
+      loading,
+      "spotify:track:queued"
+    ));
+    assert!(unavailable_is_for_the_loading_track(
+      loading,
+      "spotify:track:playing"
+    ));
+    assert!(unavailable_is_for_the_loading_track(
+      None,
+      "spotify:track:queued"
+    ));
   }
 
   #[test]

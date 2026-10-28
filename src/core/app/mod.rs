@@ -459,6 +459,9 @@ pub struct App {
   /// Another device took playback over; the idle poll must not reclaim it (#693)
   #[cfg(feature = "streaming")]
   native_handed_off: bool,
+  /// The unavailable-track guard stopped librespot; only a new load plays again
+  #[cfg(feature = "streaming")]
+  native_unavailable_halt: bool,
   /// A bare resume already tried to pull the handed-off playback back
   #[cfg(feature = "streaming")]
   native_handoff_resume_tried: bool,
