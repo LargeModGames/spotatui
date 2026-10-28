@@ -52,6 +52,8 @@ pub struct QobuzPlaybackState {
   /// The current track's file, filled while it plays; `None` until playback
   /// starts.
   pub tempfile: Option<tempfile::NamedTempFile>,
+  /// Set when `tempfile` holds the whole track; a dropped reader leaves it partial.
+  pub complete: stream::progressive::Completion,
   /// The delivered format of the current track; `None` until playback starts.
   pub quality: Option<StreamQuality>,
   /// Backup of the pre-shuffle order while shuffle is on.
@@ -79,6 +81,15 @@ impl QobuzPlaybackState {
   /// The currently playing track, if `index` is in range.
   pub fn current(&self) -> Option<&TrackInfo> {
     self.tracks.get(self.index)
+  }
+
+  /// The current track's file, only when the download filled all of it.
+  pub fn finished_file(&self) -> Option<&std::path::Path> {
+    self
+      .tempfile
+      .as_ref()
+      .filter(|_| self.complete.load(std::sync::atomic::Ordering::Acquire))
+      .map(|t| t.path())
   }
 
   /// Turn in-place shuffle on or off (see `infra::queue::toggle_shuffle`).

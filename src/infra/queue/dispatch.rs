@@ -1312,16 +1312,15 @@ async fn resume_qobuz(
     position_ms: resume_position_ms,
     paused: !playing,
   };
-  // Same track with its tempfile still on disk: replay it and seek, with no
+  // Same track with its whole file still on disk: replay it and seek, with no
   // second download. Otherwise re-download the target through play_index.
   let replay = {
     let mut guard = app.lock().await;
     match guard.qobuz_playback.as_mut() {
-      Some(s) if index == s.index && s.tempfile.is_some() => {
+      Some(s) if index == s.index && s.finished_file().is_some() => {
         s.advancing = true;
-        s.tempfile
-          .as_ref()
-          .map(|t| (Arc::clone(&s.player), t.path().to_path_buf()))
+        s.finished_file()
+          .map(|path| (Arc::clone(&s.player), path.to_path_buf()))
       }
       Some(_) => None,
       None => return,
