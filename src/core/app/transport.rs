@@ -299,14 +299,7 @@ impl App {
           player.prev();
           // Reset progress immediately for UI feedback
           self.song_progress_ms = 0;
-          // librespot can occasionally land in a paused state after a skip.
-          // Schedule a short delayed resume to avoid racing the track transition.
-          let player = std::sync::Arc::clone(player);
-          std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(300));
-            player.activate();
-            player.play();
-          });
+          player.resume_after_skip(false);
           return;
         }
       }
@@ -359,14 +352,7 @@ impl App {
         // since the position is now back at 0.
         player.prev();
         self.song_progress_ms = 0;
-        let player = std::sync::Arc::clone(player);
-        std::thread::spawn(move || {
-          std::thread::sleep(std::time::Duration::from_millis(500));
-          player.prev();
-          std::thread::sleep(std::time::Duration::from_millis(300));
-          player.activate();
-          player.play();
-        });
+        player.resume_after_skip(true);
         return;
       }
     }
@@ -445,14 +431,7 @@ impl App {
         player.next();
         // Reset progress immediately for UI feedback
         self.song_progress_ms = 0;
-        // librespot can occasionally land in a paused state after a skip.
-        // Schedule a short delayed resume to avoid racing the track transition.
-        let player = std::sync::Arc::clone(player);
-        std::thread::spawn(move || {
-          std::thread::sleep(std::time::Duration::from_millis(300));
-          player.activate();
-          player.play();
-        });
+        player.resume_after_skip(false);
         return;
       }
     }

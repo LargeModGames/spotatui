@@ -30,7 +30,7 @@ use log::{error, info, warn};
 use std::any::Any;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 use tokio::sync::Mutex;
@@ -59,6 +59,49 @@ impl PlayAfterTransfer {
       .0
       .take()
       .is_some_and(|at| now.saturating_duration_since(at) < PLAY_AFTER_TRANSFER_WINDOW)
+  }
+}
+
+/// Tokens for the commands a native skip sends after a delay: a newer skip cancels both, a pause only the play.
+#[derive(Debug, Default)]
+struct SkipResume {
+  skips: AtomicU64,
+  pauses: AtomicU64,
+  /// Held across a pause and across the delayed play's check and send, so neither lands inside the other.
+  gate: std::sync::Mutex<()>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct SkipToken {
+  skip: u64,
+  pause: u64,
+}
+
+impl SkipResume {
+  fn arm(&self) -> SkipToken {
+    SkipToken {
+      skip: self.skips.fetch_add(1, Ordering::SeqCst) + 1,
+      pause: self.pauses.load(Ordering::SeqCst),
+    }
+  }
+
+  fn cancel_play(&self) {
+    self.pauses.fetch_add(1, Ordering::SeqCst);
+  }
+
+  fn gate(&self) -> std::sync::MutexGuard<'_, ()> {
+    self
+      .gate
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner())
+  }
+
+  fn skip_is_current(&self, token: SkipToken) -> bool {
+    self.skips.load(Ordering::SeqCst) == token.skip
+  }
+
+  fn play_is_current(&self, token: SkipToken) -> bool {
+    self.skip_is_current(token) && self.pauses.load(Ordering::SeqCst) == token.pause
   }
 }
 
@@ -617,6 +660,7 @@ pub struct StreamingPlayer {
   connection_state_rx: tokio::sync::watch::Receiver<StreamingConnectionState>,
   audio_backend_error: Arc<std::sync::Mutex<Option<String>>>,
   play_after_transfer: std::sync::Mutex<PlayAfterTransfer>,
+  skip_resume: SkipResume,
 }
 
 #[allow(dead_code)]
@@ -825,6 +869,7 @@ impl StreamingPlayer {
       connection_state_rx,
       audio_backend_error,
       play_after_transfer: std::sync::Mutex::new(PlayAfterTransfer::default()),
+      skip_resume: SkipResume::default(),
     })
   }
 
@@ -962,6 +1007,8 @@ impl StreamingPlayer {
   /// Pause playback
   pub fn pause(&self) {
     self.cancel_play_after_transfer();
+    let _gate = self.skip_resume.gate();
+    self.skip_resume.cancel_play();
     if let Err(error) = self.route_command(DeferredPlayerCommand::Pause) {
       warn!("native pause failed: {error}");
     }
@@ -976,9 +1023,33 @@ impl StreamingPlayer {
 
   /// Stop playback
   pub fn stop(&self) {
+    let _gate = self.skip_resume.gate();
+    self.skip_resume.cancel_play();
     if let Err(error) = self.route_command(DeferredPlayerCommand::Stop) {
       warn!("native stop failed: {error}");
     }
+  }
+
+  /// Sends play shortly after a skip, because librespot can land paused; `second_prev` sends one more prev first.
+  pub fn resume_after_skip(self: &Arc<Self>, second_prev: bool) {
+    let token = self.skip_resume.arm();
+    let player = Arc::clone(self);
+    std::thread::spawn(move || {
+      if second_prev {
+        std::thread::sleep(Duration::from_millis(500));
+        if !player.skip_resume.skip_is_current(token) {
+          return;
+        }
+        player.prev();
+      }
+      std::thread::sleep(Duration::from_millis(300));
+      let _gate = player.skip_resume.gate();
+      if !player.skip_resume.play_is_current(token) {
+        return;
+      }
+      player.activate();
+      player.play();
+    });
   }
 
   /// Skip to the next track
@@ -1243,7 +1314,7 @@ fn new_device_id_string() -> String {
 mod tests {
   use super::{
     backend_error_status, get_or_create_device_id, new_device_id_string, PlayAfterTransfer,
-    RecoveringSink, StreamingConnectionState, PLAY_AFTER_TRANSFER_WINDOW,
+    RecoveringSink, SkipResume, StreamingConnectionState, PLAY_AFTER_TRANSFER_WINDOW,
   };
   use crate::core::i18n::EN;
   use crate::infra::spotify::credentials::{
@@ -1539,5 +1610,24 @@ mod tests {
     pending.arm(armed_at);
     pending.cancel();
     assert!(!pending.take(armed_at));
+  }
+
+  #[test]
+  fn a_pause_after_a_skip_cancels_its_play_but_not_its_second_prev() {
+    let resume = SkipResume::default();
+    let token = resume.arm();
+    resume.cancel_play();
+    assert!(resume.skip_is_current(token));
+    assert!(!resume.play_is_current(token));
+  }
+
+  #[test]
+  fn a_newer_skip_cancels_the_older_skips_delayed_commands() {
+    let resume = SkipResume::default();
+    let older = resume.arm();
+    let newer = resume.arm();
+    assert!(!resume.skip_is_current(older));
+    assert!(!resume.play_is_current(older));
+    assert!(resume.play_is_current(newer));
   }
 }
