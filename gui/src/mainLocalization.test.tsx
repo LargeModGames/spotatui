@@ -123,6 +123,7 @@ describe("main additions in the shared languages", () => {
       const html = renderToStaticMarkup(
         <PodcastPage
           s={s}
+          view={{}}
           id="show"
           name="節目 {count}"
           show={{
@@ -142,6 +143,8 @@ describe("main additions in the shared languages", () => {
               has_more: false,
             },
           }}
+          statusRev={0}
+          statusError={false}
           playingUri={episode.uri}
           active
           open={noop}
@@ -223,6 +226,7 @@ describe("main additions in the shared languages", () => {
       const html = renderToStaticMarkup(
         <RadioPage
           s={s}
+          view={{}}
           id="seed"
           name="{name} 歌"
           table={null}

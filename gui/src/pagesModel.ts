@@ -128,3 +128,27 @@ export function copyLink(
   }
   return write.then(() => send({ Notify: [readStrings()[done], 3] }), failed);
 }
+
+/** The status revision a page opened at, and the id whose load an error after that open failed. */
+export interface LoadLatch {
+  openedAt: number | null;
+  failedId: string | null;
+}
+
+/** The next latch: a fresh open or landed data clears it, an error after the open fails `id` until then. */
+export function loadLatch(
+  latch: LoadLatch,
+  load: {
+    id: string;
+    fresh: boolean;
+    landed: boolean;
+    statusRev: number | null;
+    statusError: boolean;
+  },
+): LoadLatch {
+  if (load.fresh || load.landed)
+    return { openedAt: load.statusRev, failedId: null };
+  if (load.statusError && load.statusRev !== latch.openedAt)
+    return { ...latch, failedId: load.id };
+  return latch;
+}

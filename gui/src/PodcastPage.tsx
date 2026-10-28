@@ -18,7 +18,7 @@ import { Glyph } from "./Icon";
 import { clampCursor, step } from "./libraryModel";
 import type { OpenView } from "./nav";
 import "./Pages.css";
-import { copyLink } from "./pagesModel";
+import { copyLink, loadLatch, type LoadLatch } from "./pagesModel";
 import "./PodcastPage.css";
 import {
   episodeDate,
@@ -40,10 +40,15 @@ const NO_EPISODES: EpisodeInfo[] = [];
 
 export interface PodcastPageProps {
   s?: GuiStrings;
+  /** The open view; a new one is a fresh open, even of the same show. */
+  view: object;
   id: string;
   name: string;
   /** The last fetched show, which can still be another one. */
   show: ShowPayload | null;
+  /** The status revision and whether it is an error: a later error means the fetch failed. */
+  statusRev: number | null;
+  statusError: boolean;
   playingUri: string | null;
   active: boolean;
   open: OpenView;
@@ -53,9 +58,12 @@ export interface PodcastPageProps {
 /** A podcast show with its episodes. */
 export const PodcastPage = memo(function PodcastPage({
   s = EN,
+  view,
   id,
   name,
   show,
+  statusRev,
+  statusError,
   playingUri,
   active,
   send,
@@ -63,13 +71,32 @@ export const PodcastPage = memo(function PodcastPage({
   const readStrings = useStringsReader(s);
   const [want, setWant] = useState(0);
   const [expanded, setExpanded] = useState(false);
-  const [shownId, setShownId] = useState(id);
-  if (shownId !== id) {
-    setShownId(id);
+  const [shownFor, setShownFor] = useState(view);
+  const [latch, setLatch] = useState<LoadLatch>({
+    openedAt: statusRev,
+    failedId: null,
+  });
+  const fresh = shownFor !== view;
+  if (fresh) {
+    setShownFor(view);
     setWant(0);
     setExpanded(false);
   }
   const page = show?.page?.show.id === id ? show.page : null;
+  const landed = page !== null && page.loaded;
+  const next = loadLatch(latch, {
+    id,
+    fresh,
+    landed,
+    statusRev,
+    statusError,
+  });
+  if (next.openedAt !== latch.openedAt || next.failedId !== latch.failedId)
+    setLatch(next);
+  const loading =
+    !landed && next.failedId === id
+      ? fmt(s.load_playlist_failed, { name: page?.show.name ?? name })
+      : s.loading_episodes;
   const episodes = page?.episodes ?? NO_EPISODES;
   const cursor = clampCursor(want, episodes.length);
 
@@ -110,7 +137,7 @@ export const PodcastPage = memo(function PodcastPage({
     return (
       <section className="podcast-page" aria-label={name}>
         <PageHeader kind={s.podcast} title={name} image={null} />
-        <p className="podcast-empty">{s.loading_episodes}</p>
+        <p className="podcast-empty">{loading}</p>
       </section>
     );
 
@@ -142,7 +169,7 @@ export const PodcastPage = memo(function PodcastPage({
         <h2>{s.all_episodes}</h2>
         {episodes.length === 0 ? (
           <p className="podcast-empty">
-            {page.loaded ? s.show_no_episodes : s.loading_episodes}
+            {page.loaded ? s.show_no_episodes : loading}
           </p>
         ) : (
           <div

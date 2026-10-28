@@ -46,9 +46,12 @@ const podcast: Podcast = {
 const render = (id: string, show: ShowPayload | null, playingUri = "") =>
   renderToStaticMarkup(
     <PodcastPage
+      view={{}}
       id={id}
       name="Lex Fridman Podcast"
       show={show}
+      statusRev={null}
+      statusError={false}
       playingUri={playingUri || null}
       active
       open={() => {}}

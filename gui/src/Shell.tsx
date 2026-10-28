@@ -56,6 +56,7 @@ import { Session } from "./Session";
 import { Settings } from "./Settings";
 import { SoloistOfferDialog } from "./SoloistOfferDialog";
 import { SoloistPairingDialog } from "./SoloistPairingDialog";
+import { heldShowId } from "./showModel";
 import { Stats } from "./Stats";
 import { Toast } from "./Toast";
 import { TopBar } from "./TopBar";
@@ -109,7 +110,7 @@ export function Shell({
   const tableUri = channels.track_table?.payload.uri ?? null;
   const albumId = channels.album?.payload.album?.id ?? null;
   const artistId = channels.artist?.payload.page?.id ?? null;
-  const showId = channels.show?.payload.page?.show.id ?? null;
+  const showId = heldShowId(channels.show?.payload.page);
   const radioId = channels.track_table?.payload.radio ?? null;
   const show = useCallback(
     (next: History, fresh: boolean) => {
@@ -325,9 +326,12 @@ export function Shell({
     show: showView && (
       <PodcastPage
         s={s}
+        view={showView}
         id={showView.id}
         name={showView.name}
         show={channels.show?.payload ?? null}
+        statusRev={statusRev}
+        statusError={statusError}
         playingUri={playingUri}
         active={page === "show"}
         open={open}
@@ -337,6 +341,7 @@ export function Shell({
     radio: radioView && (
       <RadioPage
         s={s}
+        view={radioView}
         id={radioView.id}
         name={radioView.name}
         table={channels.track_table?.payload ?? null}

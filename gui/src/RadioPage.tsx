@@ -7,7 +7,7 @@ import { clampCursor, playRequest, songCount } from "./libraryModel";
 import "./ListPage.css";
 import type { OpenView } from "./nav";
 import "./Pages.css";
-import { radioRows, trackKey } from "./pagesModel";
+import { loadLatch, radioRows, trackKey, type LoadLatch } from "./pagesModel";
 import { TrackTable } from "./TrackTable";
 import { PageHeader, PlayButton } from "./ui";
 
@@ -15,6 +15,8 @@ const NO_TRACKS: TrackInfo[] = [];
 
 export interface RadioPageProps {
   s?: GuiStrings;
+  /** The open view; a new one is a fresh open, even of the same seed. */
+  view: object;
   /** The seed track id. */
   id: string;
   name: string;
@@ -34,6 +36,7 @@ export interface RadioPageProps {
 /** The tracks Spotify recommends from one song. */
 export function RadioPage({
   s = EN,
+  view,
   id,
   name,
   table,
@@ -45,16 +48,28 @@ export function RadioPage({
   send,
 }: RadioPageProps) {
   const [want, setWant] = useState(0);
-  const [shownId, setShownId] = useState(id);
-  const [openedAt, setOpenedAt] = useState(statusRev);
-  if (shownId !== id) {
-    setShownId(id);
+  const [shownFor, setShownFor] = useState(view);
+  const [latch, setLatch] = useState<LoadLatch>({
+    openedAt: statusRev,
+    failedId: null,
+  });
+  const fresh = shownFor !== view;
+  if (fresh) {
+    setShownFor(view);
     setWant(0);
-    setOpenedAt(statusRev);
   }
 
   const rows = radioRows(table, id);
-  const failed = !rows && statusError && statusRev !== openedAt;
+  const next = loadLatch(latch, {
+    id,
+    fresh,
+    landed: rows !== null,
+    statusRev,
+    statusError,
+  });
+  if (next.openedAt !== latch.openedAt || next.failedId !== latch.failedId)
+    setLatch(next);
+  const failed = !rows && next.failedId === id;
   const tracks = rows ?? NO_TRACKS;
   const cursor = clampCursor(want, tracks.length);
   const play = (index: number) => {

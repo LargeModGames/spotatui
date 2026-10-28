@@ -112,3 +112,10 @@ export function showLink(id: string): string {
 export function episodeLink(id: string): string {
   return `https://open.spotify.com/episode/${id}`;
 }
+
+/** The show the channel holds for navigation: only one whose episodes landed, so back to a failed show fetches again. */
+export function heldShowId(
+  page: PodcastPage | null | undefined,
+): string | null {
+  return page?.loaded ? page.show.id : null;
+}

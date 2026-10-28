@@ -10,6 +10,7 @@ import {
   longDescription,
   newestEpisode,
   resumeOf,
+  heldShowId,
   showLink,
 } from "./showModel";
 
@@ -165,5 +166,13 @@ describe("links", () => {
   it("builds the open.spotify.com show and episode links", () => {
     expect(showLink("s")).toBe("https://open.spotify.com/show/s");
     expect(episodeLink("e")).toBe("https://open.spotify.com/episode/e");
+  });
+});
+
+describe("heldShowId", () => {
+  it("holds a show only once its episodes landed", () => {
+    expect(heldShowId(page(false, 3))).toBe("s");
+    expect(heldShowId({ ...page(false, 0), loaded: false })).toBe(null);
+    expect(heldShowId(null)).toBe(null);
   });
 });
