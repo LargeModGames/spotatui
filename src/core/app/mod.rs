@@ -16,7 +16,9 @@ use crate::core::user_config::{
   VisualizerStyle,
 };
 use crate::infra::history::{RecapPeriod, StatsData, StreakSummary};
-use crate::infra::network::sync::{ControlMode, PartySession, PartyStatus};
+use crate::infra::network::sync::{
+  ControlMode, PartyRole, PartySession, PartyStatus, PlaybackAction,
+};
 use crate::infra::network::IoEvent;
 #[cfg(feature = "queue")]
 use crate::infra::queue::QueueNowPlaying;

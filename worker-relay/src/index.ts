@@ -140,6 +140,7 @@ export class PartyRoom extends DurableObject {
       this.sendJson(server, {
         type: "joined_room",
         host_name: this.hostName,
+        control_mode: this.roomControlMode,
       });
       this.broadcastExcept(server, { type: "guest_joined", name: session.name });
     }

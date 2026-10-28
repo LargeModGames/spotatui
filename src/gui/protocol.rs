@@ -2186,6 +2186,7 @@ mod tests {
       guests: vec!["Sam".to_string()],
       control_mode: ControlMode::HostOnly,
       host_name: "Host".to_string(),
+      host_state_at: None,
     }));
 
     let party = &pushed(&diff(&before, &app, Language::En), "party")["payload"];

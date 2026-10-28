@@ -2554,6 +2554,7 @@ fn toggle_party_control_mode_flips_the_session_and_tells_the_relay() {
     guests: Vec::new(),
     control_mode: ControlMode::HostOnly,
     host_name: "Host".to_string(),
+    host_state_at: None,
   }));
   let before = app.display_revisions().get(DisplayDomain::Party);
 

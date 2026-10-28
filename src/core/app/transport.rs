@@ -65,6 +65,9 @@ impl App {
   }
 
   pub fn toggle_playback(&mut self) {
+    if self.relay_party_toggle() {
+      return;
+    }
     if self.apple_music_owns_playback() {
       self.toggle_apple_music();
       return;
@@ -233,6 +236,9 @@ impl App {
   }
 
   pub fn previous_track(&mut self) {
+    if self.relay_party_transport(PlaybackAction::PrevTrack) {
+      return;
+    }
     if self.apple_music_owns_playback() {
       if self.apple_music_refuses_while_switching() {
         return;
@@ -310,6 +316,9 @@ impl App {
   }
 
   pub fn force_previous_track(&mut self) {
+    if self.relay_party_transport(PlaybackAction::ForcePrevTrack) {
+      return;
+    }
     if self.apple_music_owns_playback() {
       if self.apple_music_refuses_while_switching() {
         return;
@@ -362,6 +371,9 @@ impl App {
   }
 
   pub fn next_track(&mut self) {
+    if self.relay_party_transport(PlaybackAction::NextTrack) {
+      return;
+    }
     if self.apple_music_owns_playback() {
       if self.apple_music_refuses_while_switching() {
         return;
