@@ -8,6 +8,7 @@
 
 ### Fixed
 
+- **The startup log header lists every compiled feature**: `compiled_features()` was a hand-kept list that had fallen behind `Cargo.toml`, so the startup line omitted features the binary was actually built with — including `soloist`, `apple-music`, `gui`, `spotify-session` and the audio backends. This had misled a support thread into thinking a build could not run Soloist. The list now mirrors the `[features]` table ([#949](https://github.com/LargeModGames/spotatui/issues/949)).
 - **Smoother scrolling in terminal Settings**: Fixed an issue where navigating the Settings list caused the screen to jump erratically. The view now stays stable, scrolling only when your cursor reaches the top or bottom of the box.
 - **The AI DJ prompt's caret follows the cursor**: after Left, Home or a Backspace in the middle of the text, the caret stayed painted at the end of the prompt. It now sits where the next character goes ([#945](https://github.com/LargeModGames/spotatui/issues/945)).
 

@@ -108,7 +108,17 @@ pub(super) fn compiled_features() -> Vec<&'static str> {
   }
   push_if_enabled!("telemetry");
   push_if_enabled!("tui");
+  push_if_enabled!("gui");
   push_if_enabled!("streaming");
+  push_if_enabled!("spotify-session");
+  push_if_enabled!("alsa-backend");
+  push_if_enabled!("pulseaudio-backend");
+  push_if_enabled!("rodio-backend");
+  push_if_enabled!("portaudio-backend");
+  push_if_enabled!("jackaudio-backend");
+  push_if_enabled!("rodiojack-backend");
+  push_if_enabled!("sdl-backend");
+  push_if_enabled!("gstreamer-backend");
   push_if_enabled!("audio-viz");
   push_if_enabled!("audio-viz-cpal");
   push_if_enabled!("cover-art");
@@ -122,11 +132,17 @@ pub(super) fn compiled_features() -> Vec<&'static str> {
   push_if_enabled!("discord-rpc");
   push_if_enabled!("macos-media");
   push_if_enabled!("windows-media");
+  push_if_enabled!("apple-music");
+  push_if_enabled!("audio-decode");
+  push_if_enabled!("audio-decode-queue");
+  push_if_enabled!("queue");
+  push_if_enabled!("queue-download");
   push_if_enabled!("local-files");
   push_if_enabled!("subsonic");
   push_if_enabled!("internet-radio");
   push_if_enabled!("youtube");
   push_if_enabled!("qobuz");
+  push_if_enabled!("soloist");
   features
 }
 
@@ -339,6 +355,27 @@ mod tests {
   fn compiled_features_contains_tui_when_the_tui_feature_is_enabled() {
     let features = compiled_features();
     assert_eq!(features.contains(&"tui"), cfg!(feature = "tui"));
+  }
+
+  #[test]
+  fn compiled_features_lists_every_feature_that_is_enabled() {
+    let features = compiled_features();
+    macro_rules! assert_listed_iff_enabled {
+      ($feature:literal) => {
+        assert_eq!(
+          features.contains(&$feature),
+          cfg!(feature = $feature),
+          "feature `{}` membership does not match its cfg",
+          $feature
+        );
+      };
+    }
+    assert_listed_iff_enabled!("gui");
+    assert_listed_iff_enabled!("spotify-session");
+    assert_listed_iff_enabled!("queue");
+    assert_listed_iff_enabled!("portaudio-backend");
+    assert_listed_iff_enabled!("soloist");
+    assert_listed_iff_enabled!("apple-music");
   }
 
   #[test]
