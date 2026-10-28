@@ -151,7 +151,7 @@ impl Default for App {
       #[cfg(feature = "streaming")]
       native_shuffle_generation: 0,
       #[cfg(not(target_os = "android"))]
-      keepawake: None,
+      keepawake: Default::default(),
       last_device_activation: None,
       native_activation_pending: false,
       #[cfg(feature = "streaming")]

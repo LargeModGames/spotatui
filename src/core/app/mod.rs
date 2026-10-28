@@ -99,6 +99,8 @@ mod display_revisions;
 mod dj;
 mod friends;
 mod help;
+#[cfg(not(target_os = "android"))]
+mod keep_awake;
 mod keybindings;
 mod layout;
 mod library;
@@ -447,7 +449,7 @@ pub struct App {
   native_shuffle_generation: u64,
   /// Prevent idle/sleep during playback
   #[cfg(not(target_os = "android"))]
-  keepawake: Option<keepawake::KeepAwake>,
+  keepawake: keep_awake::KeepAwake,
   /// Timestamp of the last native device activation
   #[allow(dead_code)]
   pub last_device_activation: Option<Instant>,

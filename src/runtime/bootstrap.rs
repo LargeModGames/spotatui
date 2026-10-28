@@ -136,6 +136,15 @@ pub(super) fn install_panic_hook() {
       return;
     }
 
+    // The keepawake crate unwraps its D-Bus release; that panic ends only its own worker thread.
+    if info
+      .location()
+      .is_some_and(|location| location.file().contains("keepawake"))
+    {
+      log::warn!("keepawake: the sleep inhibitor panicked: {info}");
+      return;
+    }
+
     #[cfg(feature = "tui")]
     ratatui::restore();
     let panic_log_path =
