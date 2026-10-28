@@ -360,14 +360,17 @@ fn selected_setting_expects_key_capture(app: &App) -> bool {
 
 fn select_clicked_setting(mouse_row: u16, list_area: Rect, app: &mut App) {
   // Rows are drawn from the filtered view, so a click resolves to a position in
-  // it before it means anything as an index into `settings_items`. The last
-  // frame scrolled to keep the selection from before this click on screen, so
-  // the scroll offset comes from that selection's position in the same view.
+  // it before it means anything as an index into `settings_items`. Use the last
+  // frame's offset because the selection can sit anywhere in the viewport.
   let visible = filtered_setting_indices(app);
   let selected_position = selected_setting_position(app).unwrap_or(0);
-  let Some(clicked_row) =
-    list_item_index_from_click(list_area, mouse_row, selected_position, None, visible.len())
-  else {
+  let Some(clicked_row) = list_item_index_from_click(
+    list_area,
+    mouse_row,
+    selected_position,
+    Some(app.view.settings_scroll_offset.get()),
+    visible.len(),
+  ) else {
     return;
   };
   let clicked_index = visible[clicked_row];
@@ -1813,6 +1816,9 @@ mod tests {
 
   #[test]
   fn clicking_the_top_row_of_a_scrolled_settings_list_selects_the_row_that_was_drawn() {
+    use crate::tui::ui::settings::draw_settings;
+    use ratatui::{backend::TestBackend, Terminal};
+
     let mut app = App::default();
     app.view.size = Viewport {
       width: 100,
@@ -1823,12 +1829,17 @@ mod tests {
     let areas = settings_layout_areas(&app).expect("settings layout areas");
     let inner_height = (areas.list.height - 2) as usize;
     assert!(
-      visible.len() > inner_height,
+      visible.len() > inner_height + 2,
       "the list must overflow its box to scroll"
     );
 
-    // The last row is selected, so the drawn list is scrolled to the bottom.
+    let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
     app.view.settings_selected_index = *visible.last().unwrap();
+    terminal.draw(|f| draw_settings(f, &app)).unwrap();
+    crate::tui::handlers::handle_app(Key::Up, &mut app);
+    crate::tui::handlers::handle_app(Key::Up, &mut app);
+    terminal.draw(|f| draw_settings(f, &app)).unwrap();
+
     handler(
       mouse_event(
         MouseEventKind::Down(MouseButton::Left),
@@ -1840,7 +1851,7 @@ mod tests {
 
     assert_eq!(
       app.view.settings_selected_index,
-      visible[visible.len() - inner_height]
+      visible[app.view.settings_scroll_offset.get()]
     );
     assert!(!app.view.settings_edit_mode);
   }
