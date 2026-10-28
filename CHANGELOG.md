@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **Smoother scrolling in terminal Settings**: Fixed an issue where navigating the Settings list caused the screen to jump erratically. The view now stays stable, scrolling only when your cursor reaches the top or bottom of the box.
+
 ## [v0.47.0] 2026-10-25
 
 ### Added
