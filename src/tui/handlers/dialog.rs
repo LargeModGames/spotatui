@@ -182,6 +182,7 @@ fn handle_add_to_playlist_picker(key: Key, app: &mut App) {
           }
           close_dialog(app);
         }
+        None if !app.view.playlist_picker_filter.is_empty() => {}
         None => close_dialog(app),
       }
     }
@@ -566,6 +567,41 @@ mod tests {
     ));
     assert!(!playlist_picker_captures_key(&app, Key::Esc));
     assert_eq!(app.playlist_picker_items().len(), 2);
+  }
+
+  #[test]
+  fn picker_search_keeps_global_keys_out_of_handle_app() {
+    let (mut app, rx) = picker_with_nested_playlists();
+    while rx.try_recv().is_ok() {}
+
+    crate::tui::handlers::handle_app(app.user_config.keys.search, &mut app);
+    crate::tui::handlers::handle_app(Key::Char(' '), &mut app);
+    crate::tui::handlers::handle_app(Key::Char('d'), &mut app);
+
+    assert_eq!(app.view.playlist_picker_filter, " d");
+    assert_eq!(
+      app.get_current_route().active_block,
+      ActiveBlock::Dialog(DialogContext::AddTrackToPlaylistPicker)
+    );
+    assert!(rx.try_recv().is_err());
+  }
+
+  #[test]
+  fn enter_on_a_search_with_no_matches_keeps_the_picker_open() {
+    let (mut app, rx) = picker_with_nested_playlists();
+    while rx.try_recv().is_ok() {}
+    handler(app.user_config.keys.search, &mut app);
+    type_text(&mut app, "nothing like this");
+    handler(Key::Enter, &mut app);
+
+    handler(Key::Enter, &mut app);
+
+    assert_eq!(app.view.playlist_picker_filter, "nothing like this");
+    assert_eq!(
+      app.get_current_route().active_block,
+      ActiveBlock::Dialog(DialogContext::AddTrackToPlaylistPicker)
+    );
+    assert!(rx.try_recv().is_err());
   }
 
   #[test]

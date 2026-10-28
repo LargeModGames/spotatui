@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Search the add-to-playlist picker**: press `/` (the `search` key) in the picker that `w` and `W` open and type part of a playlist name. The list narrows to the matching playlists you can add to, including the ones inside folders. `Enter` keeps the search and a second `Enter` adds the track, `Esc` clears the search, and a second `Esc` closes the picker ([#924](https://github.com/LargeModGames/spotatui/issues/924)).
+
 ### Fixed
 
 - **The AI DJ prompt's caret follows the cursor**: after Left, Home or a Backspace in the middle of the text, the caret stayed painted at the end of the prompt. It now sits where the next character goes ([#945](https://github.com/LargeModGames/spotatui/issues/945)).

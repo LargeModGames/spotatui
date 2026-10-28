@@ -215,7 +215,8 @@ pub fn help_entries_for(strings: &crate::core::i18n::Strings) -> Vec<HelpEntry> 
       help.search_playlist_picker,
       Binding(|k| k.search),
       help.context_playlist_picker,
-    ),
+    )
+    .needs(Requirement::AnyOf(&[PLAYLIST_WRITE, SESSION])),
     row(
       help.toggle_playback,
       Binding(|k| k.toggle_playback),
