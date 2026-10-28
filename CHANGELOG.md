@@ -8,6 +8,7 @@
 
 ### Fixed
 
+- **Soloist download errors include their underlying cause**: failed downloads now include the error chain in the warning, making connection resets and timeouts easier to tell apart ([#950](https://github.com/LargeModGames/spotatui/issues/950)).
 - **Smoother scrolling in terminal Settings**: Fixed an issue where navigating the Settings list caused the screen to jump erratically. The view now stays stable, scrolling only when your cursor reaches the top or bottom of the box.
 - **The AI DJ prompt's caret follows the cursor**: after Left, Home or a Backspace in the middle of the text, the caret stayed painted at the end of the prompt. It now sits where the next character goes ([#945](https://github.com/LargeModGames/spotatui/issues/945)).
 - **The log's startup line lists every compiled feature**: `features:` left out `soloist`, `gui`, `apple-music`, `spotify-session`, the playback backends and the shared decode features, so a release build with Soloist looked like it had none. A test now fails when a feature in `Cargo.toml` is missing from the list ([#949](https://github.com/LargeModGames/spotatui/issues/949)).
