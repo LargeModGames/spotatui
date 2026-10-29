@@ -96,7 +96,7 @@ impl AudioCaptureManager {
 
     #[cfg(target_os = "linux")]
     {
-      // On Linux with PipeWire/PulseAudio, look for a monitor device
+      // On Linux with PipeWire/PulseAudio, look for a monitor or ALSA loopback device
       // Priority: bluetooth first, then speakers, then anything else
       if let Ok(devices) = host.input_devices() {
         let mut monitors: Vec<Device> = Vec::new();
@@ -106,7 +106,7 @@ impl AudioCaptureManager {
         for device in devices {
           if let Ok(description) = device.description() {
             let name_lower = description.name().to_lowercase();
-            if name_lower.contains("monitor") {
+            if name_lower.contains("monitor") || name_lower.contains("loopback") {
               monitors.push(device);
             }
           }
