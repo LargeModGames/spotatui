@@ -8,6 +8,7 @@
 
 ### Fixed
 
+- **The Linux visualizer works without PipeWire**: the Linux release captured audio for the visualizer only through PipeWire, so on plain PulseAudio or ALSA systems, and in a proot Linux on Android, it had no audio. It now falls back to the ALSA capture when no PipeWire server answers.
 - **Soloist download errors include their underlying cause**: failed downloads now include the error chain in the warning, making connection resets and timeouts easier to tell apart ([#950](https://github.com/LargeModGames/spotatui/issues/950)).
 - **Smoother scrolling in terminal Settings**: Fixed an issue where navigating the Settings list caused the screen to jump erratically. The view now stays stable, scrolling only when your cursor reaches the top or bottom of the box.
 - **The AI DJ prompt's caret follows the cursor**: after Left, Home or a Backspace in the middle of the text, the caret stayed painted at the end of the prompt. It now sits where the next character goes ([#945](https://github.com/LargeModGames/spotatui/issues/945)).

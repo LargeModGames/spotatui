@@ -38,7 +38,7 @@ across a **nine-leg** feature matrix, plus one `macos-latest` job (below):
 | Leg | Features |
 |-----|----------|
 | `default` | a plain `cargo test`: streaming + audio-viz-cpal + scripting + self-update + OS integrations |
-| `all-sources` | the **Linux** release feature set from `cd.yml` (adds cover-art, mcp-server, ai-dj, audio-viz, all five sources, soloist) |
+| `all-sources` | the **Linux** release feature set from `cd.yml` (adds cover-art, mcp-server, ai-dj, audio-viz with the audio-viz-cpal fallback, all five sources, soloist) |
 | `mcp-only` | `telemetry,tui,mcp-server` |
 | `ai-dj-only` | `telemetry,tui,ai-dj` |
 | `slim` | `telemetry,tui` |
@@ -390,7 +390,9 @@ never config:
   never enabled by hand); `cover-art` layers the ratatui-image terminal
   rendering on top and keeps its pre-split meaning for users and CI.
 - `audio-viz` (PipeWire, Linux-only) and `audio-viz-cpal` are **visualizer
-  capture** backends, not playback. The librespot *playback* backend is chosen by
+  capture** backends, not playback. With both on Linux (the release rows),
+  `infra/audio/fallback_capture.rs` opens PipeWire and falls back to cpal when
+  no PipeWire server answers. The librespot *playback* backend is chosen by
   `[target.'cfg(...)']` dependency blocks in Cargo.toml, not by the `*-backend`
   features: linux-gnu→alsa, linux-musl→rodio, Windows→rodio, macOS→portaudio -
   the non-default picks avoid librespot's `pipe` sink writing raw audio to stdout
