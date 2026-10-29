@@ -21,6 +21,12 @@
 - **[MCP setup](mcp-setup.md):** make your coding agent the DJ.
 - **[Scripting](scripting.md):** the Lua plugin API. [PLUGINS.md](../PLUGINS.md) lists plugins to install.
 
+## Community setups
+
+Unofficial setups that people got working. They are not supported installs.
+
+- **[Android TV box](android-tv-termux.md):** the terminal app fullscreen on a TV, through Termux and a Debian container.
+
 ## Help
 
 - **[Report a bug](https://github.com/LargeModGames/spotatui/issues/new/choose)**, with a [debug log](configuration.md#logging).
