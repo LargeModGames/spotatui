@@ -637,7 +637,7 @@ pub async fn start_ui(
   }
   let mut route_depth = app.lock().await.navigation_depth();
 
-  let events = event::Events::new(user_config.behavior.tick_rate_milliseconds);
+  let mut events = event::Events::new(user_config.behavior.tick_rate_milliseconds);
   let inspector = crate::tui::dev_inspect::Inspector::from_env(events.sender());
   let mut pending_snapshot = None;
 
