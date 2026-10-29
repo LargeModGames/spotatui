@@ -56,8 +56,8 @@ pub fn check_for_update_silent() -> Option<UpdateInfo> {
     .build()
     .ok()?;
 
-  let latest = status.get_latest_release().ok()?;
-  let latest_version = latest.version.trim_start_matches('v').to_string();
+  let latest = latest_release(&status).ok()?;
+  let latest_version = latest.version().trim_start_matches('v').to_string();
 
   if latest_version != current_version {
     Some(UpdateInfo {
@@ -106,12 +106,22 @@ fn is_newer(current: &str, latest: &str) -> bool {
   self_update::version::bump_is_greater(current, latest).unwrap_or(false)
 }
 
+fn latest_release(
+  updater: &self_update::backends::github::Update,
+) -> Result<self_update::update::Release> {
+  updater
+    .get_latest_release()?
+    .latest()
+    .cloned()
+    .ok_or_else(|| anyhow!("no release found"))
+}
+
 /// Pinned to `tag`, because an unpinned self_update can pick a prerelease nobody checked.
 fn pinned_updater(
   tag: &str,
   current_version: &str,
   interactive: bool,
-) -> Result<Box<dyn self_update::update::ReleaseUpdate>> {
+) -> Result<self_update::backends::github::Update> {
   Ok(
     self_update::backends::github::Update::configure()
       .repo_owner("LargeModGames")
@@ -120,7 +130,7 @@ fn pinned_updater(
       .show_download_progress(interactive)
       .no_confirm(!interactive)
       .current_version(current_version)
-      .target_version_tag(&format!("v{}", tag.trim_start_matches('v')))
+      .release_tag(format!("v{}", tag.trim_start_matches('v')))
       .build()?,
   )
 }
@@ -139,15 +149,15 @@ fn verify_release_checksum(release: &self_update::update::Release) -> Result<()>
   let asset_name = format!("spotatui-{}.{}", prefix, ext);
 
   let asset = release
-    .assets
+    .assets()
     .iter()
-    .find(|a| a.name == asset_name)
+    .find(|a| a.name() == asset_name)
     .ok_or_else(|| anyhow!("release asset '{}' not found", asset_name))?;
 
   let checksum_asset = release
-    .assets
+    .assets()
     .iter()
-    .find(|a| a.name == CHECKSUMS_ASSET)
+    .find(|a| a.name() == CHECKSUMS_ASSET)
     .ok_or_else(|| anyhow!("'{}' not found, skipping update", CHECKSUMS_ASSET))?;
 
   // GitHub's API rejects requests without a User-Agent with 403, and asset URLs
@@ -158,7 +168,7 @@ fn verify_release_checksum(release: &self_update::update::Release) -> Result<()>
     .build()?;
 
   let checksum_text = client
-    .get(&checksum_asset.download_url)
+    .get(checksum_asset.download_url())
     .header(reqwest::header::ACCEPT, "application/octet-stream")
     .send()?
     .error_for_status()?
@@ -168,7 +178,7 @@ fn verify_release_checksum(release: &self_update::update::Release) -> Result<()>
     .ok_or_else(|| anyhow!("'{}' has no SHA-256 for '{}'", CHECKSUMS_ASSET, asset_name))?;
 
   let binary_bytes = client
-    .get(&asset.download_url)
+    .get(asset.download_url())
     .header(reqwest::header::ACCEPT, "application/octet-stream")
     .send()?
     .error_for_status()?
@@ -188,11 +198,11 @@ fn verify_release_checksum(release: &self_update::update::Release) -> Result<()>
   Ok(())
 }
 
-/// Convert self_update::Status to UpdateOutcome
-fn status_to_outcome(status: self_update::Status) -> UpdateOutcome {
+/// Convert self_update::VersionStatus to UpdateOutcome
+fn status_to_outcome(status: self_update::VersionStatus) -> UpdateOutcome {
   match status {
-    self_update::Status::UpToDate(_) => UpdateOutcome::UpToDate,
-    self_update::Status::Updated(v) => UpdateOutcome::Installed(v),
+    self_update::VersionStatus::Updated(v) => UpdateOutcome::Installed(v),
+    _ => UpdateOutcome::UpToDate,
   }
 }
 
@@ -212,8 +222,8 @@ pub fn install_update_silent(delay_secs: u64) -> Result<UpdateOutcome> {
     .current_version(current_version)
     .build()?;
 
-  let latest = status.get_latest_release()?;
-  let latest_version = latest.version.trim_start_matches('v').to_string();
+  let latest = latest_release(&status)?;
+  let latest_version = latest.version().trim_start_matches('v').to_string();
 
   if !is_newer(current_version, &latest_version) {
     // Up to date — clear any stale pending state
@@ -227,7 +237,7 @@ pub fn install_update_silent(delay_secs: u64) -> Result<UpdateOutcome> {
   if delay_secs == 0 {
     // No delay: verify checksum then install immediately
     verify_release_checksum(&latest)?;
-    let result = pinned_updater(&latest.version, current_version, false)?.update()?;
+    let result = pinned_updater(latest.version(), current_version, false)?.update()?;
     return Ok(status_to_outcome(result));
   }
 
@@ -276,7 +286,7 @@ pub fn install_update_silent(delay_secs: u64) -> Result<UpdateOutcome> {
   if elapsed >= delay_secs {
     // Delay elapsed — verify checksum then install
     verify_release_checksum(&latest)?;
-    let result = pinned_updater(&latest.version, current_version, false)?.update()?;
+    let result = pinned_updater(latest.version(), current_version, false)?.update()?;
     // Clean up state file
     if let Some(ref path) = state_path {
       let _ = std::fs::remove_file(path);
@@ -307,10 +317,10 @@ pub fn check_for_update(do_update: bool) -> Result<()> {
     .no_confirm(false)
     .build()?;
 
-  let latest = status.get_latest_release()?;
+  let latest = latest_release(&status)?;
 
   // Remove 'v' prefix if present for comparison
-  let latest_version = latest.version.trim_start_matches('v');
+  let latest_version = latest.version().trim_start_matches('v');
 
   if !is_newer(current_version, latest_version) {
     println!("✓ You are already running the latest version!");
@@ -323,14 +333,14 @@ pub fn check_for_update(do_update: bool) -> Result<()> {
     println!("\nVerifying checksum and installing update...");
 
     verify_release_checksum(&latest)?;
-    let result = pinned_updater(&latest.version, current_version, true)?.update()?;
+    let result = pinned_updater(latest.version(), current_version, true)?.update()?;
     match result {
-      self_update::Status::UpToDate(_) => {
-        println!("✓ Already up to date!");
-      }
-      self_update::Status::Updated(v) => {
+      self_update::VersionStatus::Updated(v) => {
         println!("✓ Successfully updated to v{}!", v);
         println!("\nPlease restart spotatui to use the new version.");
+      }
+      _ => {
+        println!("✓ Already up to date!");
       }
     }
   } else {
