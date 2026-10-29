@@ -977,6 +977,16 @@ fn every_typed_message_fills_its_placeholders_and_preserves_all_arguments() {
       ["SENTINEL_PROBLEM_中"]
     );
     check!(
+      "status_app.pane_nothing_to_detach",
+      strings.status.app.pane_nothing_to_detach("SENTINEL_KEY_中"),
+      ["SENTINEL_KEY_中"]
+    );
+    check!(
+      "status_app.pane_hidden",
+      strings.status.app.pane_hidden("SENTINEL_KEY_中"),
+      ["SENTINEL_KEY_中"]
+    );
+    check!(
       "status_infra.local_uri_invalid",
       strings.status.infra.local_uri_invalid("SENTINEL_ERROR_中"),
       ["SENTINEL_ERROR_中"]

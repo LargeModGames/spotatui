@@ -125,6 +125,9 @@ pub struct AppStatusStrings {
   pub paused: &'static str,
   pub paused_details: &'static str,
   pub visualizer_config: &'static str,
+  pub pane_nothing_to_detach: &'static str,
+  pub pane_hidden: &'static str,
+  pub pane_no_room: &'static str,
 }
 
 pub const EN: AppStatusStrings = AppStatusStrings {
@@ -252,6 +255,10 @@ pub const EN: AppStatusStrings = AppStatusStrings {
   paused: "Paused",
   paused_details: "Paused: {details}",
   visualizer_config: "visualizer.yml: {problem}",
+  pane_nothing_to_detach:
+    "Open lyrics, the visualizer, cover art, the queue or the mini player, then press {key} to detach it",
+  pane_hidden: "The terminal is too small to show the panes. Press {key} to close one",
+  pane_no_room: "There is no room for another pane in this terminal",
 };
 
 // Keep ..EN so new English fields compile before their translations are added.
@@ -381,6 +388,9 @@ pub const ZH_HANS: AppStatusStrings = AppStatusStrings {
   paused: "已暂停",
   paused_details: "已暂停：{details}",
   visualizer_config: "visualizer.yml：{problem}",
+  pane_nothing_to_detach: "先打开歌词、可视化、封面、队列或迷你播放器，再按 {key} 将其分离",
+  pane_hidden: "终端太小，无法显示窗格。按 {key} 关闭一个",
+  pane_no_room: "此终端没有空间再放一个窗格",
   ..EN
 };
 
@@ -511,6 +521,9 @@ pub const ZH_HANT: AppStatusStrings = AppStatusStrings {
   paused: "已暫停",
   paused_details: "已暫停：{details}",
   visualizer_config: "visualizer.yml：{problem}",
+  pane_nothing_to_detach: "先開啟歌詞、視覺化、封面、佇列或迷你播放器，再按 {key} 將其分離",
+  pane_hidden: "終端機太小，無法顯示窗格。按 {key} 關閉一個",
+  pane_no_room: "此終端機沒有空間再放一個窗格",
   ..EN
 };
 
@@ -626,5 +639,11 @@ impl AppStatusStrings {
   #[cfg_attr(not(feature = "gui"), allow(dead_code))]
   pub fn visualizer_config(&self, problem: &str) -> String {
     crate::core::i18n::format_template(self.visualizer_config, &[("problem", problem)])
+  }
+  pub fn pane_nothing_to_detach(&self, key: &str) -> String {
+    crate::core::i18n::format_template(self.pane_nothing_to_detach, &[("key", key)])
+  }
+  pub fn pane_hidden(&self, key: &str) -> String {
+    crate::core::i18n::format_template(self.pane_hidden, &[("key", key)])
   }
 }
