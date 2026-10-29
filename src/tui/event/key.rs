@@ -4,10 +4,14 @@
 
 use crossterm::event;
 
+use crate::core::input::Arrow;
 pub use crate::core::input::Key;
 
 impl From<event::KeyEvent> for Key {
   fn from(key_event: event::KeyEvent) -> Self {
+    if let Some(key) = alt_arrow(&key_event) {
+      return key;
+    }
     match key_event {
       event::KeyEvent {
         code: event::KeyCode::Esc,
@@ -78,6 +82,13 @@ impl From<event::KeyEvent> for Key {
       } => Key::Alt(c),
       event::KeyEvent {
         code: event::KeyCode::Char(c),
+        modifiers,
+        ..
+      } if modifiers == event::KeyModifiers::ALT | event::KeyModifiers::SHIFT => {
+        Key::Alt(shifted_char(c, cfg!(windows)))
+      }
+      event::KeyEvent {
+        code: event::KeyCode::Char(c),
         modifiers: event::KeyModifiers::CONTROL,
         ..
       } => Key::Ctrl(c),
@@ -96,6 +107,26 @@ impl From<event::KeyEvent> for Key {
       _ => Key::Unknown,
     }
   }
+}
+
+/// An arrow with Alt, or with Alt and Shift; any other modifier leaves it a plain arrow.
+fn alt_arrow(key_event: &event::KeyEvent) -> Option<Key> {
+  let arrow = match key_event.code {
+    event::KeyCode::Left => Arrow::Left,
+    event::KeyCode::Right => Arrow::Right,
+    event::KeyCode::Up => Arrow::Up,
+    event::KeyCode::Down => Arrow::Down,
+    _ => return None,
+  };
+  let modifiers = key_event.modifiers;
+  if modifiers.difference(event::KeyModifiers::SHIFT) != event::KeyModifiers::ALT {
+    return None;
+  }
+  Some(if modifiers.contains(event::KeyModifiers::SHIFT) {
+    Key::AltShiftArrow(arrow)
+  } else {
+    Key::AltArrow(arrow)
+  })
 }
 
 /// Apply Shift casing unless the input source has already done so.
@@ -131,6 +162,31 @@ mod tests {
     assert_eq!(shifted_char('a', true), 'a');
     assert_eq!(shifted_char('ö', true), 'ö');
     assert_eq!(shifted_char('A', true), 'A');
+  }
+
+  #[test]
+  fn alt_arrows_keep_their_modifiers_and_ctrl_alt_arrows_stay_plain() {
+    let arrow = |modifiers| Key::from(event::KeyEvent::new(event::KeyCode::Left, modifiers));
+
+    assert_eq!(arrow(event::KeyModifiers::ALT), Key::AltArrow(Arrow::Left));
+    assert_eq!(
+      arrow(event::KeyModifiers::ALT | event::KeyModifiers::SHIFT),
+      Key::AltShiftArrow(Arrow::Left)
+    );
+    assert_eq!(
+      arrow(event::KeyModifiers::ALT | event::KeyModifiers::CONTROL),
+      Key::Left
+    );
+  }
+
+  #[test]
+  fn alt_shift_letter_is_an_uppercase_alt_key() {
+    let event = event::KeyEvent::new(
+      event::KeyCode::Char('H'),
+      event::KeyModifiers::ALT | event::KeyModifiers::SHIFT,
+    );
+
+    assert_eq!(Key::from(event), Key::Alt('H'));
   }
 
   #[test]

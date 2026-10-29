@@ -1,5 +1,5 @@
 use crate::core::format::Template;
-use crate::core::input::Key;
+use crate::core::input::{Arrow, Key};
 use crate::core::state::{sanitized_radio_stations, RadioStationConfig};
 // Re-exported so existing `crate::core::user_config::{Theme, ...}` importers
 // keep working now that the theme types live in `core/theme.rs`.
@@ -456,7 +456,10 @@ fn parse_key(key: String) -> Result<Key> {
 
   match sections[0].to_lowercase().as_str() {
     "ctrl" => Ok(Key::Ctrl(modifier_char(&key, &sections)?)),
-    "alt" => Ok(Key::Alt(modifier_char(&key, &sections)?)),
+    "alt" => match sections.get(1).and_then(|rest| alt_arrow_key(rest)) {
+      Some(arrow_key) => Ok(arrow_key),
+      None => Ok(Key::Alt(modifier_char(&key, &sections)?)),
+    },
     "left" => Ok(Key::Left),
     "right" => Ok(Key::Right),
     "up" => Ok(Key::Up),
@@ -489,6 +492,23 @@ fn parse_key(key: String) -> Result<Key> {
   }
 }
 
+/// `left` or `shift-left` (any arrow) after `alt-`.
+fn alt_arrow_key(rest: &str) -> Option<Key> {
+  let rest = rest.to_lowercase();
+  let (shift, name) = match rest.strip_prefix("shift-") {
+    Some(name) => (true, name),
+    None => (false, rest.as_str()),
+  };
+  let arrow = [Arrow::Left, Arrow::Right, Arrow::Up, Arrow::Down]
+    .into_iter()
+    .find(|arrow| arrow.name() == name)?;
+  Some(if shift {
+    Key::AltShiftArrow(arrow)
+  } else {
+    Key::AltArrow(arrow)
+  })
+}
+
 /// Public version of parse_key for use in app.rs
 pub fn parse_key_public(key: String) -> Result<Key> {
   parse_key(key)
@@ -501,6 +521,8 @@ pub fn key_to_config_string(key: &Key) -> String {
     Key::Char(c) => c.to_string(),
     Key::Ctrl(c) => format!("ctrl-{}", c),
     Key::Alt(c) => format!("alt-{}", c),
+    Key::AltArrow(arrow) => format!("alt-{}", arrow.name()),
+    Key::AltShiftArrow(arrow) => format!("alt-shift-{}", arrow.name()),
     Key::Enter => "enter".to_string(),
     Key::Esc => "esc".to_string(),
     Key::Backspace => "backspace".to_string(),
@@ -618,6 +640,20 @@ pub struct KeyBindingsString {
   listening_party: Option<String>,
   like_track: Option<String>,
   generate_recap: Option<String>,
+  detach_pane: Option<String>,
+  close_pane: Option<String>,
+  focus_pane_left: Option<String>,
+  focus_pane_down: Option<String>,
+  focus_pane_up: Option<String>,
+  focus_pane_right: Option<String>,
+  move_pane_left: Option<String>,
+  move_pane_down: Option<String>,
+  move_pane_up: Option<String>,
+  move_pane_right: Option<String>,
+  rotate_pane: Option<String>,
+  grow_pane: Option<String>,
+  shrink_pane: Option<String>,
+  reset_panes: Option<String>,
 }
 
 #[derive(Clone, PartialEq)]
@@ -679,6 +715,20 @@ pub struct KeyBindings {
   pub listening_party: Key,
   pub like_track: Key,
   pub generate_recap: Key,
+  pub detach_pane: Key,
+  pub close_pane: Key,
+  pub focus_pane_left: Key,
+  pub focus_pane_down: Key,
+  pub focus_pane_up: Key,
+  pub focus_pane_right: Key,
+  pub move_pane_left: Key,
+  pub move_pane_down: Key,
+  pub move_pane_up: Key,
+  pub move_pane_right: Key,
+  pub rotate_pane: Key,
+  pub grow_pane: Key,
+  pub shrink_pane: Key,
+  pub reset_panes: Key,
 }
 
 #[derive(Default, Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1353,6 +1403,20 @@ impl UserConfig {
         listening_party: Key::Ctrl('p'),
         like_track: Key::Char('F'),
         generate_recap: Key::Char('R'),
+        detach_pane: Key::Alt('d'),
+        close_pane: Key::Alt('x'),
+        focus_pane_left: Key::Alt('h'),
+        focus_pane_down: Key::Alt('j'),
+        focus_pane_up: Key::Alt('k'),
+        focus_pane_right: Key::Alt('l'),
+        move_pane_left: Key::Alt('H'),
+        move_pane_down: Key::Alt('J'),
+        move_pane_up: Key::Alt('K'),
+        move_pane_right: Key::Alt('L'),
+        rotate_pane: Key::Alt('r'),
+        grow_pane: Key::Alt('='),
+        shrink_pane: Key::Alt('-'),
+        reset_panes: Key::Alt('0'),
       },
       plugin_command_keys: HashMap::new(),
       behavior: BehaviorConfig {
@@ -1594,6 +1658,20 @@ impl UserConfig {
     to_keys!(listening_party);
     to_keys!(like_track);
     to_keys!(generate_recap);
+    to_keys!(detach_pane);
+    to_keys!(close_pane);
+    to_keys!(focus_pane_left);
+    to_keys!(focus_pane_down);
+    to_keys!(focus_pane_up);
+    to_keys!(focus_pane_right);
+    to_keys!(move_pane_left);
+    to_keys!(move_pane_down);
+    to_keys!(move_pane_up);
+    to_keys!(move_pane_right);
+    to_keys!(rotate_pane);
+    to_keys!(grow_pane);
+    to_keys!(shrink_pane);
+    to_keys!(reset_panes);
 
     Ok(())
   }
@@ -2335,6 +2413,20 @@ impl UserConfig {
       k.listening_party,
       k.like_track,
       k.generate_recap,
+      k.detach_pane,
+      k.close_pane,
+      k.focus_pane_left,
+      k.focus_pane_down,
+      k.focus_pane_up,
+      k.focus_pane_right,
+      k.move_pane_left,
+      k.move_pane_down,
+      k.move_pane_up,
+      k.move_pane_right,
+      k.rotate_pane,
+      k.grow_pane,
+      k.shrink_pane,
+      k.reset_panes,
     ]
   }
 
@@ -2695,6 +2787,20 @@ impl UserConfig {
       listening_party: Some(key_to_config_string(self.keys.listening_party)),
       like_track: Some(key_to_config_string(self.keys.like_track)),
       generate_recap: Some(key_to_config_string(self.keys.generate_recap)),
+      detach_pane: Some(key_to_config_string(self.keys.detach_pane)),
+      close_pane: Some(key_to_config_string(self.keys.close_pane)),
+      focus_pane_left: Some(key_to_config_string(self.keys.focus_pane_left)),
+      focus_pane_down: Some(key_to_config_string(self.keys.focus_pane_down)),
+      focus_pane_up: Some(key_to_config_string(self.keys.focus_pane_up)),
+      focus_pane_right: Some(key_to_config_string(self.keys.focus_pane_right)),
+      move_pane_left: Some(key_to_config_string(self.keys.move_pane_left)),
+      move_pane_down: Some(key_to_config_string(self.keys.move_pane_down)),
+      move_pane_up: Some(key_to_config_string(self.keys.move_pane_up)),
+      move_pane_right: Some(key_to_config_string(self.keys.move_pane_right)),
+      rotate_pane: Some(key_to_config_string(self.keys.rotate_pane)),
+      grow_pane: Some(key_to_config_string(self.keys.grow_pane)),
+      shrink_pane: Some(key_to_config_string(self.keys.shrink_pane)),
+      reset_panes: Some(key_to_config_string(self.keys.reset_panes)),
     };
 
     // Helper to build theme config from current values
@@ -3004,6 +3110,20 @@ mod tests {
         err.to_string().contains(bad),
         "error for {bad:?} must name the binding: {err}"
       );
+    }
+  }
+
+  #[test]
+  fn alt_arrows_parse_and_write_back_the_same_string() {
+    use super::{key_to_config_string, parse_key};
+    use crate::core::input::{Arrow, Key};
+
+    for (text, key) in [
+      ("alt-left", Key::AltArrow(Arrow::Left)),
+      ("alt-shift-up", Key::AltShiftArrow(Arrow::Up)),
+    ] {
+      assert_eq!(parse_key(text.to_string()).unwrap(), key);
+      assert_eq!(key_to_config_string(&key), text);
     }
   }
 
