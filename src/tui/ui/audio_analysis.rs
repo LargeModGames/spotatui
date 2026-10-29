@@ -1,6 +1,7 @@
-use crate::core::app::{section_at, AnalysisState, App, PITCH_NAMES};
+use crate::core::app::{section_at, ActiveBlock, AnalysisState, App, PITCH_NAMES};
+use crate::core::pane::Pane;
 use crate::core::user_config::{normalize_tick_rate_milliseconds, VisualizerStyle};
-use crate::tui::layout::main_layout_margin;
+use crate::tui::layout::{main_layout_margin, pane_area};
 use crate::tui::ui::{head_unit, retro};
 use ratatui::{
   layout::{Constraint, Layout, Rect},
@@ -31,18 +32,28 @@ fn visualizer_block<'a>() -> Block<'a> {
 /// and border inset itself.
 ///
 /// This and `visualizer_bar_count` are only called behind the audio-viz
-/// feature gates; slim builds still compile (and test) them.
+/// feature gates; slim builds still compile (and test) them. `None` when the
+/// visualizer shows neither full screen nor in a pane.
 #[allow(dead_code)]
-pub fn visualizer_inner_width(app: &App) -> u16 {
-  let root = Rect::new(0, 0, app.view.size.width, app.view.size.height);
-  let [_, visualizer_area] = analysis_areas(root, main_layout_margin(app));
-  visualizer_block().inner(visualizer_area).width
+pub fn visualizer_inner_width(app: &App) -> Option<u16> {
+  let (root, margin) = if app.get_current_route().active_block == ActiveBlock::Analysis {
+    (
+      Rect::new(0, 0, app.view.size.width, app.view.size.height),
+      main_layout_margin(app),
+    )
+  } else {
+    (pane_area(app, Pane::Visualizer)?, 0)
+  };
+  let [_, visualizer_area] = analysis_areas(root, margin);
+  Some(visualizer_block().inner(visualizer_area).width)
 }
 
 pub fn draw(f: &mut Frame<'_>, app: &App) {
-  let margin = main_layout_margin(app);
+  draw_in(f, app, f.area(), main_layout_margin(app));
+}
 
-  let [info_area, visualizer_area] = analysis_areas(f.area(), margin);
+pub fn draw_in(f: &mut Frame<'_>, app: &App, area: Rect, margin: u16) {
+  let [info_area, visualizer_area] = analysis_areas(area, margin);
 
   let white = Style::default().fg(app.user_config.theme.text.into());
   let gray = Style::default().fg(app.user_config.theme.inactive.into());

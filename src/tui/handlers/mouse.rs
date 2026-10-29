@@ -1,9 +1,11 @@
 use super::{common_key_events, library, lyrics_view, playbar, playlist, settings};
 use crate::core::action::{Action, NavTarget};
 use crate::core::app::{ActiveBlock, App, RouteId, SettingValue, SettingsCategory};
+use crate::core::pane::Pane;
 use crate::tui::event::Key;
 use crate::tui::layout::{
-  compute_main_layout, fullscreen_view_layout, miniplayer_playbar_area, MainLayoutAreas,
+  compute_main_layout, compute_pane_layout, fullscreen_view_layout, miniplayer_playbar_area,
+  pane_close_mark, MainLayoutAreas,
 };
 use crate::tui::ui::player::{playbar_control_at, playbar_progress_line};
 use crate::tui::ui::settings::{
@@ -72,6 +74,10 @@ pub fn handler(mouse: MouseEvent, app: &mut App) {
     return;
   }
 
+  if handle_pane_mouse(mouse, app) {
+    return;
+  }
+
   let Some(areas) = main_layout_areas(app) else {
     return;
   };
@@ -98,7 +104,7 @@ pub fn handler(mouse: MouseEvent, app: &mut App) {
   }
 
   if rect_contains(areas.playbar, mouse.column, mouse.row) {
-    handle_playbar_mouse(mouse, areas.playbar, ActiveBlock::PlayBar, app);
+    handle_playbar_mouse(mouse, areas.playbar, Some(ActiveBlock::PlayBar), app);
     return;
   }
 
@@ -225,14 +231,81 @@ fn handle_fullscreen_playbar_mouse(
   };
 
   if rect_contains(playbar_area, mouse.column, mouse.row) {
-    handle_playbar_mouse(mouse, playbar_area, focus_block, app);
+    handle_playbar_mouse(mouse, playbar_area, Some(focus_block), app);
   }
+}
+
+/// Close marks, border drags and clicks in a detached pane; false leaves the event to `Main`.
+fn handle_pane_mouse(mouse: MouseEvent, app: &mut App) -> bool {
+  let Some(layout) = compute_pane_layout(app) else {
+    app.view.dragged_pane_split = None;
+    return false;
+  };
+  let (column, row) = (mouse.column, mouse.row);
+  match mouse.kind {
+    MouseEventKind::Drag(MouseButton::Left) => {
+      if let Some(index) = app.view.dragged_pane_split {
+        if let Some(border) = layout.borders.iter().find(|border| border.index == index) {
+          let percent = border.percent_at(column, row);
+          app.change_pane_layout(|tree| tree.set_split_percent(index, percent));
+        }
+        return true;
+      }
+    }
+    MouseEventKind::Up(MouseButton::Left) => {
+      if app.view.dragged_pane_split.take().is_some() {
+        return true;
+      }
+    }
+    MouseEventKind::Down(MouseButton::Left) => {
+      let closed = layout.panes.iter().find(|(pane, area)| {
+        *pane != Pane::Main
+          && pane_close_mark(*area).is_some_and(|mark| rect_contains(mark, column, row))
+      });
+      if let Some((pane, _)) = closed {
+        let pane = *pane;
+        app.change_pane_layout(|tree| tree.close(pane));
+        return true;
+      }
+      if let Some(border) = layout
+        .borders
+        .iter()
+        .find(|border| border.is_hit(column, row))
+      {
+        app.view.dragged_pane_split = Some(border.index);
+        return true;
+      }
+    }
+    _ => {}
+  }
+
+  let Some((pane, area)) = layout
+    .panes
+    .into_iter()
+    .find(|(_, area)| rect_contains(*area, column, row))
+  else {
+    return false;
+  };
+  if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+    app.view.focused_pane = pane;
+  }
+  match pane {
+    Pane::Main => return false,
+    Pane::Lyrics => match mouse.kind {
+      MouseEventKind::ScrollUp => lyrics_view::scroll_by(app, -1),
+      MouseEventKind::ScrollDown => lyrics_view::scroll_by(app, 1),
+      _ => {}
+    },
+    Pane::MiniPlayer => handle_playbar_mouse(mouse, area, None, app),
+    Pane::Visualizer | Pane::CoverArt | Pane::Queue => {}
+  }
+  true
 }
 
 fn handle_playbar_mouse(
   mouse: MouseEvent,
   playbar_area: Rect,
-  focus_block: ActiveBlock,
+  focus_block: Option<ActiveBlock>,
   app: &mut App,
 ) {
   match mouse.kind {
@@ -464,7 +537,10 @@ fn focus_content_table(active_block: ActiveBlock, app: &mut App) {
   app.set_current_route_state(Some(active_block), Some(active_block));
 }
 
-fn focus_playbar(block: ActiveBlock, app: &mut App) {
+fn focus_playbar(block: Option<ActiveBlock>, app: &mut App) {
+  let Some(block) = block else {
+    return;
+  };
   if block == ActiveBlock::PlayBar {
     common_key_events::remember_playbar_origin(app);
   }
@@ -1261,7 +1337,7 @@ mod tests {
         };
         app.set_current_route_state(Some(active), Some(origin));
 
-        focus_playbar(ActiveBlock::PlayBar, &mut app);
+        focus_playbar(Some(ActiveBlock::PlayBar), &mut app);
         playbar::handler(away, &mut app);
 
         let route = app.get_current_route();
@@ -2481,5 +2557,58 @@ mod tests {
       Some(scrolled_offset),
       "click must resolve to the visible row anchored by scroll offset"
     );
+  }
+
+  fn pane_rect(app: &App, pane: Pane) -> Rect {
+    crate::tui::layout::pane_area(app, pane).unwrap()
+  }
+
+  #[test]
+  fn a_click_in_a_detached_pane_focuses_it() {
+    let mut app = crate::tui::layout::app_with_panes(160, 50);
+    let lyrics = pane_rect(&app, Pane::Lyrics);
+
+    handler(
+      mouse_event(
+        MouseEventKind::Down(MouseButton::Left),
+        lyrics.x + 5,
+        lyrics.y + 5,
+      ),
+      &mut app,
+    );
+
+    assert_eq!(app.view.focused_pane, Pane::Lyrics);
+  }
+
+  #[test]
+  fn a_click_on_the_close_mark_closes_the_pane() {
+    let mut app = crate::tui::layout::app_with_panes(160, 50);
+    let mark = pane_close_mark(pane_rect(&app, Pane::Visualizer)).unwrap();
+
+    handler(
+      mouse_event(MouseEventKind::Down(MouseButton::Left), mark.x + 1, mark.y),
+      &mut app,
+    );
+
+    assert!(!app.pane_open(Pane::Visualizer));
+    assert!(app.pane_open(Pane::Lyrics));
+  }
+
+  #[test]
+  fn a_drag_on_a_split_border_resizes_the_split() {
+    let mut app = crate::tui::layout::app_with_panes(160, 50);
+    let main = pane_rect(&app, Pane::Main);
+    let border_column = main.x + main.width - 1;
+
+    for event in [
+      mouse_event(MouseEventKind::Down(MouseButton::Left), border_column, 20),
+      mouse_event(MouseEventKind::Drag(MouseButton::Left), 79, 20),
+      mouse_event(MouseEventKind::Up(MouseButton::Left), 79, 20),
+    ] {
+      handler(event, &mut app);
+    }
+
+    assert_eq!(pane_rect(&app, Pane::Main).width, 79);
+    assert_eq!(app.view.dragged_pane_split, None);
   }
 }

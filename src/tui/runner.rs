@@ -1,5 +1,6 @@
 use crate::core::app::{self, ActiveBlock, App, RouteId};
 use crate::core::driver::{Driver, TickEnv};
+use crate::core::pane::Pane;
 use crate::core::user_config::UserConfig;
 use crate::infra::network::IoEvent;
 use crate::tui::event::{self, Key};
@@ -118,6 +119,10 @@ fn frame_cursor_position(app: &App, active_block: ActiveBlock) -> Option<(u16, u
 /// ever get as far as the DJ handler". `Key::Ctrl('c')` stays at the call site,
 /// because it is an unconditional quit that predates any of this.
 fn dispatch_key(key: Key, app: &mut App) -> bool {
+  let key = match key.plain_arrow() {
+    Some(plain) if !handlers::pane_arrows_apply(app) => plain,
+    _ => key,
+  };
   let current_active_block = app.get_current_route().active_block;
 
   if current_active_block == ActiveBlock::ExitPrompt {
@@ -142,7 +147,9 @@ fn dispatch_key(key: Key, app: &mut App) -> bool {
   } else if key_reaches_handlers_before_back(app, key) {
     handlers::handle_app(key, app);
   } else if key == app.user_config.keys.back {
-    if !back_key_clears_playlist_filter(app, current_active_block) {
+    if !handlers::leave_focused_pane(app)
+      && !back_key_clears_playlist_filter(app, current_active_block)
+    {
       if current_active_block == ActiveBlock::Settings {
         handlers::handle_app(key, app);
       } else if app.get_current_route().active_block == ActiveBlock::AnnouncementPrompt {
@@ -190,6 +197,31 @@ mod tests {
     app.view.input_cursor_position = 7;
     app.view.input_scroll_offset.set(2);
     app
+  }
+
+  #[test]
+  fn alt_arrow_is_a_plain_arrow_where_no_pane_uses_it() {
+    let mut app = app();
+    app.view.input = "abc".chars().collect();
+    app.view.input_idx = 3;
+    app.view.input_cursor_position = 3;
+    app.set_current_route_state(Some(ActiveBlock::Input), None);
+
+    dispatch_key(Key::AltArrow(crate::core::input::Arrow::Left), &mut app);
+
+    assert_eq!(app.view.input_idx, 2);
+  }
+
+  #[test]
+  fn back_key_in_a_focused_pane_returns_the_focus_without_a_pop() {
+    let mut app = crate::tui::layout::app_with_panes(160, 50);
+    app.view.focused_pane = Pane::Visualizer;
+    let route = app.get_current_route().id.clone();
+
+    dispatch_key(app.user_config.keys.back, &mut app);
+
+    assert_eq!(app.view.focused_pane, Pane::Main);
+    assert_eq!(app.get_current_route().id, route);
   }
 
   #[test]
@@ -601,7 +633,9 @@ pub async fn start_ui(
     app.view.terminal_input_caps.keyboard_enhancement_supported = keyboard_enhancement_supported;
     app.view.terminal_input_caps.keyboard_enhancement_enabled = keyboard_enhancement_enabled;
     app.view.terminal_input_caps.ctrl_punct_reliable = app::CapabilityState::Unknown;
+    app.keep_pane_focus_in_layout();
   }
+  let mut route_depth = app.lock().await.navigation_depth();
 
   let events = event::Events::new(user_config.behavior.tick_rate_milliseconds);
   let inspector = crate::tui::dev_inspect::Inspector::from_env(events.sender());
@@ -647,16 +681,25 @@ pub async fn start_ui(
       if app.get_current_route().active_block == ActiveBlock::HelpMenu {
         ui::ensure_help_menu_model(&mut app);
       }
+      handlers::show_main_for_new_screen(&mut app, route_depth);
+      route_depth = app.navigation_depth();
 
       let current_route = app.get_current_route();
       // The banner animates whenever the Home screen is displayed, regardless
       // of which block has focus (on Home the focused block is usually Empty
       // or Library, not Home), so gate the fast tick on the route. A disabled
       // banner gradient renders statically and needs no fast tick.
+      let pane_layout = crate::tui::layout::compute_pane_layout(&app);
+      let pane_shows = |pane| {
+        pane_layout
+          .as_ref()
+          .is_some_and(|layout| layout.area(pane).is_some())
+      };
       let animation_active = (current_route.id == RouteId::Home
         && app.user_config.behavior.banner_gradient)
         || current_route.active_block == ActiveBlock::Analysis
-        || (current_route.id == RouteId::LyricsView
+        || pane_shows(Pane::Visualizer)
+        || ((current_route.id == RouteId::LyricsView || pane_shows(Pane::Lyrics))
           && app.lyrics_status() == crate::core::app::LyricsStatus::Found)
         || app.view.liked_song_animation_frame.is_some()
         || app.theme_fade_active();
@@ -780,11 +823,8 @@ pub async fn start_ui(
         // The visualizer bar count is frontend geometry (terminal width and
         // layout margin), so it is resolved here and injected.
         #[cfg(any(feature = "audio-viz", feature = "audio-viz-cpal"))]
-        let viz_bars = (app.get_current_route().active_block == ActiveBlock::Analysis).then(|| {
-          ui::audio_analysis::visualizer_bar_count(
-            app.user_config.behavior.visualizer_style,
-            ui::audio_analysis::visualizer_inner_width(&app),
-          )
+        let viz_bars = ui::audio_analysis::visualizer_inner_width(&app).map(|width| {
+          ui::audio_analysis::visualizer_bar_count(app.user_config.behavior.visualizer_style, width)
         });
         driver.tick(
           &mut app,

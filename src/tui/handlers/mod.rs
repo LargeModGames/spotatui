@@ -26,6 +26,7 @@ mod local_browser;
 mod lyrics_view;
 mod miniplayer;
 mod mouse;
+mod panes;
 mod party;
 mod playbar;
 mod playlist;
@@ -56,6 +57,7 @@ pub use announcement_prompt::dismiss as dismiss_announcement;
 pub(crate) use dialog::playlist_picker_captures_key;
 pub use input::handler as input_handler;
 pub use mouse::handler as mouse_handler;
+pub use panes::{leave_focused_pane, pane_arrows_apply, show_main_for_new_screen};
 
 #[cfg(target_os = "macos")]
 fn key_matches_open_settings_binding(key: Key, binding: Key) -> bool {
@@ -215,6 +217,10 @@ pub fn handle_app(key: Key, app: &mut App) {
     || key_matches_open_settings_binding(key, effective_open_settings)
   {
     app.apply(Action::Navigate(NavTarget::Settings));
+    return;
+  }
+
+  if !is_input_mode(app) && panes::handle_pane_key(key, app) {
     return;
   }
 
@@ -433,7 +439,11 @@ pub fn handle_app(key: Key, app: &mut App) {
         app.apply(Action::OpenAddPlayingTrackDialog);
       }
     }
-    _ => handle_block_events(key, app),
+    _ => {
+      if !panes::handle_focused_pane_key(key, app) {
+        handle_block_events(key, app);
+      }
+    }
   }
 }
 

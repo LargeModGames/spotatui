@@ -491,7 +491,10 @@ pub fn draw_queue(f: &mut Frame<'_>, app: &App) {
   let [area] = f
     .area()
     .layout(&Layout::vertical([Constraint::Percentage(100)]).margin(2));
+  draw_queue_in(f, app, area);
+}
 
+pub fn draw_queue_in(f: &mut Frame<'_>, app: &App, area: Rect) {
   let style = app.user_config.theme.base_style();
   let mut items: Vec<ListItem> = Vec::new();
 

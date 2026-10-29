@@ -815,7 +815,7 @@ pub fn draw_miniplayer(f: &mut Frame<'_>, app: &App) {
 }
 
 #[cfg(feature = "cover-art")]
-fn draw_cover_art_content(f: &mut Frame<'_>, app: &App, area: Rect) {
+pub(crate) fn draw_cover_art_content(f: &mut Frame<'_>, app: &App, area: Rect) {
   use ratatui::widgets::Clear;
 
   // Clear the area to remove any lingering terminal image protocol artifacts

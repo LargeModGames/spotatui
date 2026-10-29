@@ -14,6 +14,7 @@ use ratatui_image::{
   protocol::StatefulProtocol,
   Resize, StatefulImage,
 };
+use std::cell::Cell;
 use std::sync::{mpsc, Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
 mod dither;
@@ -75,7 +76,12 @@ pub fn sync(store: &CoverArtStore) {
   let Some(renderer) = RENDERER.get() else {
     return;
   };
-  for surface in [&renderer.playbar, &renderer.fullscreen, &renderer.plugin] {
+  for surface in [
+    &renderer.playbar,
+    &renderer.pane_playbar,
+    &renderer.fullscreen,
+    &renderer.plugin,
+  ] {
     let mut lock = lock_surface(surface);
     let stale = lock
       .as_ref()
@@ -86,11 +92,23 @@ pub fn sync(store: &CoverArtStore) {
   }
 }
 
+thread_local! {
+  static IN_PANE_PLAYBAR: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Run `draw` with the playbar art on the Mini player pane's own surface.
+pub fn in_pane_playbar<R>(draw: impl FnOnce() -> R) -> R {
+  IN_PANE_PLAYBAR.with(|flag| flag.set(true));
+  let result = draw();
+  IN_PANE_PLAYBAR.with(|flag| flag.set(false));
+  result
+}
+
 /// Render into the playbar's cover slot.
 pub fn render(f: &mut Frame, area: Rect, store: &CoverArtStore, config: &UserConfig) {
   if let Some(renderer) = RENDERER.get() {
     renderer.render_surface(
-      &renderer.playbar,
+      renderer.playbar_surface(),
       f,
       area,
       store,
@@ -107,7 +125,7 @@ pub fn render(f: &mut Frame, area: Rect, store: &CoverArtStore, config: &UserCon
 /// Measure the playbar image's fitted size, so the layout can size its slot.
 pub fn size_for(area: Rect, store: &CoverArtStore) -> Option<Rect> {
   let renderer = RENDERER.get()?;
-  renderer.surface_size_for(&renderer.playbar, area, Resize::Fit(None), store)
+  renderer.surface_size_for(renderer.playbar_surface(), area, Resize::Fit(None), store)
 }
 
 /// Render into the fullscreen cover art view.
@@ -169,6 +187,8 @@ struct CoverArtRenderer {
   terminal_background: Option<[u8; 3]>,
   /// Playbar protocol state.
   playbar: Mutex<Option<Surface>>,
+  /// The Mini player pane's playbar, drawn in the same frame as the main playbar.
+  pane_playbar: Mutex<Option<Surface>>,
   /// Separate protocol state for the fullscreen cover art view, avoiding
   /// conflicts when the same image is rendered in both the playbar and
   /// fullscreen in one frame.
@@ -332,8 +352,17 @@ impl CoverArtRenderer {
       picker,
       terminal_background,
       playbar: Mutex::new(None),
+      pane_playbar: Mutex::new(None),
       fullscreen: Mutex::new(None),
       plugin: Mutex::new(None),
+    }
+  }
+
+  fn playbar_surface(&self) -> &Mutex<Option<Surface>> {
+    if IN_PANE_PLAYBAR.with(Cell::get) {
+      &self.pane_playbar
+    } else {
+      &self.playbar
     }
   }
 

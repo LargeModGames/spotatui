@@ -11,6 +11,7 @@ pub mod help;
 pub mod home;
 pub mod library;
 pub mod lyrics;
+pub mod panes;
 pub mod player;
 pub mod playlist_sync;
 pub mod plugin_screen;
@@ -23,7 +24,7 @@ pub mod tables;
 pub mod util;
 
 use crate::core::app::{App, RouteId};
-use crate::tui::layout::{compute_main_layout, is_wide_layout};
+use crate::tui::layout::{compute_main_layout, is_wide_layout, main_hidden};
 use ratatui::{layout::Rect, Frame};
 
 pub use self::artist::draw_artist_albums;
@@ -61,10 +62,13 @@ pub fn draw_main_layout(f: &mut Frame<'_>, app: &App) {
         draw_input_and_help_box(f, app, input_area, help_area, settings_area);
       }
     }
-    draw_user_block(f, app, areas.sidebar);
-    draw_route_content(f, app, areas.content);
+    if !main_hidden(app) {
+      draw_user_block(f, app, areas.sidebar);
+      draw_route_content(f, app, areas.content);
+    }
     draw_playbar(f, app, areas.playbar);
   }
+  panes::draw_detached_panes(f, app);
 
   // Possibly draw confirm dialog
   draw_dialog(f, app);
@@ -154,6 +158,7 @@ mod tests {
   use super::*;
   use crate::core::app::ActiveBlock;
   use crate::core::geometry::Viewport;
+  use crate::core::pane::Pane;
   use ratatui::{backend::TestBackend, buffer::Buffer, Terminal};
 
   fn render(width: u16, height: u16) -> (App, Buffer) {
@@ -197,6 +202,37 @@ mod tests {
       playlists_row.contains("Playlists"),
       "playlists panel not at hitbox row: {playlists_row}"
     );
+  }
+
+  #[test]
+  fn detached_panes_draw_beside_main_with_their_close_marks() {
+    let mut app = crate::tui::layout::app_with_panes(160, 50);
+    app.push_navigation_stack(RouteId::Home, ActiveBlock::Home);
+    let mut terminal = Terminal::new(TestBackend::new(160, 50)).unwrap();
+    terminal.draw(|f| draw_main_layout(f, &app)).unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    let rect_of = |pane| crate::tui::layout::pane_area(&app, pane).unwrap();
+    let (lyrics, visualizer) = (rect_of(Pane::Lyrics), rect_of(Pane::Visualizer));
+
+    let lyrics_top = row_text(&buffer, lyrics.y);
+    let visualizer_top = row_text(&buffer, visualizer.y);
+    let pane_part = |row: &str, area: Rect| -> String {
+      row
+        .chars()
+        .skip(area.x as usize)
+        .take(area.width as usize)
+        .collect()
+    };
+
+    let lyrics_title = app.strings().screens.lyrics_title;
+    assert!(
+      pane_part(&lyrics_top, lyrics).contains(lyrics_title),
+      "{lyrics_top}"
+    );
+    assert!(pane_part(&lyrics_top, lyrics).contains(panes::CLOSE_MARK));
+    assert!(pane_part(&visualizer_top, visualizer).contains(panes::CLOSE_MARK));
+    let main_part = pane_part(&row_text(&buffer, 2), rect_of(Pane::Main));
+    assert!(!main_part.contains(panes::CLOSE_MARK), "{main_part}");
   }
 
   #[test]
