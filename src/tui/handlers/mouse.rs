@@ -245,9 +245,12 @@ fn handle_pane_mouse(mouse: MouseEvent, app: &mut App) -> bool {
   match mouse.kind {
     MouseEventKind::Drag(MouseButton::Left) => {
       if let Some(index) = app.view.dragged_pane_split {
-        if let Some(border) = layout.borders.iter().find(|border| border.index == index) {
-          let percent = border.percent_at(column, row);
-          app.change_pane_layout(|tree| tree.set_split_percent(index, percent));
+        match layout.borders.iter().find(|border| border.index == index) {
+          Some(border) => {
+            let percent = border.percent_at(column, row);
+            app.change_pane_layout(|tree| tree.set_split_percent(index, percent));
+          }
+          None => app.view.dragged_pane_split = None,
         }
         return true;
       }
@@ -258,6 +261,7 @@ fn handle_pane_mouse(mouse: MouseEvent, app: &mut App) -> bool {
       }
     }
     MouseEventKind::Down(MouseButton::Left) => {
+      app.view.dragged_pane_split = None;
       let closed = layout.panes.iter().find(|(pane, area)| {
         *pane != Pane::Main
           && pane_close_mark(*area).is_some_and(|mark| rect_contains(mark, column, row))
@@ -2609,6 +2613,32 @@ mod tests {
     }
 
     assert_eq!(pane_rect(&app, Pane::Main).width, 79);
+    assert_eq!(app.view.dragged_pane_split, None);
+  }
+
+  #[test]
+  fn a_click_away_from_a_border_ends_a_drag_that_lost_its_release() {
+    let mut app = crate::tui::layout::app_with_panes(160, 50);
+    let main = pane_rect(&app, Pane::Main);
+    let lyrics = pane_rect(&app, Pane::Lyrics);
+
+    for event in [
+      mouse_event(
+        MouseEventKind::Down(MouseButton::Left),
+        main.x + main.width - 1,
+        20,
+      ),
+      mouse_event(
+        MouseEventKind::Down(MouseButton::Left),
+        lyrics.x + 5,
+        lyrics.y + 5,
+      ),
+      mouse_event(MouseEventKind::Drag(MouseButton::Left), 79, 20),
+    ] {
+      handler(event, &mut app);
+    }
+
+    assert_eq!(pane_rect(&app, Pane::Main), main);
     assert_eq!(app.view.dragged_pane_split, None);
   }
 }

@@ -45,13 +45,15 @@ pub enum Event {
 
 /// Whether the reader thread hands a mouse event to the UI loop. Every
 /// forwarded event locks the `App` and redraws, so pointer motion (`Moved`)
-/// and button releases are dropped. A left drag is kept: it scrubs the
-/// playbar progress line.
+/// and most button releases are dropped. A left drag is kept: it scrubs the
+/// playbar progress line and moves a pane border, and the left release ends
+/// the border drag.
 fn forwards_mouse(kind: MouseEventKind) -> bool {
   matches!(
     kind,
     MouseEventKind::Down(_)
       | MouseEventKind::Drag(MouseButton::Left)
+      | MouseEventKind::Up(MouseButton::Left)
       | MouseEventKind::ScrollUp
       | MouseEventKind::ScrollDown
   )
@@ -210,8 +212,10 @@ mod tests {
   }
 
   #[test]
-  fn left_drag_is_forwarded_to_the_mouse_handler() {
+  fn left_drag_and_its_release_are_forwarded_to_the_mouse_handler() {
     assert!(forwards_mouse(MouseEventKind::Drag(MouseButton::Left)));
+    assert!(forwards_mouse(MouseEventKind::Up(MouseButton::Left)));
+    assert!(!forwards_mouse(MouseEventKind::Up(MouseButton::Right)));
   }
 
   #[test]
