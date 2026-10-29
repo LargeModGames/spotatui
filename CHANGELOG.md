@@ -4,6 +4,7 @@
 
 ### Added
 
+- **Detach a screen into a pane**: open the lyrics (`B`), the visualizer (`v`), cover art (`G`), the queue (`Q`) or the mini player (`T`) and press `Alt+d`. The view leaves full screen and stays on screen in a pane beside the library, so you can see the lyrics and the visualizer at the same time in one terminal. `Alt+d` in a focused pane puts it back to full screen. `Alt+h/j/k/l` (or `Alt` with an arrow key) moves the focus between panes, `Alt+H/J/K/L` (or `Alt+Shift` with an arrow key) swaps the focused pane with its neighbor, `Alt+r` turns its split, `Alt+=` and `Alt+-` resize it, `Alt+x` closes it, `Alt+0` closes every pane and `Alt+x` on the main layout hides it, with the search box, help, settings and the playbar still on screen. With mouse input on, a click focuses a pane, `[x]` closes it and a drag on the line between two panes resizes them. The layout is saved in `state.yml` and comes back at the next launch. Every key can be rebound in `config.yml`.
 - **Search the add-to-playlist picker**: press `/` (the `search` key) in the picker that `w` and `W` open and type part of a playlist name. The list narrows to the matching playlists you can add to, including the ones inside folders. `Enter` keeps the search and a second `Enter` adds the track, `Esc` clears the search, and a second `Esc` closes the picker ([#924](https://github.com/LargeModGames/spotatui/issues/924)).
 
 ### Fixed

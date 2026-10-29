@@ -298,6 +298,41 @@ behavior:
 - Unknown position strings fall back to the default with a warning.
 - Mouse hit-testing follows every arrangement automatically.
 
+### Detached panes
+
+The lyrics, the visualizer, cover art, the queue and the mini player can leave full screen and stay beside the main layout as panes. Open one of them and press `Alt+d`. The new pane goes beside the focused pane: side by side when that pane is wide, stacked when it is tall.
+
+| Key | Does |
+|-----|------|
+| `Alt+d` | Detach the open full-screen view into a pane, or put the focused pane back to full screen |
+| `Alt+x` | Close the focused pane, or hide the main layout when it has focus |
+| `Alt+h` / `Alt+j` / `Alt+k` / `Alt+l`, or `Alt` with an arrow key | Focus the pane on the left, below, above, on the right |
+| `Alt+H` / `Alt+J` / `Alt+K` / `Alt+L`, or `Alt+Shift` with an arrow key | Swap the focused pane with that neighbor |
+| `Alt+r` | Turn the split of the focused pane (side by side or stacked) |
+| `Alt+=` / `Alt+-` | Make the focused pane larger or smaller |
+| `Alt+0` | Close every pane and show the main layout again |
+
+- A focused pane gets the keys of its view (for example `V` cycles the visualizer style). `Esc` or the back key gives the focus back to the main layout. The open key of a detached view (`B` for the lyrics) focuses its pane.
+- With mouse input on, a click focuses a pane, `[x]` on its border closes it, and a drag on the line between two panes resizes them.
+- The keys are `detach_pane`, `close_pane`, `focus_pane_left`, `focus_pane_down`, `focus_pane_up`, `focus_pane_right`, `move_pane_left`, `move_pane_down`, `move_pane_up`, `move_pane_right`, `rotate_pane`, `grow_pane` and `shrink_pane` under `keybindings` in `config.yml`.
+- The layout is saved as `pane_layout` in `state.yml`, a tree you can also edit by hand:
+
+  ```yaml
+  pane_layout:
+    axis: horizontal   # horizontal = side by side, vertical = stacked
+    percent: 60        # the share of `first`, 10..=90
+    first: main
+    second:
+      axis: vertical
+      percent: 50
+      first: lyrics
+      second: visualizer
+  ```
+
+  The leaves are `main`, `lyrics`, `visualizer`, `cover_art`, `queue` and `mini_player`. A leaf can appear only once; otherwise the layout loads as `main` alone. A layout without `main` is a hidden main layout.
+- `Alt+d` refuses a new pane when it, or the main layout, would be too small for the terminal. If the window becomes smaller than a saved layout needs, the panes hide and the main layout takes the whole window. They come back when the window is large enough. While they hide, `Alt+x` closes one hidden pane at a time.
+- `Alt+x` with the focus on the main layout hides it, when at least one pane is open. The search box, the help button and the settings button stay in a row above the panes, and the playbar stays in its usual place. The main layout comes back when a key opens a new screen in it, for example a search or a jump to an album, or when you press `Alt+0`.
+
 ## Other behavior keys
 
 These keys also go under `behavior:`. Defaults below are the built-in values when a key is omitted; most can also be changed in Settings.
