@@ -21,6 +21,10 @@ pub struct ViewState {
   /// Terminal geometry as of the last frame. The small/large search limits
   /// derive from it.
   pub size: Viewport,
+  /// The pane that gets the keys; `Pane::Main` is the normal layout.
+  pub focused_pane: Pane,
+  /// The pre-order index of the split border the mouse drags, from Down until Up.
+  pub dragged_pane_split: Option<usize>,
   /// What the terminal can report about key presses, probed at startup and
   /// consulted when the rebind flow validates a capture.
   pub terminal_input_caps: TerminalInputCapabilities,

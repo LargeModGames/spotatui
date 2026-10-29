@@ -389,6 +389,10 @@ impl App {
     }
   }
 
+  pub fn navigation_depth(&self) -> usize {
+    self.navigation_stack.len()
+  }
+
   pub fn get_current_route(&self) -> &Route {
     // if for some reason there is no route return the default
     self.navigation_stack.last().unwrap_or(&DEFAULT_ROUTE)

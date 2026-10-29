@@ -2,6 +2,7 @@ use crate::core::action::LibraryTarget;
 use crate::core::geometry::Viewport;
 use crate::core::input::Key;
 use crate::core::pagination::{CursorPaged, Paged};
+use crate::core::pane::{Pane, PaneNode};
 use crate::core::plugin_api::{
   ArtistInfo, EpisodeInfo, PlayableInfo, PlaylistInfo, SavedAlbumInfo, ShowInfo, TrackInfo,
 };

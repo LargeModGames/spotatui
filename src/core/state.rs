@@ -5,7 +5,7 @@
 //! edits do not churn every time volume, source, pane sizes, announcements, or
 //! radio stations change.
 
-use crate::core::{limits::MAX_PLAYBAR_ROWS, source::Source};
+use crate::core::{limits::MAX_PLAYBAR_ROWS, pane::PaneNode, source::Source};
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -54,6 +54,7 @@ pub struct RuntimeState {
   pub sidebar_width_percent: u8,
   pub playbar_height_rows: u16,
   pub library_height_percent: u8,
+  pub pane_layout: PaneNode,
   pub radio_stations: Vec<RadioStationConfig>,
   /// Whether the one-time community-playlist-pin prompt has been shown.
   pub community_pin_prompt_shown: bool,
@@ -72,6 +73,7 @@ impl Default for RuntimeState {
       sidebar_width_percent: 20,
       playbar_height_rows: 6,
       library_height_percent: 30,
+      pane_layout: PaneNode::default(),
       radio_stations: Vec::new(),
       community_pin_prompt_shown: false,
       spotify_device_id: None,
@@ -105,6 +107,9 @@ impl RuntimeState {
     if let Some(library_height_percent) = state.library_height_percent {
       self.library_height_percent = library_height_percent.min(100);
     }
+    if let Some(pane_layout) = state.pane_layout.as_ref().and_then(PaneNode::sanitized) {
+      self.pane_layout = pane_layout;
+    }
     if let Some(radio_stations) = &state.radio_stations {
       self.radio_stations = sanitized_radio_stations(radio_stations);
     }
@@ -126,6 +131,7 @@ impl RuntimeState {
       sidebar_width_percent: Some(self.sidebar_width_percent.min(100)),
       playbar_height_rows: Some(self.playbar_height_rows.min(MAX_PLAYBAR_ROWS)),
       library_height_percent: Some(self.library_height_percent.min(100)),
+      pane_layout: self.pane_layout.sanitized(),
       radio_stations: Some(sanitized_radio_stations(&self.radio_stations)),
       community_pin_prompt_shown: Some(self.community_pin_prompt_shown),
       qobuz_bundle_cache: None,
@@ -223,6 +229,12 @@ pub struct PersistedRuntimeState {
   pub playbar_height_rows: Option<u16>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub library_height_percent: Option<u8>,
+  /// A layout this build cannot read (for example a pane from a newer release) loads as `None`.
+  #[serde(
+    skip_serializing_if = "Option::is_none",
+    deserialize_with = "deserialize_pane_layout"
+  )]
+  pub pane_layout: Option<PaneNode>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub radio_stations: Option<Vec<RadioStationConfig>>,
   #[serde(skip_serializing_if = "Option::is_none")]
@@ -287,6 +299,13 @@ impl PersistedRuntimeState {
     }
   }
 
+  pub fn pane_layout(pane_layout: &PaneNode) -> Self {
+    Self {
+      pane_layout: pane_layout.sanitized(),
+      ..Default::default()
+    }
+  }
+
   pub fn radio_station(radio_station: RadioStationConfig) -> Self {
     Self {
       radio_stations: Some(vec![radio_station]),
@@ -330,6 +349,7 @@ impl PersistedRuntimeState {
       && self.sidebar_width_percent.is_none()
       && self.playbar_height_rows.is_none()
       && self.library_height_percent.is_none()
+      && self.pane_layout.is_none()
       && self.radio_stations.is_none()
       && self.community_pin_prompt_shown.is_none()
       && self.qobuz_bundle_cache.is_none()
@@ -486,6 +506,7 @@ fn sanitized_persisted_state(state: &PersistedRuntimeState) -> PersistedRuntimeS
       .playbar_height_rows
       .map(|rows| rows.min(MAX_PLAYBAR_ROWS)),
     library_height_percent: state.library_height_percent.map(|height| height.min(100)),
+    pane_layout: state.pane_layout.as_ref().and_then(PaneNode::sanitized),
     radio_stations: state
       .radio_stations
       .as_deref()
@@ -530,6 +551,9 @@ fn merge_state_patch(merged: &mut PersistedRuntimeState, patch: &PersistedRuntim
   if let Some(library_height_percent) = patch.library_height_percent {
     merged.library_height_percent = Some(library_height_percent.min(100));
   }
+  if let Some(pane_layout) = patch.pane_layout.as_ref().and_then(PaneNode::sanitized) {
+    merged.pane_layout = Some(pane_layout);
+  }
   if let Some(radio_stations) = &patch.radio_stations {
     merged.radio_stations = Some(merged_radio_stations(
       merged.radio_stations.as_deref().unwrap_or(&[]),
@@ -545,6 +569,22 @@ fn merge_state_patch(merged: &mut PersistedRuntimeState, patch: &PersistedRuntim
   if let Some(device_id) = sanitized_device_id(patch.spotify_device_id.as_deref()) {
     merged.spotify_device_id = Some(device_id);
   }
+}
+
+fn deserialize_pane_layout<'de, D>(deserializer: D) -> Result<Option<PaneNode>, D::Error>
+where
+  D: serde::Deserializer<'de>,
+{
+  let value = Option::<serde_yaml::Value>::deserialize(deserializer)?;
+  Ok(
+    value.and_then(|value| match serde_yaml::from_value::<PaneNode>(value) {
+      Ok(layout) => layout.sanitized(),
+      Err(e) => {
+        log::warn!("[state] ignoring an unreadable pane_layout: {e}");
+        None
+      }
+    }),
+  )
 }
 
 fn sanitized_device_id(device_id: Option<&str>) -> Option<String> {
@@ -650,6 +690,48 @@ mod source_config {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::core::pane::{Pane, SplitAxis};
+
+  fn lyrics_beside_main() -> PaneNode {
+    let mut layout = PaneNode::default();
+    layout.detach(Pane::Main, Pane::Lyrics, SplitAxis::Horizontal);
+    layout
+  }
+
+  #[test]
+  fn the_pane_layout_saves_as_a_sparse_patch() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.yml");
+    save(&path, &PersistedRuntimeState::volume_percent(42)).unwrap();
+
+    save(
+      &path,
+      &PersistedRuntimeState::pane_layout(&lyrics_beside_main()),
+    )
+    .unwrap();
+
+    let loaded = load(&path).unwrap();
+    assert_eq!(loaded.volume_percent, Some(42));
+    let mut runtime = RuntimeState::default();
+    runtime.apply_persisted(&loaded);
+    assert_eq!(runtime.pane_layout, lyrics_beside_main());
+  }
+
+  #[test]
+  fn an_unreadable_pane_layout_loads_as_none_and_keeps_the_rest() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.yml");
+    std::fs::write(
+      &path,
+      "volume_percent: 42\npane_layout:\n  axis: vertical\n  percent: 50\n  first: main\n  second: hologram\n",
+    )
+    .unwrap();
+
+    let loaded = load(&path).unwrap();
+
+    assert_eq!(loaded.volume_percent, Some(42));
+    assert_eq!(loaded.pane_layout, None);
+  }
 
   #[test]
   fn missing_file_loads_as_empty_state() {
@@ -672,6 +754,7 @@ mod tests {
       sidebar_width_percent: Some(25),
       playbar_height_rows: Some(7),
       library_height_percent: Some(35),
+      pane_layout: Some(lyrics_beside_main()),
       radio_stations: Some(vec![RadioStationConfig {
         name: "Station".to_string(),
         url: "https://example.test/stream".to_string(),

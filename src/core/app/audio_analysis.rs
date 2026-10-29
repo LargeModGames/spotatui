@@ -194,9 +194,11 @@ impl App {
     self.pitch_view_available() && !self.view.pitch_dismissed
   }
 
-  /// Whether `V` can pick the pitch view: the analysis screen shows and a Spotify track plays.
+  /// Whether `V` can pick the pitch view: the analysis screen or its pane shows and a Spotify track plays.
   pub(crate) fn pitch_view_available(&self) -> bool {
-    self.spotify_track_playing && self.get_current_route().active_block == ActiveBlock::Analysis
+    self.spotify_track_playing
+      && (self.get_current_route().active_block == ActiveBlock::Analysis
+        || self.pane_open(Pane::Visualizer))
   }
 
   /// The tick's decision for the playing Spotify track; an analysis stays while its track plays.

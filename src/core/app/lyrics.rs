@@ -149,7 +149,7 @@ impl App {
     }
     let active = active_lyric_index(lyrics, self.lyric_progress_ms());
     let target = self.view.lyrics_view.manual_index.unwrap_or(active) as f64;
-    if self.get_current_route().id == RouteId::LyricsView {
+    if self.get_current_route().id == RouteId::LyricsView || self.pane_open(Pane::Lyrics) {
       self.view.lyrics_view.ease_toward(target, elapsed);
     } else {
       self.view.lyrics_view.snap_to(target);
