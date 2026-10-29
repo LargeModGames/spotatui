@@ -51,6 +51,8 @@ exit
 
 The release links the PipeWire library, so `libpipewire-0.3-0t64` must be installed even though no PipeWire server runs.
 
+Until a release with the visualizer fallback ([#959](https://github.com/LargeModGames/spotatui/pull/959)) is out, `latest` installs one without it: everything works except the live visualizer. Once you are on a newer release, self-update keeps you there.
+
 ## 3. Route the audio
 
 spotatui plays through ALSA. In Debian, send ALSA to Termux's PulseAudio, which plays through Android. Put this in Debian's `/etc/asound.conf`:
@@ -65,9 +67,15 @@ pcm.pulse_monitor {
 }
 ```
 
-`pulse_monitor` is what the visualizer records. It only ever opens a device with "monitor" in its name, never the default input, so this entry is required for the visualizer.
+`pulse_monitor` is what the visualizer records. It only opens a device with "monitor" or "loopback" in its name, never the default input, so this entry is required for the visualizer.
 
 ## 4. The launch script
+
+Create the folder for the scripts first:
+
+```sh
+mkdir -p ~/bin ~/.termux
+```
 
 Save this as `~/bin/spotatui-tv` in Termux and make it executable (`chmod +x`):
 
@@ -160,7 +168,7 @@ done
 tmux send-keys -t tv q; sleep 1; tmux send-keys -t tv Enter
 ```
 
-This gives Termux the same rights as `adb` on the box, and needs network debugging to stay on. Skip it if `q` is enough for you.
+This gives Termux the same rights as `adb` on the box, and needs network debugging to stay on, which lets any authorized device on your network control the box. Use it only on a network you trust, and skip it if `q` is enough for you. To undo it, turn off network debugging and revoke the USB debugging authorizations in Developer options.
 
 ## Troubleshooting
 
