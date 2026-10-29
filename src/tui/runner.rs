@@ -111,6 +111,30 @@ fn frame_cursor_position(app: &App, active_block: ActiveBlock) -> Option<(u16, u
   ))
 }
 
+/// Whether this frame moves and needs the animation tick rate.
+fn animation_active(app: &App) -> bool {
+  let current_route = app.get_current_route();
+  // The banner animates whenever the Home screen is displayed, regardless
+  // of which block has focus (on Home the focused block is usually Empty
+  // or Library, not Home), so gate the fast tick on the route. A disabled
+  // banner gradient renders statically and needs no fast tick.
+  // A pane animates only while it moves: the visualizer while a track
+  // plays or its bars fall, the lyrics while they follow playback, ease,
+  // or are browsed by hand.
+  let pane_shows = |pane| crate::tui::layout::visible_pane_area(app, pane).is_some();
+  let lyrics_pane_moves = app.playing_as_of_last_tick()
+    || app.view.lyrics_view.is_easing()
+    || app.view.lyrics_view.manual_index.is_some();
+  (current_route.id == RouteId::Home && app.user_config.behavior.banner_gradient)
+    || current_route.active_block == ActiveBlock::Analysis
+    || (app.visualizer_moves() && pane_shows(Pane::Visualizer))
+    || ((current_route.id == RouteId::LyricsView
+      || (lyrics_pane_moves && pane_shows(Pane::Lyrics)))
+      && app.lyrics_status() == crate::core::app::LyricsStatus::Found)
+    || app.view.liked_song_animation_frame.is_some()
+    || app.theme_fade_active()
+}
+
 /// One keypress, from the runner's event loop. Returns `true` when the user asked
 /// to quit and the loop must break.
 ///
@@ -210,6 +234,53 @@ mod tests {
     dispatch_key(Key::AltArrow(crate::core::input::Arrow::Left), &mut app);
 
     assert_eq!(app.view.input_idx, 2);
+  }
+
+  #[test]
+  fn a_visualizer_pane_ticks_fast_only_while_a_track_plays_or_its_bars_fall() {
+    let mut app = crate::tui::layout::app_with_panes(160, 50);
+    app.push_navigation_stack(RouteId::Search, ActiveBlock::SearchResultBlock);
+
+    assert!(!animation_active(&app));
+
+    app.spectrum_data = Some(crate::infra::audio::SpectrumData {
+      bands: vec![0.0, 0.4],
+      ..Default::default()
+    });
+    assert!(animation_active(&app));
+
+    app.spectrum_data = None;
+    app.note_analysis_clock(true, Instant::now());
+    assert!(animation_active(&app));
+  }
+
+  #[test]
+  fn a_paused_lyrics_pane_ticks_fast_only_while_it_is_browsed() {
+    let mut app = crate::tui::layout::app_with_panes(160, 50);
+    app.change_pane_layout(|tree| tree.close(Pane::Visualizer));
+    app.push_navigation_stack(RouteId::Search, ActiveBlock::SearchResultBlock);
+    app.set_lyrics(
+      app::LyricsStatus::Found,
+      Some(vec![(0, "one".to_string()), (5_000, "two".to_string())]),
+      false,
+    );
+    app.view.lyrics_view.snap_to(0.0);
+
+    assert!(!animation_active(&app));
+
+    app.view.lyrics_view.manual_index = Some(1);
+
+    assert!(animation_active(&app));
+  }
+
+  #[test]
+  fn a_screen_that_covers_the_panes_drops_their_fast_tick_and_capture() {
+    let mut app = crate::tui::layout::app_with_panes(160, 50);
+    app.note_analysis_clock(true, Instant::now());
+    app.push_navigation_stack(RouteId::Settings, ActiveBlock::Settings);
+
+    assert!(!animation_active(&app));
+    assert_eq!(ui::audio_analysis::visualizer_inner_width(&app), None);
   }
 
   #[test]
@@ -685,25 +756,7 @@ pub async fn start_ui(
       route_depth = app.navigation_depth();
 
       let current_route = app.get_current_route();
-      // The banner animates whenever the Home screen is displayed, regardless
-      // of which block has focus (on Home the focused block is usually Empty
-      // or Library, not Home), so gate the fast tick on the route. A disabled
-      // banner gradient renders statically and needs no fast tick.
-      let pane_layout = crate::tui::layout::compute_pane_layout(&app);
-      let pane_shows = |pane| {
-        pane_layout
-          .as_ref()
-          .is_some_and(|layout| layout.area(pane).is_some())
-      };
-      let animation_active = (current_route.id == RouteId::Home
-        && app.user_config.behavior.banner_gradient)
-        || current_route.active_block == ActiveBlock::Analysis
-        || pane_shows(Pane::Visualizer)
-        || ((current_route.id == RouteId::LyricsView || pane_shows(Pane::Lyrics))
-          && app.lyrics_status() == crate::core::app::LyricsStatus::Found)
-        || app.view.liked_song_animation_frame.is_some()
-        || app.theme_fade_active();
-      let current_tick_rate = if animation_active {
+      let current_tick_rate = if animation_active(&app) {
         app.user_config.behavior.animation_tick_rate_milliseconds
       } else {
         app.user_config.behavior.tick_rate_milliseconds

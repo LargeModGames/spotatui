@@ -226,6 +226,34 @@ pub fn pane_area(app: &App, pane: Pane) -> Option<Rect> {
   compute_pane_layout(app)?.area(pane)
 }
 
+/// Whether the current route draws the main layout and with it the panes; keep in step with
+/// the draw match in `runner::start_ui`.
+pub fn route_draws_main_layout(app: &App) -> bool {
+  match app.get_current_route().active_block {
+    ActiveBlock::HelpMenu
+    | ActiveBlock::Queue
+    | ActiveBlock::Error
+    | ActiveBlock::SelectDevice
+    | ActiveBlock::Analysis
+    | ActiveBlock::LyricsView
+    | ActiveBlock::MiniPlayer
+    | ActiveBlock::AnnouncementPrompt
+    | ActiveBlock::ExitPrompt
+    | ActiveBlock::Settings
+    | ActiveBlock::PluginScreen => false,
+    ActiveBlock::CoverArtView => !cfg!(feature = "cover-art"),
+    _ => true,
+  }
+}
+
+/// The rect of `pane` when it is on screen in this frame.
+pub fn visible_pane_area(app: &App, pane: Pane) -> Option<Rect> {
+  if !route_draws_main_layout(app) {
+    return None;
+  }
+  pane_area(app, pane)
+}
+
 /// Whether the panes are on screen and can take keys: no full-screen view or modal covers them.
 pub fn main_layout_has_keys(app: &App) -> bool {
   !matches!(

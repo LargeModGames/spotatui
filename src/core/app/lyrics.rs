@@ -70,6 +70,10 @@ impl LyricsViewState {
     self.scroll_pos = self.anim_from + (self.anim_target - self.anim_from) * eased;
   }
 
+  pub fn is_easing(&self) -> bool {
+    self.anim_progress < 1.0
+  }
+
   /// Jump straight to `target` with no animation (used while the view is not
   /// visible so it opens already in position).
   pub fn snap_to(&mut self, target: f64) {

@@ -211,6 +211,22 @@ impl App {
     }
   }
 
+  /// Whether the last tick saw any source play.
+  pub fn playing_as_of_last_tick(&self) -> bool {
+    self.analysis_clock.is_some_and(|clock| clock.playing)
+  }
+
+  /// Whether the visualizer still moves: a source plays, or its bars still fall after a pause.
+  pub fn visualizer_moves(&self) -> bool {
+    const SETTLED: f32 = 0.01;
+    self.playing_as_of_last_tick()
+      || self.pitch_levels.iter().any(|level| *level > SETTLED)
+      || self
+        .spectrum_data
+        .as_ref()
+        .is_some_and(|spectrum| spectrum.bands.iter().any(|band| *band > SETTLED))
+  }
+
   /// Starts the clock from a new position: a small correction is blended in, a seek is not.
   pub(crate) fn note_analysis_clock(&mut self, playing: bool, now: Instant) {
     let base = self.song_progress_ms;

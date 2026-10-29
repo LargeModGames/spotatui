@@ -1,7 +1,7 @@
 use crate::core::app::{section_at, ActiveBlock, AnalysisState, App, PITCH_NAMES};
 use crate::core::pane::Pane;
 use crate::core::user_config::{normalize_tick_rate_milliseconds, VisualizerStyle};
-use crate::tui::layout::{main_layout_margin, pane_area};
+use crate::tui::layout::{main_layout_margin, visible_pane_area};
 use crate::tui::ui::{head_unit, retro};
 use ratatui::{
   layout::{Constraint, Layout, Rect},
@@ -42,7 +42,7 @@ pub fn visualizer_inner_width(app: &App) -> Option<u16> {
       main_layout_margin(app),
     )
   } else {
-    (pane_area(app, Pane::Visualizer)?, 0)
+    (visible_pane_area(app, Pane::Visualizer)?, 0)
   };
   let [_, visualizer_area] = analysis_areas(root, margin);
   Some(visualizer_block().inner(visualizer_area).width)
