@@ -55,6 +55,8 @@ pub struct RuntimeState {
   pub playbar_height_rows: u16,
   pub library_height_percent: u8,
   pub pane_layout: PaneNode,
+  /// Whether `V` last picked the Spotify pitch view rather than a style.
+  pub pitch_view_chosen: bool,
   pub radio_stations: Vec<RadioStationConfig>,
   /// Whether the one-time community-playlist-pin prompt has been shown.
   pub community_pin_prompt_shown: bool,
@@ -74,6 +76,7 @@ impl Default for RuntimeState {
       playbar_height_rows: 6,
       library_height_percent: 30,
       pane_layout: PaneNode::default(),
+      pitch_view_chosen: true,
       radio_stations: Vec::new(),
       community_pin_prompt_shown: false,
       spotify_device_id: None,
@@ -110,6 +113,9 @@ impl RuntimeState {
     if let Some(pane_layout) = state.pane_layout.as_ref().and_then(PaneNode::sanitized) {
       self.pane_layout = pane_layout;
     }
+    if let Some(pitch_view_chosen) = state.pitch_view_chosen {
+      self.pitch_view_chosen = pitch_view_chosen;
+    }
     if let Some(radio_stations) = &state.radio_stations {
       self.radio_stations = sanitized_radio_stations(radio_stations);
     }
@@ -132,6 +138,7 @@ impl RuntimeState {
       playbar_height_rows: Some(self.playbar_height_rows.min(MAX_PLAYBAR_ROWS)),
       library_height_percent: Some(self.library_height_percent.min(100)),
       pane_layout: self.pane_layout.sanitized(),
+      pitch_view_chosen: Some(self.pitch_view_chosen),
       radio_stations: Some(sanitized_radio_stations(&self.radio_stations)),
       community_pin_prompt_shown: Some(self.community_pin_prompt_shown),
       qobuz_bundle_cache: None,
@@ -236,6 +243,8 @@ pub struct PersistedRuntimeState {
   )]
   pub pane_layout: Option<PaneNode>,
   #[serde(skip_serializing_if = "Option::is_none")]
+  pub pitch_view_chosen: Option<bool>,
+  #[serde(skip_serializing_if = "Option::is_none")]
   pub radio_stations: Option<Vec<RadioStationConfig>>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub community_pin_prompt_shown: Option<bool>,
@@ -306,6 +315,13 @@ impl PersistedRuntimeState {
     }
   }
 
+  pub fn pitch_view_chosen(pitch_view_chosen: bool) -> Self {
+    Self {
+      pitch_view_chosen: Some(pitch_view_chosen),
+      ..Default::default()
+    }
+  }
+
   pub fn radio_station(radio_station: RadioStationConfig) -> Self {
     Self {
       radio_stations: Some(vec![radio_station]),
@@ -350,6 +366,7 @@ impl PersistedRuntimeState {
       && self.playbar_height_rows.is_none()
       && self.library_height_percent.is_none()
       && self.pane_layout.is_none()
+      && self.pitch_view_chosen.is_none()
       && self.radio_stations.is_none()
       && self.community_pin_prompt_shown.is_none()
       && self.qobuz_bundle_cache.is_none()
@@ -507,6 +524,7 @@ fn sanitized_persisted_state(state: &PersistedRuntimeState) -> PersistedRuntimeS
       .map(|rows| rows.min(MAX_PLAYBAR_ROWS)),
     library_height_percent: state.library_height_percent.map(|height| height.min(100)),
     pane_layout: state.pane_layout.as_ref().and_then(PaneNode::sanitized),
+    pitch_view_chosen: state.pitch_view_chosen,
     radio_stations: state
       .radio_stations
       .as_deref()
@@ -553,6 +571,9 @@ fn merge_state_patch(merged: &mut PersistedRuntimeState, patch: &PersistedRuntim
   }
   if let Some(pane_layout) = patch.pane_layout.as_ref().and_then(PaneNode::sanitized) {
     merged.pane_layout = Some(pane_layout);
+  }
+  if let Some(pitch_view_chosen) = patch.pitch_view_chosen {
+    merged.pitch_view_chosen = Some(pitch_view_chosen);
   }
   if let Some(radio_stations) = &patch.radio_stations {
     merged.radio_stations = Some(merged_radio_stations(
@@ -755,6 +776,7 @@ mod tests {
       playbar_height_rows: Some(7),
       library_height_percent: Some(35),
       pane_layout: Some(lyrics_beside_main()),
+      pitch_view_chosen: Some(false),
       radio_stations: Some(vec![RadioStationConfig {
         name: "Station".to_string(),
         url: "https://example.test/stream".to_string(),

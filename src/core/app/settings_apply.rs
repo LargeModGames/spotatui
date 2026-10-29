@@ -85,19 +85,19 @@ impl App {
   /// Cycles through every style in `VisualizerStyle::all()` order (Cava, Bar
   /// Graph, Head Unit, Analog VU, Winamp, Phosphor Scope, Outrun, Rack EQ,
   /// Cassette Deck), then the Spotify pitch view while a Spotify track plays.
-  /// The pitch view is not saved: it is the default for every Spotify track.
+  /// Both the style and the pitch view choice are saved.
   pub(crate) fn cycle_visualizer_style(&mut self) {
     let style = self.user_config.behavior.visualizer_style;
     let first = VisualizerStyle::all()[0];
     let next = if self.pitch_view_shows() {
-      self.view.pitch_dismissed = true;
       first
     } else if self.pitch_view_available() && style.next() == first {
-      self.view.pitch_dismissed = false;
+      self.choose_pitch_view(true);
       return;
     } else {
       style.next()
     };
+    self.choose_pitch_view(false);
     if next != style {
       self.user_config.behavior.visualizer_style = next;
       // Save the config so the preference persists

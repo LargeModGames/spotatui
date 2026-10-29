@@ -110,8 +110,6 @@ pub struct ViewState {
 
   /// Scroll/browse state for the lyrics view.
   pub lyrics_view: LyricsViewState,
-  /// Set when `V` leaves the Spotify pitch view; cleared when the analysis screen opens.
-  pub pitch_dismissed: bool,
 
   // Settings screen state
   pub settings_category: SettingsCategory,
