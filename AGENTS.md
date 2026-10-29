@@ -391,8 +391,9 @@ never config:
   rendering on top and keeps its pre-split meaning for users and CI.
 - `audio-viz` (PipeWire, Linux-only) and `audio-viz-cpal` are **visualizer
   capture** backends, not playback. With both on Linux (the release rows),
-  `infra/audio/fallback_capture.rs` opens PipeWire and falls back to cpal when
-  no PipeWire server answers. The librespot *playback* backend is chosen by
+  `infra/audio/fallback_capture.rs` opens PipeWire and falls back to a cpal
+  monitor device (never the default input, which can be a microphone) when no
+  PipeWire server answers. The librespot *playback* backend is chosen by
   `[target.'cfg(...)']` dependency blocks in Cargo.toml, not by the `*-backend`
   features: linux-gnu→alsa, linux-musl→rodio, Windows→rodio, macOS→portaudio -
   the non-default picks avoid librespot's `pipe` sink writing raw audio to stdout
