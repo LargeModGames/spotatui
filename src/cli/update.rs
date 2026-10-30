@@ -69,10 +69,15 @@ pub fn check_for_update_silent() -> Option<UpdateInfo> {
   }
 }
 
-/// Returns the artifact prefix used in release asset names for the current platform.
-/// Mirrors the `artifact_prefix` matrix in `.github/workflows/cd.yml`.
-fn current_platform_prefix() -> Option<&'static str> {
-  platform_prefix(std::env::consts::OS, std::env::consts::ARCH)
+/// Returns the release archive name for the current platform.
+fn current_asset_name() -> Option<String> {
+  asset_name(std::env::consts::OS, std::env::consts::ARCH)
+}
+
+/// The archive cd.yml publishes for (OS, arch), named after its `artifact_prefix` matrix.
+fn asset_name(os: &str, arch: &str) -> Option<String> {
+  let ext = if os == "windows" { "zip" } else { "tar.gz" };
+  platform_prefix(os, arch).map(|prefix| format!("spotatui-{prefix}.{ext}"))
 }
 
 /// Maps (OS, arch) to the release artifact prefix published by cd.yml; must
@@ -122,6 +127,9 @@ fn pinned_updater(
   current_version: &str,
   interactive: bool,
 ) -> Result<self_update::backends::github::Update> {
+  // self_update matches `darwin` for macOS, but cd.yml publishes `macos` archives.
+  let asset_name =
+    current_asset_name().ok_or_else(|| anyhow!("unsupported platform, cannot update"))?;
   Ok(
     self_update::backends::github::Update::configure()
       .repo_owner("LargeModGames")
@@ -131,6 +139,7 @@ fn pinned_updater(
       .no_confirm(!interactive)
       .current_version(current_version)
       .release_tag(format!("v{}", tag.trim_start_matches('v')))
+      .asset_matcher(move |assets| assets.iter().find(|a| a.name() == asset_name).cloned())
       .build()?,
   )
 }
@@ -142,11 +151,8 @@ fn pinned_updater(
 fn verify_release_checksum(release: &self_update::update::Release) -> Result<()> {
   use sha2::Digest;
 
-  let prefix = current_platform_prefix()
+  let asset_name = current_asset_name()
     .ok_or_else(|| anyhow!("unsupported platform, cannot verify update checksum"))?;
-
-  let ext = if cfg!(windows) { "zip" } else { "tar.gz" };
-  let asset_name = format!("spotatui-{}.{}", prefix, ext);
 
   let asset = release
     .assets()
@@ -352,7 +358,7 @@ pub fn check_for_update(do_update: bool) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-  use super::{checksum_for, is_newer, platform_prefix};
+  use super::{asset_name, checksum_for, is_newer, platform_prefix};
 
   #[test]
   fn an_rc_or_dev_build_ahead_of_the_latest_release_is_not_downgraded() {
@@ -410,5 +416,19 @@ mod tests {
       assert_eq!(platform_prefix(os, arch), Some(prefix), "{os}/{arch}");
     }
     assert_eq!(platform_prefix("linux", "arm"), None);
+  }
+
+  #[test]
+  fn every_release_target_names_the_archive_cd_publishes() {
+    for (os, arch, name) in [
+      ("linux", "x86_64", "spotatui-linux-x86_64.tar.gz"),
+      ("linux", "aarch64", "spotatui-linux-aarch64.tar.gz"),
+      ("macos", "x86_64", "spotatui-macos-x86_64.tar.gz"),
+      ("macos", "aarch64", "spotatui-macos-aarch64.tar.gz"),
+      ("windows", "x86_64", "spotatui-windows-x86_64.zip"),
+    ] {
+      assert_eq!(asset_name(os, arch).as_deref(), Some(name), "{os}/{arch}");
+    }
+    assert_eq!(asset_name("linux", "arm"), None);
   }
 }
