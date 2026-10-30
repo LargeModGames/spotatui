@@ -50,7 +50,7 @@ chrono = "0.4.45"
 log = "0.4.32"
 fern = "0.7.1"
 open = "5.3"
-self_update = { version = "0.44", features = ["archive-tar", "archive-zip", "compression-flate2", "compression-zip-deflate"], optional = true }
+self_update = { version = "1.3.3", features = ["archive-tar", "archive-zip", "compression-tar-gz", "compression-zip-deflate"], optional = true }
 sha2 = { version = "0.11", optional = true }
 hex = { version = "0.4", optional = true }
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "blocking"], default-features = false }

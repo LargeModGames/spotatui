@@ -2806,10 +2806,7 @@ mod tests {
     app.refresh_language();
     let changed = pushed(&diff(&before, &app, Language::En), "settings");
     assert_eq!(changed["payload"]["language"], "zh-Hant");
-    assert_eq!(
-      changed["payload"]["strings"]["gui"]["settings"],
-      app.strings().gui.settings
-    );
+    assert_eq!(changed["payload"]["strings"]["gui"]["settings"], "設定");
     let language = changed["payload"]["rows"]
       .as_array()
       .unwrap()
@@ -2865,7 +2862,7 @@ mod tests {
     assert_eq!(message["payload"]["language"], "zh-Hans");
     assert_eq!(
       message["payload"]["strings"]["gui"]["continue_button"],
-      crate::core::i18n::ZH_HANS.gui.continue_button
+      "继续"
     );
   }
 

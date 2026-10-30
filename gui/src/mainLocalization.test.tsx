@@ -242,7 +242,7 @@ describe("main additions in the shared languages", () => {
       );
       expect(html).toContain(fmt(s.song_radio_named, { name: "{name} 歌" }));
       expect(html).toContain(s.song_radio);
-
+      expect(html).not.toContain("Song radio");
       const recent = renderToStaticMarkup(
         <RecentlyPlayed
           s={s}
@@ -267,12 +267,17 @@ describe("main additions in the shared languages", () => {
         expect(localized.map((x) => x.value)).toEqual(
           english.map((x) => x.value),
         );
+        expect(localized.every((x, i) => x.label !== english[i].label)).toBe(
+          true,
+        );
       }
     }
     expect(sortOptions(EN)[2]).toEqual({
       value: "name:desc",
       label: "Title (Z-A)",
     });
+    expect(sortOptions(ZH_HANS)[2].label).toBe("标题（Z-A）");
+    expect(sortOptions(ZH_HANT)[2].label).toBe("標題（Z-A）");
   });
 
   it("reports a clipboard failure in the selected language", async () => {

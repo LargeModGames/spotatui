@@ -143,7 +143,7 @@ describe("Connection", () => {
     expect(connection.getState().booted).toBe(false);
     expect(
       connection.getState().localization?.strings.gui.continue_button,
-    ).toBe(strings.ZH_HANT.gui.continue_button);
+    ).toBe("繼續");
     receive({
       kind: "settings",
       rev: 3,
@@ -166,7 +166,7 @@ describe("Connection", () => {
     });
     const active = connection.getState().localization;
     expect(active?.language).toBe("zh-Hans");
-    expect(active?.strings.gui.settings).toBe(strings.ZH_HANS.gui.settings);
+    expect(active?.strings.gui.settings).toBe("设置");
     receive({
       kind: "settings",
       rev: 4,
