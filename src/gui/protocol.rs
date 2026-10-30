@@ -2818,13 +2818,7 @@ mod tests {
       language["value"]["options"],
       serde_json::json!(["auto", "en", "zh-Hans", "zh-Hant"])
     );
-    assert_eq!(
-      language["value"]["labels"][0],
-      app
-        .strings()
-        .settings
-        .option_label("behavior.language", "auto")
-    );
+    assert_eq!(language["value"]["labels"][0], "自動（跟隨系統）");
   }
 
   #[test]
@@ -2885,7 +2879,7 @@ mod tests {
         .find(|row| row.id == "behavior.disable_auto_update")
         .unwrap()
         .description,
-      app.strings().gui.update_checks_description
+      "跳过启动时及每 6 小时的自动检查；改为在此页手动检查、下载和安装更新"
     );
   }
 

@@ -365,7 +365,10 @@ impl App {
       Notice::BadKey => self.set_error_status_message(strings.soloist_bad_key, 15),
       Notice::Expired => self.set_error_status_message(strings.soloist_expired, 20),
       Notice::ExpiresSoon { count, unit } => {
-        self.set_status_message(strings.soloist_expires_soon(count, &unit), 10);
+        self.set_status_message(
+          strings.soloist_expires_soon(count, strings.soloist_expiry_unit(&unit)),
+          10,
+        );
       }
       Notice::DirInUse => self.set_error_status_message(strings.soloist_dir_in_use, 15),
       Notice::KeepsExiting => self.set_error_status_message(strings.soloist_keeps_exiting, 15),

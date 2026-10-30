@@ -74,7 +74,7 @@ test("the Hello table localizes onboarding before App or Settings exists", async
     },
     onboarding,
   ]);
-  await expect(page.getByRole("heading", { name: "選擇音源" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "選擇來源" })).toBeVisible();
   await expect(page.getByRole("button", { name: "繼續" })).toBeVisible();
   await expect(page.locator("html")).toHaveAttribute("lang", "zh-Hant");
   await shot(page, "onboarding-zh-Hant");
@@ -123,6 +123,26 @@ test("a Settings push updates mounted memoized pages and keeps input and raw cho
   await shot(page, "discover-zh-Hans");
   // A stale Settings message cannot roll the language or the table back.
   socket!.send(JSON.stringify(settingsFor("en", 1)));
+  // The page handles messages in order: once this later shelf shows, the stale
+  // Settings message before it has been handled too.
+  const shelves = discover[0];
+  if (shelves.kind !== "discover" || !shelves.payload.shelves)
+    throw new Error("discover fixture");
+  socket!.send(
+    JSON.stringify({
+      ...shelves,
+      rev: 2,
+      payload: {
+        ...shelves.payload,
+        shelves: [
+          { ...shelves.payload.shelves[0], title: "After the stale message" },
+          ...shelves.payload.shelves.slice(1),
+        ],
+      },
+    } satisfies ServerMessage),
+  );
+  await expect(page.getByText("After the stale message")).toBeVisible();
+  await expect(page.locator("html")).toHaveAttribute("lang", "zh-Hans");
   await expect(
     page.getByRole("heading", { name: "发现", exact: true }),
   ).toBeVisible();

@@ -404,6 +404,19 @@ pub const ZH_HANS: PopupStrings = PopupStrings {
   unknown_artist: "未知",
   create_results_title: "结果（Enter 添加）",
   added_tracks_title_template: "已添加（{count}）— d=移除，Enter=创建",
+  soloist_offer_body: "Spotify 拒绝向 librespot 提供这些曲目的音频密钥，部分账号会遇到这种情况。Spotify 自家的播放器 Soloist 可以播放，但需要 Premium。请在设置中：",
+  soloist_offer_controls: "Enter：打开设置   Esc：暂不",
+  soloist_offer_not_now: "暂不",
+  soloist_offer_set_up: "配置 Soloist",
+  soloist_offer_step_download: "1. Soloist 路径：从 Spotify 下载。",
+  soloist_offer_step_engine: "3. 播放引擎：Soloist。",
+  soloist_offer_step_key: "2. Soloist API 密钥：获取密钥，然后填入。",
+  soloist_offer_title: "通过 Soloist 播放？",
+  soloist_pair_close: "关闭",
+  soloist_pair_open: "1. 在同一网络的电脑上打开 Spotify。",
+  soloist_pair_pick_template: "2. 在它的设备菜单中选择“{name}”。",
+  soloist_pair_title: "将 spotatui 与 Spotify 配对",
+  soloist_pair_waiting: "正在等待 Spotify…",
   ..EN
 };
 
@@ -533,6 +546,19 @@ pub const ZH_HANT: PopupStrings = PopupStrings {
   unknown_artist: "未知",
   create_results_title: "結果（Enter 加入）",
   added_tracks_title_template: "已加入（{count}）— d=移除，Enter=建立",
+  soloist_offer_body: "Spotify 拒絕向 librespot 提供這些曲目的音訊金鑰，部分帳號會遇到這種情況。Spotify 自家的播放器 Soloist 可以播放，但需要 Premium。請在設定中：",
+  soloist_offer_controls: "Enter：開啟設定   Esc：暫不",
+  soloist_offer_not_now: "暫不",
+  soloist_offer_set_up: "設定 Soloist",
+  soloist_offer_step_download: "1. Soloist 路徑：從 Spotify 下載。",
+  soloist_offer_step_engine: "3. 播放引擎：Soloist。",
+  soloist_offer_step_key: "2. Soloist API 金鑰：取得金鑰，然後填入。",
+  soloist_offer_title: "透過 Soloist 播放？",
+  soloist_pair_close: "關閉",
+  soloist_pair_open: "1. 在同一網路的電腦上開啟 Spotify。",
+  soloist_pair_pick_template: "2. 在它的裝置選單中選擇「{name}」。",
+  soloist_pair_title: "將 spotatui 與 Spotify 配對",
+  soloist_pair_waiting: "正在等待 Spotify…",
   ..EN
 };
 

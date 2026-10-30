@@ -462,6 +462,7 @@ pub const ZH_HANS: HelpStrings = HelpStrings {
   not_for_source_template: "{source} 不支持",
   only_for_source_template: "仅适用于 {source}",
   unavailable_description_template: "{description}（{hint}）",
+  settings_button: "按下所选设置项的按钮",
   ..EN
 };
 pub const ZH_HANT: HelpStrings = HelpStrings {
@@ -614,6 +615,7 @@ pub const ZH_HANT: HelpStrings = HelpStrings {
   not_for_source_template: "{source} 不支援",
   only_for_source_template: "僅適用於 {source}",
   unavailable_description_template: "{description}（{hint}）",
+  settings_button: "按下所選設定項目的按鈕",
   ..EN
 };
 

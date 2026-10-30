@@ -116,7 +116,7 @@ describe("shared browser strings", () => {
         onReply={() => {}}
       />,
     );
-    expect(html).toContain("選擇音源");
+    expect(html).toContain("選擇來源");
     expect(html).toContain("繼續");
     expect(html).toContain("Spotify");
   });

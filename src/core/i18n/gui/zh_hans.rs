@@ -227,7 +227,7 @@ pub const ZH_HANS: GuiStrings = GuiStrings {
   you_hear: "你正在听",
   spotify_follow_only: "听众只能跟随 Spotify 歌曲。你再次播放 Spotify 前，他们会继续播放上一首歌。",
   stopped_following:
-    "你已停止跟随房主，正在播放自己的音乐。播放 Spotify 歌曲或等待下一首即可重新跟随。",
+    "你已停止跟随房主：扬声器正在播放你自己的音乐。播放 Spotify 歌曲或等待下一首即可重新跟随。",
   each_own_copy: "每位听众都在自己的设备上播放",
   guest_controls: "允许听众控制播放",
   host_picks_songs: "歌曲由房主选择。",

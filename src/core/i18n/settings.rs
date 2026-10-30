@@ -322,6 +322,10 @@ pub struct SettingsStrings {
   pub reserved_key_template: &'static str,
   pub key_conflict_template: &'static str,
   pub option_auto: &'static str,
+  pub option_soloist_normal: &'static str,
+  pub option_soloist_high: &'static str,
+  pub option_soloist_very_high: &'static str,
+  pub option_soloist_lossless: &'static str,
   pub option_auto_color: &'static str,
   pub option_en: &'static str,
   pub option_zh_hans: &'static str,
@@ -862,6 +866,10 @@ impl SettingsStrings {
   pub fn option_label<'a>(&self, id: &str, raw: &'a str) -> &'a str {
     match (id, raw) {
       ("behavior.language", "auto") => self.option_auto,
+      ("behavior.soloist_audio_quality", "Normal") => self.option_soloist_normal,
+      ("behavior.soloist_audio_quality", "High") => self.option_soloist_high,
+      ("behavior.soloist_audio_quality", "Very high") => self.option_soloist_very_high,
+      ("behavior.soloist_audio_quality", "Lossless") => self.option_soloist_lossless,
       ("behavior.language", "en") => self.option_en,
       ("behavior.language", "zh-Hans") => self.option_zh_hans,
       ("behavior.language", "zh-Hant") => self.option_zh_hant,
