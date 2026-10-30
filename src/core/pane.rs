@@ -126,10 +126,15 @@ impl PaneNode {
     }
   }
 
-  /// Remove `pane`; its sibling takes the place of the parent split.
+  /// Remove `pane`; its sibling takes the place of the parent split, and
+  /// closing the only pane left shows `Main` again.
   pub fn close(&mut self, pane: Pane) -> bool {
     let Self::Split(split) = self else {
-      return false;
+      if pane == Pane::Main || *self != Self::Leaf(pane) {
+        return false;
+      }
+      *self = Self::default();
+      return true;
     };
     let survivor = if split.first == Self::Leaf(pane) {
       Some(split.second.clone())
@@ -335,6 +340,15 @@ mod tests {
     );
     assert!(!tree.show_main());
     assert!(!PaneNode::default().close(Pane::Main));
+  }
+
+  #[test]
+  fn closing_the_only_pane_left_shows_main_again() {
+    let mut tree = PaneNode::Leaf(Pane::Lyrics);
+
+    assert!(!tree.close(Pane::Queue));
+    assert!(tree.close(Pane::Lyrics));
+    assert_eq!(tree, PaneNode::default());
   }
 
   #[test]

@@ -2698,42 +2698,7 @@ impl UserConfig {
     };
 
     // Helper to convert Key to config string
-    let key_to_config_string = |key: Key| -> String {
-      match key {
-        Key::Char(' ') => "space".to_string(),
-        Key::Char(c) => c.to_string(),
-        Key::Ctrl(c) => format!("ctrl-{}", c),
-        Key::Alt(c) => format!("alt-{}", c),
-        Key::Enter => "enter".to_string(),
-        Key::Tab => "tab".to_string(),
-        Key::Esc => "esc".to_string(),
-        Key::Backspace => "backspace".to_string(),
-        Key::Delete => "del".to_string(),
-        Key::Left => "left".to_string(),
-        Key::Right => "right".to_string(),
-        Key::Up => "up".to_string(),
-        Key::Down => "down".to_string(),
-        Key::Home => "home".to_string(),
-        Key::End => "end".to_string(),
-        Key::Ins => "ins".to_string(),
-        Key::PageUp => "pageup".to_string(),
-        Key::PageDown => "pagedown".to_string(),
-        Key::F0 => "f0".to_string(),
-        Key::F1 => "f1".to_string(),
-        Key::F2 => "f2".to_string(),
-        Key::F3 => "f3".to_string(),
-        Key::F4 => "f4".to_string(),
-        Key::F5 => "f5".to_string(),
-        Key::F6 => "f6".to_string(),
-        Key::F7 => "f7".to_string(),
-        Key::F8 => "f8".to_string(),
-        Key::F9 => "f9".to_string(),
-        Key::F10 => "f10".to_string(),
-        Key::F11 => "f11".to_string(),
-        Key::F12 => "f12".to_string(),
-        _ => "unknown".to_string(),
-      }
-    };
+    let key_to_config_string = |key: Key| -> String { self::key_to_config_string(&key) };
 
     // Helper to build keybindings config from current values
     let build_keybindings = || KeyBindingsString {
@@ -3842,6 +3807,30 @@ dj_api_key: null
     config.behavior.dj_configured = Some(true);
     config.save_config().unwrap();
     assert_eq!(on_disk(&config_path).dj_configured, Some(true));
+  }
+
+  #[test]
+  fn a_save_keeps_alt_arrow_bindings() {
+    use super::{UserConfig, UserConfigPaths, UserConfigString};
+    use crate::core::input::{Arrow, Key};
+
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("config.yml");
+    let mut config = UserConfig::new();
+    config.path_to_config = Some(UserConfigPaths {
+      config_file_path: config_path.clone(),
+    });
+    config.keys.focus_pane_left = Key::AltArrow(Arrow::Left);
+    config.keys.move_pane_left = Key::AltShiftArrow(Arrow::Left);
+
+    config.save_config().unwrap();
+    let raw = std::fs::read_to_string(&config_path).unwrap();
+    let keys = serde_yaml::from_str::<UserConfigString>(&raw)
+      .unwrap()
+      .keybindings
+      .unwrap();
+    assert_eq!(keys.focus_pane_left.as_deref(), Some("alt-left"));
+    assert_eq!(keys.move_pane_left.as_deref(), Some("alt-shift-left"));
   }
 
   #[test]

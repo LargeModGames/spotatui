@@ -31,7 +31,7 @@ pub(super) fn handle_pane_key(key: Key, app: &mut App) -> bool {
     return false;
   }
   if key == keys.reset_panes {
-    app.change_pane_layout(|tree| std::mem::take(tree).is_split());
+    app.change_pane_layout(|tree| std::mem::take(tree) != PaneNode::default());
     return true;
   }
   if key == Key::Esc && leave_focused_pane(app) {
@@ -87,7 +87,7 @@ pub(super) fn handle_pane_key(key: Key, app: &mut App) -> bool {
   };
 
   let Some(layout) = compute_pane_layout(app) else {
-    if app.pane_layout().is_split() {
+    if *app.pane_layout() != PaneNode::default() {
       handle_hidden_panes(matches!(op, PaneOp::Close), app);
     }
     return true;
@@ -138,7 +138,7 @@ fn handle_hidden_panes(close: bool, app: &mut App) {
       app.change_pane_layout(|tree| tree.close(last));
     }
   }
-  if app.pane_layout().is_split() && compute_pane_layout(app).is_none() {
+  if *app.pane_layout() != PaneNode::default() && compute_pane_layout(app).is_none() {
     let key = app.user_config.keys.close_pane.to_string();
     let message = app.strings().status.app.pane_hidden(&key);
     app.set_status_message(message, STATUS_TTL_SECS);
@@ -422,6 +422,35 @@ mod tests {
       assert_eq!(app.pane_layout(), &PaneNode::default());
       assert_eq!(app.view.focused_pane, Pane::Main);
     }
+  }
+
+  #[test]
+  fn alt_0_brings_main_back_when_one_pane_is_left() {
+    let mut app = app_with_panes(160, 50);
+    app.change_pane_layout(|tree| {
+      *tree = PaneNode::Leaf(Pane::Lyrics);
+      true
+    });
+    app.view.focused_pane = Pane::Lyrics;
+
+    handle_app(Key::Alt('0'), &mut app);
+
+    assert_eq!(app.pane_layout(), &PaneNode::default());
+    assert_eq!(app.view.focused_pane, Pane::Main);
+  }
+
+  #[test]
+  fn alt_x_closes_the_last_hidden_pane_and_brings_main_back() {
+    let mut app = app_with_panes(20, 8);
+    app.change_pane_layout(|tree| {
+      *tree = PaneNode::Leaf(Pane::Lyrics);
+      true
+    });
+    assert!(compute_pane_layout(&app).is_none());
+
+    handle_app(Key::Alt('x'), &mut app);
+
+    assert_eq!(app.pane_layout(), &PaneNode::default());
   }
 
   #[test]
