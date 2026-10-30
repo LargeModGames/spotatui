@@ -313,7 +313,8 @@ The lyrics, the visualizer, cover art, the queue and the mini player can leave f
 
 - A focused pane gets the keys of its view (for example `V` cycles the visualizer style). `Esc` or the back key gives the focus back to the main layout. The open key of a detached view (`B` for the lyrics) focuses its pane.
 - With mouse input on, a click focuses a pane, `[x]` on its border closes it, and a drag on the line between two panes resizes them.
-- The keys are `detach_pane`, `close_pane`, `focus_pane_left`, `focus_pane_down`, `focus_pane_up`, `focus_pane_right`, `move_pane_left`, `move_pane_down`, `move_pane_up`, `move_pane_right`, `rotate_pane`, `grow_pane` and `shrink_pane` under `keybindings` in `config.yml`.
+- The keys are `detach_pane`, `close_pane`, `focus_pane_left`, `focus_pane_down`, `focus_pane_up`, `focus_pane_right`, `move_pane_left`, `move_pane_down`, `move_pane_up`, `move_pane_right`, `rotate_pane`, `grow_pane`, `shrink_pane` and `reset_panes` under `keybindings` in `config.yml`.
+- On macOS the terminal must send Option as Meta, or the `Alt` keys type special characters: turn on "Use Option as Meta key" in Terminal (Settings > Profiles > Keyboard), or set the Option key to "Esc+" in iTerm2 (Settings > Profiles > Keys). You can also rebind the keys to ones without `Alt`.
 - The layout is saved as `pane_layout` in `state.yml`, a tree you can also edit by hand:
 
   ```yaml
