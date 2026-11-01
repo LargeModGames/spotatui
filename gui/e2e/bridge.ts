@@ -44,6 +44,47 @@ export async function openWithVisualizer(
   });
 }
 
+/** Opens the visualizer screen in `style` and answers each ask with `frame` at the band count it asked for. */
+export async function openScreen(
+  page: Page,
+  messages: ServerMessage[],
+  style: string,
+  frame: (bars: number) => ServerMessage,
+): Promise<void> {
+  await page.addInitScript(
+    (value) => localStorage.setItem("spotatui.visualizer_style", value),
+    style,
+  );
+  await page.routeWebSocket("**/ws", (ws) => {
+    let frames: ReturnType<typeof setInterval> | undefined;
+    ws.onMessage((text) => {
+      const message = JSON.parse(String(text)) as ClientMessage;
+      if (message.type !== "visualizer_screen") return;
+      clearInterval(frames);
+      if (message.on) {
+        const next = JSON.stringify(frame(message.bars));
+        frames = setInterval(() => ws.send(next), 30);
+      }
+    });
+    ws.onClose(() => clearInterval(frames));
+    for (const message of messages) ws.send(JSON.stringify(message));
+  });
+  await page.goto("/#code=shot");
+  await page.getByRole("button", { name: "Visualizer", exact: true }).click();
+  await page.waitForFunction(() => {
+    const canvas =
+      document.querySelector<HTMLCanvasElement>(".viz-screen-canvas");
+    const pixels = canvas
+      ?.getContext("2d")
+      ?.getImageData(0, 0, canvas.width, canvas.height).data;
+    return (
+      pixels?.some((value, index) => index % 4 === 3 && value > 0) ?? false
+    );
+  });
+  // Needles, meters and peak caps ease in over a few hundred ms.
+  await page.waitForTimeout(800);
+}
+
 /** Saves the page as `shots/<browser>/<name>.png` once its fonts have loaded. */
 export async function shot(page: Page, name: string): Promise<void> {
   await page.evaluate(() => document.fonts.ready);
