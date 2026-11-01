@@ -507,25 +507,24 @@ for (const mode of ["Spectrum", "Waveform"] as const) {
   });
 }
 
+/** Opens the visualizer screen in `style` over a playing song, with the bar's setting row present. */
+const openStyle = (page: Page, style: string) =>
+  openScreen(
+    page,
+    [...playing, ...library, visualizerSetting("Spectrum")],
+    style,
+    screenFrame,
+  );
+
 for (const style of STYLES) {
   test(`visualizer screen ${style}`, async ({ page }) => {
-    await openScreen(
-      page,
-      [...playing, ...library, visualizerSetting("Spectrum")],
-      style,
-      screenFrame,
-    );
+    await openStyle(page, style);
     await shot(page, `visualizer-screen-${style.toLowerCase()}`);
   });
 }
 
 test("visualizer screen cycles its style with V", async ({ page }) => {
-  await openScreen(
-    page,
-    [...playing, ...library, visualizerSetting("Spectrum")],
-    "Cassette",
-    screenFrame,
-  );
+  await openStyle(page, "Cassette");
   const style = page.getByRole("combobox", { name: "Visualizer style" });
   await expect(style).toHaveValue("Cassette");
   await page.getByRole("button", { name: "Next style" }).focus();
