@@ -299,8 +299,6 @@ async fn serve_until_quit(
   let mut visualizer = Feed::new();
   let mut frame_clock = tokio::time::interval(FRAME_EVERY);
   frame_clock.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-  let mut screen_clock = tokio::time::interval(FRAME_EVERY);
-  screen_clock.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
   // Never completes when the handler cannot register: a completed future must not be polled again.
   let ctrl_c = async {
     if let Err(e) = tokio::signal::ctrl_c().await {
@@ -381,14 +379,16 @@ async fn serve_until_quit(
           break;
         }
       }
-      _ = frame_clock.tick(), if visualizer.streams(publisher.visualizer_watched(), Instant::now()) => {
-        if let Some(frame) = visualizer.frame(driver, Instant::now()) {
-          publisher.frame(&frame);
+      _ = frame_clock.tick(), if visualizer.streams(publisher.visualizer_watched(), Instant::now())
+        || visualizer.screen_streams(Instant::now()) => {
+        let now = Instant::now();
+        if visualizer.streams(publisher.visualizer_watched(), now) {
+          if let Some(frame) = visualizer.frame(driver, now) {
+            publisher.frame(&frame);
+          }
         }
-      }
-      _ = screen_clock.tick(), if visualizer.screen_streams(Instant::now()) => {
-        if let Some(bars) = publisher.screen_watched() {
-          if let Some(frame) = visualizer.screen_frame(driver, bars, Instant::now()) {
+        if let (true, Some(bars)) = (visualizer.screen_streams(now), publisher.screen_watched()) {
+          if let Some(frame) = visualizer.screen_frame(driver, bars, now) {
             publisher.screen_frame(&frame);
           }
         }

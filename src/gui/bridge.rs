@@ -17,8 +17,6 @@ const TICK_EVERY: Duration = Duration::from_millis(250);
 /// Timer jitter: a 250 ms tick loop may arrive a few ms early.
 const TICK_SLACK: Duration = Duration::from_millis(20);
 const NO_PAGE_LIMIT: Duration = Duration::from_secs(60);
-/// cava's smallest plan: one band for each channel.
-const MIN_SCREEN_BARS: usize = 2;
 
 /// The app once boot has built it: `None` while the first-launch questions run.
 pub(crate) type SharedApp = watch::Receiver<Option<Arc<Mutex<App>>>>;
@@ -125,7 +123,7 @@ pub(crate) fn channel(
   let watchers = Arc::new(AtomicUsize::new(0));
   let (screen_frames, screen_frame) = watch::channel(None);
   let screen_watchers = Arc::new(AtomicUsize::new(0));
-  let screen_bars = Arc::new(AtomicUsize::new(MIN_SCREEN_BARS));
+  let screen_bars = Arc::new(AtomicUsize::new(0));
   let now = Instant::now();
   let publisher = Publisher {
     pushes: pushes.clone(),
@@ -321,7 +319,7 @@ where
             } else {
               link
                 .screen_bars
-                .store(usize::from(bars).max(MIN_SCREEN_BARS), Ordering::Relaxed);
+                .store(usize::from(bars), Ordering::Relaxed);
               if screen_watching.is_none() {
                 screen_frames.borrow_and_update();
                 screen_watching = Some(Watching::new(&link.screen_watchers));
@@ -546,8 +544,8 @@ pub(crate) mod tests {
     ask(
       &mut client,
       &publisher,
-      r#"{"type":"visualizer_screen","on":true,"bars":0}"#,
-      Some(MIN_SCREEN_BARS),
+      r#"{"type":"visualizer_screen","on":true,"bars":40}"#,
+      Some(40),
     )
     .await;
     ask(

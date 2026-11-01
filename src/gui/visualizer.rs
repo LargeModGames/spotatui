@@ -216,7 +216,7 @@ impl Feed {
   /// Closes a capture that brings nothing while frames should flow; the driver
   /// opens it again, on the default device of that moment, after a pause.
   fn check_stall(&mut self, now: Instant) {
-    let shown = (self.watched && self.mode != PlayerBarVisualizer::Off) || self.screen_watched;
+    let shown = (self.watched && self.bar_on()) || self.screen_watched;
     if !(shown && self.sounding && self.wants_capture(now)) {
       self.heard_at = None;
       return;
@@ -253,8 +253,7 @@ impl Feed {
     let recent =
       |at: Option<Instant>| at.is_some_and(|at| now.saturating_duration_since(at) < LINGER);
     AVAILABLE
-      && ((self.mode != PlayerBarVisualizer::Off && recent(self.shown_at))
-        || recent(self.screen_shown_at))
+      && ((self.bar_on() && recent(self.shown_at)) || recent(self.screen_shown_at))
       && recent(self.sounded_at)
       && self.stalls < MAX_STALLS
       && !self.retry_at.is_some_and(|at| now < at)
@@ -264,7 +263,7 @@ impl Feed {
   /// or the bars have yet to hear that it stopped.
   pub(crate) fn streams(&self, watched: bool, now: Instant) -> bool {
     watched
-      && self.mode != PlayerBarVisualizer::Off
+      && self.bar_on()
       && self.wants_capture(now)
       && self.capturing
       && (self.sounding || !self.quiet)
@@ -292,14 +291,12 @@ impl Feed {
     }
     #[cfg(any(feature = "audio-viz", feature = "audio-viz-cpal"))]
     {
-      if let Some(audio) = driver.recent_audio() {
-        if audio.written != self.screen_written {
-          self.screen_written = audio.written;
-          self.heard_at = Some(now);
-          self.stalls = 0;
-        }
-      }
       let spectrum = driver.spectrum(bars)?;
+      if spectrum.written != self.screen_written {
+        self.screen_written = spectrum.written;
+        self.heard_at = Some(now);
+        self.stalls = 0;
+      }
       self.screen_frame_from(&spectrum.bands, &spectrum.wave)
     }
     #[cfg(not(any(feature = "audio-viz", feature = "audio-viz-cpal")))]
@@ -310,9 +307,7 @@ impl Feed {
   }
 
   fn screen_frame_from(&mut self, bands: &[f32], wave: &[f32]) -> Option<ServerMessage> {
-    let silent = bands.iter().all(|band| *band < 0.5 / 255.0)
-      && wave.iter().all(|value| value.abs() < 0.5 / 127.0);
-    if silent {
+    if silent(bands, wave) {
       return (!std::mem::replace(&mut self.screen_quiet, true))
         .then(|| protocol::visualizer_screen(&[], &[]));
     }
@@ -373,15 +368,22 @@ impl Feed {
         scope(&audio.samples, audio.sample_rate, WAVE_POINTS),
       ),
     };
-    // Below half a step of the bytes the page gets.
-    let silent = levels.iter().all(|level| *level < 0.5 / 255.0)
-      && wave.iter().all(|value| value.abs() < 0.5 / 127.0);
-    if silent {
+    if silent(&levels, &wave) {
       return self.silent_frame();
     }
     self.quiet = false;
     Some(protocol::visualizer(&levels, &wave))
   }
+
+  fn bar_on(&self) -> bool {
+    self.mode != PlayerBarVisualizer::Off
+  }
+}
+
+/// Every value is below half a step of the bytes the page gets.
+fn silent(levels: &[f32], wave: &[f32]) -> bool {
+  levels.iter().all(|level| *level < 0.5 / 255.0)
+    && wave.iter().all(|value| value.abs() < 0.5 / 127.0)
 }
 
 #[cfg(test)]

@@ -812,16 +812,26 @@ pub(crate) struct VisualizerFrame {
 pub(crate) fn visualizer(levels: &[f32], wave: &[f32]) -> ServerMessage {
   ServerMessage::Visualizer {
     payload: VisualizerFrame {
-      levels: levels
-        .iter()
-        .map(|level| (level.clamp(0.0, 1.0) * 255.0).round() as u8)
-        .collect(),
-      wave: wave
-        .iter()
-        .map(|value| (value.clamp(-1.0, 1.0) * 127.0).round() as i8)
-        .collect(),
+      levels: unit_bytes(levels),
+      wave: signed_bytes(wave),
     },
   }
+}
+
+/// 0 to 1 as 0 to 255.
+fn unit_bytes(values: &[f32]) -> Vec<u8> {
+  values
+    .iter()
+    .map(|value| (value.clamp(0.0, 1.0) * 255.0).round() as u8)
+    .collect()
+}
+
+/// -1 to 1 as -127 to 127.
+fn signed_bytes(values: &[f32]) -> Vec<i8> {
+  values
+    .iter()
+    .map(|value| (value.clamp(-1.0, 1.0) * 127.0).round() as i8)
+    .collect()
 }
 
 /// cava's frame as the terminal's styles read it; both lists are empty when the sound stops.
@@ -837,14 +847,8 @@ pub(crate) struct ScreenFrame {
 pub(crate) fn visualizer_screen(bands: &[f32], wave: &[f32]) -> ServerMessage {
   ServerMessage::VisualizerScreen {
     payload: ScreenFrame {
-      bands: bands
-        .iter()
-        .map(|band| (band.clamp(0.0, 1.0) * 255.0).round() as u8)
-        .collect(),
-      wave: wave
-        .iter()
-        .map(|value| (value.clamp(-1.0, 1.0) * 127.0).round() as i8)
-        .collect(),
+      bands: unit_bytes(bands),
+      wave: signed_bytes(wave),
     },
   }
 }
