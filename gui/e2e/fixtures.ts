@@ -12,6 +12,7 @@ import type { TrackInfo } from "../src/bindings/TrackInfo";
 import type { VisualizerLook } from "../src/bindings/VisualizerLook";
 
 const revisions = {
+  pane_layout: 1,
   route: 1,
   status: 1,
   source: 1,

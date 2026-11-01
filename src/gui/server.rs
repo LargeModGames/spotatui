@@ -811,7 +811,7 @@ mod tests {
     .unwrap();
 
     let mut values = Vec::new();
-    for _ in 0..28 {
+    for _ in 0..29 {
       values.push(next_json(&mut socket).await);
     }
     let kinds: Vec<_> = values.iter().map(|value| value["kind"].clone()).collect();
@@ -820,6 +820,7 @@ mod tests {
       [
         "hello",
         "onboarding",
+        "pane_layout",
         "route",
         "status",
         "source",
@@ -986,12 +987,13 @@ mod tests {
     boot.send_replace(Some(Arc::new(tokio::sync::Mutex::new(app))));
 
     let mut kinds = Vec::new();
-    for _ in 0..26 {
+    for _ in 0..27 {
       kinds.push(next_json(&mut page).await["kind"].clone());
     }
     assert_eq!(
       kinds,
       [
+        "pane_layout",
         "route",
         "status",
         "source",
