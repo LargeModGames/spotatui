@@ -13,6 +13,7 @@ import {
 import {
   channels,
   clamp,
+  ledColours,
   levels,
   mono,
   pushSweep,
@@ -35,14 +36,6 @@ import { mix, rgba, type Rgb } from "./visualizerModel";
 
 const rgb = (r: number, g: number, b: number): Rgb => [r, g, b];
 const DEG = Math.PI / 180;
-
-/** Each LED colour lit, and unlit over `base`, built once. */
-function ledColours(base: Rgb, colours: Rgb[]): { lit: string; dim: string }[] {
-  return colours.map((colour) => ({
-    lit: rgba(colour),
-    dim: rgba(mix(base, colour, 0.18)),
-  }));
-}
 
 // Analog VU: two backlit 1970s hi-fi needle meters.
 
@@ -212,18 +205,20 @@ function drawVuFace(
     { align: "right" },
   );
   const [nx, ny] = at(needle, radius + row * 0.8);
-  ctx.shadowColor = "rgba(0,0,0,0.35)";
-  ctx.shadowBlur = row * 0.3;
-  ctx.shadowOffsetX = row * 0.15;
-  ctx.lineWidth = Math.max(row * 0.1, 1.5);
-  ctx.strokeStyle = rgba(VU.needle);
-  ctx.beginPath();
-  ctx.moveTo(cx, cy);
-  ctx.lineTo(nx, ny);
-  ctx.stroke();
+  const width = Math.max(row * 0.1, 1.5);
+  // The shadow is a second, offset stroke: a blur over the needle's long box costs too much.
+  for (const [shift, colour, size] of [
+    [row * 0.15, "rgba(0,0,0,0.35)", width * 1.6],
+    [0, rgba(VU.needle), width],
+  ] as const) {
+    ctx.lineWidth = size;
+    ctx.strokeStyle = colour;
+    ctx.beginPath();
+    ctx.moveTo(cx + shift, cy);
+    ctx.lineTo(nx + shift, ny);
+    ctx.stroke();
+  }
   ctx.restore();
-  ctx.shadowBlur = 0;
-  ctx.shadowOffsetX = 0;
 }
 
 // Winamp: the classic player's scanlined bars, peak caps and scope strip.
@@ -298,7 +293,9 @@ export function paintWinamp(scene: Scene): void {
     ctx.fillRect(x0 + i * pitch, bottom - height, barW, height);
   });
   ctx.fillStyle = rgba(AMP.black);
-  for (let y = top; y < bottom; y += 2) ctx.fillRect(x0, y, w - col * 4, 1);
+  ctx.beginPath();
+  for (let y = top; y < bottom; y += 2) ctx.rect(x0, y, w - col * 4, 1);
+  ctx.fill();
   ctx.fillStyle = rgba(AMP.cap);
   state.peaks.forEach((peak, i) => {
     const y = bottom - clamp(peak.value, 0, 1) * room - 3;
@@ -353,6 +350,9 @@ const SCOPE = {
   label: rgb(60, 140, 80),
   bezel: rgb(60, 110, 70),
 };
+const TRAIL_COLOURS = TRAILS.map((brightness) =>
+  rgba(mix(SCOPE.bg, SCOPE.trace, brightness)),
+);
 
 export function paintPhosphorScope(scene: Scene): void {
   const { ctx, w, h, state } = scene;
@@ -418,14 +418,14 @@ export function paintPhosphorScope(scene: Scene): void {
     polyline(
       ctx,
       sweep.length,
-      (i) => sx + (i / Math.max(sweep.length - 1, 1)) * sw,
+      (i) => sx + (i / (sweep.length - 1)) * sw,
       (i) => sy + sh / 2 - clamp(sweep[i], -1, 1) * sh * 0.42,
     );
     if (k === state.trails.length - 1) {
       glowStroke(ctx, SCOPE.trace, 1.8, row * 0.5);
       return;
     }
-    ctx.strokeStyle = rgba(mix(SCOPE.bg, SCOPE.trace, TRAILS[offset + k]));
+    ctx.strokeStyle = TRAIL_COLOURS[offset + k];
     ctx.lineWidth = 1.3;
     ctx.stroke();
   });
@@ -497,17 +497,13 @@ export function paintOutrun(scene: Scene): void {
   ctx.restore();
 
   const ridge = resample(row1, RIDGE_POINTS);
-  const peaks = ridge.map((value, i): [number, number] => [
-    (i / (RIDGE_POINTS - 1)) * w,
-    hz - 1 - clamp(value, 0, 1) * hz * 0.44,
-  ]);
   ctx.fillStyle = rgba(OUT.mountain);
   const ridgeLine = (drop: number) =>
     polyline(
       ctx,
-      peaks.length,
-      (i) => peaks[i][0],
-      (i) => peaks[i][1] + drop,
+      RIDGE_POINTS,
+      (i) => (i / (RIDGE_POINTS - 1)) * w,
+      (i) => hz - 1 - clamp(ridge[i], 0, 1) * hz * 0.44 + drop,
     );
   ridgeLine(0);
   ctx.lineTo(w, hz);
@@ -586,7 +582,23 @@ const RACK = {
   knob: rgb(40, 40, 44),
   knobName: rgb(50, 50, 54),
 };
-const RACK_LEDS = ledColours(RACK.window, [RACK.green, RACK.amber, RACK.red]);
+const RACK_LEDS = ledColours(
+  RACK.window,
+  [RACK.green, RACK.amber, RACK.red],
+  0.18,
+);
+
+let labelWidths: { px: number; halves: number[] } = { px: 0, halves: [] };
+
+/** Half the width of each band label at `px`, measured again only when the size changes. */
+function labelHalves(ctx: CanvasRenderingContext2D, px: number): number[] {
+  if (labelWidths.px !== px)
+    labelWidths = {
+      px,
+      halves: RACK_LABELS.map((label) => textWidth(ctx, label, px) / 2),
+    };
+  return labelWidths.halves;
+}
 
 export function paintRackEq(scene: Scene): void {
   const { ctx, w, h, state } = scene;
@@ -671,7 +683,7 @@ export function paintRackEq(scene: Scene): void {
       }
       // One dark segment above the peak, as on the TUI's rack.
       const peak = Math.min(
-        Math.round(clamp(state.peaks[index]?.value ?? 0, 0, 1) * segments) + 1,
+        Math.round(clamp(state.peaks[index].value, 0, 1) * segments) + 1,
         segments - 1,
       );
       if (peak >= lit) {
@@ -679,7 +691,7 @@ export function paintRackEq(scene: Scene): void {
         ctx.fillRect(x, base - (peak + 1) * pitch, ladder, pitch * 0.35);
       }
       const label = RACK_LABELS[b];
-      const halfLabel = textWidth(ctx, label, px * 0.75) / 2;
+      const halfLabel = labelHalves(ctx, px * 0.75)[b];
       const mid = x + ladder / 2;
       if (mid - halfLabel > edge + 2) {
         text(ctx, label, mid, labelY, RACK.label, px * 0.75, {
@@ -727,7 +739,11 @@ const TAPE = {
   amber: rgb(250, 190, 40),
   red: rgb(250, 60, 40),
 };
-const TAPE_LEDS = ledColours(TAPE.body, [TAPE.green, TAPE.amber, TAPE.red]);
+const TAPE_LEDS = ledColours(
+  TAPE.body,
+  [TAPE.green, TAPE.amber, TAPE.red],
+  0.18,
+);
 const TAPE_SCALE: [string, number][] = [
   ["-30", 0],
   ["-20", 0.25],

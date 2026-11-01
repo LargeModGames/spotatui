@@ -134,7 +134,7 @@ describe("head unit", () => {
     twice = stepMeter(twice, [0.9], 1 / 120);
     expect(once).toBeCloseTo(0.6 * Math.min(0.9 * 1.4, 1));
     expect(twice).toBeCloseTo(once);
-    expect(stepMeter(0, [0.9], null)).toBeCloseTo(once);
+    expect(stepMeter(0, [0.9], 0)).toBeCloseTo(once);
   });
 
   it("maps the square onto the floor corners", () => {
@@ -185,10 +185,9 @@ describe("retro styles", () => {
   });
 
   it("labels the rack bands with rising standard frequencies", () => {
-    const labels = RACK_LABELS;
-    expect(labels[0]).toBe("63");
-    expect(labels[9]).toBe("8k");
-    expect(new Set(labels).size).toBe(10);
+    expect(RACK_LABELS[0]).toBe("63");
+    expect(RACK_LABELS[9]).toBe("8k");
+    expect(new Set(RACK_LABELS).size).toBe(10);
   });
 
   it("trades tape between the reels and spins the smaller pack faster", () => {

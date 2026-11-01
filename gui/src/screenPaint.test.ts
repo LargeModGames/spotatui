@@ -44,10 +44,10 @@ describe("painters", () => {
         const { ctx, drawn } = fakeContext();
         const state = freshState();
         const bars = barCount(style, w);
-        for (const audio of [
+        for (const [frame, audio] of [
           { bands: music(bars), wave },
           { bands: [], wave: [] },
-        ]) {
+        ].entries()) {
           PAINTERS[style]({
             ctx,
             w,
@@ -61,12 +61,11 @@ describe("painters", () => {
               durationMs: 238_000,
               playing: true,
             },
-            now: 1000 + state.frames * 16,
-            dt: state.frames === 0 ? 0 : 0.016,
+            now: 1000 + frame * 16,
+            dt: frame === 0 ? 0 : 0.016,
             accent: [240, 168, 58],
             state,
           });
-          state.frames += 1;
         }
         if (w >= 400)
           expect(drawn.length, `${style} at ${w}x${h}`).toBeGreaterThan(10);

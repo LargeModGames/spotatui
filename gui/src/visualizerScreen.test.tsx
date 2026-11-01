@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { STYLES } from "./screenModel";
-import { styleName, VisualizerScreen } from "./VisualizerScreen";
+import { STYLES, styleName } from "./screenModel";
+import { VisualizerScreen } from "./VisualizerScreen";
 import { SCREENS_EN } from "./i18n";
 
 const screen = (available: boolean) =>

@@ -3,7 +3,6 @@ import { rgba, type Rgb } from "./visualizerModel";
 
 /** What a style keeps from one frame to the next; a new style starts fresh. */
 interface PaintState {
-  frames: number;
   peaks: Peak[];
   needles: [number, number];
   trails: number[][];
@@ -14,7 +13,6 @@ interface PaintState {
 
 export function freshState(): PaintState {
   return {
-    frames: 0,
     peaks: [],
     needles: [0, 0],
     trails: [],

@@ -13,6 +13,7 @@ import {
   FLOOR,
   HEAD_UNIT_BANDS,
   HEAD_UNIT_MARKS,
+  ledColours,
   markBand,
   mono,
   type Point,
@@ -107,7 +108,10 @@ const CHROME = {
   bg: [16, 16, 16] as Rgb,
   label: [128, 128, 128] as Rgb,
 };
-const ghost = (colour: Rgb) => mix(colour, CHROME.bg, 0.9);
+/** An unlit VFD segment: a tenth of the way from the background to its colour. */
+const GHOST = 0.1;
+const ghost = (colour: Rgb) => mix(CHROME.bg, colour, GHOST);
+const DIGITS = ledColours(CHROME.bg, [CHROME.cap, ghost(CHROME.cap)], GHOST);
 const chromeGradient = (t: number) =>
   t < 0.5
     ? mix(CHROME.low, CHROME.mid, t * 2)
@@ -123,12 +127,8 @@ function paintHeadUnit(scene: Scene): void {
   const { ctx, w, h, state } = scene;
   if (w < 120 || h < 60) return;
   const live = resample(mono(bandsOf(scene)), HEAD_UNIT_BANDS);
-  state.meter = stepMeter(
-    state.meter,
-    live,
-    state.frames === 0 ? null : scene.dt,
-  );
-  const { row, col } = grid(h);
+  state.meter = stepMeter(state.meter, live, scene.dt);
+  const { row, col, px } = grid(h);
   ctx.fillStyle = rgba(CHROME.bg);
   ctx.fillRect(0, 0, w, h);
 
@@ -139,11 +139,11 @@ function paintHeadUnit(scene: Scene): void {
   let top = 0;
   let bottom = h;
   if (header) {
-    drawHeader(ctx, scene.track, w, row, col);
+    drawHeader(ctx, scene.track, w, row, col, px);
     top = row * 2;
   }
   if (readout) {
-    drawReadout(ctx, scene.track, state.meter, w, h - row * 3, row, col);
+    drawReadout(ctx, scene.track, state.meter, w, h - row * 3, row, col, px);
     bottom = h - row * 4;
   }
   if (labels) bottom -= row;
@@ -166,9 +166,11 @@ function paintHeadUnit(scene: Scene): void {
   live.forEach((level, b) => drawStrip(ctx, floor, b, clamp(level, 0, 1), row));
   // The display's dot rows: thin dark lines over the whole glass.
   ctx.fillStyle = rgba(VFD.glass, 0.55);
+  ctx.beginPath();
   for (let y = stage.y; y < stage.y + stage.h; y += 4)
-    ctx.fillRect(stage.x, y, stage.w, 1);
-  if (labels) drawMarks(ctx, floor, bottom + row / 2, stage, row);
+    ctx.rect(stage.x, y, stage.w, 1);
+  ctx.fill();
+  if (labels) drawMarks(ctx, floor, bottom + row / 2, stage, px);
 }
 
 function drawStrip(
@@ -274,9 +276,8 @@ function drawMarks(
   floor: Projection,
   y: number,
   stage: { x: number; w: number },
-  row: number,
+  px: number,
 ): void {
-  const px = row * 0.8;
   let edge = -Infinity;
   for (const [hz, label] of HEAD_UNIT_MARKS) {
     const x = floor.apply((markBand(hz) + 0.5) / HEAD_UNIT_BANDS, 0)[0];
@@ -287,17 +288,17 @@ function drawMarks(
   }
 }
 
-const METER_COLOURS = new Map<number, [string, string][]>();
+const METER_COLOURS = new Map<number, { lit: string; dim: string }[]>();
 
 /** Each segment's lit and unlit colour for a meter of `count` segments, built once per height. */
-function meterColours(count: number): [string, string][] {
+function meterColours(count: number): { lit: string; dim: string }[] {
   let colours = METER_COLOURS.get(count);
   if (!colours) {
-    colours = Array.from({ length: count }, (_, segment) => {
+    const bases = Array.from({ length: count }, (_, segment) => {
       const t = segment / (count - 1);
-      const base = t >= 0.8 ? CHROME.hot : chromeGradient(t * 0.5);
-      return [rgba(base), rgba(ghost(base))];
+      return t >= 0.8 ? CHROME.hot : chromeGradient(t * 0.5);
     });
+    colours = ledColours(CHROME.bg, bases, GHOST);
     METER_COLOURS.set(count, colours);
   }
   return colours;
@@ -317,7 +318,7 @@ function drawMeter(
   const lit = Math.round(level * count);
   const colours = meterColours(count);
   for (let segment = 0; segment < count; segment++) {
-    ctx.fillStyle = colours[segment][segment < lit ? 0 : 1];
+    ctx.fillStyle = segment < lit ? colours[segment].lit : colours[segment].dim;
     const top = y + h - (segment + 1) * pitch;
     ctx.fillRect(x, top + pitch * 0.25, w, pitch * 0.75);
   }
@@ -329,8 +330,8 @@ function drawHeader(
   w: number,
   row: number,
   col: number,
+  px: number,
 ): void {
-  const px = row * 0.8;
   const y = row / 2;
   text(ctx, "DSP HEAD UNIT", col, y, CHROME.label, px);
   const left = textWidth(ctx, "DSP HEAD UNIT", px);
@@ -401,24 +402,29 @@ function sevenSegment(
   y: number,
   w: number,
   h: number,
-  lit: Rgb,
+  colours: { lit: string; dim: string },
 ): void {
   const t = Math.max(w * 0.16, 1.5);
   const m = y + h / 2;
-  const bars: Record<string, [number, number, number, number]> = {
-    a: [x + t, y, w - 2 * t, t],
-    b: [x + w - t, y + t, t, h / 2 - 1.5 * t],
-    c: [x + w - t, m + t / 2, t, h / 2 - 1.5 * t],
-    d: [x + t, y + h - t, w - 2 * t, t],
-    e: [x, m + t / 2, t, h / 2 - 1.5 * t],
-    f: [x, y + t, t, h / 2 - 1.5 * t],
-    g: [x + t, m - t / 2, w - 2 * t, t],
-  };
+  const side = h / 2 - 1.5 * t;
   const on = SEGMENTS[glyph] ?? "";
-  for (const [name, [bx, by, bw, bh]] of Object.entries(bars)) {
-    ctx.fillStyle = rgba(on.includes(name) ? lit : ghost(lit));
+  const bar = (
+    name: string,
+    bx: number,
+    by: number,
+    bw: number,
+    bh: number,
+  ) => {
+    ctx.fillStyle = on.includes(name) ? colours.lit : colours.dim;
     ctx.fillRect(bx, by, bw, bh);
-  }
+  };
+  bar("a", x + t, y, w - 2 * t, t);
+  bar("b", x + w - t, y + t, t, side);
+  bar("c", x + w - t, m + t / 2, t, side);
+  bar("d", x + t, y + h - t, w - 2 * t, t);
+  bar("e", x, m + t / 2, t, side);
+  bar("f", x, y + t, t, side);
+  bar("g", x + t, m - t / 2, w - 2 * t, t);
 }
 
 function drawReadout(
@@ -429,24 +435,24 @@ function drawReadout(
   y: number,
   row: number,
   col: number,
+  px: number,
 ): void {
   const idle = track.progressMs === null;
   const value = idle ? "--:--" : clock(track.progressMs ?? 0).padStart(5, "0");
-  const lit = idle ? ghost(CHROME.cap) : CHROME.cap;
+  const colours = DIGITS[idle ? 1 : 0];
   let x = col * 3;
   for (const glyph of value) {
     if (glyph === ":") {
-      ctx.fillStyle = rgba(lit);
+      ctx.fillStyle = colours.lit;
       ctx.fillRect(x + col * 0.25, y + row * 0.7, col * 0.5, col * 0.5);
       ctx.fillRect(x + col * 0.25, y + row * 2.0, col * 0.5, col * 0.5);
       x += col * 2;
       continue;
     }
-    sevenSegment(ctx, glyph, x, y + row * 0.2, col * 2.4, row * 2.6, lit);
+    sevenSegment(ctx, glyph, x, y + row * 0.2, col * 2.4, row * 2.6, colours);
     x += col * 3.4;
   }
   x += col;
-  const px = row * 0.8;
   text(ctx, "ST", x, y + row / 2, CHROME.mid, px);
   const state = track.live
     ? "LIVE"

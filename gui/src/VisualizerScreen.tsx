@@ -21,7 +21,8 @@ import {
   STYLES,
   type Style,
   type TrackView,
-  type WatchScreen,
+  type ScreenFeed,
+  styleName,
 } from "./screenModel";
 import { PAINTERS } from "./screenPaint";
 import { parseHex, rgba, STALE_MS } from "./visualizerModel";
@@ -32,29 +33,6 @@ const RESIZE_SETTLE_MS = 250;
 /** With no frame at all this long after the ask, the screen says it waits for audio. */
 const WAITING_MS = 1500;
 const CYCLE_KEY = "V";
-
-export function styleName(style: Style, screens: ScreenStrings): string {
-  switch (style) {
-    case "Cava":
-      return "Cava";
-    case "BarGraph":
-      return screens.bar_graph;
-    case "HeadUnit":
-      return screens.head_unit;
-    case "AnalogVu":
-      return screens.analog_vu;
-    case "Winamp":
-      return screens.winamp;
-    case "PhosphorScope":
-      return screens.phosphor_scope;
-    case "Outrun":
-      return screens.outrun;
-    case "RackEq":
-      return screens.rack_eq;
-    case "Cassette":
-      return screens.cassette_deck;
-  }
-}
 
 function trackAt(
   item: NowPlaying | null,
@@ -81,7 +59,7 @@ export function VisualizerScreen({
   position,
   active,
   available,
-  watch,
+  feed,
 }: {
   s?: GuiStrings;
   screens?: ScreenStrings;
@@ -90,7 +68,7 @@ export function VisualizerScreen({
   active: boolean;
   /** This build captures what the computer plays. */
   available: boolean;
-  watch?: WatchScreen;
+  feed?: ScreenFeed;
 }) {
   const [style, setStyle] = useState<Style>(() =>
     readStyle(pageStorage().getItem(STYLE_KEY)),
@@ -142,12 +120,16 @@ export function VisualizerScreen({
   }, [available]);
 
   useEffect(() => {
-    if (!active || !available || !shown || !watch || width === 0) return;
+    if (!active || !available || !shown || !feed) return;
     asked.current = performance.now();
-    return watch(bars, ({ payload, at }) => {
+    return feed.watch(({ payload, at }) => {
       frame.current = { audio: audioOf(payload), at };
     });
-  }, [active, available, shown, watch, bars, width]);
+  }, [active, available, shown, feed]);
+
+  useEffect(() => {
+    if (width > 0) feed?.bars(bars);
+  }, [feed, bars, width]);
 
   useEffect(() => {
     const element = canvas.current;
@@ -175,11 +157,7 @@ export function VisualizerScreen({
       ctx.clearRect(0, 0, w, h);
       const latest = frame.current;
       const sound =
-        latest !== null &&
-        now - latest.at < STALE_MS &&
-        latest.audio.bands.length > 0
-          ? latest.audio
-          : SILENT;
+        latest !== null && now - latest.at < STALE_MS ? latest.audio : SILENT;
       const dt = stepSeconds(last, now);
       const bars = barCount(style, w);
       held = settleBands(held, sound.bands, dt);
@@ -196,7 +174,6 @@ export function VisualizerScreen({
         accent,
         state,
       });
-      state.frames += 1;
       last = now;
       // Silence or a pause is a frame too; only a capture that never answered waits.
       const answered = latest !== null && latest.at >= asked.current;

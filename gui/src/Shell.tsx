@@ -61,7 +61,7 @@ import { Stats } from "./Stats";
 import { Toast } from "./Toast";
 import { TopBar } from "./TopBar";
 import { TrackActionsContext, type TrackActions } from "./TrackMenu";
-import type { WatchScreen } from "./screenModel";
+import type { ScreenFeed } from "./screenModel";
 import { VISUALIZER_SETTING } from "./visualizerModel";
 import { VisualizerScreen } from "./VisualizerScreen";
 
@@ -82,7 +82,7 @@ export function Shell({
   onWindow,
   onQuit,
   watchVisualizer,
-  watchVisualizerScreen,
+  visualizerScreen,
   coverSrc,
   askChangelog,
 }: {
@@ -94,7 +94,7 @@ export function Shell({
   onWindow: ((mode: WindowMode) => void) | null;
   onQuit: () => void;
   watchVisualizer?: WatchVisualizer;
-  watchVisualizerScreen?: WatchScreen;
+  visualizerScreen?: ScreenFeed;
   coverSrc?: CoverSrc;
   /** Asks the server for the changelog the Home page shows. */
   askChangelog: () => void;
@@ -437,7 +437,7 @@ export function Shell({
         active={page === "visualizer" && !room}
         // The player bar's setting row is offered only where the build can capture.
         available={choice(VISUALIZER_SETTING) !== null}
-        watch={watchVisualizerScreen}
+        feed={visualizerScreen}
       />
     ),
     health: (

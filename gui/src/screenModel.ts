@@ -1,4 +1,5 @@
 import type { ScreenFrame } from "./bindings/ScreenFrame";
+import type { ScreenStrings } from "./bindings/ScreenStrings";
 import type { VisualizerStyle } from "./bindings/VisualizerStyle";
 import {
   type Frame,
@@ -10,19 +11,28 @@ import {
 
 export type Style = VisualizerStyle;
 
-/** Every terminal style in the TUI's cycle order: a style added in Rust fails the type check here. */
-const ORDER: Record<Style, null> = {
+/**
+ * Every terminal style in the TUI's cycle order, with the screen string that
+ * names it (Cava's name is the same in every language). A style added in Rust
+ * fails the type check here.
+ */
+const NAMES: Record<Style, keyof ScreenStrings | null> = {
   Cava: null,
-  BarGraph: null,
-  HeadUnit: null,
-  AnalogVu: null,
-  Winamp: null,
-  PhosphorScope: null,
-  Outrun: null,
-  RackEq: null,
-  Cassette: null,
+  BarGraph: "bar_graph",
+  HeadUnit: "head_unit",
+  AnalogVu: "analog_vu",
+  Winamp: "winamp",
+  PhosphorScope: "phosphor_scope",
+  Outrun: "outrun",
+  RackEq: "rack_eq",
+  Cassette: "cassette_deck",
 };
-export const STYLES = Object.keys(ORDER) as Style[];
+export const STYLES = Object.keys(NAMES) as Style[];
+
+export function styleName(style: Style, screens: ScreenStrings): string {
+  const key = NAMES[style];
+  return key ? screens[key] : "Cava";
+}
 
 /** The page keeps its own choice; the TUI's `behavior.visualizer_style` is not touched. */
 export const STYLE_KEY = "spotatui.visualizer_style";
@@ -79,10 +89,12 @@ export interface Audio {
 export const SILENT: Audio = { bands: [], wave: [] };
 
 /** Asks for frames at `bars` bands while the listener lives. */
-export type WatchScreen = (
-  bars: number,
-  listener: (frame: Frame<ScreenFrame>) => void,
-) => () => void;
+export interface ScreenFeed {
+  /** Hands frames to `listener` until the returned stop runs. */
+  watch: (listener: (frame: Frame<ScreenFrame>) => void) => () => void;
+  /** The band count the style draws; a new count goes out once, the watch stays. */
+  bars: (count: number) => void;
+}
 
 export function audioOf(frame: ScreenFrame): Audio {
   return {
@@ -258,10 +270,11 @@ const FRAME_SECONDS = 1 / 60;
 export function stepMeter(
   level: number,
   live: number[],
-  dtSeconds: number | null,
+  dtSeconds: number,
 ): number {
   const target = rmsLevel(live);
-  const dt = dtSeconds ?? FRAME_SECONDS;
+  // A style's first frame has no step yet; it moves as one 60 Hz frame does.
+  const dt = dtSeconds > 0 ? dtSeconds : FRAME_SECONDS;
   const perFrame = target > level ? 0.6 : 0.15;
   const ease = 1 - Math.pow(1 - perFrame, dt / FRAME_SECONDS);
   return level + (target - level) * ease;
@@ -325,10 +338,19 @@ export const VFD = {
   wallBottom: [70, 146, 232] as Rgb,
 };
 
-const STRIP = [VFD.green, VFD.lavender, VFD.blue].map((band) => ({
-  lit: rgba(band),
-  dim: rgba(mix(VFD.glass, band, 0.2)),
-}));
+/** Each colour lit, and unlit as `dim` of the way from `base` to it, built once. */
+export function ledColours(
+  base: Rgb,
+  colours: Rgb[],
+  dim: number,
+): { lit: string; dim: string }[] {
+  return colours.map((colour) => ({
+    lit: rgba(colour),
+    dim: rgba(mix(base, colour, dim)),
+  }));
+}
+
+const STRIP = ledColours(VFD.glass, [VFD.green, VFD.lavender, VFD.blue], 0.2);
 
 /** A strip runs green, lavender, then blue from front to back, and dims past the level. */
 export function stripColour(depth: number, level: number): string {
@@ -439,7 +461,7 @@ export const RACK_LABELS = Array.from({ length: RACK_BANDS }, (_, i) => {
 /** The song's share played; 0.3 when the length is not known, as on live radio. */
 export function tapeProgress(track: TrackView): number {
   const { progressMs, durationMs } = track;
-  if (progressMs === null || durationMs === null || durationMs <= 0) return 0.3;
+  if (progressMs === null || durationMs === null) return 0.3;
   return clamp(progressMs / durationMs, 0, 1);
 }
 

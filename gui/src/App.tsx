@@ -65,7 +65,7 @@ export function App({ connection }: { connection: Connection }) {
         onWindow={state.window ? resize : null}
         onQuit={() => connection.send({ type: "quit" })}
         watchVisualizer={connection.watchVisualizer}
-        watchVisualizerScreen={connection.watchVisualizerScreen}
+        visualizerScreen={connection.screen}
         coverSrc={connection.coverSrc}
         askChangelog={connection.askChangelog}
       />
