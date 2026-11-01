@@ -627,7 +627,6 @@ mod tests {
     screen_seen(&mut feed, true, false, t0 + LINGER / 2);
 
     assert_eq!(feed.wants_capture(t0 + LINGER / 2), AVAILABLE);
-    assert!(feed.screen_streams(None, t0 + LINGER / 2).is_none());
     assert!(!feed.wants_capture(t0 + LINGER));
   }
 

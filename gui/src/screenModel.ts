@@ -138,21 +138,15 @@ export function settleBands(
   dt: number,
 ): number[] {
   if (bands.length > 0) return bands;
-  // Settled silence is empty, so it takes the cached zeros below.
   return held.some((value) => value > 0)
     ? held.map((value) => Math.max(0, value - FALL_PER_SEC * dt))
-    : SILENT.bands;
+    : held;
 }
-
-let zeros: number[] = [];
 
 /** Each channel resampled to the count this page asked for (another page can ask for another); no frame yet rests at zero. */
 export function fitBands(bands: number[], bars: number): number[] {
   const half = Math.floor(bars / 2);
-  if (bands.length === 0) {
-    if (zeros.length !== half * 2) zeros = new Array<number>(half * 2).fill(0);
-    return zeros;
-  }
+  if (bands.length === 0) return new Array<number>(half * 2).fill(0);
   if (bands.length === half * 2) return bands;
   const [left, right] = channels(bands);
   return [...resample(left, half).reverse(), ...resample(right, half)];
@@ -409,7 +403,6 @@ export function pushSweep(trails: number[][], wave: number[]): number[][] {
 
 /** Peak-to-peak "volts" and a crossing count over the 50 ms window. */
 export function scopeReadout(wave: number[]): { vpp: number; hz: number } {
-  if (wave.length === 0) return { vpp: 0, hz: 0 };
   let [low, high, crossings] = [wave[0], wave[0], 0];
   for (let i = 1; i < wave.length; i++) {
     low = Math.min(low, wave[i]);
