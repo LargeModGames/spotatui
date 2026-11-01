@@ -22,30 +22,6 @@
   font-weight: 700;
 }
 
-.viz-screen-bar select,
-.viz-screen-bar button {
-  height: 32px;
-  box-sizing: border-box;
-  padding: 0 12px;
-  border: 1px solid transparent;
-  border-radius: 4px;
-  background: var(--raised);
-  color: var(--text);
-  font: 14px var(--sans);
-  cursor: pointer;
-}
-
-.viz-screen-bar select:hover,
-.viz-screen-bar button:hover {
-  background: var(--hover);
-}
-
-.viz-screen-bar select:focus-visible,
-.viz-screen-bar button:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
 .viz-screen-canvas {
   display: block;
   width: 100%;

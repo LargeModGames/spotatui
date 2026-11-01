@@ -28,6 +28,7 @@ import {
   VU_ZERO,
   vuDb,
 } from "./screenModel";
+import { rgba } from "./visualizerModel";
 
 const MIRRORED = [0.1, 0.2, 0.9, 0.3, 0.4, 0.05];
 
@@ -152,10 +153,10 @@ describe("head unit", () => {
   });
 
   it("runs a strip green, lavender, then blue, and dims it past the level", () => {
-    expect(stripColour(0.2, 1)).toEqual(VFD.green);
-    expect(stripColour(0.5, 1)).toEqual(VFD.lavender);
-    expect(stripColour(0.9, 1)).toEqual(VFD.blue);
-    expect(stripColour(0.5, 0.3)).not.toEqual(VFD.lavender);
+    expect(stripColour(0.2, 1)).toBe(rgba(VFD.green));
+    expect(stripColour(0.5, 1)).toBe(rgba(VFD.lavender));
+    expect(stripColour(0.9, 1)).toBe(rgba(VFD.blue));
+    expect(stripColour(0.5, 0.3)).not.toBe(rgba(VFD.lavender));
   });
 });
 

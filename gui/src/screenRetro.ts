@@ -1,12 +1,14 @@
 import { clock } from "./format";
 import {
   bandsOf,
+  glowStroke,
   grid,
   polyline,
   roundRect,
   type Scene,
   text,
   textWidth,
+  waveOf,
 } from "./screenDraw";
 import {
   channels,
@@ -34,6 +36,14 @@ import { mix, rgba, type Rgb } from "./visualizerModel";
 const rgb = (r: number, g: number, b: number): Rgb => [r, g, b];
 const DEG = Math.PI / 180;
 
+/** Each LED colour lit, and unlit over `base`, built once. */
+function ledColours(base: Rgb, colours: Rgb[]): { lit: string; dim: string }[] {
+  return colours.map((colour) => ({
+    lit: rgba(colour),
+    dim: rgba(mix(base, colour, 0.18)),
+  }));
+}
+
 // Analog VU: two backlit 1970s hi-fi needle meters.
 
 const VU = {
@@ -52,7 +62,7 @@ const VU = {
 
 const signed = (db: number) => {
   const whole = Math.round(db);
-  return (whole >= 0 ? `+${Math.abs(whole)}` : `${whole}`).padStart(3);
+  return (whole >= 0 ? `+${whole}` : `${whole}`).padStart(3);
 };
 
 export function paintAnalogVu(scene: Scene): void {
@@ -300,18 +310,17 @@ export function paintWinamp(scene: Scene): void {
   text(ctx, "OSC", col * 2, oscY + oscH / 2, AMP.osc, px * 0.85);
   const ox = col * 6;
   const ow = w - col * 8;
-  // At most one point for each two pixels; silence is a flat line.
+  // At most one point for each two pixels.
   const points = Math.max(Math.floor(ow / 2), 2);
-  const raw = scene.audio.wave.length > 1 ? scene.audio.wave : [0, 0];
+  const raw = waveOf(scene);
   const wave = raw.length > points ? resample(raw, points) : raw;
   ctx.strokeStyle = rgba(AMP.lcd);
   ctx.lineWidth = 1.2;
   polyline(
     ctx,
-    wave.map((value, i) => [
-      ox + (i / (wave.length - 1)) * ow,
-      oscY + oscH / 2 - clamp(value, -1, 1) * (oscH / 2) * 0.9,
-    ]),
+    wave.length,
+    (i) => ox + (i / (wave.length - 1)) * ow,
+    (i) => oscY + oscH / 2 - clamp(wave[i], -1, 1) * (oscH / 2) * 0.9,
   );
   ctx.stroke();
 
@@ -403,27 +412,23 @@ export function paintPhosphorScope(scene: Scene): void {
   ctx.lineWidth = 2;
   ctx.stroke();
 
-  state.trails = pushSweep(
-    state.trails,
-    scene.audio.wave.length > 1 ? scene.audio.wave : [0, 0],
-  );
+  state.trails = pushSweep(state.trails, waveOf(scene));
   const offset = TRAILS.length - state.trails.length;
   state.trails.forEach((sweep, k) => {
-    const newest = k === state.trails.length - 1;
-    ctx.strokeStyle = rgba(mix(SCOPE.bg, SCOPE.trace, TRAILS[offset + k]));
-    ctx.lineWidth = newest ? 1.8 : 1.3;
-    ctx.shadowColor = rgba(SCOPE.trace);
-    ctx.shadowBlur = newest ? row * 0.6 : 0;
     polyline(
       ctx,
-      sweep.map((value, i) => [
-        sx + (i / Math.max(sweep.length - 1, 1)) * sw,
-        sy + sh / 2 - clamp(value, -1, 1) * sh * 0.42,
-      ]),
+      sweep.length,
+      (i) => sx + (i / Math.max(sweep.length - 1, 1)) * sw,
+      (i) => sy + sh / 2 - clamp(sweep[i], -1, 1) * sh * 0.42,
     );
+    if (k === state.trails.length - 1) {
+      glowStroke(ctx, SCOPE.trace, 1.8, row * 0.5);
+      return;
+    }
+    ctx.strokeStyle = rgba(mix(SCOPE.bg, SCOPE.trace, TRAILS[offset + k]));
+    ctx.lineWidth = 1.3;
     ctx.stroke();
   });
-  ctx.shadowBlur = 0;
   const { vpp, hz } = scopeReadout(scene.audio.wave);
   text(
     ctx,
@@ -497,32 +502,29 @@ export function paintOutrun(scene: Scene): void {
     hz - 1 - clamp(value, 0, 1) * hz * 0.44,
   ]);
   ctx.fillStyle = rgba(OUT.mountain);
-  polyline(ctx, [[0, hz], ...peaks, [w, hz]]);
-  ctx.closePath();
-  ctx.fill();
-  const rim = (colour: Rgb, drop: number, width: number, blur: number) => {
-    ctx.strokeStyle = rgba(colour);
-    ctx.lineWidth = width;
-    ctx.shadowColor = rgba(colour);
-    ctx.shadowBlur = blur;
+  const ridgeLine = (drop: number) =>
     polyline(
       ctx,
-      peaks.map(([x, y]) => [x, y + drop]),
+      peaks.length,
+      (i) => peaks[i][0],
+      (i) => peaks[i][1] + drop,
     );
-    ctx.stroke();
-    ctx.shadowBlur = 0;
-  };
-  rim(OUT.neonDim, 3, 1, 0);
-  rim(OUT.neon, 0, 2, row * 0.5);
+  ridgeLine(0);
+  ctx.lineTo(w, hz);
+  ctx.lineTo(0, hz);
+  ctx.closePath();
+  ctx.fill();
+  ridgeLine(3);
+  ctx.strokeStyle = rgba(OUT.neonDim);
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ridgeLine(0);
+  glowStroke(ctx, OUT.neon, 2, row * 0.5);
 
   ctx.save();
   ctx.beginPath();
   ctx.rect(0, hz, w, h - hz);
   ctx.clip();
-  ctx.shadowBlur = row * 0.4;
-  ctx.shadowColor = rgba(OUT.grid);
-  ctx.strokeStyle = rgba(OUT.grid);
-  ctx.lineWidth = 1.2;
   const far = (w * 9) / 232;
   const near = (w * 62) / 232;
   ctx.beginPath();
@@ -530,8 +532,8 @@ export function paintOutrun(scene: Scene): void {
     ctx.moveTo(cx + i * far, hz);
     ctx.lineTo(cx + i * near, h);
   }
-  ctx.stroke();
-  // One blurred stroke for each colour, not one for each line.
+  glowStroke(ctx, OUT.grid, 1.2, row * 0.35);
+  // One stroke for each colour, not one for each line.
   const rows: [number[], number[]] = [[], []];
   for (let k = 0; k < 8; k++) {
     const z = 1.25 * Math.pow(1.65, k - state.phase);
@@ -541,13 +543,12 @@ export function paintOutrun(scene: Scene): void {
     rows[z < 3 ? 0 : 1].push(y);
   }
   rows.forEach((ys, far) => {
-    ctx.strokeStyle = rgba(far ? OUT.gridFar : OUT.grid);
     ctx.beginPath();
     for (const y of ys) {
       ctx.moveTo(0, y);
       ctx.lineTo(w, y);
     }
-    ctx.stroke();
+    glowStroke(ctx, far ? OUT.gridFar : OUT.grid, 1.2, row * 0.35);
   });
   ctx.restore();
   ctx.fillStyle = rgba(OUT.horizon);
@@ -585,6 +586,7 @@ const RACK = {
   knob: rgb(40, 40, 44),
   knobName: rgb(50, 50, 54),
 };
+const RACK_LEDS = ledColours(RACK.window, [RACK.green, RACK.amber, RACK.red]);
 
 export function paintRackEq(scene: Scene): void {
   const { ctx, w, h, state } = scene;
@@ -663,9 +665,8 @@ export function paintRackEq(scene: Scene): void {
       const lit = Math.round(clamp(values[index], 0, 1) * segments);
       for (let s = 0; s < segments; s++) {
         const share = s / segments;
-        const led =
-          share < 0.64 ? RACK.green : share < 0.86 ? RACK.amber : RACK.red;
-        ctx.fillStyle = rgba(s < lit ? led : mix(RACK.window, led, 0.18));
+        const led = RACK_LEDS[share < 0.64 ? 0 : share < 0.86 ? 1 : 2];
+        ctx.fillStyle = s < lit ? led.lit : led.dim;
         ctx.fillRect(x, base - (s + 1) * pitch, ladder, pitch * 0.7);
       }
       // One dark segment above the peak, as on the TUI's rack.
@@ -726,6 +727,7 @@ const TAPE = {
   amber: rgb(250, 190, 40),
   red: rgb(250, 60, 40),
 };
+const TAPE_LEDS = ledColours(TAPE.body, [TAPE.green, TAPE.amber, TAPE.red]);
 const TAPE_SCALE: [string, number][] = [
   ["-30", 0],
   ["-20", 0.25],
@@ -852,9 +854,8 @@ export function paintCassette(scene: Scene): void {
     });
     for (let k = 0; k < leds; k++) {
       const share = k / leds;
-      const led =
-        share < 0.65 ? TAPE.green : share < 0.825 ? TAPE.amber : TAPE.red;
-      ctx.fillStyle = rgba(share < level ? led : mix(TAPE.body, led, 0.18));
+      const led = TAPE_LEDS[share < 0.65 ? 0 : share < 0.825 ? 1 : 2];
+      ctx.fillStyle = share < level ? led.lit : led.dim;
       ctx.fillRect(x0 + k * pitch, ly - row * 0.4, pitch * 0.7, row * 0.8);
     }
   });

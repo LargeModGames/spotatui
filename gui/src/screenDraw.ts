@@ -2,7 +2,7 @@ import { type Audio, clamp, type Peak, type TrackView } from "./screenModel";
 import { rgba, type Rgb } from "./visualizerModel";
 
 /** What a style keeps from one frame to the next; a new style starts fresh. */
-export interface PaintState {
+interface PaintState {
   frames: number;
   peaks: Peak[];
   needles: [number, number];
@@ -76,15 +76,32 @@ export function text(
   ctx.fillText(value, x, y);
 }
 
-/** Starts a path through `points`; the caller strokes or fills it. */
+/** Starts a path through `count` points at `x(i)`, `y(i)`; the caller strokes or fills it. */
 export function polyline(
   ctx: CanvasRenderingContext2D,
-  points: [number, number][],
+  count: number,
+  x: (i: number) => number,
+  y: (i: number) => number,
 ): void {
   ctx.beginPath();
-  points.forEach(([x, y], i) =>
-    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y),
-  );
+  for (let i = 0; i < count; i++)
+    if (i === 0) ctx.moveTo(x(i), y(i));
+    else ctx.lineTo(x(i), y(i));
+}
+
+/** Strokes the current path with a glow: wide and faint, then thin. Cheaper than `shadowBlur` on long paths. */
+export function glowStroke(
+  ctx: CanvasRenderingContext2D,
+  colour: Rgb,
+  width: number,
+  glow: number,
+): void {
+  ctx.strokeStyle = rgba(colour, 0.25);
+  ctx.lineWidth = width + glow;
+  ctx.stroke();
+  ctx.strokeStyle = rgba(colour);
+  ctx.lineWidth = width;
+  ctx.stroke();
 }
 
 export function roundRect(
@@ -110,6 +127,13 @@ export function bandsOf(scene: Scene): number[] {
   return scene.audio.bands.length > 0
     ? scene.audio.bands
     : new Array<number>(Math.max(scene.bars, 2)).fill(0);
+}
+
+const FLAT = [0, 0];
+
+/** The wave to trace: silence is a flat line. */
+export function waveOf(scene: Scene): number[] {
+  return scene.audio.wave.length > 1 ? scene.audio.wave : FLAT;
 }
 
 /** The faceplates' grid: one terminal row scaled to the canvas, a cell's width, and the text size. */

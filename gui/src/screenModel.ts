@@ -1,25 +1,42 @@
 import type { ScreenFrame } from "./bindings/ScreenFrame";
-import { type Frame, mix, type Rgb } from "./visualizerModel";
+import type { VisualizerStyle } from "./bindings/VisualizerStyle";
+import {
+  type Frame,
+  LONGEST_STEP,
+  mix,
+  rgba,
+  type Rgb,
+} from "./visualizerModel";
 
-/** The terminal's visualizer styles, in the order the TUI cycles them. */
-export const STYLES = [
-  "Cava",
-  "BarGraph",
-  "HeadUnit",
-  "AnalogVu",
-  "Winamp",
-  "PhosphorScope",
-  "Outrun",
-  "RackEq",
-  "Cassette",
-] as const;
-export type Style = (typeof STYLES)[number];
+export type Style = VisualizerStyle;
+
+/** Every terminal style in the TUI's cycle order: a style added in Rust fails the type check here. */
+const ORDER: Record<Style, null> = {
+  Cava: null,
+  BarGraph: null,
+  HeadUnit: null,
+  AnalogVu: null,
+  Winamp: null,
+  PhosphorScope: null,
+  Outrun: null,
+  RackEq: null,
+  Cassette: null,
+};
+export const STYLES = Object.keys(ORDER) as Style[];
 
 /** The page keeps its own choice; the TUI's `behavior.visualizer_style` is not touched. */
 export const STYLE_KEY = "spotatui.visualizer_style";
 
 export function readStyle(stored: string | null): Style {
   return STYLES.find((style) => style === stored) ?? "Cava";
+}
+
+export function saveStyle(storage: Pick<Storage, "setItem">, style: Style) {
+  try {
+    storage.setItem(STYLE_KEY, style);
+  } catch {
+    // A full or blocked storage only forgets the choice at the next load.
+  }
 }
 
 export function nextStyle(style: Style): Style {
@@ -147,7 +164,7 @@ export function clamp(value: number, low: number, high: number): number {
 
 /** Seconds since the last frame: none on the first, at most a quarter second. */
 export function stepSeconds(last: number | null, now: number): number {
-  return last === null ? 0 : clamp((now - last) / 1000, 0, 0.25);
+  return last === null ? 0 : clamp((now - last) / 1000, 0, LONGEST_STEP);
 }
 
 /** A falling marker: it holds, then drops at a steady rate. */
@@ -254,7 +271,7 @@ export type Point = [number, number];
 
 /** A square-to-quad projection; corners for (0,0), (1,0), (1,1), (0,1). */
 export class Projection {
-  readonly m: number[][];
+  private readonly m: number[][];
 
   constructor([p0, p1, p2, p3]: [Point, Point, Point, Point]) {
     const [dx1, dx2, dx3] = [
@@ -308,10 +325,15 @@ export const VFD = {
   wallBottom: [70, 146, 232] as Rgb,
 };
 
+const STRIP = [VFD.green, VFD.lavender, VFD.blue].map((band) => ({
+  lit: rgba(band),
+  dim: rgba(mix(VFD.glass, band, 0.2)),
+}));
+
 /** A strip runs green, lavender, then blue from front to back, and dims past the level. */
-export function stripColour(depth: number, level: number): Rgb {
-  const band = depth < 0.46 ? VFD.green : depth < 0.7 ? VFD.lavender : VFD.blue;
-  return depth <= level ? band : mix(VFD.glass, band, 0.2);
+export function stripColour(depth: number, level: number): string {
+  const zone = STRIP[depth < 0.46 ? 0 : depth < 0.7 ? 1 : 2];
+  return depth <= level ? zone.lit : zone.dim;
 }
 
 /** The frequency marks under the floor, on the 50 Hz to 10 kHz log scale. */

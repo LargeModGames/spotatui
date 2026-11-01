@@ -1,5 +1,13 @@
 import { clock } from "./format";
-import { bandsOf, font, grid, type Scene, text, textWidth } from "./screenDraw";
+import {
+  bandsOf,
+  font,
+  grid,
+  polyline,
+  type Scene,
+  text,
+  textWidth,
+} from "./screenDraw";
 import {
   clamp,
   FLOOR,
@@ -182,7 +190,7 @@ function drawStrip(
   for (let y = front[1]; y > back[1]; y -= segment) {
     const yTop = Math.max(y - segment + gap, back[1]);
     const mid = (y + yTop) / 2;
-    ctx.fillStyle = rgba(stripColour((front[1] - mid) / depth, level));
+    ctx.fillStyle = stripColour((front[1] - mid) / depth, level);
     const at = (yy: number) =>
       front[0] + ((front[1] - yy) / depth) * (back[0] - front[0]);
     ctx.beginPath();
@@ -203,15 +211,20 @@ function drawWalls(
   const { x, y, w, h } = stage;
   ctx.save();
   // Walls stand behind the floor, never on it.
-  ctx.beginPath();
-  ctx.rect(x, y, w, h);
-  FLOOR.forEach(([fx, fy], i) => {
-    const px = x + fx * w;
-    const py = y + fy * h;
-    if (i === 0) ctx.moveTo(px, py);
-    else ctx.lineTo(px, py);
-  });
+  const corners = [
+    floor.apply(0, 0),
+    floor.apply(1, 0),
+    floor.apply(1, 1),
+    floor.apply(0, 1),
+  ];
+  polyline(
+    ctx,
+    4,
+    (i) => corners[i][0],
+    (i) => corners[i][1],
+  );
   ctx.closePath();
+  ctx.rect(x, y, w, h);
   ctx.clip("evenodd");
   const wall = (
     x0: number,
@@ -229,11 +242,14 @@ function drawWalls(
     gradient.addColorStop(0, rgba(VFD.wallTop));
     gradient.addColorStop(1, rgba(VFD.wallBottom));
     ctx.fillStyle = gradient;
-    ctx.beginPath();
-    ctx.moveTo(x0, top);
-    ctx.lineTo(x1, top);
-    ctx.lineTo(x1, bottomRight);
-    ctx.lineTo(x0, bottomLeft);
+    const xs = [x0, x1, x1, x0];
+    const ys = [top, top, bottomRight, bottomLeft];
+    polyline(
+      ctx,
+      4,
+      (i) => xs[i],
+      (i) => ys[i],
+    );
     ctx.closePath();
     ctx.fill();
   };
@@ -261,15 +277,30 @@ function drawMarks(
   row: number,
 ): void {
   const px = row * 0.8;
-  ctx.font = font(px);
   let edge = -Infinity;
   for (const [hz, label] of HEAD_UNIT_MARKS) {
     const x = floor.apply((markBand(hz) + 0.5) / HEAD_UNIT_BANDS, 0)[0];
-    const half = ctx.measureText(label).width / 2;
+    const half = textWidth(ctx, label, px) / 2;
     if (x - half < edge + px * 0.6 || x + half > stage.x + stage.w) continue;
     text(ctx, label, x, y, CHROME.label, px, { align: "center" });
     edge = x + half;
   }
+}
+
+const METER_COLOURS = new Map<number, [string, string][]>();
+
+/** Each segment's lit and unlit colour for a meter of `count` segments, built once per height. */
+function meterColours(count: number): [string, string][] {
+  let colours = METER_COLOURS.get(count);
+  if (!colours) {
+    colours = Array.from({ length: count }, (_, segment) => {
+      const t = segment / (count - 1);
+      const base = t >= 0.8 ? CHROME.hot : chromeGradient(t * 0.5);
+      return [rgba(base), rgba(ghost(base))];
+    });
+    METER_COLOURS.set(count, colours);
+  }
+  return colours;
 }
 
 function drawMeter(
@@ -284,10 +315,9 @@ function drawMeter(
   const pitch = row / 2;
   const count = Math.max(Math.floor(h / pitch), 2);
   const lit = Math.round(level * count);
+  const colours = meterColours(count);
   for (let segment = 0; segment < count; segment++) {
-    const t = segment / (count - 1);
-    const base = t >= 0.8 ? CHROME.hot : chromeGradient(t * 0.5);
-    ctx.fillStyle = rgba(segment < lit ? base : ghost(base));
+    ctx.fillStyle = colours[segment][segment < lit ? 0 : 1];
     const top = y + h - (segment + 1) * pitch;
     ctx.fillRect(x, top + pitch * 0.25, w, pitch * 0.75);
   }
@@ -412,15 +442,7 @@ function drawReadout(
       x += col * 2;
       continue;
     }
-    sevenSegment(
-      ctx,
-      glyph,
-      x,
-      y + row * 0.2,
-      col * 2.4,
-      row * 2.6,
-      idle ? ghost(CHROME.cap) : lit,
-    );
+    sevenSegment(ctx, glyph, x, y + row * 0.2, col * 2.4, row * 2.6, lit);
     x += col * 3.4;
   }
   x += col;

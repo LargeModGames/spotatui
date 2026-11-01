@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { NowPlaying } from "./bindings/NowPlaying";
 import type { ScreenStrings } from "./bindings/ScreenStrings";
+import { pageStorage } from "./commandModel";
 import { type Position, shownAt } from "./connection";
 import { EN, fmt, type GuiStrings, SCREENS_EN } from "./i18n";
 import { font, freshState } from "./screenDraw";
@@ -12,6 +13,7 @@ import {
   nextStyle,
   NO_TRACK,
   readStyle,
+  saveStyle,
   settleBands,
   SILENT,
   stepSeconds,
@@ -54,14 +56,6 @@ export function styleName(style: Style, screens: ScreenStrings): string {
   }
 }
 
-function storedStyle(): Style {
-  try {
-    return readStyle(localStorage.getItem(STYLE_KEY));
-  } catch {
-    return "Cava";
-  }
-}
-
 function trackAt(
   item: NowPlaying | null,
   position: Position | null,
@@ -98,7 +92,9 @@ export function VisualizerScreen({
   available: boolean;
   watch?: WatchScreen;
 }) {
-  const [style, setStyle] = useState<Style>(storedStyle);
+  const [style, setStyle] = useState<Style>(() =>
+    readStyle(pageStorage().getItem(STYLE_KEY)),
+  );
   const canvas = useRef<HTMLCanvasElement>(null);
   const [width, setWidth] = useState(0);
   const [shown, setShown] = useState(false);
@@ -119,11 +115,7 @@ export function VisualizerScreen({
 
   const choose = (next: Style) => {
     setStyle(next);
-    try {
-      localStorage.setItem(STYLE_KEY, next);
-    } catch {
-      // A page without storage still switches; the choice lasts until reload.
-    }
+    saveStyle(pageStorage(), next);
   };
 
   useEffect(() => {
@@ -246,6 +238,7 @@ export function VisualizerScreen({
       <header className="viz-screen-bar">
         <h1>{s.visualizer}</h1>
         <select
+          className="list-sort"
           aria-label={s.visualizer_style}
           value={style}
           onChange={(event) => choose(readStyle(event.target.value))}
@@ -258,6 +251,7 @@ export function VisualizerScreen({
         </select>
         <button
           type="button"
+          className="list-sort"
           title={fmt(s.label_shortcut, {
             label: s.next_visualizer_style,
             key: CYCLE_KEY,

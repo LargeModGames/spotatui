@@ -40,7 +40,7 @@ export function isEmptySpace(target: Element | null): boolean {
 /** Lower than this, a bar or a cap is at rest. */
 const REST = 0.01;
 /** A longer gap, such as a hidden tab, moves the bars as this one does. */
-const LONGEST_STEP = 0.25;
+export const LONGEST_STEP = 0.25;
 /** A frame older than this no longer counts as sound. */
 export const STALE_MS = 200;
 
