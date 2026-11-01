@@ -1,6 +1,7 @@
 import { test, type Page } from "@playwright/test";
 import type { ClientMessage } from "../src/bindings/ClientMessage";
 import type { ServerMessage } from "../src/bindings/ServerMessage";
+import { STYLE_KEY } from "../src/screenModel";
 
 /** Opens the page with a launch code and answers its socket with `messages`, in order. */
 export async function openWith(
@@ -13,35 +14,55 @@ export async function openWith(
   await page.goto("/#code=shot");
 }
 
-/** Like `openWith`, and while the page asks for visualizer frames, sends it `frame` again and again. */
-export async function openWithVisualizer(
+/** A page asking for visualizer frames, or for the screen's at a band count. */
+type FrameAsk = { on: boolean; bars?: number };
+
+/** Like `openWith`, and while the page asks with `type`, sends it the frame for that ask again and again. */
+async function openStreaming(
   page: Page,
   messages: ServerMessage[],
-  frame: ServerMessage,
+  type: "visualizer" | "visualizer_screen",
+  frame: (ask: FrameAsk) => ServerMessage,
 ): Promise<void> {
   await page.routeWebSocket("**/ws", (ws) => {
     let frames: ReturnType<typeof setInterval> | undefined;
     ws.onMessage((text) => {
       const message = JSON.parse(String(text)) as ClientMessage;
-      if (message.type !== "visualizer") return;
+      if (message.type !== type) return;
       clearInterval(frames);
-      if (message.on)
-        frames = setInterval(() => ws.send(JSON.stringify(frame)), 30);
+      const ask = message as FrameAsk;
+      if (ask.on) {
+        const next = JSON.stringify(frame(ask));
+        frames = setInterval(() => ws.send(next), 30);
+      }
     });
     ws.onClose(() => clearInterval(frames));
     for (const message of messages) ws.send(JSON.stringify(message));
   });
   await page.goto("/#code=shot");
-  // Drawn once the first frame lands on the canvas.
-  await page.waitForFunction(() => {
-    const canvas = document.querySelector<HTMLCanvasElement>(".playerbar-viz");
+}
+
+/** Waits until the first frame lands on the canvas `selector` names. */
+async function painted(page: Page, selector: string): Promise<void> {
+  await page.waitForFunction((selector) => {
+    const canvas = document.querySelector<HTMLCanvasElement>(selector);
     const pixels = canvas
       ?.getContext("2d")
       ?.getImageData(0, 0, canvas.width, canvas.height).data;
     return (
       pixels?.some((value, index) => index % 4 === 3 && value > 0) ?? false
     );
-  });
+  }, selector);
+}
+
+/** Like `openWith`, and while the page asks for visualizer frames, sends it `frame` again and again. */
+export async function openWithVisualizer(
+  page: Page,
+  messages: ServerMessage[],
+  frame: ServerMessage,
+): Promise<void> {
+  await openStreaming(page, messages, "visualizer", () => frame);
+  await painted(page, ".playerbar-viz");
 }
 
 /** Opens the visualizer screen in `style` and answers each ask with `frame` at the band count it asked for. */
@@ -52,35 +73,14 @@ export async function openScreen(
   frame: (bars: number) => ServerMessage,
 ): Promise<void> {
   await page.addInitScript(
-    (value) => localStorage.setItem("spotatui.visualizer_style", value),
-    style,
+    ([key, value]) => localStorage.setItem(key, value),
+    [STYLE_KEY, style],
   );
-  await page.routeWebSocket("**/ws", (ws) => {
-    let frames: ReturnType<typeof setInterval> | undefined;
-    ws.onMessage((text) => {
-      const message = JSON.parse(String(text)) as ClientMessage;
-      if (message.type !== "visualizer_screen") return;
-      clearInterval(frames);
-      if (message.on) {
-        const next = JSON.stringify(frame(message.bars));
-        frames = setInterval(() => ws.send(next), 30);
-      }
-    });
-    ws.onClose(() => clearInterval(frames));
-    for (const message of messages) ws.send(JSON.stringify(message));
-  });
-  await page.goto("/#code=shot");
+  await openStreaming(page, messages, "visualizer_screen", (ask) =>
+    frame(ask.bars ?? 0),
+  );
   await page.getByRole("button", { name: "Visualizer", exact: true }).click();
-  await page.waitForFunction(() => {
-    const canvas =
-      document.querySelector<HTMLCanvasElement>(".viz-screen-canvas");
-    const pixels = canvas
-      ?.getContext("2d")
-      ?.getImageData(0, 0, canvas.width, canvas.height).data;
-    return (
-      pixels?.some((value, index) => index % 4 === 3 && value > 0) ?? false
-    );
-  });
+  await painted(page, ".viz-screen-canvas");
   // Needles, meters and peak caps ease in over a few hundred ms.
   await page.waitForTimeout(800);
 }
