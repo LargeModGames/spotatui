@@ -274,8 +274,6 @@ export function stepNeedle(needle: number, target: number, dt: number): number {
 // Head Unit: a VFD spectrum in perspective with an eased level meter.
 
 export const HEAD_UNIT_BANDS = 12;
-export const WINAMP_BARS = 19;
-export const RIDGE_POINTS = 48;
 
 const FRAME_SECONDS = 1 / 60;
 
@@ -387,6 +385,10 @@ export function markBand(hz: number): number {
   );
 }
 
+// Winamp: nineteen bars, as the classic player draws.
+
+export const WINAMP_BARS = 19;
+
 // Phosphor Scope: four sweeps that fade.
 
 export const TRAILS = [0.18, 0.32, 0.55, 1];
@@ -416,6 +418,8 @@ export function scopeReadout(wave: number[]): { vpp: number; hz: number } {
 }
 
 // Outrun: the grid scrolls while the song plays.
+
+export const RIDGE_POINTS = 48;
 
 export function stepOutrun(
   phase: number,
