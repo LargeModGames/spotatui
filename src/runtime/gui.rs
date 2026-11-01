@@ -299,6 +299,8 @@ async fn serve_until_quit(
   let mut visualizer = Feed::new();
   let mut frame_clock = tokio::time::interval(FRAME_EVERY);
   frame_clock.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+  let mut screen_clock = tokio::time::interval(FRAME_EVERY);
+  screen_clock.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
   // Never completes when the handler cannot register: a completed future must not be polled again.
   let ctrl_c = async {
     if let Err(e) = tokio::signal::ctrl_c().await {
@@ -363,7 +365,13 @@ async fn serve_until_quit(
           },
         );
         // After the tick, which opens, polls or closes the capture.
-        visualizer.note(&app, plays_here(&app), publisher.visualizer_watched(), now);
+        visualizer.note(
+          &app,
+          plays_here(&app),
+          publisher.visualizer_watched(),
+          publisher.screen_watched().is_some(),
+          now,
+        );
         last_tick = now;
         publisher.publish(&app);
         publisher.tick(&app, now);
@@ -376,6 +384,13 @@ async fn serve_until_quit(
       _ = frame_clock.tick(), if visualizer.streams(publisher.visualizer_watched(), Instant::now()) => {
         if let Some(frame) = visualizer.frame(driver, Instant::now()) {
           publisher.frame(&frame);
+        }
+      }
+      _ = screen_clock.tick(), if visualizer.screen_streams(Instant::now()) => {
+        if let Some(bars) = publisher.screen_watched() {
+          if let Some(frame) = visualizer.screen_frame(driver, bars, Instant::now()) {
+            publisher.screen_frame(&frame);
+          }
         }
       }
       _ = update_checks.tick(), if update_requests.is_some() => {
@@ -427,7 +442,13 @@ async fn serve_until_quit(
           driver.run_pending_script_commands(&mut app);
           publisher.publish(&app);
           // A click on the bar changes the visualizer's mode at once.
-          visualizer.note(&app, plays_here(&app), publisher.visualizer_watched(), Instant::now());
+          visualizer.note(
+            &app,
+            plays_here(&app),
+            publisher.visualizer_watched(),
+            publisher.screen_watched().is_some(),
+            Instant::now(),
+          );
           // A changed auto-update setting reaches the updater at once.
           if let Some(check) = changed_check(last_check, &app.user_config.behavior) {
             last_check = Some(check);
@@ -438,6 +459,7 @@ async fn serve_until_quit(
         Some(
           ClientMessage::Onboarding { .. }
           | ClientMessage::Visualizer { .. }
+          | ClientMessage::VisualizerScreen { .. }
           | ClientMessage::Changelog,
         ) => {}
         Some(ClientMessage::Update { ask }) => match ask {

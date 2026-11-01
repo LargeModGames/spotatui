@@ -887,6 +887,14 @@ impl Driver {
     self.audio_capture.current()?.recent_audio()
   }
 
+  /// cava's next frame from the open capture at `bars` bands, for a frontend
+  /// that asked for `VizNeed::Samples` and draws the terminal's styles.
+  #[cfg(any(feature = "audio-viz", feature = "audio-viz-cpal"))]
+  #[cfg_attr(not(feature = "gui"), allow(dead_code))]
+  pub fn spectrum(&self, bars: usize) -> Option<audio::SpectrumData> {
+    self.audio_capture.current()?.get_spectrum(bars)
+  }
+
   /// The one-shot startup dispatch, fired by the frontend right after its
   /// first frame: initial Spotify fetches, the startup route's data, the
   /// persisted active source's sidebar data, and `--play-file`.
