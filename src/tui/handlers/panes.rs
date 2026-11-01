@@ -167,7 +167,7 @@ pub(super) fn handle_focused_pane_key(key: Key, app: &mut App) -> bool {
     return true;
   }
   match pane {
-    Pane::Main => return false,
+    Pane::Main | Pane::NowPlaying => return false,
     Pane::Lyrics => lyrics_view::handler(key, app),
     Pane::Visualizer => analysis::handler(key, app),
     Pane::CoverArt => {
@@ -199,7 +199,7 @@ pub fn leave_focused_pane(app: &mut App) -> bool {
 fn attach_pane(app: &mut App, pane: Pane) {
   app.change_pane_layout(|tree| tree.close(pane));
   match pane {
-    Pane::Main => {}
+    Pane::Main | Pane::NowPlaying => {}
     Pane::Lyrics => {
       app.apply(Action::Navigate(NavTarget::Lyrics));
     }
