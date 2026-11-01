@@ -27,6 +27,9 @@ pub struct SpectrumData {
   /// first, thinned to `WAVE_POINTS`: what the terminal's oscilloscope-style
   /// visualizers trace.
   pub wave: Vec<f32>,
+  /// How many capture frames came in so far: unchanged means no new audio.
+  #[cfg_attr(not(feature = "gui"), allow(dead_code))]
+  pub written: u64,
 }
 
 /// Points in `SpectrumData::wave`, and the stretch of audio they cover.
@@ -71,9 +74,8 @@ impl AudioAnalyzer {
     )
   }
 
-  /// Build the cavacore plan and the buffers it sizes. Both setters below go
-  /// through here, so a rebuild starts from exactly the same state a fresh
-  /// analyzer does - which is also what cava does on resize.
+  /// Build the cavacore plan, the buffers it sizes, and an empty capture ring:
+  /// a new sample rate starts from the same state a fresh analyzer does.
   fn with_plan(sample_rate: u32, bars_per_channel: usize) -> Self {
     let cava = build_cava(sample_rate, bars_per_channel);
     let output = cava.make_output();
@@ -81,7 +83,7 @@ impl AudioAnalyzer {
     Self {
       spectrum: SpectrumData {
         bands: vec![0.0; output.len()],
-        wave: Vec::new(),
+        ..SpectrumData::default()
       },
       pending: Vec::new(),
       output,
@@ -93,16 +95,16 @@ impl AudioAnalyzer {
     }
   }
 
-  /// Rebuild for a new display bar count (terminal resize or style switch).
+  /// A new cavacore plan for a new display bar count (a resize or a style
+  /// switch), as cava does on resize. The capture ring is not the plan's and stays.
   pub fn set_bars(&mut self, display_bars: usize) {
     let bars_per_channel = clamp_bars_per_channel(self.sample_rate, display_bars / 2);
     if bars_per_channel != self.bars_per_channel {
-      // The GUI's player bar reads `recent` while its screen resizes the plan.
-      let recent = std::mem::take(&mut self.recent);
-      let written = self.written;
-      *self = Self::with_plan(self.sample_rate, bars_per_channel);
-      self.recent = recent;
-      self.written = written;
+      self.cava = build_cava(self.sample_rate, bars_per_channel);
+      self.output = self.cava.make_output();
+      self.spectrum.bands = vec![0.0; self.output.len()];
+      self.pending.clear();
+      self.bars_per_channel = bars_per_channel;
     }
   }
 
@@ -158,6 +160,7 @@ impl AudioAnalyzer {
 
     mirror_stereo_bands(&self.output, &mut self.spectrum.bands);
     thin_wave(&self.recent, self.sample_rate, &mut self.spectrum.wave);
+    self.spectrum.written = self.written;
 
     self.spectrum.clone()
   }
