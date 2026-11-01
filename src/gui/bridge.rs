@@ -432,56 +432,62 @@ pub(crate) mod tests {
     assert_eq!(routes, 2, "{frames:?}");
   }
 
-  #[tokio::test]
-  async fn a_socket_gets_visualizer_frames_only_while_its_page_shows_the_visualizer() {
+  type Client = WebSocketStream<tokio::io::DuplexStream>;
+
+  /// A page socket that `link` serves, past its first message.
+  async fn connected(link: Link) -> Client {
     use tokio_tungstenite::tungstenite::protocol::Role;
-    let (link, publisher, _inbox) = booted(shared_app());
     let (server_end, client_end) = tokio::io::duplex(1 << 20);
     let server = WebSocketStream::from_raw_socket(server_end, Role::Server, None).await;
     let mut client = WebSocketStream::from_raw_socket(client_end, Role::Client, None).await;
     tokio::spawn(run_socket(server, link, None));
     client.next().await.unwrap().unwrap();
-    async fn frames_after(
-      client: &mut WebSocketStream<tokio::io::DuplexStream>,
-      publisher: &Publisher,
-      ask: &str,
-      watched: bool,
-    ) -> Vec<String> {
-      client.send(WsMessage::text(ask)).await.unwrap();
-      let deadline = Instant::now() + Duration::from_secs(2);
-      while publisher.visualizer_watched() != watched {
-        assert!(Instant::now() < deadline, "the socket never took {ask}");
-        tokio::time::sleep(Duration::from_millis(1)).await;
-      }
-      publisher.frame(&protocol::visualizer(&[1.0], &[]));
-      let mut frames = Vec::new();
-      while let Ok(Some(Ok(frame))) =
-        tokio::time::timeout(Duration::from_millis(300), client.next()).await
-      {
-        let text = frame.to_text().unwrap().to_string();
-        if text.contains("\"kind\":\"visualizer\"") {
-          frames.push(text);
-        }
-      }
-      frames
+    client
+  }
+
+  /// Sends `ask` and waits until `taken` says the socket handled it.
+  async fn ask(client: &mut Client, ask: &str, taken: impl Fn() -> bool) {
+    client.send(WsMessage::text(ask)).await.unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !taken() {
+      assert!(Instant::now() < deadline, "the socket never took {ask}");
+      tokio::time::sleep(Duration::from_millis(1)).await;
     }
+  }
+
+  /// The visualizer frames of either kind that arrive within 300 ms.
+  async fn visualizer_frames(client: &mut Client) -> Vec<String> {
+    let mut frames = Vec::new();
+    while let Ok(Some(Ok(frame))) =
+      tokio::time::timeout(Duration::from_millis(300), client.next()).await
+    {
+      let text = frame.to_text().unwrap().to_string();
+      if text.contains("\"kind\":\"visualizer") {
+        frames.push(text);
+      }
+    }
+    frames
+  }
+
+  #[tokio::test]
+  async fn a_socket_gets_visualizer_frames_only_while_its_page_shows_the_visualizer() {
+    let (link, publisher, _inbox) = booted(shared_app());
+    let mut client = connected(link).await;
 
     // Offered before the page asked: stale by the time it does.
     publisher.frame(&protocol::visualizer(&[0.5], &[]));
-    let shown = frames_after(
-      &mut client,
-      &publisher,
-      r#"{"type":"visualizer","on":true}"#,
-      true,
-    )
+    ask(&mut client, r#"{"type":"visualizer","on":true}"#, || {
+      publisher.visualizer_watched()
+    })
     .await;
-    let hidden = frames_after(
-      &mut client,
-      &publisher,
-      r#"{"type":"visualizer","on":false}"#,
-      false,
-    )
+    publisher.frame(&protocol::visualizer(&[1.0], &[]));
+    let shown = visualizer_frames(&mut client).await;
+    ask(&mut client, r#"{"type":"visualizer","on":false}"#, || {
+      !publisher.visualizer_watched()
+    })
     .await;
+    publisher.frame(&protocol::visualizer(&[1.0], &[]));
+    let hidden = visualizer_frames(&mut client).await;
 
     assert_eq!(
       shown,
@@ -492,67 +498,35 @@ pub(crate) mod tests {
 
   #[tokio::test]
   async fn the_screen_gets_its_own_frames_at_the_band_count_it_asked_for() {
-    use tokio_tungstenite::tungstenite::protocol::Role;
     let (link, publisher, _inbox) = booted(shared_app());
-    let (server_end, client_end) = tokio::io::duplex(1 << 20);
-    let server = WebSocketStream::from_raw_socket(server_end, Role::Server, None).await;
-    let mut client = WebSocketStream::from_raw_socket(client_end, Role::Client, None).await;
-    tokio::spawn(run_socket(server, link, None));
-    client.next().await.unwrap().unwrap();
-    async fn screen_frames(
-      client: &mut WebSocketStream<tokio::io::DuplexStream>,
-      publisher: &Publisher,
-    ) -> Vec<String> {
+    let mut client = connected(link).await;
+    let offer = || {
       publisher.frame(&protocol::visualizer(&[1.0], &[]));
       publisher.screen_frame(&protocol::visualizer_screen(&[1.0], &[]));
-      let mut frames = Vec::new();
-      while let Ok(Some(Ok(frame))) =
-        tokio::time::timeout(Duration::from_millis(300), client.next()).await
-      {
-        let text = frame.to_text().unwrap().to_string();
-        if text.contains("\"kind\":\"visualizer") {
-          frames.push(text);
-        }
-      }
-      frames
-    }
-    async fn ask(
-      client: &mut WebSocketStream<tokio::io::DuplexStream>,
-      publisher: &Publisher,
-      ask: &str,
-      watched: Option<usize>,
-    ) {
-      client.send(WsMessage::text(ask)).await.unwrap();
-      let deadline = Instant::now() + Duration::from_secs(2);
-      while publisher.screen_watched() != watched {
-        assert!(Instant::now() < deadline, "the socket never took {ask}");
-        tokio::time::sleep(Duration::from_millis(1)).await;
-      }
-    }
+    };
 
     ask(
       &mut client,
-      &publisher,
       r#"{"type":"visualizer_screen","bars":24}"#,
-      Some(24),
+      || publisher.screen_watched() == Some(24),
     )
     .await;
-    let shown = screen_frames(&mut client, &publisher).await;
+    offer();
+    let shown = visualizer_frames(&mut client).await;
     ask(
       &mut client,
-      &publisher,
       r#"{"type":"visualizer_screen","bars":40}"#,
-      Some(40),
+      || publisher.screen_watched() == Some(40),
     )
     .await;
     ask(
       &mut client,
-      &publisher,
       r#"{"type":"visualizer_screen","bars":null}"#,
-      None,
+      || publisher.screen_watched().is_none(),
     )
     .await;
-    let hidden = screen_frames(&mut client, &publisher).await;
+    offer();
+    let hidden = visualizer_frames(&mut client).await;
 
     assert_eq!(
       shown,

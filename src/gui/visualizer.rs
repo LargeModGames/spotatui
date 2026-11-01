@@ -269,10 +269,12 @@ impl Feed {
       && (self.sounding || !self.quiet)
   }
 
-  /// Whether the screen's frame clock runs: a page shows the screen, and there
-  /// is sound or its bands have yet to fall.
-  pub(crate) fn screen_streams(&self, watched: bool, now: Instant) -> bool {
-    watched && self.wants_capture(now) && self.capturing && (self.sounding || !self.screen_quiet)
+  /// The bands to stream at while the screen's frame clock runs: a page shows
+  /// the screen at `bars`, and there is sound or its bands have yet to fall.
+  pub(crate) fn screen_streams(&self, bars: Option<usize>, now: Instant) -> Option<usize> {
+    bars.filter(|_| {
+      self.wants_capture(now) && self.capturing && (self.sounding || !self.screen_quiet)
+    })
   }
 
   /// The screen's next frame: cava at `bars` bands, or one empty frame once this process stops.
@@ -613,7 +615,7 @@ mod tests {
     screen_seen(&mut feed, true, true, t0);
 
     assert_eq!(feed.wants_capture(t0), AVAILABLE);
-    assert_eq!(feed.screen_streams(true, t0), AVAILABLE);
+    assert_eq!(feed.screen_streams(Some(24), t0).is_some(), AVAILABLE);
     assert!(!feed.streams(true, t0));
   }
 
@@ -625,7 +627,7 @@ mod tests {
     screen_seen(&mut feed, true, false, t0 + LINGER / 2);
 
     assert_eq!(feed.wants_capture(t0 + LINGER / 2), AVAILABLE);
-    assert!(!feed.screen_streams(false, t0 + LINGER / 2));
+    assert!(feed.screen_streams(None, t0 + LINGER / 2).is_none());
     assert!(!feed.wants_capture(t0 + LINGER));
   }
 
