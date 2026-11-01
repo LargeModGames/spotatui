@@ -97,7 +97,12 @@ impl AudioAnalyzer {
   pub fn set_bars(&mut self, display_bars: usize) {
     let bars_per_channel = clamp_bars_per_channel(self.sample_rate, display_bars / 2);
     if bars_per_channel != self.bars_per_channel {
+      // The GUI's player bar reads `recent` while its screen resizes the plan.
+      let recent = std::mem::take(&mut self.recent);
+      let written = self.written;
       *self = Self::with_plan(self.sample_rate, bars_per_channel);
+      self.recent = recent;
+      self.written = written;
     }
   }
 
@@ -256,6 +261,19 @@ mod tests {
     let mut analyzer = AudioAnalyzer::new(48_000, 12);
     analyzer.push_frames(&[1.0, -0.5], 2);
     assert_eq!(analyzer.pending, vec![32_768.0, -16_384.0]);
+  }
+
+  #[test]
+  fn a_new_band_count_keeps_the_recent_audio_and_its_count() {
+    let mut analyzer = AudioAnalyzer::new(48_000, 12);
+    analyzer.push_frames(&[0.5, 0.5, -0.25, -0.25], 2);
+
+    analyzer.set_bars(40);
+
+    let recent = analyzer.recent();
+    assert_eq!(recent.written, 2);
+    assert_eq!(recent.samples, vec![0.5, -0.25]);
+    assert!(analyzer.pending.is_empty());
   }
 
   #[test]
