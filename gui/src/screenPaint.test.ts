@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { freshState } from "./screenDraw";
-import { barCount, fitBands, NO_TRACK, STYLES } from "./screenModel";
+import { barCount, NO_TRACK, sceneAudio, STYLES } from "./screenModel";
 import { PAINTERS, turbo } from "./screenPaint";
 
 /** A canvas context that takes every call and counts the drawing ones. */
@@ -45,8 +45,8 @@ describe("painters", () => {
         const state = freshState();
         const bars = barCount(style, w);
         for (const [frame, audio] of [
-          { bands: music(bars), wave },
-          { bands: fitBands([], bars), wave: [] },
+          sceneAudio(music(bars), wave, bars),
+          sceneAudio([], [], bars),
         ].entries()) {
           PAINTERS[style]({
             ctx,

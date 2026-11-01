@@ -106,7 +106,6 @@ export function audioOf(frame: ScreenFrame): Audio {
 /** Each channel bass to treble: the left half is stored reversed. */
 export function channels(bands: number[]): [number[], number[]] {
   const half = Math.floor(bands.length / 2);
-  if (half === 0) return [bands.slice(), bands.slice()];
   const left = Array.from({ length: half }, (_, i) => bands[half - 1 - i]);
   return [left, bands.slice(half, half * 2)];
 }
@@ -139,18 +138,35 @@ export function settleBands(
   dt: number,
 ): number[] {
   if (bands.length > 0) return bands;
+  // Settled silence is empty, so it takes the cached zeros below.
   return held.some((value) => value > 0)
     ? held.map((value) => Math.max(0, value - FALL_PER_SEC * dt))
-    : held;
+    : SILENT.bands;
 }
 
-/** Each channel resampled to the count this page asked for (another page can ask for another); silence rests at zero. */
+let zeros: number[] = [];
+
+/** Each channel resampled to the count this page asked for (another page can ask for another); no frame yet rests at zero. */
 export function fitBands(bands: number[], bars: number): number[] {
   const half = Math.floor(bars / 2);
-  if (bands.length === 0) return new Array<number>(half * 2).fill(0);
+  if (bands.length === 0) {
+    if (zeros.length !== half * 2) zeros = new Array<number>(half * 2).fill(0);
+    return zeros;
+  }
   if (bands.length === half * 2) return bands;
   const [left, right] = channels(bands);
   return [...resample(left, half).reverse(), ...resample(right, half)];
+}
+
+const FLAT = [0, 0];
+
+/** What the painters read: bands at this page's count, and a flat line for a wave of silence. */
+export function sceneAudio(
+  held: number[],
+  wave: number[],
+  bars: number,
+): Audio {
+  return { bands: fitBands(held, bars), wave: wave.length > 1 ? wave : FLAT };
 }
 
 /** Linear resample onto `target` points. */
@@ -382,7 +398,6 @@ export const TRAILS = [0.18, 0.32, 0.55, 1];
 export function pushSweep(trails: number[][], wave: number[]): number[][] {
   const newest = trails[trails.length - 1];
   if (
-    wave.length === 0 ||
     newest === wave ||
     (newest &&
       newest.length === wave.length &&

@@ -118,13 +118,6 @@ export function roundRect(
   ctx.closePath();
 }
 
-const FLAT = [0, 0];
-
-/** The wave to trace: silence is a flat line. */
-export function waveOf(scene: Scene): number[] {
-  return scene.audio.wave.length > 1 ? scene.audio.wave : FLAT;
-}
-
 /** The faceplates' grid: one terminal row scaled to the canvas, a cell's width, and the text size. */
 export function grid(h: number): { row: number; col: number; px: number } {
   const row = clamp(h / 30, 10, 22);

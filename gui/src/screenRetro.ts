@@ -7,7 +7,6 @@ import {
   type Scene,
   text,
   textWidth,
-  waveOf,
 } from "./screenDraw";
 import {
   channels,
@@ -308,7 +307,7 @@ export function paintWinamp(scene: Scene): void {
   const ow = w - col * 8;
   // At most one point for each two pixels.
   const points = Math.max(Math.floor(ow / 2), 2);
-  const raw = waveOf(scene);
+  const raw = scene.audio.wave;
   const wave = raw.length > points ? resample(raw, points) : raw;
   ctx.strokeStyle = rgba(AMP.lcd);
   ctx.lineWidth = 1.2;
@@ -411,7 +410,7 @@ export function paintPhosphorScope(scene: Scene): void {
   ctx.lineWidth = 2;
   ctx.stroke();
 
-  state.trails = pushSweep(state.trails, waveOf(scene));
+  state.trails = pushSweep(state.trails, scene.audio.wave);
   const offset = TRAILS.length - state.trails.length;
   state.trails.forEach((sweep, k) => {
     polyline(
