@@ -1,4 +1,6 @@
 import { EN, type GuiStrings } from "./i18n";
+import type { PaneChord } from "./bindings/PaneChord";
+import type { PaneKeys } from "./bindings/PaneKeys";
 import type { Page } from "./nav";
 
 /** The pages that digit keys open, in key order. */
@@ -50,6 +52,37 @@ export interface ShellKey {
   /** The target acts on space by itself: a button, a link or a slider. */
   interactive: boolean;
   overlay: boolean;
+  /** `KeyboardEvent.code`: the key's place, the same under Option on macOS. */
+  code: string;
+  alt: boolean;
+  ctrl: boolean;
+  shift: boolean;
+}
+
+export type PaneCommand =
+  "detach" | "close" | "reset" | { focus: "left" | "right" | "top" | "bottom" };
+
+/** The pane key from `config.yml` that a press matches; never while typing or under an overlay. */
+export function paneKey(
+  press: ShellKey,
+  keys: PaneKeys | null,
+): PaneCommand | null {
+  if (!keys || press.handled || press.composing) return null;
+  if (press.typing || press.overlay) return null;
+  const is = (chord: PaneChord | null) =>
+    chord !== null &&
+    chord.code === press.code &&
+    chord.alt === press.alt &&
+    chord.ctrl === press.ctrl &&
+    chord.shift === press.shift;
+  if (is(keys.detach)) return "detach";
+  if (is(keys.close)) return "close";
+  if (is(keys.reset)) return "reset";
+  if (is(keys.focus_left)) return { focus: "left" };
+  if (is(keys.focus_right)) return { focus: "right" };
+  if (is(keys.focus_up)) return { focus: "top" };
+  if (is(keys.focus_down)) return { focus: "bottom" };
+  return null;
 }
 
 /** What a key does on the whole page; null leaves it to the browser. Screen keys run first. */

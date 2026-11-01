@@ -86,8 +86,10 @@ describe("QueueDrawer", () => {
     expect(html).toContain(">Now playing<");
     expect(html).toContain("Set Fire to the Rain");
     expect(html).toContain(">Next in queue<");
-    expect(html).toMatch(/role="listbox"[^>]*aria-activedescendant="queue-0"/);
-    expect(html).toMatch(/id="queue-0"[^>]*aria-selected="true"/);
+    expect(html).toMatch(
+      /role="listbox"[^>]*aria-activedescendant="[^"]*queue-0"/,
+    );
+    expect(html).toMatch(/id="[^"]*queue-0"[^>]*aria-selected="true"/);
     expect(html).toContain("Lovesong");
     expect(html).toContain(">Next from: Spotify<");
     expect(html).toContain("Freeze");

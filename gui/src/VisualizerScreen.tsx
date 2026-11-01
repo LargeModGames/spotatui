@@ -127,9 +127,10 @@ export function VisualizerScreen({
     });
   }, [active, available, shown, feed]);
 
+  // Only the shown copy names the band count: the page and a pane share one feed.
   useEffect(() => {
-    if (width > 0) feed?.bars(bars);
-  }, [feed, bars, width]);
+    if (active && width > 0) feed?.bars(bars);
+  }, [feed, bars, width, active]);
 
   useEffect(() => {
     const element = canvas.current;

@@ -1,7 +1,9 @@
 import { EN, type GuiStrings, fmt } from "./i18n";
 import { AREAS, areas, SETTINGS_KEY } from "./areas";
+import type { ReactNode } from "react";
 import type { UpdateAsk } from "./bindings/UpdateAsk";
 import type { UpdateStatus } from "./bindings/UpdateStatus";
+import type { WindowEdge } from "./bindings/WindowEdge";
 import { Glyph, type GlyphName } from "./Icon";
 import type { Page } from "./nav";
 import { readyVersion } from "./settingsModel";
@@ -31,6 +33,10 @@ export function TopBar({
   connected,
   update,
   onUpdate,
+  edge,
+  grip,
+  mainHidden,
+  onMain,
 }: {
   s?: GuiStrings;
   page: Page;
@@ -46,10 +52,17 @@ export function TopBar({
   connected: boolean;
   update: UpdateStatus | null;
   onUpdate: (ask: UpdateAsk) => void;
+  /** The window edge the bar sits on; a rail on the left or right. */
+  edge?: WindowEdge;
+  /** The handle the bar moves by. */
+  grip?: ReactNode;
+  /** Whether Main is hidden; undefined when it cannot hide, which drops the button. */
+  mainHidden?: boolean;
+  onMain?: () => void;
 }) {
   const ready = readyVersion(update);
   return (
-    <header className="topbar">
+    <header className="topbar" data-edge={edge}>
       <div className="topbar-start">
         <span className="wordmark">
           spota<span>tui</span>
@@ -153,6 +166,17 @@ export function TopBar({
             {s.update_ready}
           </button>
         )}
+        {mainHidden !== undefined && (
+          <button
+            type="button"
+            className="page-button"
+            aria-label={mainHidden ? s.show_main : s.hide_main}
+            title={mainHidden ? s.show_main : s.hide_main}
+            onClick={onMain}
+          >
+            <Glyph name="library" size={20} />
+          </button>
+        )}
         <button
           type="button"
           className="page-button"
@@ -174,6 +198,7 @@ export function TopBar({
           </span>
         </span>
       </div>
+      {grip}
     </header>
   );
 }

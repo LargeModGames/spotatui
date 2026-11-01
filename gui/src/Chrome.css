@@ -848,7 +848,7 @@
 .toast {
   position: fixed;
   left: 50%;
-  bottom: 96px;
+  bottom: calc(var(--inset-bottom, 72px) + 24px);
   z-index: 30;
   max-width: min(480px, calc(100vw - 32px));
   display: flex;

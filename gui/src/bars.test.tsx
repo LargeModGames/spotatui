@@ -35,7 +35,7 @@ const player = (
     liked = false,
     volume = 72,
     connected = true,
-    panel = "now" as Panel,
+    panels = ["now"] as Panel[],
     lyricsOpen = false,
   } = {},
 ) =>
@@ -45,7 +45,7 @@ const player = (
       position={{ ms: 100_000, at: 0 }}
       connected={connected}
       devices={[]}
-      panel={panel}
+      panels={panels}
       onPanel={() => {}}
       lyricsOpen={lyricsOpen}
       onLyrics={() => {}}
@@ -74,7 +74,7 @@ describe("PlayerBar", () => {
           position={null}
           connected
           devices={[]}
-          panel={null}
+          panels={[]}
           onPanel={() => {}}
           lyricsOpen={false}
           onLyrics={() => {}}
@@ -141,14 +141,17 @@ describe("PlayerBar", () => {
   });
 
   it("presses the panel buttons that match the open panel and the lyrics page", () => {
-    const now = player(song, { panel: "now" });
+    const now = player(song, { panels: ["now"] });
     expect(tag(now, "Now playing view")).toContain('aria-pressed="true"');
     expect(tag(now, "Queue")).toContain('aria-pressed="false"');
     expect(tag(now, "Lyrics")).toContain('aria-pressed="false"');
-    const queue = player(song, { panel: "queue", lyricsOpen: true });
+    const queue = player(song, { panels: ["queue"], lyricsOpen: true });
     expect(tag(queue, "Now playing view")).toContain('aria-pressed="false"');
     expect(tag(queue, "Queue")).toContain('aria-pressed="true"');
     expect(tag(queue, "Lyrics")).toContain('aria-pressed="true"');
+    const both = player(song, { panels: ["now", "queue"] });
+    expect(tag(both, "Now playing view")).toContain('aria-pressed="true"');
+    expect(tag(both, "Queue")).toContain('aria-pressed="true"');
   });
 
   it("offers unmute at zero volume and mute otherwise", () => {

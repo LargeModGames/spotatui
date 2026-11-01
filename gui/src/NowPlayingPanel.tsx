@@ -15,6 +15,7 @@ export function NowPlayingPanel({
   open,
   send,
   onClose,
+  onCover,
 }: {
   s?: GuiStrings;
   playback: PlaybackPayload | null;
@@ -22,6 +23,8 @@ export function NowPlayingPanel({
   open: OpenView;
   send: (action: Action) => void;
   onClose: () => void;
+  /** Opens the cover art in a pane of its own; absent where it cannot. */
+  onCover?: () => void;
 }) {
   const item = playback?.item ?? null;
   const next = upNext[0] ?? null;
@@ -35,14 +38,27 @@ export function NowPlayingPanel({
     <section className="now-panel" aria-label={s.now_playing_view}>
       <header className="panel-head">
         <h2>{heading}</h2>
-        <button
-          type="button"
-          className="panel-close"
-          aria-label={s.close_now_playing}
-          onClick={onClose}
-        >
-          <Glyph name="close" />
-        </button>
+        <span className="panel-actions">
+          {onCover && (
+            <button
+              type="button"
+              className="panel-close"
+              aria-label={s.cover_art}
+              title={s.detach_pane}
+              onClick={onCover}
+            >
+              <Glyph name="panel" />
+            </button>
+          )}
+          <button
+            type="button"
+            className="panel-close"
+            aria-label={s.close_now_playing}
+            onClick={onClose}
+          >
+            <Glyph name="close" />
+          </button>
+        </span>
       </header>
       {item ? (
         <div className="now-body">
