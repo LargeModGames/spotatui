@@ -17,7 +17,8 @@ describe("shellKey", () => {
   it("a digit switches to its area", () => {
     expect(shellKey(press("1"))).toEqual({ area: "home" });
     expect(shellKey(press("5"))).toEqual({ area: "stats" });
-    expect(shellKey(press("7"))).toBeNull();
+    expect(shellKey(press("7"))).toEqual({ area: "visualizer" });
+    expect(shellKey(press("8"))).toBeNull();
   });
 
   it("a digit typed into a text field does not switch the area", () => {

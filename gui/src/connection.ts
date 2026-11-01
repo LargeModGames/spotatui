@@ -4,6 +4,7 @@ import type { OnboardingView } from "./bindings/OnboardingView";
 import type { ServerMessage } from "./bindings/ServerMessage";
 import type { WelcomePayload } from "./bindings/WelcomePayload";
 import { applyChannel, type Channels } from "./store";
+import type { ScreenFrameAt } from "./screenModel";
 import type { Frame } from "./visualizerModel";
 
 const TOKEN_KEY = "spotatui.token";
@@ -140,6 +141,8 @@ export class Connection {
   private readonly listeners = new Set<() => void>();
   /** Visualizer frames skip the state: dozens a second must not re-render the page. */
   private readonly viewers = new Set<(frame: Frame) => void>();
+  private readonly screenViewers = new Set<(frame: ScreenFrameAt) => void>();
+  private screenBars = 2;
   private code: string | null;
   private readonly open: Open;
   private readonly storage: Pick<Storage, "getItem" | "setItem">;
@@ -207,6 +210,25 @@ export class Connection {
     };
   };
 
+  /** Hands visualizer screen frames at `bars` bands to `listener`; the newest ask sets the count. */
+  watchVisualizerScreen = (
+    bars: number,
+    listener: (frame: ScreenFrameAt) => void,
+  ): (() => void) => {
+    this.screenViewers.add(listener);
+    this.screenBars = bars;
+    this.send({ type: "visualizer_screen", on: true, bars });
+    return () => {
+      this.screenViewers.delete(listener);
+      if (this.screenViewers.size === 0)
+        this.send({
+          type: "visualizer_screen",
+          on: false,
+          bars: this.screenBars,
+        });
+    };
+  };
+
   /** Asks the server for the changelog; the answer lands in `changelog`. */
   askChangelog = (): void => this.send({ type: "changelog" });
 
@@ -228,10 +250,21 @@ export class Connection {
         });
         // The server keeps the ask per socket, so a new socket asks again.
         if (this.viewers.size > 0) this.send({ type: "visualizer", on: true });
+        if (this.screenViewers.size > 0)
+          this.send({
+            type: "visualizer_screen",
+            on: true,
+            bars: this.screenBars,
+          });
         return;
       case "visualizer": {
         const frame = { payload: message.payload, at: this.now() };
         this.viewers.forEach((viewer) => viewer(frame));
+        return;
+      }
+      case "visualizer_screen": {
+        const frame = { payload: message.payload, at: this.now() };
+        this.screenViewers.forEach((viewer) => viewer(frame));
         return;
       }
       case "welcome":

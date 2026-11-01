@@ -118,7 +118,7 @@ export function barColours(accent: string, ceiling: number): Rgb[] {
   return [vivid(0), vivid(1 / 6)];
 }
 
-function parseHex(hex: string): Rgb {
+export function parseHex(hex: string): Rgb {
   const value = /^#?([0-9a-f]{6})$/i.exec(hex.trim())?.[1] ?? "f0a83a";
   return [0, 2, 4].map((at) => parseInt(value.slice(at, at + 2), 16)) as Rgb;
 }

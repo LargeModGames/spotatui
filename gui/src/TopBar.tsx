@@ -11,6 +11,7 @@ const PAGE_GLYPHS: Partial<Record<Page, GlyphName>> = {
   session: "session",
   stats: "stats",
   party: "party",
+  visualizer: "visualizer",
 };
 
 const HOME_KEY = AREAS.find((entry) => entry.area === "home")?.key;

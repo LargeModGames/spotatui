@@ -11,6 +11,7 @@ export const areas = (
   { area: "session", label: s.session, key: "4" },
   { area: "stats", label: s.stats, key: "5" },
   { area: "party", label: s.party, key: "6" },
+  { area: "visualizer", label: s.visualizer, key: "7" },
 ];
 export const AREAS = areas();
 
