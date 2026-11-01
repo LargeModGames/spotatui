@@ -313,17 +313,14 @@ where
               watching = Some(Watching::new(&link.watchers));
             }
           }
-          Ok(ClientMessage::VisualizerScreen { on, bars }) => {
-            if !on {
-              screen_watching = None;
-            } else {
-              link
-                .screen_bars
-                .store(usize::from(bars), Ordering::Relaxed);
-              if screen_watching.is_none() {
-                screen_frames.borrow_and_update();
-                screen_watching = Some(Watching::new(&link.screen_watchers));
-              }
+          Ok(ClientMessage::VisualizerScreen { bars: None }) => screen_watching = None,
+          Ok(ClientMessage::VisualizerScreen { bars: Some(bars) }) => {
+            link
+              .screen_bars
+              .store(usize::from(bars), Ordering::Relaxed);
+            if screen_watching.is_none() {
+              screen_frames.borrow_and_update();
+              screen_watching = Some(Watching::new(&link.screen_watchers));
             }
           }
           // Only the page that asked gets the 240 KB answer.
@@ -536,7 +533,7 @@ pub(crate) mod tests {
     ask(
       &mut client,
       &publisher,
-      r#"{"type":"visualizer_screen","on":true,"bars":24}"#,
+      r#"{"type":"visualizer_screen","bars":24}"#,
       Some(24),
     )
     .await;
@@ -544,14 +541,14 @@ pub(crate) mod tests {
     ask(
       &mut client,
       &publisher,
-      r#"{"type":"visualizer_screen","on":true,"bars":40}"#,
+      r#"{"type":"visualizer_screen","bars":40}"#,
       Some(40),
     )
     .await;
     ask(
       &mut client,
       &publisher,
-      r#"{"type":"visualizer_screen","on":false,"bars":0}"#,
+      r#"{"type":"visualizer_screen","bars":null}"#,
       None,
     )
     .await;

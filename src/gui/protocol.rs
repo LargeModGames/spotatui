@@ -742,10 +742,9 @@ pub(crate) enum ClientMessage {
   Visualizer {
     on: bool,
   },
-  /// Whether this page shows the visualizer screen, and the bands its style draws.
+  /// The bands the visualizer screen's style draws while this page shows it; `null` once it hides.
   VisualizerScreen {
-    on: bool,
-    bars: u16,
+    bars: Option<u16>,
   },
   /// The Home page asks for the changelog once it shows.
   Changelog,
@@ -3286,11 +3285,17 @@ mod tests {
   #[test]
   fn a_page_asking_for_the_visualizer_screen_parses_with_its_band_count() {
     let message: ClientMessage =
-      serde_json::from_str(r#"{ "type": "visualizer_screen", "on": true, "bars": 24 }"#).unwrap();
+      serde_json::from_str(r#"{ "type": "visualizer_screen", "bars": 24 }"#).unwrap();
+    let off: ClientMessage =
+      serde_json::from_str(r#"{ "type": "visualizer_screen", "bars": null }"#).unwrap();
 
     assert!(matches!(
       message,
-      ClientMessage::VisualizerScreen { on: true, bars: 24 }
+      ClientMessage::VisualizerScreen { bars: Some(24) }
+    ));
+    assert!(matches!(
+      off,
+      ClientMessage::VisualizerScreen { bars: None }
     ));
   }
 
@@ -3513,6 +3518,7 @@ mod tests {
     written::<WindowMode>(&dir, &cfg);
     written::<VisualizerFrame>(&dir, &cfg);
     written::<ScreenFrame>(&dir, &cfg);
+    written::<crate::core::user_config::VisualizerStyle>(&dir, &cfg);
     written::<WelcomePayload>(&dir, &cfg);
     written::<WelcomeStreak>(&dir, &cfg);
     written::<AnnouncementsPayload>(&dir, &cfg);

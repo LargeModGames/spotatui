@@ -220,15 +220,11 @@ export class Connection {
   ): (() => void) => {
     this.screenViewers.add(listener);
     this.screenBars = bars;
-    this.send({ type: "visualizer_screen", on: true, bars });
+    this.send({ type: "visualizer_screen", bars });
     return () => {
       this.screenViewers.delete(listener);
       if (this.screenViewers.size === 0)
-        this.send({
-          type: "visualizer_screen",
-          on: false,
-          bars: this.screenBars,
-        });
+        this.send({ type: "visualizer_screen", bars: null });
     };
   };
 
@@ -254,11 +250,7 @@ export class Connection {
         // The server keeps the ask per socket, so a new socket asks again.
         if (this.viewers.size > 0) this.send({ type: "visualizer", on: true });
         if (this.screenViewers.size > 0)
-          this.send({
-            type: "visualizer_screen",
-            on: true,
-            bars: this.screenBars,
-          });
+          this.send({ type: "visualizer_screen", bars: this.screenBars });
         return;
       case "visualizer": {
         const frame = { payload: message.payload, at: this.now() };

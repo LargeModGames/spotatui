@@ -14,25 +14,23 @@ export async function openWith(
   await page.goto("/#code=shot");
 }
 
-/** A page asking for visualizer frames, or for the screen's at a band count. */
-type FrameAsk = { on: boolean; bars?: number };
-
-/** Like `openWith`, and while the page asks with `type`, sends it the frame for that ask again and again. */
+/**
+ * Like `openWith`, and sends the page the frame `answer` gives for each of its
+ * asks again and again: `undefined` leaves a message alone, `null` stops.
+ */
 async function openStreaming(
   page: Page,
   messages: ServerMessage[],
-  type: "visualizer" | "visualizer_screen",
-  frame: (ask: FrameAsk) => ServerMessage,
+  answer: (message: ClientMessage) => ServerMessage | null | undefined,
 ): Promise<void> {
   await page.routeWebSocket("**/ws", (ws) => {
     let frames: ReturnType<typeof setInterval> | undefined;
     ws.onMessage((text) => {
-      const message = JSON.parse(String(text)) as ClientMessage;
-      if (message.type !== type) return;
+      const frame = answer(JSON.parse(String(text)) as ClientMessage);
+      if (frame === undefined) return;
       clearInterval(frames);
-      const ask = message as FrameAsk;
-      if (ask.on) {
-        const next = JSON.stringify(frame(ask));
+      if (frame) {
+        const next = JSON.stringify(frame);
         frames = setInterval(() => ws.send(next), 30);
       }
     });
@@ -61,7 +59,9 @@ export async function openWithVisualizer(
   messages: ServerMessage[],
   frame: ServerMessage,
 ): Promise<void> {
-  await openStreaming(page, messages, "visualizer", () => frame);
+  await openStreaming(page, messages, (message) =>
+    message.type !== "visualizer" ? undefined : message.on ? frame : null,
+  );
   await painted(page, ".playerbar-viz");
 }
 
@@ -76,8 +76,12 @@ export async function openScreen(
     ([key, value]) => localStorage.setItem(key, value),
     [STYLE_KEY, style],
   );
-  await openStreaming(page, messages, "visualizer_screen", (ask) =>
-    frame(ask.bars ?? 0),
+  await openStreaming(page, messages, (message) =>
+    message.type !== "visualizer_screen"
+      ? undefined
+      : message.bars === null
+        ? null
+        : frame(message.bars),
   );
   await page.getByRole("button", { name: "Visualizer", exact: true }).click();
   await painted(page, ".viz-screen-canvas");
