@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { STYLES } from "./screenModel";
 import { styleName, VisualizerScreen } from "./VisualizerScreen";
-import tables from "./bindings/strings.json";
+import { SCREENS_EN } from "./i18n";
 
 const screen = (available: boolean) =>
   renderToStaticMarkup(
@@ -17,7 +17,7 @@ const screen = (available: boolean) =>
 describe("VisualizerScreen", () => {
   it("offers all nine terminal styles by name, Cava first", () => {
     const html = screen(true);
-    const names = STYLES.map((style) => styleName(style, tables.EN.screens));
+    const names = STYLES.map((style) => styleName(style, SCREENS_EN));
     expect(names).toEqual([
       "Cava",
       "Bar Graph",

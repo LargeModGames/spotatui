@@ -1,11 +1,5 @@
-import {
-  type Audio,
-  clamp,
-  css,
-  type Peak,
-  type TrackView,
-} from "./screenModel";
-import type { Rgb } from "./visualizerModel";
+import { type Audio, clamp, type Peak, type TrackView } from "./screenModel";
+import { rgba, type Rgb } from "./visualizerModel";
 
 /** What a style keeps from one frame to the next; a new style starts fresh. */
 export interface PaintState {
@@ -52,7 +46,17 @@ export function font(px: number, bold = false): string {
   return `${bold ? "700 " : ""}${Math.max(1, Math.round(px))}px ${MONO}`;
 }
 
-/** Draws `value` centred on `y` and returns its width. */
+export function textWidth(
+  ctx: CanvasRenderingContext2D,
+  value: string,
+  px: number,
+  bold = false,
+): number {
+  ctx.font = font(px, bold);
+  return ctx.measureText(value).width;
+}
+
+/** Draws `value` centred on `y`. */
 export function text(
   ctx: CanvasRenderingContext2D,
   value: string,
@@ -64,13 +68,23 @@ export function text(
     align = "left",
     bold = false,
   }: { align?: CanvasTextAlign; bold?: boolean } = {},
-): number {
+): void {
   ctx.font = font(px, bold);
   ctx.textAlign = align;
   ctx.textBaseline = "middle";
-  ctx.fillStyle = css(colour);
+  ctx.fillStyle = rgba(colour);
   ctx.fillText(value, x, y);
-  return ctx.measureText(value).width;
+}
+
+/** Starts a path through `points`; the caller strokes or fills it. */
+export function polyline(
+  ctx: CanvasRenderingContext2D,
+  points: [number, number][],
+): void {
+  ctx.beginPath();
+  points.forEach(([x, y], i) =>
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y),
+  );
 }
 
 export function roundRect(
@@ -98,7 +112,8 @@ export function bandsOf(scene: Scene): number[] {
     : new Array<number>(Math.max(scene.bars, 2)).fill(0);
 }
 
-/** The row height the faceplates lay out in: one terminal row, scaled to the canvas. */
-export function rowOf(h: number): number {
-  return clamp(h / 30, 10, 22);
+/** The faceplates' grid: one terminal row scaled to the canvas, a cell's width, and the text size. */
+export function grid(h: number): { row: number; col: number; px: number } {
+  const row = clamp(h / 30, 10, 22);
+  return { row, col: row * 0.6, px: row * 0.8 };
 }

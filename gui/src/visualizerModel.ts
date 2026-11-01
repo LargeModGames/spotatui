@@ -10,8 +10,8 @@ export const VISUALIZER_SETTING = "behavior.player_bar_visualizer";
 const MODES: VisualizerMode[] = ["Off", "Spectrum", "Waveform"];
 
 /** A frame and when it arrived (a `performance.now()` value). */
-export interface Frame {
-  payload: VisualizerFrame;
+export interface Frame<P = VisualizerFrame> {
+  payload: P;
   at: number;
 }
 
@@ -224,7 +224,7 @@ export function sample({ stops, space }: Gradient, t: number): Rgb {
   return mixIn(space, stops[index], stops[index + 1], at - index);
 }
 
-function rgba([r, g, b]: Rgb, alpha: number): string {
+export function rgba([r, g, b]: Rgb, alpha = 1): string {
   return `rgb(${r} ${g} ${b} / ${alpha})`;
 }
 

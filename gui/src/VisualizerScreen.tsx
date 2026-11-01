@@ -1,19 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 import type { NowPlaying } from "./bindings/NowPlaying";
 import type { ScreenStrings } from "./bindings/ScreenStrings";
-import tables from "./bindings/strings.json";
-import type { Position } from "./connection";
-import { EN, fmt, type GuiStrings } from "./i18n";
-import { freshState } from "./screenDraw";
+import { type Position, shownAt } from "./connection";
+import { EN, fmt, type GuiStrings, SCREENS_EN } from "./i18n";
+import { font, freshState } from "./screenDraw";
 import {
+  type Audio,
   audioOf,
   barCount,
-  css,
   fitBands,
   nextStyle,
   NO_TRACK,
   readStyle,
-  type ScreenFrameAt,
   settleBands,
   SILENT,
   stepSeconds,
@@ -24,10 +22,9 @@ import {
   type WatchScreen,
 } from "./screenModel";
 import { PAINTERS } from "./screenPaint";
-import { parseHex, STALE_MS } from "./visualizerModel";
+import { parseHex, rgba, STALE_MS } from "./visualizerModel";
 import "./VisualizerScreen.css";
 
-const SCREENS_EN: ScreenStrings = tables.EN.screens;
 /** A window resize settles this long before the band count follows it. */
 const RESIZE_SETTLE_MS = 250;
 /** With no frame at all this long after the ask, the screen says it waits for audio. */
@@ -71,13 +68,9 @@ function trackAt(
   now: number,
 ): TrackView {
   if (!item) return NO_TRACK;
-  const ms =
-    position?.ms === null || position === null
-      ? null
-      : position.ms + (item.is_playing ? Math.max(0, now - position.at) : 0);
   return {
     title: item.title,
-    progressMs: ms,
+    progressMs: shownAt(position, item.is_playing, now),
     durationMs: item.duration_ms > 0 ? item.duration_ms : null,
     playing: item.is_playing,
     shuffle: item.shuffle,
@@ -109,17 +102,19 @@ export function VisualizerScreen({
   const canvas = useRef<HTMLCanvasElement>(null);
   const [width, setWidth] = useState(0);
   const [shown, setShown] = useState(false);
-  const frame = useRef<ScreenFrameAt | null>(null);
+  const frame = useRef<{ audio: Audio; at: number } | null>(null);
   /** When the page last asked for frames: the wait for audio counts from there. */
   const asked = useRef(0);
-  const track = useRef({ item, position });
-  const words = useRef(screens.audio_waiting);
+  const latestProps = useRef({
+    item,
+    position,
+    waiting: screens.audio_waiting,
+  });
   const bars = barCount(style, width);
 
   // The draw loop reads the newest props without starting again.
   useEffect(() => {
-    track.current = { item, position };
-    words.current = screens.audio_waiting;
+    latestProps.current = { item, position, waiting: screens.audio_waiting };
   });
 
   const choose = (next: Style) => {
@@ -157,8 +152,8 @@ export function VisualizerScreen({
   useEffect(() => {
     if (!active || !available || !shown || !watch || width === 0) return;
     asked.current = performance.now();
-    return watch(bars, (next) => {
-      frame.current = next;
+    return watch(bars, ({ payload, at }) => {
+      frame.current = { audio: audioOf(payload), at };
     });
   }, [active, available, shown, watch, bars, width]);
 
@@ -190,13 +185,13 @@ export function VisualizerScreen({
       const sound =
         latest !== null &&
         now - latest.at < STALE_MS &&
-        latest.payload.bands.length > 0
-          ? audioOf(latest.payload)
+        latest.audio.bands.length > 0
+          ? latest.audio
           : SILENT;
       const dt = stepSeconds(last, now);
       const bars = barCount(style, w);
       held = settleBands(held, sound.bands, dt);
-      const { item, position } = track.current;
+      const { item, position, waiting } = latestProps.current;
       paint({
         ctx,
         w,
@@ -214,11 +209,11 @@ export function VisualizerScreen({
       // Silence or a pause is a frame too; only a capture that never answered waits.
       const answered = latest !== null && latest.at >= asked.current;
       if (!answered && now - asked.current > WAITING_MS) {
-        ctx.font = "13px 'JetBrains Mono', ui-monospace, monospace";
+        ctx.font = font(13);
         ctx.textAlign = "center";
         ctx.textBaseline = "bottom";
-        ctx.fillStyle = css([179, 179, 179], 0.8);
-        ctx.fillText(words.current, w / 2, h - 8);
+        ctx.fillStyle = rgba([179, 179, 179], 0.8);
+        ctx.fillText(waiting, w / 2, h - 8);
       }
       request = requestAnimationFrame(draw);
     };

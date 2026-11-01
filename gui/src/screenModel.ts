@@ -1,5 +1,5 @@
 import type { ScreenFrame } from "./bindings/ScreenFrame";
-import type { Rgb } from "./visualizerModel";
+import { type Frame, mix, type Rgb } from "./visualizerModel";
 
 /** The terminal's visualizer styles, in the order the TUI cycles them. */
 export const STYLES = [
@@ -61,16 +61,10 @@ export interface Audio {
 
 export const SILENT: Audio = { bands: [], wave: [] };
 
-/** A screen frame and when it arrived (a `performance.now()` value). */
-export interface ScreenFrameAt {
-  payload: ScreenFrame;
-  at: number;
-}
-
 /** Asks for frames at `bars` bands while the listener lives. */
 export type WatchScreen = (
   bars: number,
-  listener: (frame: ScreenFrameAt) => void,
+  listener: (frame: Frame<ScreenFrame>) => void,
 ) => () => void;
 
 export function audioOf(frame: ScreenFrame): Audio {
@@ -107,7 +101,7 @@ function rmsLevel(values: number[]): number {
 }
 
 /** How fast held bands fall after the sound stops, in full scale a second. */
-export const FALL_PER_SEC = 1.5;
+const FALL_PER_SEC = 1.5;
 
 /** The bands to show: a new frame replaces them, silence lets them fall. */
 export function settleBands(
@@ -151,15 +145,6 @@ export function clamp(value: number, low: number, high: number): number {
   return Math.min(high, Math.max(low, value));
 }
 
-export function lerpRgb(a: Rgb, b: Rgb, t: number): Rgb {
-  const k = clamp(t, 0, 1);
-  return [0, 1, 2].map((i) => Math.round(a[i] + (b[i] - a[i]) * k)) as Rgb;
-}
-
-export function css([r, g, b]: Rgb, alpha = 1): string {
-  return alpha >= 1 ? `rgb(${r},${g},${b})` : `rgba(${r},${g},${b},${alpha})`;
-}
-
 /** Seconds since the last frame: none on the first, at most a quarter second. */
 export function stepSeconds(last: number | null, now: number): number {
   return last === null ? 0 : clamp((now - last) / 1000, 0, 0.25);
@@ -193,17 +178,6 @@ export function updatePeaks(
   });
 }
 
-/** `m:ss`, or `h:mm:ss` past an hour. */
-export function clock(ms: number): string {
-  const total = Math.floor(Math.max(0, ms) / 1000);
-  const hours = Math.floor(total / 3600);
-  const minutes = Math.floor((total % 3600) / 60);
-  const seconds = String(total % 60).padStart(2, "0");
-  return hours > 0
-    ? `${hours}:${String(minutes).padStart(2, "0")}:${seconds}`
-    : `${minutes}:${seconds}`;
-}
-
 /** What the readouts of the faceplate styles show about the playing item. */
 export interface TrackView {
   title: string | null;
@@ -229,7 +203,7 @@ export const NO_TRACK: TrackView = {
 
 /** Where 0 VU sits on the arc, from 0 (left) to 1 (right). */
 export const VU_ZERO = 0.72;
-const VU_MARKS: [number, number][] = [
+export const VU_MARKS: [number, number][] = [
   [-20, 0],
   [-10, 0.22],
   [-7, 0.36],
@@ -239,7 +213,6 @@ const VU_MARKS: [number, number][] = [
   [2, 0.86],
   [3, 1],
 ];
-export const VU_LABELS = VU_MARKS;
 
 /** The dB a needle position reads, linear between the scale's marks. */
 export function vuDb(position: number): number {
@@ -262,15 +235,6 @@ export function stepNeedle(needle: number, target: number, dt: number): number {
 
 export const HEAD_UNIT_BANDS = 12;
 
-/** Twelve bands bass to treble, the louder channel of each. */
-export function foldStereo(bands: number[]): number[] {
-  const half = Math.floor(bands.length / 2);
-  if (half === 0) return bands.slice();
-  return Array.from({ length: half }, (_, i) =>
-    Math.max(bands[half - 1 - i], bands[half + i]),
-  );
-}
-
 const FRAME_SECONDS = 1 / 60;
 
 /** The meter eases on time, not on redraws: 0.6 of the gap a 60 Hz frame up, 0.15 down. */
@@ -279,12 +243,8 @@ export function stepMeter(
   live: number[],
   dtSeconds: number | null,
 ): number {
-  const rms =
-    live.length === 0
-      ? 0
-      : Math.sqrt(live.reduce((sum, x) => sum + x * x, 0) / live.length);
-  const target = clamp(rms * 1.4, 0, 1);
-  const dt = Math.min(dtSeconds ?? FRAME_SECONDS, 0.25);
+  const target = rmsLevel(live);
+  const dt = dtSeconds ?? FRAME_SECONDS;
   const perFrame = target > level ? 0.6 : 0.15;
   const ease = 1 - Math.pow(1 - perFrame, dt / FRAME_SECONDS);
   return level + (target - level) * ease;
@@ -329,32 +289,6 @@ export class Projection {
       (m[1][0] * u + m[1][1] * v + m[1][2]) / w,
     ];
   }
-
-  invert([x, y]: Point): Point {
-    const m = this.m;
-    const a = [
-      [
-        m[1][1] * m[2][2] - m[1][2] * m[2][1],
-        m[0][2] * m[2][1] - m[0][1] * m[2][2],
-        m[0][1] * m[1][2] - m[0][2] * m[1][1],
-      ],
-      [
-        m[1][2] * m[2][0] - m[1][0] * m[2][2],
-        m[0][0] * m[2][2] - m[0][2] * m[2][0],
-        m[0][2] * m[1][0] - m[0][0] * m[1][2],
-      ],
-      [
-        m[1][0] * m[2][1] - m[1][1] * m[2][0],
-        m[0][1] * m[2][0] - m[0][0] * m[2][1],
-        m[0][0] * m[1][1] - m[0][1] * m[1][0],
-      ],
-    ];
-    const w = a[2][0] * x + a[2][1] * y + a[2][2];
-    return [
-      (a[0][0] * x + a[0][1] * y + a[0][2]) / w,
-      (a[1][0] * x + a[1][1] * y + a[1][2]) / w,
-    ];
-  }
 }
 
 /** The floor's corners as fractions of the stage: front-left, front-right, back-right, back-left. */
@@ -377,7 +311,7 @@ export const VFD = {
 /** A strip runs green, lavender, then blue from front to back, and dims past the level. */
 export function stripColour(depth: number, level: number): Rgb {
   const band = depth < 0.46 ? VFD.green : depth < 0.7 ? VFD.lavender : VFD.blue;
-  return depth <= level ? band : lerpRgb(VFD.glass, band, 0.2);
+  return depth <= level ? band : mix(VFD.glass, band, 0.2);
 }
 
 /** The frequency marks under the floor, on the 50 Hz to 10 kHz log scale. */
@@ -405,6 +339,7 @@ export function pushSweep(trails: number[][], wave: number[]): number[][] {
   const newest = trails[trails.length - 1];
   if (
     wave.length === 0 ||
+    newest === wave ||
     (newest &&
       newest.length === wave.length &&
       newest.every((value, i) => value === wave[i]))
@@ -416,11 +351,13 @@ export function pushSweep(trails: number[][], wave: number[]): number[][] {
 /** Peak-to-peak "volts" and a crossing count over the 50 ms window. */
 export function scopeReadout(wave: number[]): { vpp: number; hz: number } {
   if (wave.length === 0) return { vpp: 0, hz: 0 };
-  const vpp = (Math.max(...wave) - Math.min(...wave)) * 2;
-  let crossings = 0;
-  for (let i = 1; i < wave.length; i++)
+  let [low, high, crossings] = [wave[0], wave[0], 0];
+  for (let i = 1; i < wave.length; i++) {
+    low = Math.min(low, wave[i]);
+    high = Math.max(high, wave[i]);
     if (wave[i - 1] < 0 !== wave[i] < 0) crossings++;
-  return { vpp, hz: crossings / 2 / 0.05 };
+  }
+  return { vpp: (high - low) * 2, hz: crossings / 2 / 0.05 };
 }
 
 // Outrun: the grid scrolls while the song plays.
@@ -462,8 +399,8 @@ const ISO: [number, string][] = [
   [10000, "10k"],
 ];
 
-/** Band `i`'s centre on the 50 Hz to 10 kHz log scale, snapped to the nearest standard frequency. */
-export function rackLabel(i: number): string {
+/** Each band's centre on the 50 Hz to 10 kHz log scale, snapped to the nearest standard frequency. */
+export const RACK_LABELS = Array.from({ length: RACK_BANDS }, (_, i) => {
   const centre = 50 * Math.pow(200, (i + 0.5) / RACK_BANDS);
   let best = ISO[0];
   for (const entry of ISO)
@@ -473,7 +410,7 @@ export function rackLabel(i: number): string {
     )
       best = entry;
   return best[1];
-}
+});
 
 // Cassette: two reels that trade tape as the song plays.
 

@@ -3,16 +3,14 @@ import {
   barCount,
   CELL_PX,
   channels,
-  clock,
   fitBands,
   FLOOR,
-  foldStereo,
   levels,
   mono,
   nextStyle,
   Projection,
   pushSweep,
-  rackLabel,
+  RACK_LABELS,
   readStyle,
   resample,
   scopeReadout,
@@ -65,7 +63,6 @@ describe("audio", () => {
       [0.3, 0.4, 0.05],
     ]);
     expect(mono(MIRRORED)).toEqual([0.9, 0.4, 0.1]);
-    expect(foldStereo(MIRRORED)).toEqual([0.9, 0.4, 0.1]);
   });
 
   it("measures each channel as the RMS of its bands times 1.4, at most full", () => {
@@ -111,11 +108,6 @@ describe("audio", () => {
     peaks = updatePeaks(peaks, [0.95], 450, 0.05, 300, 0.7);
     expect(peaks[0]).toEqual({ value: 0.95, heldAt: 450 });
   });
-
-  it("writes the clock as m:ss and adds the hour past an hour", () => {
-    expect(clock(65_000)).toBe("1:05");
-    expect(clock(3_725_000)).toBe("1:02:05");
-  });
 });
 
 describe("analog VU", () => {
@@ -144,7 +136,7 @@ describe("head unit", () => {
     expect(stepMeter(0, [0.9], null)).toBeCloseTo(once);
   });
 
-  it("maps the floor corners and back", () => {
+  it("maps the square onto the floor corners", () => {
     const floor = new Projection(FLOOR);
     const corners: [number, number][] = [
       [0, 0],
@@ -156,9 +148,6 @@ describe("head unit", () => {
       const [x, y] = floor.apply(u, v);
       expect(x).toBeCloseTo(FLOOR[i][0], 4);
       expect(y).toBeCloseTo(FLOOR[i][1], 4);
-      const [bu, bv] = floor.invert([x, y]);
-      expect(bu).toBeCloseTo(u, 3);
-      expect(bv).toBeCloseTo(v, 3);
     });
   });
 
@@ -195,7 +184,7 @@ describe("retro styles", () => {
   });
 
   it("labels the rack bands with rising standard frequencies", () => {
-    const labels = Array.from({ length: 10 }, (_, i) => rackLabel(i));
+    const labels = RACK_LABELS;
     expect(labels[0]).toBe("63");
     expect(labels[9]).toBe("8k");
     expect(new Set(labels).size).toBe(10);

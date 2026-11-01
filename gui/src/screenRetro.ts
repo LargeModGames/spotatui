@@ -1,22 +1,21 @@
+import { clock } from "./format";
 import {
   bandsOf,
-  font,
+  grid,
+  polyline,
   roundRect,
-  rowOf,
   type Scene,
   text,
+  textWidth,
 } from "./screenDraw";
 import {
   channels,
   clamp,
-  clock,
-  css,
-  lerpRgb,
   levels,
   mono,
   pushSweep,
   RACK_BANDS,
-  rackLabel,
+  RACK_LABELS,
   resample,
   scopeReadout,
   stepNeedle,
@@ -26,11 +25,11 @@ import {
   tapeProgress,
   TRAILS,
   updatePeaks,
-  VU_LABELS,
+  VU_MARKS,
   VU_ZERO,
   vuDb,
 } from "./screenModel";
-import type { Rgb } from "./visualizerModel";
+import { mix, rgba, type Rgb } from "./visualizerModel";
 
 const rgb = (r: number, g: number, b: number): Rgb => [r, g, b];
 const DEG = Math.PI / 180;
@@ -64,10 +63,8 @@ export function paintAnalogVu(scene: Scene): void {
     stepNeedle(state.needles[0], left, dt),
     stepNeedle(state.needles[1], right, dt),
   ];
-  const row = rowOf(h);
-  const col = row * 0.6;
-  const px = row * 0.8;
-  ctx.fillStyle = css(VU.case);
+  const { row, col, px } = grid(h);
+  ctx.fillStyle = rgba(VU.case);
   ctx.fillRect(0, 0, w, h);
   text(ctx, "STEREO VU", col * 2, row * 0.7, VU.title, px, { bold: true });
   const peak = state.needles.some((needle) => needle > VU_ZERO);
@@ -113,9 +110,9 @@ function lamp(
   px: number,
 ): void {
   const radius = px * 0.38;
-  ctx.fillStyle = css(lit ? colour : lerpRgb(VU.case, colour, 0.3));
+  ctx.fillStyle = rgba(lit ? colour : mix(VU.case, colour, 0.3));
   if (lit) {
-    ctx.shadowColor = css(colour);
+    ctx.shadowColor = rgba(colour);
     ctx.shadowBlur = px;
   }
   ctx.beginPath();
@@ -143,13 +140,13 @@ function drawVuFace(
     y + h * 0.55,
     w * 0.7,
   );
-  glow.addColorStop(0, css(lerpRgb(VU.face, rgb(255, 240, 200), 0.35)));
-  glow.addColorStop(1, css(VU.faceEdge));
+  glow.addColorStop(0, rgba(mix(VU.face, rgb(255, 240, 200), 0.35)));
+  glow.addColorStop(1, rgba(VU.faceEdge));
   roundRect(ctx, x, y, w, h, row * 0.5);
   ctx.fillStyle = glow;
   ctx.fill();
   ctx.lineWidth = Math.max(row * 0.15, 1.5);
-  ctx.strokeStyle = css(VU.faceEdge);
+  ctx.strokeStyle = rgba(VU.faceEdge);
   ctx.stroke();
   ctx.save();
   roundRect(ctx, x, y, w, h, row * 0.5);
@@ -163,21 +160,21 @@ function drawVuFace(
     cy - r * Math.sin(angle(position)),
   ];
   ctx.lineWidth = Math.max(row * 0.08, 1);
-  ctx.strokeStyle = css(VU.ink);
+  ctx.strokeStyle = rgba(VU.ink);
   ctx.beginPath();
   ctx.arc(cx, cy, radius, -angle(0), -angle(1));
   ctx.stroke();
   ctx.lineWidth = row * 0.3;
-  ctx.strokeStyle = css(VU.red);
+  ctx.strokeStyle = rgba(VU.red);
   ctx.beginPath();
   ctx.arc(cx, cy, radius + row * 0.4, -angle(VU_ZERO), -angle(1));
   ctx.stroke();
-  for (const [db, position] of VU_LABELS) {
+  for (const [db, position] of VU_MARKS) {
     const colour = position >= VU_ZERO ? VU.red : VU.ink;
     const [x0, y0] = at(position, radius + row * 0.1);
     const [x1, y1] = at(position, radius + row * 0.7);
     ctx.lineWidth = Math.max(row * 0.08, 1);
-    ctx.strokeStyle = css(colour);
+    ctx.strokeStyle = rgba(colour);
     ctx.beginPath();
     ctx.moveTo(x0, y0);
     ctx.lineTo(x1, y1);
@@ -209,7 +206,7 @@ function drawVuFace(
   ctx.shadowBlur = row * 0.3;
   ctx.shadowOffsetX = row * 0.15;
   ctx.lineWidth = Math.max(row * 0.1, 1.5);
-  ctx.strokeStyle = css(VU.needle);
+  ctx.strokeStyle = rgba(VU.needle);
   ctx.beginPath();
   ctx.moveTo(cx, cy);
   ctx.lineTo(nx, ny);
@@ -239,16 +236,13 @@ const WINAMP_BARS = 19;
 export function paintWinamp(scene: Scene): void {
   const { ctx, w, h, state, track } = scene;
   if (w < 160 || h < 100) return;
-  const row = rowOf(h);
-  const col = row * 0.6;
-  const px = row * 0.8;
-  ctx.fillStyle = css(AMP.black);
+  const { row, col, px } = grid(h);
+  ctx.fillStyle = rgba(AMP.black);
   ctx.fillRect(0, 0, w, h);
-  ctx.fillStyle = css(AMP.titleBar);
+  ctx.fillStyle = rgba(AMP.titleBar);
   ctx.fillRect(0, 0, w, row * 1.1);
-  const logo = text(ctx, "WINAMP", col, row * 0.55, AMP.logo, px, {
-    bold: true,
-  });
+  text(ctx, "WINAMP", col, row * 0.55, AMP.logo, px, { bold: true });
+  const logo = textWidth(ctx, "WINAMP", px, true);
   const length = track.durationMs ? ` (${clock(track.durationMs)})` : "";
   text(
     ctx,
@@ -259,7 +253,7 @@ export function paintWinamp(scene: Scene): void {
     px,
   );
   for (let i = 0; i < 3; i++) {
-    ctx.fillStyle = css(AMP.buttons);
+    ctx.fillStyle = rgba(AMP.buttons);
     ctx.fillRect(w - col * (2 + i * 2), row * 0.3, col * 1.2, row * 0.5);
   }
   text(
@@ -281,21 +275,21 @@ export function paintWinamp(scene: Scene): void {
   const pitch = (w - col * 4) / WINAMP_BARS;
   const barW = Math.max(pitch * 0.73, 1);
   const fill = ctx.createLinearGradient(0, bottom, 0, top);
-  fill.addColorStop(0, css(AMP.green));
-  fill.addColorStop(0.45, css(AMP.green));
-  fill.addColorStop(0.45, css(AMP.yellow));
-  fill.addColorStop(0.75, css(AMP.yellow));
-  fill.addColorStop(0.75, css(AMP.red));
-  fill.addColorStop(1, css(AMP.red));
+  fill.addColorStop(0, rgba(AMP.green));
+  fill.addColorStop(0.45, rgba(AMP.green));
+  fill.addColorStop(0.45, rgba(AMP.yellow));
+  fill.addColorStop(0.75, rgba(AMP.yellow));
+  fill.addColorStop(0.75, rgba(AMP.red));
+  fill.addColorStop(1, rgba(AMP.red));
   ctx.fillStyle = fill;
   const room = area - 4;
   values.forEach((value, i) => {
     const height = clamp(value, 0, 1) * room;
     ctx.fillRect(x0 + i * pitch, bottom - height, barW, height);
   });
-  ctx.fillStyle = css(AMP.black);
+  ctx.fillStyle = rgba(AMP.black);
   for (let y = top; y < bottom; y += 2) ctx.fillRect(x0, y, w - col * 4, 1);
-  ctx.fillStyle = css(AMP.cap);
+  ctx.fillStyle = rgba(AMP.cap);
   state.peaks.forEach((peak, i) => {
     const y = bottom - clamp(peak.value, 0, 1) * room - 3;
     ctx.fillRect(x0 + i * pitch, y, barW, 1.5);
@@ -306,16 +300,19 @@ export function paintWinamp(scene: Scene): void {
   text(ctx, "OSC", col * 2, oscY + oscH / 2, AMP.osc, px * 0.85);
   const ox = col * 6;
   const ow = w - col * 8;
-  const wave = resample(scene.audio.wave, Math.max(Math.floor(ow / 2), 2));
-  ctx.strokeStyle = css(AMP.lcd);
+  // At most one point for each two pixels; silence is a flat line.
+  const points = Math.max(Math.floor(ow / 2), 2);
+  const raw = scene.audio.wave.length > 1 ? scene.audio.wave : [0, 0];
+  const wave = raw.length > points ? resample(raw, points) : raw;
+  ctx.strokeStyle = rgba(AMP.lcd);
   ctx.lineWidth = 1.2;
-  ctx.beginPath();
-  wave.forEach((value, i) => {
-    const x = ox + (i / (wave.length - 1)) * ow;
-    const y = oscY + oscH / 2 - clamp(value, -1, 1) * (oscH / 2) * 0.9;
-    if (i === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
-  });
+  polyline(
+    ctx,
+    wave.map((value, i) => [
+      ox + (i / (wave.length - 1)) * ow,
+      oscY + oscH / 2 - clamp(value, -1, 1) * (oscH / 2) * 0.9,
+    ]),
+  );
   ctx.stroke();
 
   const y = h - row * 0.8;
@@ -351,9 +348,7 @@ const SCOPE = {
 export function paintPhosphorScope(scene: Scene): void {
   const { ctx, w, h, state } = scene;
   if (w < 160 || h < 100) return;
-  const row = rowOf(h);
-  const col = row * 0.6;
-  const px = row * 0.8;
+  const { row, col, px } = grid(h);
   const glow = ctx.createRadialGradient(
     w / 2,
     h / 2,
@@ -362,8 +357,8 @@ export function paintPhosphorScope(scene: Scene): void {
     h / 2,
     Math.max(w, h) * 0.6,
   );
-  glow.addColorStop(0, css(SCOPE.glow));
-  glow.addColorStop(1, css(SCOPE.bg));
+  glow.addColorStop(0, rgba(SCOPE.glow));
+  glow.addColorStop(1, rgba(SCOPE.bg));
   ctx.fillStyle = glow;
   ctx.fillRect(0, 0, w, h);
   text(
@@ -382,7 +377,7 @@ export function paintPhosphorScope(scene: Scene): void {
   const sw = w - col * 8;
   const sh = h - row * 4.5;
   if (sw < 40 || sh < 30) return;
-  ctx.strokeStyle = css(SCOPE.grid);
+  ctx.strokeStyle = rgba(SCOPE.grid);
   ctx.lineWidth = 1;
   ctx.setLineDash([1, 3]);
   ctx.beginPath();
@@ -404,7 +399,7 @@ export function paintPhosphorScope(scene: Scene): void {
   }
   ctx.stroke();
   roundRect(ctx, sx - 4, sy - 4, sw + 8, sh + 8, row * 0.8);
-  ctx.strokeStyle = css(SCOPE.bezel);
+  ctx.strokeStyle = rgba(SCOPE.bezel);
   ctx.lineWidth = 2;
   ctx.stroke();
 
@@ -415,17 +410,17 @@ export function paintPhosphorScope(scene: Scene): void {
   const offset = TRAILS.length - state.trails.length;
   state.trails.forEach((sweep, k) => {
     const newest = k === state.trails.length - 1;
-    ctx.strokeStyle = css(lerpRgb(SCOPE.bg, SCOPE.trace, TRAILS[offset + k]));
+    ctx.strokeStyle = rgba(mix(SCOPE.bg, SCOPE.trace, TRAILS[offset + k]));
     ctx.lineWidth = newest ? 1.8 : 1.3;
-    ctx.shadowColor = css(SCOPE.trace);
+    ctx.shadowColor = rgba(SCOPE.trace);
     ctx.shadowBlur = newest ? row * 0.6 : 0;
-    ctx.beginPath();
-    sweep.forEach((value, i) => {
-      const x = sx + (i / Math.max(sweep.length - 1, 1)) * sw;
-      const y = sy + sh / 2 - clamp(value, -1, 1) * sh * 0.42;
-      if (i === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    });
+    polyline(
+      ctx,
+      sweep.map((value, i) => [
+        sx + (i / Math.max(sweep.length - 1, 1)) * sw,
+        sy + sh / 2 - clamp(value, -1, 1) * sh * 0.42,
+      ]),
+    );
     ctx.stroke();
   });
   ctx.shadowBlur = 0;
@@ -461,19 +456,17 @@ const RIDGE_POINTS = 48;
 export function paintOutrun(scene: Scene): void {
   const { ctx, w, h, state, track } = scene;
   if (w < 160 || h < 100) return;
-  const row = rowOf(h);
-  const col = row * 0.6;
-  const px = row * 0.8;
+  const { row, col, px } = grid(h);
   const row1 = mono(bandsOf(scene));
   const bass = Math.max(0, ...row1.slice(0, 3));
   state.phase = stepOutrun(state.phase, scene.dt, track.playing);
   const hz = (h * 17) / 30;
   const sky = ctx.createLinearGradient(0, 0, 0, hz);
-  sky.addColorStop(0, css(OUT.skyTop));
-  sky.addColorStop(1, css(OUT.skyBottom));
+  sky.addColorStop(0, rgba(OUT.skyTop));
+  sky.addColorStop(1, rgba(OUT.skyBottom));
   ctx.fillStyle = sky;
   ctx.fillRect(0, 0, w, hz);
-  ctx.fillStyle = css(OUT.ground);
+  ctx.fillStyle = rgba(OUT.ground);
   ctx.fillRect(0, hz, w, h - hz);
 
   const cx = w / 2;
@@ -485,15 +478,15 @@ export function paintOutrun(scene: Scene): void {
   ctx.closePath();
   ctx.clip();
   const sun = ctx.createLinearGradient(0, cy - radius, 0, cy);
-  sun.addColorStop(0, css(OUT.sunTop));
-  sun.addColorStop(1, css(OUT.sunBottom));
+  sun.addColorStop(0, rgba(OUT.sunTop));
+  sun.addColorStop(1, rgba(OUT.sunBottom));
   ctx.fillStyle = sun;
   ctx.fillRect(cx - radius, cy - radius, radius * 2, radius);
   const period = radius / 9;
   for (let y = cy - radius * 0.55; y < cy; y += period) {
     const depth = (y - (cy - radius)) / radius;
     const gap = (period * (1 + ((depth - 0.45) / 0.55) * 4 + bass * 2)) / 7;
-    ctx.fillStyle = css(lerpRgb(OUT.skyTop, OUT.skyBottom, y / hz));
+    ctx.fillStyle = rgba(mix(OUT.skyTop, OUT.skyBottom, y / hz));
     ctx.fillRect(cx - radius, y + period - gap, radius * 2, gap);
   }
   ctx.restore();
@@ -503,21 +496,18 @@ export function paintOutrun(scene: Scene): void {
     (i / (RIDGE_POINTS - 1)) * w,
     hz - 1 - clamp(value, 0, 1) * hz * 0.44,
   ]);
-  ctx.fillStyle = css(OUT.mountain);
-  ctx.beginPath();
-  ctx.moveTo(0, hz);
-  peaks.forEach(([x, y]) => ctx.lineTo(x, y));
-  ctx.lineTo(w, hz);
+  ctx.fillStyle = rgba(OUT.mountain);
+  polyline(ctx, [[0, hz], ...peaks, [w, hz]]);
   ctx.closePath();
   ctx.fill();
   const rim = (colour: Rgb, drop: number, width: number, blur: number) => {
-    ctx.strokeStyle = css(colour);
+    ctx.strokeStyle = rgba(colour);
     ctx.lineWidth = width;
-    ctx.shadowColor = css(colour);
+    ctx.shadowColor = rgba(colour);
     ctx.shadowBlur = blur;
-    ctx.beginPath();
-    peaks.forEach(([x, y], i) =>
-      i === 0 ? ctx.moveTo(x, y + drop) : ctx.lineTo(x, y + drop),
+    polyline(
+      ctx,
+      peaks.map(([x, y]) => [x, y + drop]),
     );
     ctx.stroke();
     ctx.shadowBlur = 0;
@@ -530,8 +520,8 @@ export function paintOutrun(scene: Scene): void {
   ctx.rect(0, hz, w, h - hz);
   ctx.clip();
   ctx.shadowBlur = row * 0.4;
-  ctx.shadowColor = css(OUT.grid);
-  ctx.strokeStyle = css(OUT.grid);
+  ctx.shadowColor = rgba(OUT.grid);
+  ctx.strokeStyle = rgba(OUT.grid);
   ctx.lineWidth = 1.2;
   const far = (w * 9) / 232;
   const near = (w * 62) / 232;
@@ -541,21 +531,28 @@ export function paintOutrun(scene: Scene): void {
     ctx.lineTo(cx + i * near, h);
   }
   ctx.stroke();
+  // One blurred stroke for each colour, not one for each line.
+  const rows: [number[], number[]] = [[], []];
   for (let k = 0; k < 8; k++) {
     const z = 1.25 * Math.pow(1.65, k - state.phase);
     if (z < 1) continue;
     const y = hz + (h - hz) / z;
     if (y - hz < 6) break;
-    ctx.strokeStyle = css(z < 3 ? OUT.grid : OUT.gridFar);
-    ctx.beginPath();
-    ctx.moveTo(0, y);
-    ctx.lineTo(w, y);
-    ctx.stroke();
+    rows[z < 3 ? 0 : 1].push(y);
   }
+  rows.forEach((ys, far) => {
+    ctx.strokeStyle = rgba(far ? OUT.gridFar : OUT.grid);
+    ctx.beginPath();
+    for (const y of ys) {
+      ctx.moveTo(0, y);
+      ctx.lineTo(w, y);
+    }
+    ctx.stroke();
+  });
   ctx.restore();
-  ctx.fillStyle = css(OUT.horizon);
+  ctx.fillStyle = rgba(OUT.horizon);
   ctx.fillRect(0, hz - 0.75, w, 1.5);
-  ctx.shadowColor = css(OUT.neon);
+  ctx.shadowColor = rgba(OUT.neon);
   ctx.shadowBlur = row * 0.5;
   text(ctx, "O U T R U N", col * 2, row, OUT.neon, px * 1.2, { bold: true });
   ctx.shadowBlur = 0;
@@ -592,15 +589,13 @@ const RACK = {
 export function paintRackEq(scene: Scene): void {
   const { ctx, w, h, state } = scene;
   if (w < 160 || h < 100) return;
-  const row = rowOf(h);
-  const col = row * 0.6;
-  const px = row * 0.8;
+  const { row, col, px } = grid(h);
   const plate = ctx.createLinearGradient(0, 0, 0, h);
-  plate.addColorStop(0, css(lerpRgb(RACK.plate, rgb(255, 255, 255), 0.15)));
-  plate.addColorStop(1, css(RACK.plate));
+  plate.addColorStop(0, rgba(mix(RACK.plate, rgb(255, 255, 255), 0.15)));
+  plate.addColorStop(1, rgba(RACK.plate));
   ctx.fillStyle = plate;
   ctx.fillRect(0, 0, w, h);
-  ctx.fillStyle = css(RACK.plateEdge);
+  ctx.fillStyle = rgba(RACK.plateEdge);
   ctx.fillRect(0, 0, w, row * 0.5);
   ctx.fillRect(0, h - row * 0.5, w, row * 0.5);
   for (const [sx, sy] of [
@@ -609,11 +604,11 @@ export function paintRackEq(scene: Scene): void {
     [col * 1.5, h - row * 1.2],
     [w - col * 1.5, h - row * 1.2],
   ]) {
-    ctx.fillStyle = css(RACK.screw);
+    ctx.fillStyle = rgba(RACK.screw);
     ctx.beginPath();
     ctx.arc(sx, sy, row * 0.35, 0, Math.PI * 2);
     ctx.fill();
-    ctx.fillStyle = css(RACK.plateEdge);
+    ctx.fillStyle = rgba(RACK.plateEdge);
     ctx.fillRect(sx - row * 0.25, sy - 0.75, row * 0.5, 1.5);
   }
   text(
@@ -635,7 +630,7 @@ export function paintRackEq(scene: Scene): void {
   const wh = h - row * 6.8;
   if (ww < 80 || wh < row * 3) return;
   roundRect(ctx, wx, wy, ww, wh, row * 0.3);
-  ctx.fillStyle = css(RACK.window);
+  ctx.fillStyle = rgba(RACK.window);
   ctx.fill();
   const [left, right] = channels(bandsOf(scene));
   const values = [
@@ -670,7 +665,7 @@ export function paintRackEq(scene: Scene): void {
         const share = s / segments;
         const led =
           share < 0.64 ? RACK.green : share < 0.86 ? RACK.amber : RACK.red;
-        ctx.fillStyle = css(s < lit ? led : lerpRgb(RACK.window, led, 0.18));
+        ctx.fillStyle = rgba(s < lit ? led : mix(RACK.window, led, 0.18));
         ctx.fillRect(x, base - (s + 1) * pitch, ladder, pitch * 0.7);
       }
       // One dark segment above the peak, as on the TUI's rack.
@@ -679,12 +674,11 @@ export function paintRackEq(scene: Scene): void {
         segments - 1,
       );
       if (peak >= lit) {
-        ctx.fillStyle = css(RACK.peak);
+        ctx.fillStyle = rgba(RACK.peak);
         ctx.fillRect(x, base - (peak + 1) * pitch, ladder, pitch * 0.35);
       }
-      const label = rackLabel(b);
-      ctx.font = font(px * 0.75);
-      const halfLabel = ctx.measureText(label).width / 2;
+      const label = RACK_LABELS[b];
+      const halfLabel = textWidth(ctx, label, px * 0.75) / 2;
       const mid = x + ladder / 2;
       if (mid - halfLabel > edge + 2) {
         text(ctx, label, mid, labelY, RACK.label, px * 0.75, {
@@ -697,11 +691,11 @@ export function paintRackEq(scene: Scene): void {
   const knobY = h - row * 2.5;
   ["INPUT", "RANGE", "DECAY", "PEAK HOLD"].forEach((name, i) => {
     const x = w * (0.16 + i * 0.22);
-    ctx.fillStyle = css(RACK.knob);
+    ctx.fillStyle = rgba(RACK.knob);
     ctx.beginPath();
     ctx.arc(x, knobY, row * 0.6, 0, Math.PI * 2);
     ctx.fill();
-    ctx.strokeStyle = css(RACK.plate);
+    ctx.strokeStyle = rgba(RACK.plate);
     ctx.lineWidth = 1.5;
     ctx.beginPath();
     ctx.moveTo(x, knobY);
@@ -745,10 +739,8 @@ const TAPE_SCALE: [string, number][] = [
 export function paintCassette(scene: Scene): void {
   const { ctx, w, h, state, track } = scene;
   if (w < 160 || h < 100) return;
-  const row = rowOf(h);
-  const col = row * 0.6;
-  const px = row * 0.8;
-  ctx.fillStyle = css(TAPE.body);
+  const { row, col, px } = grid(h);
+  ctx.fillStyle = rgba(TAPE.body);
   ctx.fillRect(0, 0, w, h);
   text(
     ctx,
@@ -761,7 +753,7 @@ export function paintCassette(scene: Scene): void {
   text(ctx, "TAPE COUNTER", w - col * 18, row * 0.7, TAPE.muted, px * 0.8);
   const count = Math.floor((track.progressMs ?? 0) / 1000) % 10000;
   roundRect(ctx, w - col * 17, row * 1.3, col * 13, row * 1.3, row * 0.2);
-  ctx.fillStyle = css(TAPE.counterBg);
+  ctx.fillStyle = rgba(TAPE.counterBg);
   ctx.fill();
   text(
     ctx,
@@ -782,7 +774,7 @@ export function paintCassette(scene: Scene): void {
   const x = (w - shellW) / 2;
   const y = row * 3.4;
   roundRect(ctx, x, y, shellW, shellH, row * 0.8);
-  ctx.fillStyle = css(TAPE.shell);
+  ctx.fillStyle = rgba(TAPE.shell);
   ctx.fill();
   roundRect(
     ctx,
@@ -792,7 +784,7 @@ export function paintCassette(scene: Scene): void {
     row * 2.2,
     row * 0.3,
   );
-  ctx.fillStyle = css(TAPE.labelStrip);
+  ctx.fillStyle = rgba(TAPE.labelStrip);
   ctx.fill();
   text(
     ctx,
@@ -810,7 +802,7 @@ export function paintCassette(scene: Scene): void {
   const winW = shellW * 0.76;
   const winH = Math.max(shellH - row * 4.2, row * 3);
   roundRect(ctx, winX, winY, winW, winH, row * 0.6);
-  ctx.fillStyle = css(TAPE.window);
+  ctx.fillStyle = rgba(TAPE.window);
   ctx.fill();
   // The two full packs stay apart: their centres are 0.56 of the window apart.
   const full = Math.max(Math.min(winH / 2 - 4, winW * 0.2), 8);
@@ -819,22 +811,22 @@ export function paintCassette(scene: Scene): void {
   state.reels = stepReels(state.reels, packs, full, scene.dt, track.playing);
   const cy = winY + winH / 2;
   const centres = [winX + winW * 0.22, winX + winW * 0.78];
-  ctx.strokeStyle = css(TAPE.tape);
+  ctx.strokeStyle = rgba(TAPE.tape);
   ctx.lineWidth = 2;
   ctx.beginPath();
   ctx.moveTo(centres[0], cy + packs[0]);
   ctx.lineTo(centres[1], cy + packs[1]);
   ctx.stroke();
   centres.forEach((cx, i) => {
-    ctx.fillStyle = css(TAPE.tape);
+    ctx.fillStyle = rgba(TAPE.tape);
     ctx.beginPath();
     ctx.arc(cx, cy, packs[i], 0, Math.PI * 2);
     ctx.fill();
-    ctx.fillStyle = css(TAPE.window);
+    ctx.fillStyle = rgba(TAPE.window);
     ctx.beginPath();
     ctx.arc(cx, cy, hub + 0.5, 0, Math.PI * 2);
     ctx.fill();
-    ctx.strokeStyle = css(TAPE.hub);
+    ctx.strokeStyle = rgba(TAPE.hub);
     ctx.lineWidth = Math.max(hub * 0.18, 1.5);
     ctx.beginPath();
     ctx.arc(cx, cy, hub, 0, Math.PI * 2);
@@ -862,7 +854,7 @@ export function paintCassette(scene: Scene): void {
       const share = k / leds;
       const led =
         share < 0.65 ? TAPE.green : share < 0.825 ? TAPE.amber : TAPE.red;
-      ctx.fillStyle = css(share < level ? led : lerpRgb(TAPE.body, led, 0.18));
+      ctx.fillStyle = rgba(share < level ? led : mix(TAPE.body, led, 0.18));
       ctx.fillRect(x0 + k * pitch, ly - row * 0.4, pitch * 0.7, row * 0.8);
     }
   });

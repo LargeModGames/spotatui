@@ -1,14 +1,12 @@
-import { bandsOf, font, rowOf, type Scene, text } from "./screenDraw";
+import { clock } from "./format";
+import { bandsOf, font, grid, type Scene, text, textWidth } from "./screenDraw";
 import {
   clamp,
-  clock,
-  css,
   FLOOR,
-  foldStereo,
   HEAD_UNIT_BANDS,
   HEAD_UNIT_MARKS,
-  lerpRgb,
   markBand,
+  mono,
   type Point,
   Projection,
   resample,
@@ -18,7 +16,7 @@ import {
   type TrackView,
   VFD,
 } from "./screenModel";
-import type { Rgb } from "./visualizerModel";
+import { mix, rgba, type Rgb } from "./visualizerModel";
 import {
   paintAnalogVu,
   paintCassette,
@@ -49,7 +47,7 @@ function paintCava(scene: Scene): void {
   const gap = Math.max(footprint / 3, 1);
   const bar = Math.max(footprint - gap, 1);
   const rest = Math.max(h / 120, 1.5);
-  ctx.fillStyle = css(accent);
+  ctx.fillStyle = rgba(accent);
   bands.forEach((value, i) => {
     const height = Math.max(clamp(value, 0, 1) * h, rest);
     ctx.fillRect(i * footprint + gap / 2, h - height, bar, height);
@@ -80,7 +78,7 @@ function paintBarGraph(scene: Scene): void {
   const { ctx, w, h } = scene;
   const bands = bandsOf(scene);
   const gradient = ctx.createLinearGradient(0, h, 0, 0);
-  for (let i = 0; i <= 8; i++) gradient.addColorStop(i / 8, css(turbo(i / 8)));
+  for (let i = 0; i <= 8; i++) gradient.addColorStop(i / 8, rgba(turbo(i / 8)));
   ctx.fillStyle = gradient;
   const step = w / bands.length;
   bands.forEach((value, i) => {
@@ -101,11 +99,11 @@ const CHROME = {
   bg: [16, 16, 16] as Rgb,
   label: [128, 128, 128] as Rgb,
 };
-const ghost = (colour: Rgb) => lerpRgb(colour, CHROME.bg, 0.9);
+const ghost = (colour: Rgb) => mix(colour, CHROME.bg, 0.9);
 const chromeGradient = (t: number) =>
   t < 0.5
-    ? lerpRgb(CHROME.low, CHROME.mid, t * 2)
-    : lerpRgb(CHROME.mid, CHROME.high, (t - 0.5) * 2);
+    ? mix(CHROME.low, CHROME.mid, t * 2)
+    : mix(CHROME.mid, CHROME.high, (t - 0.5) * 2);
 
 /** The lane of band `b` across the floor. */
 function lane(b: number): [number, number] {
@@ -116,15 +114,14 @@ function lane(b: number): [number, number] {
 function paintHeadUnit(scene: Scene): void {
   const { ctx, w, h, state } = scene;
   if (w < 120 || h < 60) return;
-  const live = resample(foldStereo(bandsOf(scene)), HEAD_UNIT_BANDS);
+  const live = resample(mono(bandsOf(scene)), HEAD_UNIT_BANDS);
   state.meter = stepMeter(
     state.meter,
     live,
     state.frames === 0 ? null : scene.dt,
   );
-  const row = rowOf(h);
-  const col = row * 0.6;
-  ctx.fillStyle = css(CHROME.bg);
+  const { row, col } = grid(h);
+  ctx.fillStyle = rgba(CHROME.bg);
   ctx.fillRect(0, 0, w, h);
 
   const header = h >= 12 * row;
@@ -155,12 +152,12 @@ function paintHeadUnit(scene: Scene): void {
       stage.y + fy * stage.h,
     ]) as [Point, Point, Point, Point],
   );
-  ctx.fillStyle = css(VFD.glass);
+  ctx.fillStyle = rgba(VFD.glass);
   ctx.fillRect(stage.x, stage.y, stage.w, stage.h);
   drawWalls(ctx, stage, floor);
   live.forEach((level, b) => drawStrip(ctx, floor, b, clamp(level, 0, 1), row));
   // The display's dot rows: thin dark lines over the whole glass.
-  ctx.fillStyle = css(VFD.glass, 0.55);
+  ctx.fillStyle = rgba(VFD.glass, 0.55);
   for (let y = stage.y; y < stage.y + stage.h; y += 4)
     ctx.fillRect(stage.x, y, stage.w, 1);
   if (labels) drawMarks(ctx, floor, bottom + row / 2, stage, row);
@@ -185,7 +182,7 @@ function drawStrip(
   for (let y = front[1]; y > back[1]; y -= segment) {
     const yTop = Math.max(y - segment + gap, back[1]);
     const mid = (y + yTop) / 2;
-    ctx.fillStyle = css(stripColour((front[1] - mid) / depth, level));
+    ctx.fillStyle = rgba(stripColour((front[1] - mid) / depth, level));
     const at = (yy: number) =>
       front[0] + ((front[1] - yy) / depth) * (back[0] - front[0]);
     ctx.beginPath();
@@ -229,8 +226,8 @@ function drawWalls(
       0,
       Math.max(bottomLeft, bottomRight),
     );
-    gradient.addColorStop(0, css(VFD.wallTop));
-    gradient.addColorStop(1, css(VFD.wallBottom));
+    gradient.addColorStop(0, rgba(VFD.wallTop));
+    gradient.addColorStop(1, rgba(VFD.wallBottom));
     ctx.fillStyle = gradient;
     ctx.beginPath();
     ctx.moveTo(x0, top);
@@ -290,7 +287,7 @@ function drawMeter(
   for (let segment = 0; segment < count; segment++) {
     const t = segment / (count - 1);
     const base = t >= 0.8 ? CHROME.hot : chromeGradient(t * 0.5);
-    ctx.fillStyle = css(segment < lit ? base : ghost(base));
+    ctx.fillStyle = rgba(segment < lit ? base : ghost(base));
     const top = y + h - (segment + 1) * pitch;
     ctx.fillRect(x, top + pitch * 0.25, w, pitch * 0.75);
   }
@@ -305,7 +302,8 @@ function drawHeader(
 ): void {
   const px = row * 0.8;
   const y = row / 2;
-  const left = text(ctx, "DSP HEAD UNIT", col, y, CHROME.label, px);
+  text(ctx, "DSP HEAD UNIT", col, y, CHROME.label, px);
+  const left = textWidth(ctx, "DSP HEAD UNIT", px);
   const chipWidth = col * 5;
   const chipX = w - col - chipWidth;
   chip(ctx, "DHE", chipX, y, chipWidth, row, true);
@@ -334,7 +332,7 @@ function chip(
   lit: boolean,
 ): void {
   if (lit) {
-    ctx.fillStyle = css(CHROME.high);
+    ctx.fillStyle = rgba(CHROME.high);
     ctx.fillRect(x, y - row * 0.42, width, row * 0.84);
   }
   text(
@@ -388,7 +386,7 @@ function sevenSegment(
   };
   const on = SEGMENTS[glyph] ?? "";
   for (const [name, [bx, by, bw, bh]] of Object.entries(bars)) {
-    ctx.fillStyle = css(on.includes(name) ? lit : ghost(lit));
+    ctx.fillStyle = rgba(on.includes(name) ? lit : ghost(lit));
     ctx.fillRect(bx, by, bw, bh);
   }
 }
@@ -408,7 +406,7 @@ function drawReadout(
   let x = col * 3;
   for (const glyph of value) {
     if (glyph === ":") {
-      ctx.fillStyle = css(lit);
+      ctx.fillStyle = rgba(lit);
       ctx.fillRect(x + col * 0.25, y + row * 0.7, col * 0.5, col * 0.5);
       ctx.fillRect(x + col * 0.25, y + row * 2.0, col * 0.5, col * 0.5);
       x += col * 2;

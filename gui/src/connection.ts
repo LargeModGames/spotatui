@@ -4,7 +4,7 @@ import type { OnboardingView } from "./bindings/OnboardingView";
 import type { ServerMessage } from "./bindings/ServerMessage";
 import type { WelcomePayload } from "./bindings/WelcomePayload";
 import { applyChannel, type Channels } from "./store";
-import type { ScreenFrameAt } from "./screenModel";
+import type { ScreenFrame } from "./bindings/ScreenFrame";
 import type { Frame } from "./visualizerModel";
 
 const TOKEN_KEY = "spotatui.token";
@@ -61,7 +61,8 @@ function playingOf(channels: Channels): Playing {
   return { uri: item?.uri ?? null, playing: item?.is_playing ?? false };
 }
 
-function shownAt(
+/** The position at `now`; null before the first tick. */
+export function shownAt(
   position: Position | null,
   playing: boolean,
   now: number,
@@ -141,7 +142,9 @@ export class Connection {
   private readonly listeners = new Set<() => void>();
   /** Visualizer frames skip the state: dozens a second must not re-render the page. */
   private readonly viewers = new Set<(frame: Frame) => void>();
-  private readonly screenViewers = new Set<(frame: ScreenFrameAt) => void>();
+  private readonly screenViewers = new Set<
+    (frame: Frame<ScreenFrame>) => void
+  >();
   private screenBars = 2;
   private code: string | null;
   private readonly open: Open;
@@ -213,7 +216,7 @@ export class Connection {
   /** Hands visualizer screen frames at `bars` bands to `listener`; the newest ask sets the count. */
   watchVisualizerScreen = (
     bars: number,
-    listener: (frame: ScreenFrameAt) => void,
+    listener: (frame: Frame<ScreenFrame>) => void,
   ): (() => void) => {
     this.screenViewers.add(listener);
     this.screenBars = bars;
