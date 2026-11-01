@@ -66,17 +66,19 @@ export function barCount(style: Style, widthPx: number): number {
     case "BarGraph":
       return Math.max(cells * 2, 2);
     case "HeadUnit":
+      return HEAD_UNIT_BANDS * 2;
     case "AnalogVu":
     case "Cassette":
       return 24;
     case "Winamp":
-      return 38;
+      return WINAMP_BARS * 2;
+    // The TUI asks for 16 too; the scope draws only the wave.
     case "PhosphorScope":
       return 16;
     case "Outrun":
-      return 96;
+      return RIDGE_POINTS * 2;
     case "RackEq":
-      return 20;
+      return RACK_BANDS * 2;
   }
 }
 
@@ -146,7 +148,6 @@ export function settleBands(
 /** Each channel resampled to the count this page asked for (another page can ask for another); no frame yet rests at zero. */
 export function fitBands(bands: number[], bars: number): number[] {
   const half = Math.floor(bars / 2);
-  if (bands.length === 0) return new Array<number>(half * 2).fill(0);
   if (bands.length === half * 2) return bands;
   const [left, right] = channels(bands);
   return [...resample(left, half).reverse(), ...resample(right, half)];
@@ -273,6 +274,8 @@ export function stepNeedle(needle: number, target: number, dt: number): number {
 // Head Unit: a VFD spectrum in perspective with an eased level meter.
 
 export const HEAD_UNIT_BANDS = 12;
+export const WINAMP_BARS = 19;
+export const RIDGE_POINTS = 48;
 
 const FRAME_SECONDS = 1 / 60;
 

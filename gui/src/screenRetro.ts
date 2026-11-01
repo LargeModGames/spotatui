@@ -16,6 +16,8 @@ import {
   mono,
   pushSweep,
   RACK_BANDS,
+  RIDGE_POINTS,
+  WINAMP_BARS,
   RACK_LABELS,
   resample,
   scopeReadout,
@@ -234,7 +236,6 @@ const AMP = {
   buttons: rgb(150, 150, 170),
   osc: rgb(90, 90, 110),
 };
-const WINAMP_BARS = 19;
 
 export function paintWinamp(scene: Scene): void {
   const { ctx, w, h, state, track } = scene;
@@ -269,7 +270,7 @@ export function paintWinamp(scene: Scene): void {
     { bold: true },
   );
 
-  const values = resample(mono(scene.audio.bands), WINAMP_BARS);
+  const values = mono(scene.audio.bands);
   state.peaks = updatePeaks(state.peaks, values, scene.now, scene.dt, 300, 0.7);
   const x0 = col * 2;
   const top = row * 3.8;
@@ -454,14 +455,13 @@ const OUT = {
   sunBottom: rgb(255, 50, 150),
   title: rgb(255, 120, 220),
 };
-const RIDGE_POINTS = 48;
 
 export function paintOutrun(scene: Scene): void {
   const { ctx, w, h, state, track } = scene;
   if (w < 160 || h < 100) return;
   const { row, col, px } = grid(h);
-  const row1 = mono(scene.audio.bands);
-  const bass = Math.max(0, ...row1.slice(0, 3));
+  const ridge = mono(scene.audio.bands);
+  const bass = Math.max(0, ...ridge.slice(0, 3));
   state.phase = stepOutrun(state.phase, scene.dt, track.playing);
   const hz = (h * 17) / 30;
   const sky = ctx.createLinearGradient(0, 0, 0, hz);
@@ -494,7 +494,6 @@ export function paintOutrun(scene: Scene): void {
   }
   ctx.restore();
 
-  const ridge = resample(row1, RIDGE_POINTS);
   ctx.fillStyle = rgba(OUT.mountain);
   const ridgeLine = (drop: number) =>
     polyline(
@@ -645,10 +644,7 @@ export function paintRackEq(scene: Scene): void {
   ctx.fillStyle = rgba(RACK.window);
   ctx.fill();
   const [left, right] = channels(scene.audio.bands);
-  const values = [
-    ...resample(left, RACK_BANDS),
-    ...resample(right, RACK_BANDS),
-  ];
+  const values = [...left, ...right];
   state.peaks = updatePeaks(state.peaks, values, scene.now, scene.dt, 600, 0.6);
   const pitch = row * 0.42;
   const segments = Math.max(Math.floor((wh - row * 2.4) / pitch), 3);

@@ -17,7 +17,6 @@ import {
   mono,
   type Point,
   Projection,
-  resample,
   stepMeter,
   stripColour,
   type Style,
@@ -122,7 +121,7 @@ function lane(b: number): [number, number] {
 function paintHeadUnit(scene: Scene): void {
   const { ctx, w, h, state } = scene;
   if (w < 120 || h < 60) return;
-  const live = resample(mono(scene.audio.bands), HEAD_UNIT_BANDS);
+  const live = mono(scene.audio.bands);
   state.meter = stepMeter(state.meter, live, scene.dt);
   const { row, col, px } = grid(h);
   ctx.fillStyle = rgba(CHROME.bg);
