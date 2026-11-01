@@ -333,6 +333,18 @@ The lyrics, the visualizer, cover art, the queue and the mini player can leave f
 - `Alt+d` refuses a new pane when it, or the main layout, would be too small for the terminal. If the window becomes smaller than a saved layout needs, the panes hide and the main layout takes the whole window. They come back when the window is large enough. While they hide, `Alt+x` closes one hidden pane at a time.
 - `Alt+x` with the focus on the main layout hides it, when at least one pane is open. The search box, the help button and the settings button stay in a row above the panes, and the playbar stays in its usual place. The main layout comes back when a key opens a new screen in it, for example a search or a jump to an album, or when you press `Alt+0`.
 
+### Panes in the desktop app and the browser GUI
+
+The GUI has its own layout, saved as `gui_pane_layout` in `state.yml`. The Now Playing panel and the queue are panes there, and the lyrics, the visualizer and the cover art can join them.
+
+- The button at the top right of the Lyrics and Visualizer pages, and the panel button in the Now Playing header for the cover art, open that view as a pane.
+- Drag a pane by its header. A highlighted box shows where it will go: along an edge of the window, along an edge of another pane, or, in the middle of another pane, in its place. Release anywhere else and the pane floats over the page. A red box means there is not enough room, and the drop does nothing. `Esc` cancels a drag.
+- Drag the line between two panes to resize them. It snaps to 25, 33, 50, 67 and 75 percent. A double-click sets 50 percent; arrow keys on a focused line move it.
+- When a pane is docked beside the main view, the library button in the top bar hides the main view and the panes take its room. The same button, a new page, or `Alt+0` shows it again. `close_pane` with the focus in the main view hides it too.
+- Drag the dots at the top of the top bar or the player bar to move the bar to another edge of the window. On the left or the right, the top bar becomes a column of icons and the player bar a column with the cover on top. The arrow keys on the focused dots do the same.
+- The pane keys `detach_pane`, `close_pane`, `focus_pane_*` and `reset_panes` work in the GUI too. In a browser tab the browser can take `Alt` keys for itself; the desktop app gets them all.
+- Below 1101 pixels of width the panes hide and the bars go back to the top and the bottom. The saved layout stays and comes back when the window is wider.
+
 ## Other behavior keys
 
 These keys also go under `behavior:`. Defaults below are the built-in values when a key is omitted; most can also be changed in Settings.
