@@ -3,7 +3,7 @@ import type { NowPlaying } from "./bindings/NowPlaying";
 import type { ScreenStrings } from "./bindings/ScreenStrings";
 import { pageStorage } from "./commandModel";
 import { type Position, shownAt } from "./connection";
-import { EN, fmt, type GuiStrings, SCREENS_EN } from "./i18n";
+import { EN, type GuiStrings, SCREENS_EN } from "./i18n";
 import { font, freshState } from "./screenDraw";
 import {
   type Audio,
@@ -167,7 +167,6 @@ export function VisualizerScreen({
         w,
         h,
         audio: { bands: fitBands(held, bars), wave: sound.wave },
-        bars,
         track: trackAt(item, position, now),
         now,
         dt,
@@ -229,10 +228,7 @@ export function VisualizerScreen({
         <button
           type="button"
           className="list-sort"
-          title={fmt(s.label_shortcut, {
-            label: s.next_visualizer_style,
-            key: CYCLE_KEY,
-          })}
+          title={screens.visualizer_style_hint}
           aria-keyshortcuts={CYCLE_KEY}
           onClick={() => choose(nextStyle(style))}
         >

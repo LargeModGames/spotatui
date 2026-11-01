@@ -1,6 +1,5 @@
 import { clock } from "./format";
 import {
-  bandsOf,
   glowStroke,
   grid,
   polyline,
@@ -61,7 +60,7 @@ const signed = (db: number) => {
 export function paintAnalogVu(scene: Scene): void {
   const { ctx, w, h, state, dt } = scene;
   if (w < 160 || h < 100) return;
-  const [left, right] = levels(bandsOf(scene));
+  const [left, right] = levels(scene.audio.bands);
   state.needles = [
     stepNeedle(state.needles[0], left, dt),
     stepNeedle(state.needles[1], right, dt),
@@ -271,7 +270,7 @@ export function paintWinamp(scene: Scene): void {
     { bold: true },
   );
 
-  const values = resample(mono(bandsOf(scene)), WINAMP_BARS);
+  const values = resample(mono(scene.audio.bands), WINAMP_BARS);
   state.peaks = updatePeaks(state.peaks, values, scene.now, scene.dt, 300, 0.7);
   const x0 = col * 2;
   const top = row * 3.8;
@@ -462,7 +461,7 @@ export function paintOutrun(scene: Scene): void {
   const { ctx, w, h, state, track } = scene;
   if (w < 160 || h < 100) return;
   const { row, col, px } = grid(h);
-  const row1 = mono(bandsOf(scene));
+  const row1 = mono(scene.audio.bands);
   const bass = Math.max(0, ...row1.slice(0, 3));
   state.phase = stepOutrun(state.phase, scene.dt, track.playing);
   const hz = (h * 17) / 30;
@@ -646,7 +645,7 @@ export function paintRackEq(scene: Scene): void {
   roundRect(ctx, wx, wy, ww, wh, row * 0.3);
   ctx.fillStyle = rgba(RACK.window);
   ctx.fill();
-  const [left, right] = channels(bandsOf(scene));
+  const [left, right] = channels(scene.audio.bands);
   const values = [
     ...resample(left, RACK_BANDS),
     ...resample(right, RACK_BANDS),
@@ -659,6 +658,8 @@ export function paintRackEq(scene: Scene): void {
   const ladder = Math.max(step * 0.62, 2);
   const base = wy + row * 0.8 + segments * pitch;
   const labelY = wy + wh - row * 0.8;
+  const labelPx = px * 0.75;
+  const halves = labelHalves(ctx, labelPx);
   for (let channel = 0; channel < 2; channel++) {
     const startX = wx + channel * half + col * 3;
     text(
@@ -691,10 +692,10 @@ export function paintRackEq(scene: Scene): void {
         ctx.fillRect(x, base - (peak + 1) * pitch, ladder, pitch * 0.35);
       }
       const label = RACK_LABELS[b];
-      const halfLabel = labelHalves(ctx, px * 0.75)[b];
+      const halfLabel = halves[b];
       const mid = x + ladder / 2;
       if (mid - halfLabel > edge + 2) {
-        text(ctx, label, mid, labelY, RACK.label, px * 0.75, {
+        text(ctx, label, mid, labelY, RACK.label, labelPx, {
           align: "center",
         });
         edge = mid + halfLabel;
@@ -858,7 +859,7 @@ export function paintCassette(scene: Scene): void {
     }
   });
 
-  const [left, right] = levels(bandsOf(scene));
+  const [left, right] = levels(scene.audio.bands);
   const leds = clamp(Math.floor((w / col - 16) / 2), 8, 40);
   const x0 = col * 8;
   const span = w - col * 16;

@@ -144,11 +144,11 @@ export function settleBands(
     : held;
 }
 
-/** Each channel resampled to the count this page asked for: another page can ask for another. */
+/** Each channel resampled to the count this page asked for (another page can ask for another); silence rests at zero. */
 export function fitBands(bands: number[], bars: number): number[] {
   const half = Math.floor(bars / 2);
-  if (bands.length === 0 || bands.length === half * 2 || half === 0)
-    return bands;
+  if (bands.length === 0) return new Array<number>(half * 2).fill(0);
+  if (bands.length === half * 2) return bands;
   const [left, right] = channels(bands);
   return [...resample(left, half).reverse(), ...resample(right, half)];
 }

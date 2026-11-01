@@ -91,7 +91,7 @@ describe("audio", () => {
       [1, 0.5, 0],
       [1, 0.5, 0],
     ]);
-    expect(fitBands([], 40)).toEqual([]);
+    expect(fitBands([], 40)).toEqual(new Array(40).fill(0));
   });
 
   it("resamples linearly and keeps both ends", () => {

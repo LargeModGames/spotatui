@@ -1,6 +1,5 @@
 import { clock } from "./format";
 import {
-  bandsOf,
   font,
   grid,
   polyline,
@@ -51,7 +50,7 @@ export const PAINTERS: Record<Style, (scene: Scene) => void> = {
 
 function paintCava(scene: Scene): void {
   const { ctx, w, h, accent } = scene;
-  const bands = bandsOf(scene);
+  const bands = scene.audio.bands;
   const footprint = w / bands.length;
   const gap = Math.max(footprint / 3, 1);
   const bar = Math.max(footprint - gap, 1);
@@ -85,7 +84,7 @@ export function turbo(t: number): Rgb {
 
 function paintBarGraph(scene: Scene): void {
   const { ctx, w, h } = scene;
-  const bands = bandsOf(scene);
+  const bands = scene.audio.bands;
   const gradient = ctx.createLinearGradient(0, h, 0, 0);
   for (let i = 0; i <= 8; i++) gradient.addColorStop(i / 8, rgba(turbo(i / 8)));
   ctx.fillStyle = gradient;
@@ -112,10 +111,7 @@ const CHROME = {
 const GHOST = 0.1;
 const ghost = (colour: Rgb) => mix(CHROME.bg, colour, GHOST);
 const DIGITS = ledColours(CHROME.bg, [CHROME.cap, ghost(CHROME.cap)], GHOST);
-const chromeGradient = (t: number) =>
-  t < 0.5
-    ? mix(CHROME.low, CHROME.mid, t * 2)
-    : mix(CHROME.mid, CHROME.high, (t - 0.5) * 2);
+const CHIP_OFF = ghost(CHROME.high);
 
 /** The lane of band `b` across the floor. */
 function lane(b: number): [number, number] {
@@ -126,7 +122,7 @@ function lane(b: number): [number, number] {
 function paintHeadUnit(scene: Scene): void {
   const { ctx, w, h, state } = scene;
   if (w < 120 || h < 60) return;
-  const live = resample(mono(bandsOf(scene)), HEAD_UNIT_BANDS);
+  const live = resample(mono(scene.audio.bands), HEAD_UNIT_BANDS);
   state.meter = stepMeter(state.meter, live, scene.dt);
   const { row, col, px } = grid(h);
   ctx.fillStyle = rgba(CHROME.bg);
@@ -296,7 +292,7 @@ function meterColours(count: number): { lit: string; dim: string }[] {
   if (!colours) {
     const bases = Array.from({ length: count }, (_, segment) => {
       const t = segment / (count - 1);
-      return t >= 0.8 ? CHROME.hot : chromeGradient(t * 0.5);
+      return t >= 0.8 ? CHROME.hot : mix(CHROME.low, CHROME.mid, t);
     });
     colours = ledColours(CHROME.bg, bases, GHOST);
     METER_COLOURS.set(count, colours);
@@ -366,18 +362,10 @@ function chip(
     ctx.fillStyle = rgba(CHROME.high);
     ctx.fillRect(x, y - row * 0.42, width, row * 0.84);
   }
-  text(
-    ctx,
-    label,
-    x + width / 2,
-    y,
-    lit ? CHROME.bg : ghost(CHROME.high),
-    row * 0.72,
-    {
-      align: "center",
-      bold: lit,
-    },
-  );
+  text(ctx, label, x + width / 2, y, lit ? CHROME.bg : CHIP_OFF, row * 0.72, {
+    align: "center",
+    bold: lit,
+  });
 }
 
 /** The seven segments a-g of each glyph. */

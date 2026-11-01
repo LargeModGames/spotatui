@@ -28,8 +28,6 @@ export interface Scene {
   w: number;
   h: number;
   audio: Audio;
-  /** The bands the style asked for: what silence shows. */
-  bars: number;
   track: TrackView;
   /** Milliseconds, and the seconds since the last frame. */
   now: number;
@@ -118,13 +116,6 @@ export function roundRect(
   ctx.arcTo(x, y + h, x, y, k);
   ctx.arcTo(x, y, x + w, y, k);
   ctx.closePath();
-}
-
-/** The bands to draw: silence rests at the count the style asked for. */
-export function bandsOf(scene: Scene): number[] {
-  return scene.audio.bands.length > 0
-    ? scene.audio.bands
-    : new Array<number>(Math.max(scene.bars, 2)).fill(0);
 }
 
 const FLAT = [0, 0];
