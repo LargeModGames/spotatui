@@ -380,14 +380,14 @@ async fn serve_until_quit(
         }
       }
       _ = frame_clock.tick(), if visualizer.streams(publisher.visualizer_watched(), Instant::now())
-        || visualizer.screen_streams(Instant::now()) => {
+        || visualizer.screen_streams(publisher.screen_watched().is_some(), Instant::now()) => {
         let now = Instant::now();
         if visualizer.streams(publisher.visualizer_watched(), now) {
           if let Some(frame) = visualizer.frame(driver, now) {
             publisher.frame(&frame);
           }
         }
-        if let (true, Some(bars)) = (visualizer.screen_streams(now), publisher.screen_watched()) {
+        if let Some(bars) = publisher.screen_watched().filter(|_| visualizer.screen_streams(true, now)) {
           if let Some(frame) = visualizer.screen_frame(driver, bars, now) {
             publisher.screen_frame(&frame);
           }

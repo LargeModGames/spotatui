@@ -146,8 +146,9 @@ pub struct TickEnv {
 pub enum VizNeed {
   /// cava's bands, as many as the frontend's geometry fits, into `App::spectrum_data`.
   Bars(usize),
-  /// Only the capture: the frontend reads `Driver::recent_audio`, analyses it
-  /// itself and closes a failed capture to try again; no status message.
+  /// Only the capture: the frontend reads `Driver::recent_audio` or
+  /// `Driver::spectrum` itself and closes a failed capture to try again; no
+  /// status message.
   #[cfg_attr(not(feature = "gui"), allow(dead_code))]
   Samples,
 }
@@ -845,7 +846,7 @@ impl Driver {
       Some(need) => {
         // Built at the count we are about to ask for, so the first frame
         // does not immediately throw the fresh cavacore plan away. Samples
-        // alone need the smallest plan.
+        // start at the smallest plan; `Driver::spectrum` sizes it later.
         let desired_bars = match need {
           VizNeed::Bars(bars) => bars,
           VizNeed::Samples => 2,

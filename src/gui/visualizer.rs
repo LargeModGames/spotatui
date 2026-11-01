@@ -17,8 +17,8 @@ pub(crate) const AVAILABLE: bool = cfg!(any(
 
 /// About one frame for each refresh of the display.
 pub(crate) const FRAME_EVERY: Duration = Duration::from_millis(16);
-/// The capture stays open this long after the page hides the bar or the sound
-/// stops, so a short pause does not open and scan the device again.
+/// The capture stays open this long after the page hides the bar or the screen,
+/// or the sound stops, so a short pause does not open and scan the device again.
 const LINGER: Duration = Duration::from_secs(10);
 /// An open capture that brings no new audio this long while this process plays
 /// is closed and opened again, at first after this long and then twice as long
@@ -27,7 +27,7 @@ const LINGER: Duration = Duration::from_secs(10);
 const STALL: Duration = Duration::from_secs(3);
 const OPEN_LIMIT: Duration = Duration::from_secs(6);
 /// After this many stalls in a row the capture rests until a new start: another
-/// mode, the bar shown again, or the sound starting again.
+/// mode, the bar or the screen shown again, or the sound starting again.
 const MAX_STALLS: u32 = 5;
 /// Audio the player queued before a volume change still plays at the old volume this long.
 const SETTLE: Duration = Duration::from_millis(600);
@@ -271,11 +271,8 @@ impl Feed {
 
   /// Whether the screen's frame clock runs: a page shows the screen, and there
   /// is sound or its bands have yet to fall.
-  pub(crate) fn screen_streams(&self, now: Instant) -> bool {
-    self.screen_watched
-      && self.wants_capture(now)
-      && self.capturing
-      && (self.sounding || !self.screen_quiet)
+  pub(crate) fn screen_streams(&self, watched: bool, now: Instant) -> bool {
+    watched && self.wants_capture(now) && self.capturing && (self.sounding || !self.screen_quiet)
   }
 
   /// The screen's next frame: cava at `bars` bands, or one empty frame once this process stops.
@@ -294,8 +291,7 @@ impl Feed {
       let spectrum = driver.spectrum(bars)?;
       if spectrum.written != self.screen_written {
         self.screen_written = spectrum.written;
-        self.heard_at = Some(now);
-        self.stalls = 0;
+        self.heard(now);
       }
       self.screen_frame_from(&spectrum.bands, &spectrum.wave)
     }
@@ -348,8 +344,7 @@ impl Feed {
       return None;
     }
     self.written = audio.written;
-    self.heard_at = Some(now);
-    self.stalls = 0;
+    self.heard(now);
     let undo = (1.0 / volume_gain(self.volume.heard(now).min(100) as u8)).min(MAX_VOLUME_UNDO);
     audio.samples.iter_mut().for_each(|sample| *sample *= undo);
     let (levels, wave) = match self.mode {
@@ -377,6 +372,16 @@ impl Feed {
 
   fn bar_on(&self) -> bool {
     self.mode != PlayerBarVisualizer::Off
+  }
+
+  /// The capture brought new audio: it is no stall.
+  #[cfg_attr(
+    not(any(feature = "audio-viz", feature = "audio-viz-cpal")),
+    allow(dead_code)
+  )]
+  fn heard(&mut self, now: Instant) {
+    self.heard_at = Some(now);
+    self.stalls = 0;
   }
 }
 
@@ -608,7 +613,7 @@ mod tests {
     screen_seen(&mut feed, true, true, t0);
 
     assert_eq!(feed.wants_capture(t0), AVAILABLE);
-    assert_eq!(feed.screen_streams(t0), AVAILABLE);
+    assert_eq!(feed.screen_streams(true, t0), AVAILABLE);
     assert!(!feed.streams(true, t0));
   }
 
@@ -620,7 +625,7 @@ mod tests {
     screen_seen(&mut feed, true, false, t0 + LINGER / 2);
 
     assert_eq!(feed.wants_capture(t0 + LINGER / 2), AVAILABLE);
-    assert!(!feed.screen_streams(t0 + LINGER / 2));
+    assert!(!feed.screen_streams(false, t0 + LINGER / 2));
     assert!(!feed.wants_capture(t0 + LINGER));
   }
 
