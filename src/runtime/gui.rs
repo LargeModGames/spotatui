@@ -363,7 +363,13 @@ async fn serve_until_quit(
           },
         );
         // After the tick, which opens, polls or closes the capture.
-        visualizer.note(&app, plays_here(&app), publisher.visualizer_watched(), now);
+        visualizer.note(
+          &app,
+          plays_here(&app),
+          publisher.visualizer_watched(),
+          publisher.screen_watched().is_some(),
+          now,
+        );
         last_tick = now;
         publisher.publish(&app);
         publisher.tick(&app, now);
@@ -373,9 +379,18 @@ async fn serve_until_quit(
           break;
         }
       }
-      _ = frame_clock.tick(), if visualizer.streams(publisher.visualizer_watched(), Instant::now()) => {
-        if let Some(frame) = visualizer.frame(driver, Instant::now()) {
-          publisher.frame(&frame);
+      _ = frame_clock.tick(), if visualizer.streams(publisher.visualizer_watched(), Instant::now())
+        || visualizer.screen_streams(publisher.screen_watched(), Instant::now()).is_some() => {
+        let now = Instant::now();
+        if visualizer.streams(publisher.visualizer_watched(), now) {
+          if let Some(frame) = visualizer.frame(driver, now) {
+            publisher.frame(&frame);
+          }
+        }
+        if let Some(bars) = visualizer.screen_streams(publisher.screen_watched(), now) {
+          if let Some(frame) = visualizer.screen_frame(driver, bars, now) {
+            publisher.screen_frame(&frame);
+          }
         }
       }
       _ = update_checks.tick(), if update_requests.is_some() => {
@@ -427,7 +442,13 @@ async fn serve_until_quit(
           driver.run_pending_script_commands(&mut app);
           publisher.publish(&app);
           // A click on the bar changes the visualizer's mode at once.
-          visualizer.note(&app, plays_here(&app), publisher.visualizer_watched(), Instant::now());
+          visualizer.note(
+            &app,
+            plays_here(&app),
+            publisher.visualizer_watched(),
+            publisher.screen_watched().is_some(),
+            Instant::now(),
+          );
           // A changed auto-update setting reaches the updater at once.
           if let Some(check) = changed_check(last_check, &app.user_config.behavior) {
             last_check = Some(check);
@@ -438,6 +459,7 @@ async fn serve_until_quit(
         Some(
           ClientMessage::Onboarding { .. }
           | ClientMessage::Visualizer { .. }
+          | ClientMessage::VisualizerScreen { .. }
           | ClientMessage::Changelog,
         ) => {}
         Some(ClientMessage::Update { ask }) => match ask {

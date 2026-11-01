@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
-import { openWith, openWithVisualizer, shot } from "./bridge";
+import { openScreen, openWith, openWithVisualizer, shot } from "./bridge";
+import { STYLES } from "../src/screenModel";
 import {
   announcement,
   artist,
@@ -24,6 +25,7 @@ import {
   playlistSync,
   spotifyLoggedOut,
   room,
+  screenFrame,
   search,
   session,
   settings,
@@ -504,6 +506,31 @@ for (const mode of ["Spectrum", "Waveform"] as const) {
     await shot(page, `visualizer-${mode.toLowerCase()}-cover`);
   });
 }
+
+/** Opens the visualizer screen in `style` over a playing song, with the bar's setting row present. */
+const openStyle = (page: Page, style: string) =>
+  openScreen(
+    page,
+    [...playing, ...library, visualizerSetting("Spectrum")],
+    style,
+    screenFrame,
+  );
+
+for (const style of STYLES) {
+  test(`visualizer screen ${style}`, async ({ page }) => {
+    await openStyle(page, style);
+    await shot(page, `visualizer-screen-${style.toLowerCase()}`);
+  });
+}
+
+test("visualizer screen cycles its style with V", async ({ page }) => {
+  await openStyle(page, "Cassette");
+  const style = page.getByRole("combobox", { name: "Visualizer style" });
+  await expect(style).toHaveValue("Cassette");
+  await page.getByRole("button", { name: "Next style" }).focus();
+  await page.keyboard.press("Shift+V");
+  await expect(style).toHaveValue("Cava");
+});
 
 test("library folders", async ({ page }) => {
   await openWith(page, [...playing, ...libraryFolders]);

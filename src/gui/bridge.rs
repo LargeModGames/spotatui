@@ -32,6 +32,9 @@ pub(crate) struct Link {
   window: bool,
   frames: watch::Receiver<Option<Arc<str>>>,
   watchers: Arc<AtomicUsize>,
+  screen_frames: watch::Receiver<Option<Arc<str>>>,
+  screen_watchers: Arc<AtomicUsize>,
+  screen_bars: Arc<AtomicUsize>,
 }
 
 impl Link {
@@ -85,6 +88,10 @@ pub(crate) struct Publisher {
   frames: watch::Sender<Option<Arc<str>>>,
   /// The sockets that show the visualizer.
   watchers: Arc<AtomicUsize>,
+  /// The visualizer screen's frames, its watchers, and the bands the newest ask wants.
+  screen_frames: watch::Sender<Option<Arc<str>>>,
+  screen_watchers: Arc<AtomicUsize>,
+  screen_bars: Arc<AtomicUsize>,
   /// The Home page's lines as last pushed: they have no revision of their own.
   welcome: Option<protocol::WelcomePayload>,
 }
@@ -114,6 +121,9 @@ pub(crate) fn channel(
   let (inbox, messages) = mpsc::unbounded_channel();
   let (frames, frame) = watch::channel(None);
   let watchers = Arc::new(AtomicUsize::new(0));
+  let (screen_frames, screen_frame) = watch::channel(None);
+  let screen_watchers = Arc::new(AtomicUsize::new(0));
+  let screen_bars = Arc::new(AtomicUsize::new(0));
   let now = Instant::now();
   let publisher = Publisher {
     pushes: pushes.clone(),
@@ -123,6 +133,9 @@ pub(crate) fn channel(
     alone_since: None,
     frames,
     watchers: Arc::clone(&watchers),
+    screen_frames,
+    screen_watchers: Arc::clone(&screen_watchers),
+    screen_bars: Arc::clone(&screen_bars),
     welcome: None,
   };
   (
@@ -134,6 +147,9 @@ pub(crate) fn channel(
       window,
       frames: frame,
       watchers,
+      screen_frames: screen_frame,
+      screen_watchers,
+      screen_bars,
     },
     publisher,
     messages,
@@ -185,6 +201,19 @@ impl Publisher {
       .frames
       .send_replace(Some(protocol::encode(message).into()));
   }
+
+  /// The bands the visualizer screen wants, while a page shows it.
+  pub(crate) fn screen_watched(&self) -> Option<usize> {
+    (self.screen_watchers.load(Ordering::Relaxed) > 0)
+      .then(|| self.screen_bars.load(Ordering::Relaxed))
+  }
+
+  /// Offer a frame to the pages that show the visualizer screen.
+  pub(crate) fn screen_frame(&self, message: &ServerMessage) {
+    self
+      .screen_frames
+      .send_replace(Some(protocol::encode(message).into()));
+  }
 }
 
 async fn resync(app: &SharedApp, language: Option<Language>) -> Vec<ServerMessage> {
@@ -208,6 +237,8 @@ where
   let mut apps = link.app.clone();
   let mut frames = link.frames.clone();
   let mut watching = None;
+  let mut screen_frames = link.screen_frames.clone();
+  let mut screen_watching = None;
   let app = apps.borrow_and_update().clone();
   let (revisions, language) = match app {
     Some(app) => {
@@ -260,6 +291,14 @@ where
           }
         }
       }
+      Ok(()) = screen_frames.changed(), if screen_watching.is_some() => {
+        let frame = screen_frames.borrow_and_update().clone();
+        if let Some(frame) = frame {
+          if sink.send(WsMessage::text(frame.to_string())).await.is_err() {
+            return;
+          }
+        }
+      }
       incoming = stream.next() => match incoming {
         Some(Ok(WsMessage::Text(text))) => match serde_json::from_str::<ClientMessage>(&text) {
           // Answered here: boot waits on it before the tick loop exists.
@@ -272,6 +311,16 @@ where
               // A frame from before the page asked is stale.
               frames.borrow_and_update();
               watching = Some(Watching::new(&link.watchers));
+            }
+          }
+          Ok(ClientMessage::VisualizerScreen { bars: None }) => screen_watching = None,
+          Ok(ClientMessage::VisualizerScreen { bars: Some(bars) }) => {
+            link
+              .screen_bars
+              .store(usize::from(bars), Ordering::Relaxed);
+            if screen_watching.is_none() {
+              screen_frames.borrow_and_update();
+              screen_watching = Some(Watching::new(&link.screen_watchers));
             }
           }
           // Only the page that asked gets the 240 KB answer.
@@ -383,61 +432,107 @@ pub(crate) mod tests {
     assert_eq!(routes, 2, "{frames:?}");
   }
 
-  #[tokio::test]
-  async fn a_socket_gets_visualizer_frames_only_while_its_page_shows_the_visualizer() {
+  type Client = WebSocketStream<tokio::io::DuplexStream>;
+
+  /// A page socket that `link` serves, past its first message.
+  async fn connected(link: Link) -> Client {
     use tokio_tungstenite::tungstenite::protocol::Role;
-    let (link, publisher, _inbox) = booted(shared_app());
     let (server_end, client_end) = tokio::io::duplex(1 << 20);
     let server = WebSocketStream::from_raw_socket(server_end, Role::Server, None).await;
     let mut client = WebSocketStream::from_raw_socket(client_end, Role::Client, None).await;
     tokio::spawn(run_socket(server, link, None));
     client.next().await.unwrap().unwrap();
-    async fn frames_after(
-      client: &mut WebSocketStream<tokio::io::DuplexStream>,
-      publisher: &Publisher,
-      ask: &str,
-      watched: bool,
-    ) -> Vec<String> {
-      client.send(WsMessage::text(ask)).await.unwrap();
-      let deadline = Instant::now() + Duration::from_secs(2);
-      while publisher.visualizer_watched() != watched {
-        assert!(Instant::now() < deadline, "the socket never took {ask}");
-        tokio::time::sleep(Duration::from_millis(1)).await;
-      }
-      publisher.frame(&protocol::visualizer(&[1.0], &[]));
-      let mut frames = Vec::new();
-      while let Ok(Some(Ok(frame))) =
-        tokio::time::timeout(Duration::from_millis(300), client.next()).await
-      {
-        let text = frame.to_text().unwrap().to_string();
-        if text.contains("\"kind\":\"visualizer\"") {
-          frames.push(text);
-        }
-      }
-      frames
+    client
+  }
+
+  /// Sends `ask` and waits until `taken` says the socket handled it.
+  async fn ask(client: &mut Client, ask: &str, taken: impl Fn() -> bool) {
+    client.send(WsMessage::text(ask)).await.unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !taken() {
+      assert!(Instant::now() < deadline, "the socket never took {ask}");
+      tokio::time::sleep(Duration::from_millis(1)).await;
     }
+  }
+
+  /// The visualizer frames of either kind that arrive within 300 ms.
+  async fn visualizer_frames(client: &mut Client) -> Vec<String> {
+    let mut frames = Vec::new();
+    while let Ok(Some(Ok(frame))) =
+      tokio::time::timeout(Duration::from_millis(300), client.next()).await
+    {
+      let text = frame.to_text().unwrap().to_string();
+      if text.contains("\"kind\":\"visualizer") {
+        frames.push(text);
+      }
+    }
+    frames
+  }
+
+  #[tokio::test]
+  async fn a_socket_gets_visualizer_frames_only_while_its_page_shows_the_visualizer() {
+    let (link, publisher, _inbox) = booted(shared_app());
+    let mut client = connected(link).await;
 
     // Offered before the page asked: stale by the time it does.
     publisher.frame(&protocol::visualizer(&[0.5], &[]));
-    let shown = frames_after(
-      &mut client,
-      &publisher,
-      r#"{"type":"visualizer","on":true}"#,
-      true,
-    )
+    ask(&mut client, r#"{"type":"visualizer","on":true}"#, || {
+      publisher.visualizer_watched()
+    })
     .await;
-    let hidden = frames_after(
-      &mut client,
-      &publisher,
-      r#"{"type":"visualizer","on":false}"#,
-      false,
-    )
+    publisher.frame(&protocol::visualizer(&[1.0], &[]));
+    let shown = visualizer_frames(&mut client).await;
+    ask(&mut client, r#"{"type":"visualizer","on":false}"#, || {
+      !publisher.visualizer_watched()
+    })
     .await;
+    publisher.frame(&protocol::visualizer(&[1.0], &[]));
+    let hidden = visualizer_frames(&mut client).await;
 
     assert_eq!(
       shown,
       [protocol::encode(&protocol::visualizer(&[1.0], &[]))]
     );
     assert!(hidden.is_empty(), "{hidden:?}");
+  }
+
+  #[tokio::test]
+  async fn the_screen_gets_its_own_frames_at_the_band_count_it_asked_for() {
+    let (link, publisher, _inbox) = booted(shared_app());
+    let mut client = connected(link).await;
+    let offer = || {
+      publisher.frame(&protocol::visualizer(&[1.0], &[]));
+      publisher.screen_frame(&protocol::visualizer_screen(&[1.0], &[]));
+    };
+
+    ask(
+      &mut client,
+      r#"{"type":"visualizer_screen","bars":24}"#,
+      || publisher.screen_watched() == Some(24),
+    )
+    .await;
+    offer();
+    let shown = visualizer_frames(&mut client).await;
+    ask(
+      &mut client,
+      r#"{"type":"visualizer_screen","bars":40}"#,
+      || publisher.screen_watched() == Some(40),
+    )
+    .await;
+    ask(
+      &mut client,
+      r#"{"type":"visualizer_screen","bars":null}"#,
+      || publisher.screen_watched().is_none(),
+    )
+    .await;
+    offer();
+    let hidden = visualizer_frames(&mut client).await;
+
+    assert_eq!(
+      shown,
+      [protocol::encode(&protocol::visualizer_screen(&[1.0], &[]))]
+    );
+    assert!(hidden.is_empty(), "{hidden:?}");
+    assert!(!publisher.visualizer_watched());
   }
 }

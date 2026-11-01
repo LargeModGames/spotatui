@@ -61,7 +61,9 @@ import { Stats } from "./Stats";
 import { Toast } from "./Toast";
 import { TopBar } from "./TopBar";
 import { TrackActionsContext, type TrackActions } from "./TrackMenu";
+import type { ScreenFeed } from "./screenModel";
 import { VISUALIZER_SETTING } from "./visualizerModel";
+import { VisualizerScreen } from "./VisualizerScreen";
 
 const NO_DEVICES: DeviceInfo[] = [];
 /** A search that got no answer stops showing "Searching…" after this long. */
@@ -80,6 +82,7 @@ export function Shell({
   onWindow,
   onQuit,
   watchVisualizer,
+  visualizerScreen,
   coverSrc,
   askChangelog,
 }: {
@@ -91,6 +94,7 @@ export function Shell({
   onWindow: ((mode: WindowMode) => void) | null;
   onQuit: () => void;
   watchVisualizer?: WatchVisualizer;
+  visualizerScreen?: ScreenFeed;
   coverSrc?: CoverSrc;
   /** Asks the server for the changelog the Home page shows. */
   askChangelog: () => void;
@@ -422,6 +426,18 @@ export function Shell({
         queue={queue ?? null}
         active={page === "party"}
         send={send}
+      />
+    ),
+    visualizer: (
+      <VisualizerScreen
+        s={s}
+        screens={state.localization?.strings.screens}
+        item={playback?.item ?? null}
+        position={state.position}
+        active={page === "visualizer" && !room}
+        // The player bar's setting row is offered only where the build can capture.
+        available={choice(VISUALIZER_SETTING) !== null}
+        feed={visualizerScreen}
       />
     ),
     health: (

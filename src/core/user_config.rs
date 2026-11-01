@@ -213,6 +213,7 @@ pub struct UserTheme {
 
 /// Available audio visualizer styles
 #[derive(Clone, Copy, Debug, PartialEq, Default, Serialize, Deserialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub enum VisualizerStyle {
   /// Cava mode: cava's engine and mirrored stereo layout drawn in eighth blocks
   ///

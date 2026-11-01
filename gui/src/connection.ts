@@ -4,6 +4,8 @@ import type { OnboardingView } from "./bindings/OnboardingView";
 import type { ServerMessage } from "./bindings/ServerMessage";
 import type { WelcomePayload } from "./bindings/WelcomePayload";
 import { applyChannel, type Channels } from "./store";
+import type { ScreenFrame } from "./bindings/ScreenFrame";
+import type { ScreenFeed } from "./screenModel";
 import type { Frame } from "./visualizerModel";
 
 const TOKEN_KEY = "spotatui.token";
@@ -60,7 +62,8 @@ function playingOf(channels: Channels): Playing {
   return { uri: item?.uri ?? null, playing: item?.is_playing ?? false };
 }
 
-function shownAt(
+/** The position at `now`; null before the first tick. */
+export function shownAt(
   position: Position | null,
   playing: boolean,
   now: number,
@@ -140,6 +143,10 @@ export class Connection {
   private readonly listeners = new Set<() => void>();
   /** Visualizer frames skip the state: dozens a second must not re-render the page. */
   private readonly viewers = new Set<(frame: Frame) => void>();
+  private readonly screenViewers = new Set<
+    (frame: Frame<ScreenFrame>) => void
+  >();
+  private screenBars = 0;
   private code: string | null;
   private readonly open: Open;
   private readonly storage: Pick<Storage, "getItem" | "setItem">;
@@ -207,6 +214,29 @@ export class Connection {
     };
   };
 
+  /** The visualizer screen's frames; the server sends them while one listens and a count is known. */
+  readonly screen: ScreenFeed = {
+    watch: (listener) => {
+      this.screenViewers.add(listener);
+      if (this.screenViewers.size === 1) this.askScreen();
+      return () => {
+        this.screenViewers.delete(listener);
+        if (this.screenViewers.size === 0)
+          this.send({ type: "visualizer_screen", bars: null });
+      };
+    },
+    bars: (count) => {
+      if (count === this.screenBars) return;
+      this.screenBars = count;
+      if (this.screenViewers.size > 0) this.askScreen();
+    },
+  };
+
+  private askScreen(): void {
+    if (this.screenBars > 0)
+      this.send({ type: "visualizer_screen", bars: this.screenBars });
+  }
+
   /** Asks the server for the changelog; the answer lands in `changelog`. */
   askChangelog = (): void => this.send({ type: "changelog" });
 
@@ -228,10 +258,16 @@ export class Connection {
         });
         // The server keeps the ask per socket, so a new socket asks again.
         if (this.viewers.size > 0) this.send({ type: "visualizer", on: true });
+        if (this.screenViewers.size > 0) this.askScreen();
         return;
       case "visualizer": {
         const frame = { payload: message.payload, at: this.now() };
         this.viewers.forEach((viewer) => viewer(frame));
+        return;
+      }
+      case "visualizer_screen": {
+        const frame = { payload: message.payload, at: this.now() };
+        this.screenViewers.forEach((viewer) => viewer(frame));
         return;
       }
       case "welcome":
