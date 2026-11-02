@@ -302,6 +302,17 @@ fn handle_string_edit(key: Key, app: &mut App) {
           return;
         }
 
+        if let Some(error) = (setting.id == "behavior.streaming_audio_cache_limit")
+          .then(|| crate::core::user_config::parse_audio_cache_limit(&new_value))
+          .and_then(Result::err)
+        {
+          app.handle_error_with_message(
+            anyhow::anyhow!("Invalid audio cache limit: {error}"),
+            strings.invalid_audio_cache_limit.to_string(),
+          );
+          return;
+        }
+
         let automatic_dither = setting.id == "theme.cover_art_dither_color"
           && (new_value.trim().is_empty() || new_value.trim().eq_ignore_ascii_case("auto"));
         if matches!(setting.value, SettingValue::Color(_)) && !automatic_dither {
@@ -656,6 +667,42 @@ mod tests {
       .iter()
       .position(|setting| setting.id == id)
       .unwrap_or_else(|| panic!("expected a {id} setting"))
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn audio_cache_limit_edit_rejects_invalid_sizes_and_keeps_the_previous_value() {
+    let mut app = App::default_connected();
+    open_settings(&mut app);
+    let index = setting_index(&app, "behavior.streaming_audio_cache_limit");
+    app.view.settings_selected_index = index;
+
+    handler(Key::Enter, &mut app);
+    app.view.settings_edit_buffer = "1G".to_string();
+    handler(Key::Enter, &mut app);
+    assert_eq!(
+      app.settings_items[index].value,
+      SettingValue::String("1G".to_string())
+    );
+    app.apply_settings_changes();
+    assert_eq!(app.user_config.behavior.streaming_audio_cache_limit, "1G");
+
+    handler(Key::Enter, &mut app);
+    app.view.settings_edit_buffer = "abc".to_string();
+    handler(Key::Enter, &mut app);
+
+    assert_eq!(app.get_current_route().id, RouteId::Error);
+    assert_eq!(
+      app.api_error(),
+      app.strings().settings.invalid_audio_cache_limit
+    );
+    assert_eq!(
+      app.settings_items[index].value,
+      SettingValue::String("1G".to_string())
+    );
+    assert_eq!(app.user_config.behavior.streaming_audio_cache_limit, "1G");
+    assert!(app.view.settings_edit_mode);
+    assert_eq!(app.view.settings_edit_buffer, "abc");
   }
 
   #[cfg(feature = "soloist")]

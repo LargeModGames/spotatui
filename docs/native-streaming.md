@@ -35,13 +35,19 @@ behavior:
 ```
 
 The same section holds `enable_streaming`, `streaming_device_name` (the name
-in the Connect device list), `streaming_audio_cache` and `streaming_autoplay`.
+in the Connect device list), `streaming_audio_cache`, `streaming_audio_cache_limit`
+and `streaming_autoplay`.
 Set `streaming_autoplay: false` to disable Spotify's related-songs autoplay;
 restart spotatui for the change to take effect.
 Autoplay is per device, so this applies only to the spotatui Connect device,
 not your phone or other Connect devices. The bitrate setting controls
 the librespot native player directly; the Spotify app may still describe a
 Connect device's quality as "Automatic".
+`streaming_audio_cache_limit` caps the audio cache at a size like `1G` (K/M/G
+suffixes or a bare byte count; empty or `0` means unlimited). It applies only
+when `streaming_audio_cache` is enabled. The cache is pruned to the limit on
+startup and as new audio is written; the change applies after a restart.
+This limit is for the librespot player; Soloist keeps its own fixed cache cap.
 The Spotify login and the audio cache are stored in the app cache
 directory, for example `$XDG_CACHE_HOME/spotatui/streaming_cache` when
 `XDG_CACHE_HOME` is set to an absolute path, or

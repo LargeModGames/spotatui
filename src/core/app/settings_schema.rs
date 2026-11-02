@@ -109,6 +109,7 @@ pub(crate) fn setting_requirement(id: &str) -> Requirement {
     | "behavior.streaming_device_name"
     | "behavior.streaming_bitrate"
     | "behavior.streaming_audio_cache"
+    | "behavior.streaming_audio_cache_limit"
     | "behavior.streaming_autoplay"
     | "behavior.playback_engine"
     | "behavior.soloist_path"
@@ -532,6 +533,23 @@ impl App {
           .behavior_streaming_audio_cache_description
           .to_string(),
         value: SettingValue::Bool(self.user_config.behavior.streaming_audio_cache),
+      },
+      #[cfg(feature = "streaming")]
+      SettingItem {
+        id: "behavior.streaming_audio_cache_limit".to_string(),
+        name: strings
+          .behavior_streaming_audio_cache_limit_name
+          .to_string(),
+        description: strings
+          .behavior_streaming_audio_cache_limit_description
+          .to_string(),
+        value: SettingValue::String(
+          self
+            .user_config
+            .behavior
+            .streaming_audio_cache_limit
+            .clone(),
+        ),
       },
       #[cfg(feature = "streaming")]
       SettingItem {
