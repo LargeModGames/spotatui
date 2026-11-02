@@ -35,7 +35,12 @@ impl Network {
   /// playlist cannot be classified as another user's, so the librespot
   /// fallback would never run. A failed load only leaves that classification
   /// `Unknown`, the same as before, so it must not fail the caller.
-  pub(crate) async fn ensure_user_loaded(&self) {
+  ///
+  /// The CLI's synchronous path, like `resolve_liked_state_now`: not an
+  /// `IoEvent`, so it skips the pump's lanes and auth gate (the CLI requires a
+  /// session before it gets here) and keeps only the shared funnel. A
+  /// frontend loads the profile through `IoEvent::GetUser` instead.
+  pub(super) async fn ensure_user_loaded(&self) {
     if self.app.lock().await.user().is_some() {
       return;
     }
