@@ -179,6 +179,12 @@ pub async fn handle_matches(
 
       cli.get_status(format.to_string()).await
     }
+    "list" if matches.contains_id("playlist-tracks") => {
+      let format = matches.get_one::<String>("format").unwrap();
+      let uri = matches.get_one::<String>("playlist-tracks").unwrap();
+      let limit = matches.get_one::<String>("limit").map(String::as_str);
+      cli.list_playlist_tracks(uri, format, limit).await
+    }
     "list" => {
       let format = matches.get_one::<String>("format").unwrap().to_string();
 
@@ -310,6 +316,16 @@ mod tests {
     assert_eq!(plan("search", &["queen", "--tracks"]), NOTHING);
     assert_eq!(plan("list", &["--playlists"]), NOTHING);
     assert_eq!(plan("list", &["--liked"]), NOTHING);
+    assert_eq!(
+      plan(
+        "list",
+        &[
+          "--playlist-tracks",
+          "spotify:playlist:37i9dQZF1DXcBWIGoYBM5M"
+        ]
+      ),
+      NOTHING
+    );
   }
 
   #[test]

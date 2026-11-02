@@ -166,6 +166,8 @@ pub enum FormatType {
   /// CLI paths (current-playback item, search results).
   TrackInfo(Box<crate::core::plugin_api::TrackInfo>),
   Episode(Box<FullEpisode>),
+  /// Domain episode (a podcast episode inside a playlist).
+  EpisodeInfo(Box<crate::core::plugin_api::EpisodeInfo>),
   /// Domain variants — used by search results and other migrated paths.
   AlbumInfo(Box<crate::core::plugin_api::AlbumInfo>),
   ArtistInfo(Box<crate::core::plugin_api::ArtistInfo>),
@@ -233,6 +235,15 @@ impl Format {
           Self::Track(e.name),
           Self::Uri(uri),
         ]
+      }
+      FormatType::EpisodeInfo(e) => {
+        // A playlist's episode may come without its show's name; an empty one
+        // renders as `None` (no %h value), not a blank show.
+        let mut values = vec![Self::Track(e.name), Self::Uri(e.uri.unwrap_or_default())];
+        if !e.show_name.is_empty() {
+          values.insert(0, Self::Show(e.show_name));
+        }
+        values
       }
       FormatType::AlbumInfo(a) => {
         let joined_artists = a

@@ -75,10 +75,15 @@ spotatui play --playlist --name "Your Playlist" --random
 | `-d, --devices` | List devices |
 | `-p, --playlists` | List your playlists |
 | `--liked` | List your liked songs |
-| `--limit <1-50>` | Maximum results |
+| `--playlist-tracks <URI>` | List the tracks of a playlist, given its `spotify:playlist:` URI or `open.spotify.com/playlist/` link |
+| `--limit <N>` | Maximum results: 1-50, or any number of tracks with `--playlist-tracks` |
+
+With `--playlist-tracks`, every track of the playlist is listed unless `--limit` stops it earlier, and the default format is `%t - %a (%u)`. A playlist episode fills `%t` with its name and `%h` with its show.
 
 ```bash
 spotatui list --liked --limit 50
+spotatui list --playlist-tracks spotify:playlist:37i9dQZF1DXcBWIGoYBM5M --format '%t - %a'
+spotatui list --playlist-tracks "https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M?si=abc" --limit 20
 ```
 
 ## `search` (alias `s`)
