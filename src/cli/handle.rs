@@ -473,6 +473,146 @@ mod tests {
     seen
   }
 
+  const PLAYLIST_URI: &str = "spotify:playlist:37i9dQZF1DXcBWIGoYBM5M";
+
+  /// One `playlists/{id}/items` page holding a track per name.
+  fn playlist_page(names: &[&str]) -> String {
+    use crate::core::test_helpers::full_track;
+    use rspotify::model::{page::Page, playlist::PlaylistItem, PlayableItem};
+    let page = Page {
+      href: String::new(),
+      items: names
+        .iter()
+        .enumerate()
+        .map(|(index, name)| PlaylistItem {
+          item: Some(PlayableItem::Track(full_track(
+            &format!("{index:022}"),
+            name,
+          ))),
+          ..Default::default()
+        })
+        .collect(),
+      limit: names.len() as u32,
+      next: None,
+      offset: 0,
+      previous: None,
+      total: names.len() as u32,
+    };
+    serde_json::to_string(&page).unwrap()
+  }
+
+  /// Runs `list` with `args` against a server that answers every request with
+  /// `status` and `body`, and hands back the result and the request lines.
+  async fn list_against(
+    args: &[&str],
+    status: &'static str,
+    body: String,
+  ) -> (Result<String>, Vec<String>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}/v1/", listener.local_addr().unwrap());
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let server_seen = Arc::clone(&seen);
+    let server = tokio::spawn(async move {
+      loop {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let request = read_http_request(&mut stream).await;
+        let line = request.lines().next().unwrap_or_default().to_string();
+        server_seen.lock().unwrap().push(line);
+        let response = format!(
+          "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+          body.len()
+        );
+        stream.write_all(response.as_bytes()).await.unwrap();
+      }
+    });
+    let (net, _state_dir, _fake) = cli_network(base_url);
+    let matches = crate::cli::list_subcommand()
+      .try_get_matches_from(std::iter::once("list").chain(args.iter().copied()))
+      .unwrap();
+    let result = handle_matches(&matches, "list".to_string(), net, UserConfig::new()).await;
+    server.abort();
+    let seen = seen.lock().unwrap().clone();
+    (result, seen)
+  }
+
+  #[tokio::test]
+  async fn playlist_tracks_prints_each_track_in_the_given_format() {
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+      let (result, seen) = list_against(
+        &[
+          "--playlist-tracks",
+          PLAYLIST_URI,
+          "-f",
+          "%t | %a",
+          "--limit",
+          "2",
+        ],
+        "200 OK",
+        playlist_page(&["One", "Two"]),
+      )
+      .await;
+
+      assert_eq!(result.unwrap(), "One | Test Artist\nTwo | Test Artist");
+      assert_eq!(seen.len(), 1, "{seen:?}");
+      assert!(seen[0].contains("/items?limit=2&offset=0"), "{seen:?}");
+    })
+    .await
+    .expect("playlist tracks test timed out");
+  }
+
+  #[tokio::test]
+  async fn playlist_tracks_says_so_when_the_playlist_is_empty() {
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+      let (result, _) = list_against(
+        &["--playlist-tracks", PLAYLIST_URI],
+        "200 OK",
+        playlist_page(&[]),
+      )
+      .await;
+
+      assert_eq!(result.unwrap(), "No tracks found");
+    })
+    .await
+    .expect("empty playlist test timed out");
+  }
+
+  #[tokio::test]
+  async fn playlist_tracks_fails_the_command_when_spotify_fails() {
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+      let (result, _) = list_against(
+        &["--playlist-tracks", PLAYLIST_URI],
+        "500 Internal Server Error",
+        r#"{"error":{"status":500,"message":"boom"}}"#.to_string(),
+      )
+      .await;
+
+      assert!(result.is_err());
+    })
+    .await
+    .expect("failed playlist test timed out");
+  }
+
+  #[tokio::test]
+  async fn playlist_tracks_refuses_a_zero_limit_before_any_request() {
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+      let (result, seen) = list_against(
+        &["--playlist-tracks", PLAYLIST_URI, "--limit", "0"],
+        "200 OK",
+        playlist_page(&["One"]),
+      )
+      .await;
+
+      let error = result.unwrap_err().to_string();
+      assert!(
+        error.contains("limit must be a number of tracks"),
+        "{error}"
+      );
+      assert!(seen.is_empty(), "{seen:?}");
+    })
+    .await
+    .expect("zero limit test timed out");
+  }
+
   #[tokio::test]
   async fn the_device_list_fetches_the_devices_and_not_the_playback() {
     tokio::time::timeout(std::time::Duration::from_secs(30), async {
