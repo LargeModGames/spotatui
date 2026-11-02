@@ -39,7 +39,7 @@ impl Network {
     if self.app.lock().await.user().is_some() {
       return;
     }
-    match super::requests::spotify_get_typed_for::<PrivateUser>("me", &[]).await {
+    match self.spotify_get_typed::<PrivateUser>("me", &[]).await {
       Ok(user) => *self.app.lock().await.user_mut() = Some(user_info(user)),
       Err(error) => log::debug!("profile unavailable for playlist access checks: {error}"),
     }
