@@ -454,12 +454,6 @@ fn playlist_read_page_size(collected: usize, max: Option<u32>, page_size: u32) -
   (remaining > 0).then(|| remaining.min(page_size as usize) as u32)
 }
 
-/// The offset of the page after `offset`, or `None` when Spotify names no next
-/// page. A zero `limit` would ask for the same page forever, so it ends the read.
-fn next_playlist_read_offset(offset: u32, limit: u32, has_next: bool) -> Option<u32> {
-  (has_next && limit > 0).then(|| offset.saturating_add(limit))
-}
-
 impl Network {
   /// Every playable item of a playlist in order, or only the first `max`.
   ///
@@ -476,15 +470,7 @@ impl Network {
     let mut items = Vec::new();
     let mut offset = 0;
     while let Some(limit) = playlist_read_page_size(items.len(), max, page_size) {
-      let page = match fetch_playlist_tracks_page(
-        &self.app,
-        playlist_id,
-        offset,
-        limit,
-        &self.external_playlist_fallbacks,
-      )
-      .await
-      {
+      let page = match self.read_playlist_page(playlist_id, offset, limit).await {
         Ok(page) => page.into_domain(),
         Err(PlaylistPageError::UnsupportedExternal) => {
           let strings = self.app.lock().await.strings();
@@ -495,7 +481,7 @@ impl Network {
         }
         Err(PlaylistPageError::Request(error)) => return Err(error),
       };
-      let next = next_playlist_read_offset(page.offset, page.limit, page.next.is_some());
+      let next = playlist_page_next_offset(&page, offset);
       items.extend(page.items.into_iter().map(|(_, item)| item));
       match next {
         Some(next) => offset = next,
@@ -506,6 +492,38 @@ impl Network {
       items.truncate(max as usize);
     }
     Ok(items)
+  }
+
+  /// One page of the read. A 403 is classified against the user's own id, which
+  /// the CLI has not loaded, so a 403 without it loads the profile and asks
+  /// again: only then can another user's playlist reach the librespot fallback.
+  /// The profile costs a request only on that path, never on a normal read.
+  async fn read_playlist_page(
+    &self,
+    playlist_id: &PlaylistId<'_>,
+    offset: u32,
+    limit: u32,
+  ) -> Result<PlaylistTracksPage, PlaylistPageError> {
+    let fetch = || {
+      fetch_playlist_tracks_page(
+        &self.app,
+        playlist_id,
+        offset,
+        limit,
+        &self.external_playlist_fallbacks,
+      )
+    };
+    let result = fetch().await;
+    let forbidden =
+      matches!(&result, Err(PlaylistPageError::Request(error)) if is_forbidden_error(error));
+    if !forbidden || self.app.lock().await.user().is_some() {
+      return result;
+    }
+    self.ensure_user_loaded().await;
+    if self.app.lock().await.user().is_none() {
+      return result;
+    }
+    fetch().await
   }
 }
 
@@ -2208,22 +2226,6 @@ mod tests {
     assert_eq!(playlist_read_page_size(25, Some(20), 50), None);
   }
 
-  #[test]
-  fn a_playlist_read_moves_to_the_next_page_while_spotify_names_one() {
-    assert_eq!(next_playlist_read_offset(0, 50, true), Some(50));
-    assert_eq!(next_playlist_read_offset(50, 20, true), Some(70));
-  }
-
-  #[test]
-  fn a_playlist_read_ends_on_the_last_page() {
-    assert_eq!(next_playlist_read_offset(100, 50, false), None);
-  }
-
-  #[test]
-  fn a_page_with_a_zero_limit_ends_the_read_instead_of_looping() {
-    assert_eq!(next_playlist_read_offset(0, 0, true), None);
-  }
-
   /// A `playlists/{id}/items` page of tracks named after their ids.
   fn playlist_items_body(offset: u32, total: u32, ids: &[&str], has_next: bool) -> String {
     use crate::core::test_helpers::full_track;
@@ -2336,6 +2338,93 @@ mod tests {
     let seen = server.await.unwrap();
     assert_eq!(seen.len(), 1);
     assert!(seen[0].contains("limit=1"), "{seen:?}");
+  }
+
+  #[tokio::test]
+  async fn a_forbidden_playlist_read_loads_the_profile_to_classify_another_users_playlist() {
+    use crate::infra::network::metadata::tests::read_http_request;
+    use tokio::io::AsyncWriteExt;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}/v1/", listener.local_addr().unwrap());
+    let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+    let server_seen = Arc::clone(&seen);
+    let server = tokio::spawn(async move {
+      loop {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let request = read_http_request(&mut stream).await;
+        let line = request.lines().next().unwrap_or_default().to_string();
+        let (status, body) = if line.contains("/items") {
+          (
+            "403 Forbidden",
+            r#"{"error":{"status":403,"message":"Forbidden"}}"#,
+          )
+        } else if line.contains("/me ") || line.contains("/me?") {
+          ("200 OK", r#"{"id":"me","href":"","external_urls":{}}"#)
+        } else {
+          ("200 OK", r#"{"owner":{"id":"someone-else"}}"#)
+        };
+        server_seen.lock().await.push(line);
+        let response = format!(
+          "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+          body.len()
+        );
+        stream.write_all(response.as_bytes()).await.unwrap();
+      }
+    });
+    let (network, _fake) = read_items_network(base_url);
+
+    let result = tokio::time::timeout(
+      Duration::from_secs(30),
+      network.read_playlist_items(&search_playlist_id(), None),
+    )
+    .await
+    .expect("the read must end");
+    server.abort();
+
+    // Classified as another user's playlist: the read ends on the fallback's
+    // answer (no librespot session here), not on the raw 403.
+    let error = result.unwrap_err().to_string();
+    let expected = network
+      .app
+      .lock()
+      .await
+      .strings()
+      .status
+      .infra
+      .playlist_external_unavailable;
+    assert_eq!(error, expected);
+    assert_eq!(
+      network
+        .app
+        .lock()
+        .await
+        .user()
+        .as_ref()
+        .map(|u| u.id.as_str()),
+      Some("me")
+    );
+    let seen = seen.lock().await;
+    assert_eq!(
+      seen.iter().filter(|line| line.contains("/me")).count(),
+      1,
+      "{seen:?}"
+    );
+  }
+
+  #[tokio::test]
+  async fn a_playlist_read_that_succeeds_never_loads_the_profile() {
+    let a = "0000000000000000000001";
+    let (base_url, server) =
+      serve_playlist_pages(vec![("200 OK", playlist_items_body(0, 1, &[a], false))]).await;
+    let (network, _fake) = read_items_network(base_url);
+
+    network
+      .read_playlist_items(&search_playlist_id(), None)
+      .await
+      .unwrap();
+
+    assert_eq!(server.await.unwrap().len(), 1);
+    assert!(network.app.lock().await.user().is_none());
   }
 
   #[tokio::test]
