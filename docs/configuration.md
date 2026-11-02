@@ -17,7 +17,7 @@ Machine-managed runtime state lives separately in `$XDG_STATE_HOME/spotatui/stat
 
 Most invalid values log a warning and fall back to the default. A misspelled key is usually ignored. Structural mistakes (an unknown sort field, a bad template placeholder, an invalid column id, an icon that is too wide) are logged as warnings and the affected value falls back to its built-in default. Warnings go to the log file whose path is printed at startup, a `spotatui_logs/spotatuilog<pid>` file inside your system temp directory (`%TEMP%` on Windows, `$TMPDIR` where set, otherwise `/tmp`). The startup line reports the resolved path, so copy it from there rather than guessing.
 
-Fatal errors include YAML syntax errors (the file cannot be parsed at all), and a handful of out-of-range numeric values that bypass the warn-and-fallback policy: `volume_increment` outside 0–100, a tick rate (or animation tick rate) outside 1–999ms, an unparseable `auto_update_delay`, `playback_poll_seconds` below 1, and `like_animation_frames` below 1.
+Fatal errors include YAML syntax errors (the file cannot be parsed at all), and a handful of out-of-range numeric values that bypass the warn-and-fallback policy: `volume_increment` outside 0–100, a tick rate (or animation tick rate) outside 1–999ms, an unparseable `auto_update_delay` or `streaming_audio_cache_limit` (even when audio caching is disabled), `playback_poll_seconds` below 1, and `like_animation_frames` below 1.
 
 ## Interface language
 
@@ -85,6 +85,7 @@ behavior:
   streaming_device_name: spotatui  # the name in the Connect device list
   streaming_bitrate: 320           # 96, 160, or 320 kbps
   streaming_audio_cache: false     # keep played audio in the streaming cache
+  streaming_audio_cache_limit: 1G  # cap the audio cache; empty or 0 = unlimited
   streaming_autoplay: true         # enable Spotify's related-songs autoplay
   playback_engine: librespot       # or soloist: Spotify's own player (feature `soloist`)
   soloist_path: /path/to/soloist   # the Soloist program; Settings can download it

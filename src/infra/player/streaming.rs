@@ -608,6 +608,8 @@ pub struct StreamingConfig {
   pub bitrate: u16,
   /// Enable audio caching
   pub audio_cache: bool,
+  /// Maximum on-disk size of the audio cache in bytes. `None` disables the limit.
+  pub audio_cache_limit: Option<u64>,
   /// Play related songs when a list ends
   pub autoplay: bool,
   /// Cache directory path
@@ -622,6 +624,7 @@ impl Default for StreamingConfig {
       device_name: "spotatui".to_string(),
       bitrate: 320,
       audio_cache: false,
+      audio_cache_limit: None,
       autoplay: true,
       cache_path: None,
       initial_volume: 100,
@@ -688,7 +691,12 @@ impl StreamingPlayer {
       std::fs::create_dir_all(path).ok();
     }
 
-    let cache = Cache::new(cache_path.clone(), None, audio_cache_path, None)?;
+    let cache = Cache::new(
+      cache_path.clone(),
+      None,
+      audio_cache_path,
+      config.audio_cache_limit,
+    )?;
 
     let credentials = cache
       .credentials()
@@ -1315,7 +1323,8 @@ fn new_device_id_string() -> String {
 mod tests {
   use super::{
     backend_error_status, get_or_create_device_id, new_device_id_string, PlayAfterTransfer,
-    RecoveringSink, SkipResume, StreamingConnectionState, PLAY_AFTER_TRANSFER_WINDOW,
+    RecoveringSink, SkipResume, StreamingConfig, StreamingConnectionState, StreamingPlayer,
+    PLAY_AFTER_TRANSFER_WINDOW,
   };
   use crate::core::i18n::EN;
   use crate::infra::spotify::credentials::{
@@ -1326,6 +1335,41 @@ mod tests {
   use std::time::Duration;
 
   const ALSA_NO_DEFAULT: &str = "Audio Sink Error Connection Refused: <AlsaSink> Device default May be Invalid, Busy, or Already in Use, ALSA function 'snd_pcm_open' failed with error 'No such file or directory (2)'";
+
+  #[tokio::test]
+  async fn audio_cache_limit_prunes_existing_audio_only_when_enabled() {
+    for (audio_cache, audio_cache_limit, file_remains) in [
+      (true, Some(1), false),
+      (true, None, true),
+      (false, Some(1), true),
+    ] {
+      let dir = tempfile::tempdir().unwrap();
+      let audio = dir.path().join("audio");
+      std::fs::create_dir(&audio).unwrap();
+      let file = audio.join("x.file");
+      std::fs::write(&file, b"xx").unwrap();
+
+      let error = StreamingPlayer::new_cache_only(StreamingConfig {
+        audio_cache,
+        audio_cache_limit,
+        cache_path: Some(dir.path().to_path_buf()),
+        ..Default::default()
+      })
+      .await
+      .err()
+      .expect("the temporary cache has no Spotify login");
+
+      assert_eq!(
+        error.to_string(),
+        "No cached Spotify login; log in to Spotify first"
+      );
+      assert_eq!(
+        file.exists(),
+        file_remains,
+        "audio_cache={audio_cache}, audio_cache_limit={audio_cache_limit:?}"
+      );
+    }
+  }
 
   #[test]
   fn backend_error_status_explains_a_missing_alsa_default_device() {

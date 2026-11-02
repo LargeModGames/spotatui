@@ -79,6 +79,8 @@ pub struct SettingsStrings {
   pub behavior_streaming_bitrate_description: &'static str,
   pub behavior_streaming_audio_cache_name: &'static str,
   pub behavior_streaming_audio_cache_description: &'static str,
+  pub behavior_streaming_audio_cache_limit_name: &'static str,
+  pub behavior_streaming_audio_cache_limit_description: &'static str,
   pub behavior_streaming_autoplay_name: &'static str,
   pub behavior_streaming_autoplay_description: &'static str,
   pub behavior_startup_behavior_name: &'static str,
@@ -318,6 +320,7 @@ pub struct SettingsStrings {
   pub save_failed_template: &'static str,
   pub icon_width_template: &'static str,
   pub invalid_delay_template: &'static str,
+  pub invalid_audio_cache_limit: &'static str,
   pub invalid_color_template: &'static str,
   pub reserved_key_template: &'static str,
   pub key_conflict_template: &'static str,
@@ -527,6 +530,10 @@ impl SettingsStrings {
       "behavior.streaming_audio_cache" => (
         self.behavior_streaming_audio_cache_name,
         self.behavior_streaming_audio_cache_description,
+      ),
+      "behavior.streaming_audio_cache_limit" => (
+        self.behavior_streaming_audio_cache_limit_name,
+        self.behavior_streaming_audio_cache_limit_description,
       ),
       "behavior.streaming_autoplay" => (
         self.behavior_streaming_autoplay_name,
