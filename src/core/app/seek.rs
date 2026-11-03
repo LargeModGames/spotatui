@@ -206,7 +206,11 @@ impl App {
         _ => return,
       };
 
-      let new_progress = position_ms.min(duration_ms);
+      // Clamp to strictly less than track duration so an absolute seek (such as
+      // from lyrics selection or playbar scrubbing) cannot overshoot and trigger
+      // `NextTrack` in `apply_seek`.
+      let max_seek = duration_ms.saturating_sub(1);
+      let new_progress = position_ms.min(max_seek);
       self.seek_ms = Some(new_progress as u128);
 
       // Use native streaming player for instant control (bypasses event channel latency)
@@ -456,5 +460,24 @@ mod tests {
     app.apply_seek(2_000);
 
     assert!(matches!(rx.try_recv(), Ok(IoEvent::NextTrack)));
+  }
+
+  #[test]
+  fn seek_to_clamps_below_track_duration_to_prevent_next_track() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.current_playback_context = Some(playing_track_context(full_track("ctx", "Context")));
+
+    // Duration of full_track is 180_000 ms. Seek far past duration.
+    app.seek_to(300_000);
+
+    // Flushes pending API seek
+    app.flush_pending_api_seek();
+
+    match rx.try_recv() {
+      Ok(IoEvent::Seek(ms)) => assert_eq!(ms, 179_999),
+      Ok(IoEvent::NextTrack) => panic!("seek_to triggered NextTrack!"),
+      _other => panic!("expected Seek(179_999)"),
+    }
   }
 }
