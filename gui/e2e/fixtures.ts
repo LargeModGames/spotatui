@@ -1112,6 +1112,33 @@ export const waveFrame: ServerMessage = {
   },
 };
 
+/** cava's mirrored bands at `bars`: the bass meets in the middle, the right channel a little quieter. */
+export const screenFrame = (bars: number): ServerMessage => {
+  const half = Math.max(Math.floor(bars / 2), 1);
+  const channel = (gain: number) =>
+    Array.from({ length: half }, (_, band) => {
+      const x = band / Math.max(half - 1, 1);
+      return Math.round(
+        255 *
+          Math.min(
+            1,
+            Math.max(0, gain * (0.9 - 0.55 * x + 0.12 * Math.sin(x * 14))),
+          ),
+      );
+    });
+  return {
+    kind: "visualizer_screen",
+    payload: {
+      bands: [...channel(1).reverse(), ...channel(0.85)],
+      wave: Array.from({ length: 480 }, (_, point) =>
+        Math.round(
+          127 * (0.55 * Math.sin(point / 6) + 0.2 * Math.sin(point / 1.7)),
+        ),
+      ),
+    },
+  };
+};
+
 /** The desktop app's settings rows, with a downloaded update waiting to install. */
 export const settings: ServerMessage[] = [
   {

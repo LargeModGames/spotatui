@@ -130,6 +130,10 @@ describe("fetchFor", () => {
     });
   });
 
+  it("opens the visualizer screen without a fetch", () => {
+    expect(fetchFor({ page: "visualizer" }, true, loaded)).toBeNull();
+  });
+
   it("sends no Spotify fetch without a session, but a local list still opens", () => {
     const offline = { ...loaded, spotify: false };
     expect(fetchFor({ page: "home" }, true, offline)).toBeNull();

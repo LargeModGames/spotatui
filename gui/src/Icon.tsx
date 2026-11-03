@@ -96,6 +96,7 @@ const PATHS = {
   ),
   session: <path d="M3 12h4l3-7 4 14 3-7h4" />,
   stats: <path d="M5 20V10M12 20V4M19 20v-7" />,
+  visualizer: <path d="M2 12h3l2.5-6 3 12 3-15 3 18 2.5-9H22" />,
   party: (
     <>
       <circle cx="9" cy="8" r="3.5" />

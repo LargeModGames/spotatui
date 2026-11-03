@@ -40,6 +40,10 @@ pub(crate) enum ServerMessage {
   Visualizer {
     payload: VisualizerFrame,
   },
+  /// A frame of the visualizer screen, sent only to a page that shows it.
+  VisualizerScreen {
+    payload: ScreenFrame,
+  },
   /// The Home page's lines under the banner, sent on connect and on every change.
   Welcome {
     payload: WelcomePayload,
@@ -738,6 +742,10 @@ pub(crate) enum ClientMessage {
   Visualizer {
     on: bool,
   },
+  /// The bands the visualizer screen's style draws while this page shows it; `null` once it hides.
+  VisualizerScreen {
+    bars: Option<u16>,
+  },
   /// The Home page asks for the changelog once it shows.
   Changelog,
   Quit,
@@ -803,14 +811,43 @@ pub(crate) struct VisualizerFrame {
 pub(crate) fn visualizer(levels: &[f32], wave: &[f32]) -> ServerMessage {
   ServerMessage::Visualizer {
     payload: VisualizerFrame {
-      levels: levels
-        .iter()
-        .map(|level| (level.clamp(0.0, 1.0) * 255.0).round() as u8)
-        .collect(),
-      wave: wave
-        .iter()
-        .map(|value| (value.clamp(-1.0, 1.0) * 127.0).round() as i8)
-        .collect(),
+      levels: unit_bytes(levels),
+      wave: signed_bytes(wave),
+    },
+  }
+}
+
+/// 0 to 1 as 0 to 255.
+fn unit_bytes(values: &[f32]) -> Vec<u8> {
+  values
+    .iter()
+    .map(|value| (value.clamp(0.0, 1.0) * 255.0).round() as u8)
+    .collect()
+}
+
+/// -1 to 1 as -127 to 127.
+fn signed_bytes(values: &[f32]) -> Vec<i8> {
+  values
+    .iter()
+    .map(|value| (value.clamp(-1.0, 1.0) * 127.0).round() as i8)
+    .collect()
+}
+
+/// cava's frame as the terminal's styles read it; both lists are empty when the sound stops.
+#[derive(Serialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
+pub(crate) struct ScreenFrame {
+  /// Both channels, 0 to 255: the left from treble to bass, then the right from bass to treble.
+  bands: Vec<u8>,
+  /// The newest 50 ms as a mono mix from oldest to newest, -127 to 127.
+  wave: Vec<i8>,
+}
+
+pub(crate) fn visualizer_screen(bands: &[f32], wave: &[f32]) -> ServerMessage {
+  ServerMessage::VisualizerScreen {
+    payload: ScreenFrame {
+      bands: unit_bytes(bands),
+      wave: signed_bytes(wave),
     },
   }
 }
@@ -3235,6 +3272,34 @@ mod tests {
   }
 
   #[test]
+  fn a_screen_frame_carries_bands_as_bytes_and_the_wave_as_signed_bytes() {
+    assert_eq!(
+      serde_json::to_value(visualizer_screen(&[0.0, 0.5, 1.5], &[-2.0, 0.25])).unwrap(),
+      serde_json::json!({
+        "kind": "visualizer_screen",
+        "payload": { "bands": [0, 128, 255], "wave": [-127, 32] }
+      })
+    );
+  }
+
+  #[test]
+  fn a_page_asking_for_the_visualizer_screen_parses_with_its_band_count() {
+    let message: ClientMessage =
+      serde_json::from_str(r#"{ "type": "visualizer_screen", "bars": 24 }"#).unwrap();
+    let off: ClientMessage =
+      serde_json::from_str(r#"{ "type": "visualizer_screen", "bars": null }"#).unwrap();
+
+    assert!(matches!(
+      message,
+      ClientMessage::VisualizerScreen { bars: Some(24) }
+    ));
+    assert!(matches!(
+      off,
+      ClientMessage::VisualizerScreen { bars: None }
+    ));
+  }
+
+  #[test]
   fn the_changelog_message_carries_the_embedded_changelog_on_request() {
     let ask: ClientMessage = serde_json::from_str(r#"{ "type": "changelog" }"#).unwrap();
     assert!(matches!(ask, ClientMessage::Changelog));
@@ -3452,6 +3517,8 @@ mod tests {
     written::<ShowInfo>(&dir, &cfg);
     written::<WindowMode>(&dir, &cfg);
     written::<VisualizerFrame>(&dir, &cfg);
+    written::<ScreenFrame>(&dir, &cfg);
+    written::<crate::core::user_config::VisualizerStyle>(&dir, &cfg);
     written::<WelcomePayload>(&dir, &cfg);
     written::<WelcomeStreak>(&dir, &cfg);
     written::<AnnouncementsPayload>(&dir, &cfg);
