@@ -308,13 +308,9 @@ mod tests {
     let cursor = terminal.get_cursor_position().unwrap();
 
     // 100x30 screen: popup is 80 wide at x=10; margin 2 puts the input box at
-    // x=12, width 76, so its right border is at x=87.
-    assert!(cursor.x < 87, "cursor escaped the box: x={}", cursor.x);
-    assert!(
-      cursor.x > 12,
-      "cursor is on the left border: x={}",
-      cursor.x
-    );
+    // x=12, width 76 (74 usable). offset = 200 - 74 + 1 = 127; cursor x =
+    // 12 + 1 + 200 - 127 = 86, one column left of the right border at x=87.
+    assert_eq!(cursor.x, 86, "cursor x was {}", cursor.x);
   }
 
   #[test]
@@ -331,12 +327,9 @@ mod tests {
       .unwrap();
     let cursor = terminal.get_cursor_position().unwrap();
 
-    // Margin is 1 here: box at x=11, width 78, right border at x=88.
-    assert!(cursor.x < 88, "cursor escaped the box: x={}", cursor.x);
-    assert!(
-      cursor.x > 11,
-      "cursor is on the left border: x={}",
-      cursor.x
-    );
+    // Margin is 1 here: box at x=11, width 78 (76 usable). offset =
+    // 200 - 76 + 1 = 125; cursor x = 11 + 1 + 200 - 125 = 87, one column
+    // left of the right border at x=88.
+    assert_eq!(cursor.x, 87, "cursor x was {}", cursor.x);
   }
 }
