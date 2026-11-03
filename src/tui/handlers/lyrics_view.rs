@@ -98,8 +98,38 @@ fn seek_to_focused(app: &mut App) {
 mod tests {
   use super::*;
 
+  fn playing_context() -> rspotify::model::CurrentPlaybackContext {
+    use rspotify::model::{
+      context::Actions, CurrentlyPlayingType, Device, DeviceType, PlayableItem, RepeatState,
+    };
+    rspotify::model::CurrentPlaybackContext {
+      device: Device {
+        id: Some("dev".to_string()),
+        is_active: true,
+        is_private_session: false,
+        is_restricted: false,
+        name: "Test Device".to_string(),
+        _type: DeviceType::Computer,
+        volume_percent: Some(50),
+      },
+      repeat_state: RepeatState::Off,
+      shuffle_state: false,
+      context: None,
+      timestamp: chrono::Utc::now(),
+      progress: Some(chrono::Duration::milliseconds(0)),
+      is_playing: true,
+      item: Some(PlayableItem::Track(crate::core::test_helpers::full_track(
+        "4uLU6hMCjMI75M1A2tKUQC",
+        "Test Song",
+      ))),
+      currently_playing_type: CurrentlyPlayingType::Track,
+      actions: Actions::default(),
+    }
+  }
+
   fn app_with_sample_lyrics() -> App {
     let mut app = App::default();
+    app.current_playback_context = Some(playing_context());
     app.set_lyrics(
       LyricsStatus::Found,
       Some(vec![
@@ -115,19 +145,37 @@ mod tests {
   #[test]
   fn enter_seeks_to_browsed_lyric_and_resumes_follow() {
     let mut app = app_with_sample_lyrics();
+    app.view.lyrics_view.timing_offset_ms = 500;
     // Browse to Line 2 (at 10_000 ms)
     scroll_by(&mut app, 2);
     assert_eq!(app.view.lyrics_view.manual_index, Some(2));
 
     handler(Key::Enter, &mut app);
 
+    // 10_000 ms browsed lyric minus 500 ms timing offset
+    assert_eq!(app.song_progress_ms, 9_500);
     // Manual browsing should be cleared (auto-follow resumes)
+    assert_eq!(app.view.lyrics_view.manual_index, None);
+  }
+
+  #[test]
+  fn enter_without_browsing_seeks_to_active_lyric() {
+    let mut app = app_with_sample_lyrics();
+    app.song_progress_ms = 6_000;
+    assert_eq!(app.view.lyrics_view.manual_index, None);
+
+    handler(Key::Enter, &mut app);
+
+    // Active line at 6_000 ms is Line 1 (5_000 ms)
+    assert_eq!(app.song_progress_ms, 5_000);
     assert_eq!(app.view.lyrics_view.manual_index, None);
   }
 
   #[test]
   fn enter_does_nothing_when_lyrics_unsynced() {
     let mut app = App::default();
+    app.current_playback_context = Some(playing_context());
+    app.song_progress_ms = 1_000;
     app.set_lyrics(
       LyricsStatus::Found,
       Some(vec![(0, "Unsynced text".to_string())]),
@@ -137,7 +185,19 @@ mod tests {
 
     handler(Key::Enter, &mut app);
 
-    // Unsynced lyrics cannot be seeked, manual index remains untouched
+    assert_eq!(app.song_progress_ms, 1_000);
     assert_eq!(app.view.lyrics_view.manual_index, Some(0));
+  }
+
+  #[test]
+  fn enter_does_nothing_when_lyrics_not_found() {
+    let mut app = App::default();
+    app.current_playback_context = Some(playing_context());
+    app.song_progress_ms = 1_000;
+    app.set_lyrics(LyricsStatus::NotFound, None, false);
+
+    handler(Key::Enter, &mut app);
+
+    assert_eq!(app.song_progress_ms, 1_000);
   }
 }
