@@ -128,7 +128,7 @@ mod tests {
   }
 
   fn app_with_sample_lyrics() -> App {
-    let mut test_app = App::default();
+    let mut test_app = App::default_connected();
     test_app.current_playback_context = Some(playing_context());
     test_app.set_lyrics(
       LyricsStatus::Found,
