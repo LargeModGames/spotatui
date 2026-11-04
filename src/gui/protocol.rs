@@ -235,9 +235,21 @@ fn chord(key: Key) -> Option<PaneChord> {
   let code = match c {
     'a'..='z' | 'A'..='Z' => format!("Key{}", c.to_ascii_uppercase()),
     '0'..='9' => format!("Digit{c}"),
-    '=' => "Equal".to_string(),
-    '-' => "Minus".to_string(),
-    _ => return None,
+    _ => match c {
+      '=' => "Equal",
+      '-' => "Minus",
+      '.' => "Period",
+      ',' => "Comma",
+      '/' => "Slash",
+      ';' => "Semicolon",
+      '\'' => "Quote",
+      '[' => "BracketLeft",
+      ']' => "BracketRight",
+      '\\' => "Backslash",
+      '`' => "Backquote",
+      _ => return None,
+    }
+    .to_string(),
   };
   Some(PaneChord {
     code,
@@ -1995,6 +2007,19 @@ mod tests {
       code(Key::Char('-')),
       Some(("Minus".into(), false, false, false))
     );
+    assert_eq!(
+      code(Key::Alt('.')),
+      Some(("Period".into(), true, false, false))
+    );
+    assert_eq!(
+      code(Key::Ctrl('/')),
+      Some(("Slash".into(), false, true, false))
+    );
+    assert_eq!(
+      code(Key::Alt('[')),
+      Some(("BracketLeft".into(), true, false, false))
+    );
+    assert_eq!(code(Key::Alt('?')), None);
     assert_eq!(code(Key::Alt('ä')), None);
     assert_eq!(code(Key::Enter), None);
   }
