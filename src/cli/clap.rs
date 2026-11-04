@@ -52,6 +52,38 @@ spotify:playlist: or spotify:show: URI";
   }
 }
 
+/// Reads a playlist URI or `open.spotify.com` link as a `spotify:playlist:` URI,
+/// so `list --playlist-tracks` refuses anything else before boot.
+fn parse_playlist_uri(input: &str) -> Result<String, String> {
+  let expected = "expected a spotify:playlist: URI or an open.spotify.com/playlist/ link";
+  let input = input.trim();
+  let id = if let Some(id) = input.strip_prefix("spotify:playlist:") {
+    id
+  } else {
+    let link = input
+      .strip_prefix("https://")
+      .or_else(|| input.strip_prefix("http://"))
+      .unwrap_or(input);
+    let path = link
+      .strip_prefix("open.spotify.com/")
+      .ok_or_else(|| expected.to_string())?;
+    // Localized links carry a language segment: open.spotify.com/intl-es/playlist/...
+    let path = match path.split_once('/') {
+      Some((lang, rest)) if lang.starts_with("intl-") => rest,
+      _ => path,
+    };
+    let id = path
+      .strip_prefix("playlist/")
+      .ok_or_else(|| expected.to_string())?;
+    // Shared links end in `?si=...`.
+    id.split(['?', '#', '/']).next().unwrap_or_default()
+  };
+  if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric()) {
+    return Err(expected.to_string());
+  }
+  Ok(format!("spotify:playlist:{id}"))
+}
+
 /// Refuses a `--queue` or `--random` that the kind of `--uri` cannot honor.
 ///
 /// Clap sees the kind of a `--name` search through its category flags, but the
@@ -325,19 +357,21 @@ pub fn list_subcommand() -> Command {
   Command::new("list")
     .version(env!("CARGO_PKG_VERSION"))
     .author(env!("CARGO_PKG_AUTHORS"))
-    .about("Lists devices, liked songs and playlists")
+    .about("Lists devices, liked songs, playlists and the tracks of a playlist")
     .long_about(
-      "This will list devices, liked songs or playlists. With the `--limit` flag you are \
-able to specify the amount of results (between 1 and 50). Here, the `--format` is \
-even more awesome, get your output exactly the way you want. The format option will \
-be applied to every item found.",
+      "This will list devices, liked songs, playlists or the tracks of one playlist. With \
+the `--limit` flag you are able to specify the amount of results (between 1 and 50). \
+With `--playlist-tracks` every track is listed, and `--limit` stops after that many \
+tracks instead. Here, the `--format` is even more awesome, get your output exactly the \
+way you want. The format option will be applied to every item found.",
     )
     .visible_alias("l")
     .arg(
       format_arg()
         .default_value_if("devices", ArgPredicate::IsPresent, "%v% %d")
         .default_value_if("liked", ArgPredicate::IsPresent, "%t - %a (%u)")
-        .default_value_if("playlists", ArgPredicate::IsPresent, "%p (%u)"),
+        .default_value_if("playlists", ArgPredicate::IsPresent, "%p (%u)")
+        .default_value_if("playlist-tracks", ArgPredicate::IsPresent, "%t - %a (%u)"),
     )
     .arg(
       Arg::new("devices")
@@ -360,13 +394,20 @@ be applied to every item found.",
         .help("Lists liked songs"),
     )
     .arg(
+      Arg::new("playlist-tracks")
+        .long("playlist-tracks")
+        .value_name("URI")
+        .value_parser(parse_playlist_uri)
+        .help("Lists the tracks of a playlist, given its spotify:playlist: URI or link"),
+    )
+    .arg(
       Arg::new("limit")
         .long("limit")
-        .help("Specifies the maximum number of results (1 - 50)"),
+        .help("Specifies the maximum number of results (1 - 50, any number of playlist tracks)"),
     )
     .group(
       ArgGroup::new("listable")
-        .args(["devices", "playlists", "liked"])
+        .args(["devices", "playlists", "liked", "playlist-tracks"])
         .required(true)
         .multiple(false),
     )
@@ -529,6 +570,66 @@ mod tests {
       check_play_uri_flags("spotify:playlist:1", false, true),
       Ok(())
     );
+  }
+
+  const PLAYLIST: &str = "spotify:playlist:37i9dQZF1DXcBWIGoYBM5M";
+
+  #[test]
+  fn playlist_tracks_takes_a_playlist_uri_as_given() {
+    let matches = list_subcommand()
+      .try_get_matches_from(["list", "--playlist-tracks", PLAYLIST])
+      .unwrap();
+    assert_eq!(
+      matches.get_one::<String>("playlist-tracks").unwrap(),
+      PLAYLIST
+    );
+  }
+
+  #[test]
+  fn playlist_tracks_reads_a_shared_link_as_its_uri() {
+    for link in [
+      "https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M",
+      "https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M?si=abc123",
+      "https://open.spotify.com/intl-es/playlist/37i9dQZF1DXcBWIGoYBM5M?si=abc123",
+      "http://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M",
+      "open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M",
+    ] {
+      assert_eq!(parse_playlist_uri(link).as_deref(), Ok(PLAYLIST), "{link}");
+    }
+  }
+
+  #[test]
+  fn playlist_tracks_refuses_anything_but_a_playlist() {
+    for input in [
+      "spotify:album:37i9dQZF1DXcBWIGoYBM5M",
+      "https://open.spotify.com/album/37i9dQZF1DXcBWIGoYBM5M",
+      "https://example.com/playlist/37i9dQZF1DXcBWIGoYBM5M",
+      "spotify:playlist:",
+      "spotify:playlist:not a valid id",
+      "not-a-uri",
+    ] {
+      let error = parse_playlist_uri(input).unwrap_err();
+      assert!(
+        error.starts_with("expected a spotify:playlist:"),
+        "{input}: {error}"
+      );
+    }
+  }
+
+  #[test]
+  fn playlist_tracks_formats_tracks_by_default() {
+    let matches = list_subcommand()
+      .try_get_matches_from(["list", "--playlist-tracks", PLAYLIST])
+      .unwrap();
+    assert_eq!(matches.get_one::<String>("format").unwrap(), "%t - %a (%u)");
+  }
+
+  #[test]
+  fn playlist_tracks_is_one_listable_kind_among_the_others() {
+    let error = list_subcommand()
+      .try_get_matches_from(["list", "--playlist-tracks", PLAYLIST, "--liked"])
+      .unwrap_err();
+    assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
   }
 
   #[test]

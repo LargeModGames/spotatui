@@ -13,6 +13,44 @@ use rspotify::model::{enums::DeviceType, Device};
 use rspotify::prelude::*;
 use serde::Deserialize;
 
+/// The profile as `App` keeps it.
+fn user_info(user: PrivateUser) -> UserInfo {
+  // `PrivateUser::country` is deprecated upstream but still the only
+  // market signal available; mirror the existing read in `get_user_country`.
+  #[allow(deprecated)]
+  let country = user.country.map(|c| <&'static str>::from(c).to_string());
+  UserInfo {
+    id: user.id.id().to_string(),
+    display_name: user.display_name,
+    // Store the ISO 3166-1 alpha-2 code as a plain string so no rspotify
+    // type leaks into App state; `App::get_user_country` re-derives it.
+    country,
+  }
+}
+
+impl Network {
+  /// Loads the profile when `App` has none yet, and reports no failure.
+  ///
+  /// A frontend loads it at startup, the CLI never does. Without it a 403
+  /// playlist cannot be classified as another user's, so the librespot
+  /// fallback would never run. A failed load only leaves that classification
+  /// `Unknown`, the same as before, so it must not fail the caller.
+  ///
+  /// The CLI's synchronous path, like `resolve_liked_state_now`: not an
+  /// `IoEvent`, so it skips the pump's lanes and auth gate (the CLI requires a
+  /// session before it gets here) and keeps only the shared funnel. A
+  /// frontend loads the profile through `IoEvent::GetUser` instead.
+  pub(super) async fn ensure_user_loaded(&self) {
+    if self.app.lock().await.user().is_some() {
+      return;
+    }
+    match self.spotify_get_typed::<PrivateUser>("me", &[]).await {
+      Ok(user) => *self.app.lock().await.user_mut() = Some(user_info(user)),
+      Err(error) => log::debug!("profile unavailable for playlist access checks: {error}"),
+    }
+  }
+}
+
 /// The router's `views/made-for-x` answer.
 #[derive(Deserialize)]
 struct MadeForYou {
@@ -102,18 +140,7 @@ impl UserNetwork for Network {
   async fn get_user(&mut self) {
     match self.spotify_get_typed::<PrivateUser>("me", &[]).await {
       Ok(user) => {
-        let mut app = self.app.lock().await;
-        // `PrivateUser::country` is deprecated upstream but still the only
-        // market signal available; mirror the existing read in `get_user_country`.
-        #[allow(deprecated)]
-        let country = user.country.map(|c| <&'static str>::from(c).to_string());
-        *app.user_mut() = Some(UserInfo {
-          id: user.id.id().to_string(),
-          display_name: user.display_name.clone(),
-          // Store the ISO 3166-1 alpha-2 code as a plain string so no rspotify
-          // type leaks into App state; `App::get_user_country` re-derives it.
-          country,
-        });
+        *self.app.lock().await.user_mut() = Some(user_info(user));
       }
       Err(e) => {
         let err = anyhow!(e);
