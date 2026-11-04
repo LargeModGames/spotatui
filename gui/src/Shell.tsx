@@ -816,7 +816,7 @@ export function Shell({
   };
   const dragBar =
     (bar: FrameBar) => (event: ReactPointerEvent<HTMLButtonElement>) => {
-      if (event.button !== 0 || !wide) return;
+      if (event.button !== 0) return;
       const edgeUnder = (at: Point) =>
         edgeAt(at.x, at.y, window.innerWidth, window.innerHeight);
       let shown: WindowEdge | null = null;
