@@ -58,11 +58,14 @@ pub enum WindowEdge {
 }
 
 impl FrameBar {
-  fn default_edge(self) -> WindowEdge {
-    match self {
+  const ALL: [Self; 2] = [Self::Top, Self::Player];
+
+  fn at_default_edge(self) -> BarPlacement {
+    let edge = match self {
       Self::Top => WindowEdge::Top,
       Self::Player => WindowEdge::Bottom,
-    }
+    };
+    BarPlacement { bar: self, edge }
   }
 }
 
@@ -80,12 +83,7 @@ impl Default for GuiLayout {
     Self {
       tree: default_tree(),
       floating: Vec::new(),
-      bars: [FrameBar::Top, FrameBar::Player]
-        .map(|bar| BarPlacement {
-          bar,
-          edge: bar.default_edge(),
-        })
-        .to_vec(),
+      bars: FrameBar::ALL.map(FrameBar::at_default_edge).to_vec(),
     }
   }
 }
@@ -112,12 +110,9 @@ impl GuiLayout {
         bars.push(*placement);
       }
     }
-    for bar in [FrameBar::Top, FrameBar::Player] {
+    for bar in FrameBar::ALL {
       if !bars.iter().any(|kept| kept.bar == bar) {
-        bars.push(BarPlacement {
-          bar,
-          edge: bar.default_edge(),
-        });
+        bars.push(bar.at_default_edge());
       }
     }
 

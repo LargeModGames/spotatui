@@ -626,28 +626,36 @@ fn deserialize_pane_layout<'de, D>(deserializer: D) -> Result<Option<PaneNode>, 
 where
   D: serde::Deserializer<'de>,
 {
-  let value = Option::<serde_yaml::Value>::deserialize(deserializer)?;
-  Ok(
-    value.and_then(|value| match serde_yaml::from_value::<PaneNode>(value) {
-      Ok(layout) => layout.sanitized(),
-      Err(e) => {
-        log::warn!("[state] ignoring an unreadable pane_layout: {e}");
-        None
-      }
-    }),
-  )
+  deserialize_lenient(deserializer, "pane_layout", |layout: PaneNode| {
+    layout.sanitized()
+  })
 }
 
 fn deserialize_gui_pane_layout<'de, D>(deserializer: D) -> Result<Option<GuiLayout>, D::Error>
 where
   D: serde::Deserializer<'de>,
 {
+  deserialize_lenient(deserializer, "gui_pane_layout", |layout: GuiLayout| {
+    Some(layout.sanitized())
+  })
+}
+
+/// Reads an optional field that falls back to None when it does not parse.
+fn deserialize_lenient<'de, D, T>(
+  deserializer: D,
+  field: &str,
+  sanitize: impl FnOnce(T) -> Option<T>,
+) -> Result<Option<T>, D::Error>
+where
+  D: serde::Deserializer<'de>,
+  T: serde::de::DeserializeOwned,
+{
   let value = Option::<serde_yaml::Value>::deserialize(deserializer)?;
   Ok(
-    value.and_then(|value| match serde_yaml::from_value::<GuiLayout>(value) {
-      Ok(layout) => Some(layout.sanitized()),
+    value.and_then(|value| match serde_yaml::from_value::<T>(value) {
+      Ok(parsed) => sanitize(parsed),
       Err(e) => {
-        log::warn!("[state] ignoring an unreadable gui_pane_layout: {e}");
+        log::warn!("[state] ignoring an unreadable {field}: {e}");
         None
       }
     }),
