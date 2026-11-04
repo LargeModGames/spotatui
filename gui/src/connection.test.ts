@@ -61,6 +61,22 @@ describe("Connection", () => {
     expect(sockets[0].sent).toEqual([JSON.stringify({ type: "quit" })]);
   });
 
+  it("keeps the last layout sent while disconnected and sends it after the next hello", () => {
+    const { connection, sockets, retries } = harness("abc");
+    sockets[0].handlers.message(hello("t1"));
+    sockets[0].handlers.close();
+    connection.send({ type: "pane_layout", layout: null });
+    connection.send({ type: "quit" });
+    const layout = { tree: "main" as const, floating: [], bars: [] };
+    connection.send({ type: "pane_layout", layout });
+    retries[0]();
+    expect(sockets[1].sent).toEqual([]);
+    sockets[1].handlers.message(hello("t1"));
+    expect(sockets[1].sent).toEqual([
+      JSON.stringify({ type: "pane_layout", layout }),
+    ]);
+  });
+
   it("connects with the launch code and keeps the token from hello", () => {
     const { connection, sockets, storage } = harness("abc");
     sockets[0].handlers.message(hello("t1"));

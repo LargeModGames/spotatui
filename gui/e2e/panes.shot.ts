@@ -214,3 +214,46 @@ test("the top bar hides Main and opening a page shows it again", async ({
     page.getByRole("button", { name: "Hide main view" }),
   ).toBeVisible();
 });
+
+test("a layout change made while the socket is closed goes out when it opens again", async ({
+  page,
+}) => {
+  const sent: { socket: number; layout: GuiLayout | null }[] = [];
+  const sockets: {
+    close: () => Promise<void>;
+    send: (text: string) => void;
+  }[] = [];
+  const greet = (socket: { send: (text: string) => void }) => {
+    for (const message of [
+      ...playing,
+      ...library,
+      ...room,
+      paneLayout(DEFAULT_LAYOUT),
+    ])
+      socket.send(JSON.stringify(message));
+  };
+  await page.routeWebSocket("**/ws", (ws) => {
+    const socket = sockets.length;
+    sockets.push(ws);
+    ws.onMessage((text) => {
+      const message = JSON.parse(String(text)) as ClientMessage;
+      if (message.type === "pane_layout")
+        sent.push({ socket, layout: message.layout });
+    });
+    // The second socket holds its hello, so the page stays disconnected until the test greets it.
+    if (socket === 0) greet(ws);
+  });
+  await page.goto("/#code=shot");
+  await page.getByText("Set Fire to the Rain").first().waitFor();
+
+  await sockets[0]!.close();
+  await expect.poll(() => sockets.length).toBe(2);
+  await page.getByRole("button", { name: "Hide main view" }).click();
+  await expect(page.locator('[data-pane="main"]')).toBeHidden();
+  expect(sent).toEqual([]);
+
+  greet(sockets[1]!);
+  await expect.poll(() => sent.map((entry) => entry.socket)).toEqual([1]);
+  expect(sent[0]?.layout?.tree).toBe("now_playing");
+  await expect(page.locator('[data-pane="main"]')).toBeHidden();
+});
