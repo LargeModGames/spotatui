@@ -191,6 +191,14 @@ fn draw_cover(f: &mut Frame<'_>, app: &App, area: Rect) -> u16 {
   };
   // Clear first: an image protocol leaves its pixels behind when the art changes size.
   f.render_widget(Clear, area);
+  // Same gate as the playbar: the art can be decoded for the adaptive theme
+  // while the user turned the picture off, or the terminal cannot show it.
+  if !app
+    .user_config
+    .do_draw_cover_art(crate::tui::cover_art::full_image_support())
+  {
+    return 0;
+  }
   if !app.cover_art.available() {
     let message = Paragraph::new(super::util::cover_art_status(app))
       .style(Style::default().fg(theme.inactive.into()))
@@ -427,5 +435,22 @@ mod tests {
       short.height, 8,
       "a short panel shrinks the cover, not the text"
     );
+  }
+
+  #[cfg(feature = "cover-art")]
+  #[test]
+  fn the_panel_keeps_no_rows_for_the_cover_when_cover_art_is_turned_off() {
+    use ratatui::{backend::TestBackend, Terminal};
+    let mut app = App::default();
+    app.user_config.behavior.draw_cover_art = false;
+    let area = Rect::new(0, 0, 38, 19);
+    let mut terminal = Terminal::new(TestBackend::new(40, 20)).unwrap();
+
+    let mut rows = None;
+    terminal
+      .draw(|f| rows = Some(draw_cover(f, &app, area)))
+      .unwrap();
+
+    assert_eq!(rows, Some(0), "the text starts at the top of the panel");
   }
 }
