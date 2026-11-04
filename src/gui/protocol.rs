@@ -204,7 +204,7 @@ pub(crate) struct PaneKeys {
 }
 
 /// A key as the browser's `KeyboardEvent.code` names it, with its modifiers.
-#[derive(Serialize, Debug, PartialEq)]
+#[derive(Serialize)]
 #[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub(crate) struct PaneChord {
   code: String,
