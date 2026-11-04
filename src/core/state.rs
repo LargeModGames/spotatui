@@ -5,7 +5,12 @@
 //! edits do not churn every time volume, source, pane sizes, announcements, or
 //! radio stations change.
 
-use crate::core::{limits::MAX_PLAYBAR_ROWS, pane::PaneNode, source::Source};
+use crate::core::{
+  gui_layout::GuiLayout,
+  limits::MAX_PLAYBAR_ROWS,
+  pane::{Pane, PaneNode},
+  source::Source,
+};
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -55,6 +60,7 @@ pub struct RuntimeState {
   pub playbar_height_rows: u16,
   pub library_height_percent: u8,
   pub pane_layout: PaneNode,
+  pub gui_pane_layout: GuiLayout,
   /// Whether `V` last picked the Spotify pitch view rather than a style.
   pub pitch_view_chosen: bool,
   pub radio_stations: Vec<RadioStationConfig>,
@@ -76,6 +82,7 @@ impl Default for RuntimeState {
       playbar_height_rows: 6,
       library_height_percent: 30,
       pane_layout: PaneNode::default(),
+      gui_pane_layout: GuiLayout::default(),
       pitch_view_chosen: true,
       radio_stations: Vec::new(),
       community_pin_prompt_shown: false,
@@ -110,8 +117,12 @@ impl RuntimeState {
     if let Some(library_height_percent) = state.library_height_percent {
       self.library_height_percent = library_height_percent.min(100);
     }
-    if let Some(pane_layout) = state.pane_layout.as_ref().and_then(PaneNode::sanitized) {
+    if let Some(mut pane_layout) = state.pane_layout.as_ref().and_then(PaneNode::sanitized) {
+      pane_layout.close(Pane::NowPlaying);
       self.pane_layout = pane_layout;
+    }
+    if let Some(gui_pane_layout) = &state.gui_pane_layout {
+      self.gui_pane_layout = gui_pane_layout.sanitized();
     }
     if let Some(pitch_view_chosen) = state.pitch_view_chosen {
       self.pitch_view_chosen = pitch_view_chosen;
@@ -138,6 +149,7 @@ impl RuntimeState {
       playbar_height_rows: Some(self.playbar_height_rows.min(MAX_PLAYBAR_ROWS)),
       library_height_percent: Some(self.library_height_percent.min(100)),
       pane_layout: self.pane_layout.sanitized(),
+      gui_pane_layout: Some(self.gui_pane_layout.sanitized()),
       pitch_view_chosen: Some(self.pitch_view_chosen),
       radio_stations: Some(sanitized_radio_stations(&self.radio_stations)),
       community_pin_prompt_shown: Some(self.community_pin_prompt_shown),
@@ -242,6 +254,11 @@ pub struct PersistedRuntimeState {
     deserialize_with = "deserialize_pane_layout"
   )]
   pub pane_layout: Option<PaneNode>,
+  #[serde(
+    skip_serializing_if = "Option::is_none",
+    deserialize_with = "deserialize_gui_pane_layout"
+  )]
+  pub gui_pane_layout: Option<GuiLayout>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub pitch_view_chosen: Option<bool>,
   #[serde(skip_serializing_if = "Option::is_none")]
@@ -315,6 +332,14 @@ impl PersistedRuntimeState {
     }
   }
 
+  #[cfg_attr(not(feature = "gui"), allow(dead_code))]
+  pub fn gui_pane_layout(gui_pane_layout: &GuiLayout) -> Self {
+    Self {
+      gui_pane_layout: Some(gui_pane_layout.sanitized()),
+      ..Default::default()
+    }
+  }
+
   pub fn pitch_view_chosen(pitch_view_chosen: bool) -> Self {
     Self {
       pitch_view_chosen: Some(pitch_view_chosen),
@@ -366,6 +391,7 @@ impl PersistedRuntimeState {
       && self.playbar_height_rows.is_none()
       && self.library_height_percent.is_none()
       && self.pane_layout.is_none()
+      && self.gui_pane_layout.is_none()
       && self.pitch_view_chosen.is_none()
       && self.radio_stations.is_none()
       && self.community_pin_prompt_shown.is_none()
@@ -524,6 +550,7 @@ fn sanitized_persisted_state(state: &PersistedRuntimeState) -> PersistedRuntimeS
       .map(|rows| rows.min(MAX_PLAYBAR_ROWS)),
     library_height_percent: state.library_height_percent.map(|height| height.min(100)),
     pane_layout: state.pane_layout.as_ref().and_then(PaneNode::sanitized),
+    gui_pane_layout: state.gui_pane_layout.as_ref().map(GuiLayout::sanitized),
     pitch_view_chosen: state.pitch_view_chosen,
     radio_stations: state
       .radio_stations
@@ -572,6 +599,9 @@ fn merge_state_patch(merged: &mut PersistedRuntimeState, patch: &PersistedRuntim
   if let Some(pane_layout) = patch.pane_layout.as_ref().and_then(PaneNode::sanitized) {
     merged.pane_layout = Some(pane_layout);
   }
+  if let Some(gui_pane_layout) = &patch.gui_pane_layout {
+    merged.gui_pane_layout = Some(gui_pane_layout.sanitized());
+  }
   if let Some(pitch_view_chosen) = patch.pitch_view_chosen {
     merged.pitch_view_chosen = Some(pitch_view_chosen);
   }
@@ -596,12 +626,36 @@ fn deserialize_pane_layout<'de, D>(deserializer: D) -> Result<Option<PaneNode>, 
 where
   D: serde::Deserializer<'de>,
 {
+  deserialize_lenient(deserializer, "pane_layout", |layout: PaneNode| {
+    layout.sanitized()
+  })
+}
+
+fn deserialize_gui_pane_layout<'de, D>(deserializer: D) -> Result<Option<GuiLayout>, D::Error>
+where
+  D: serde::Deserializer<'de>,
+{
+  deserialize_lenient(deserializer, "gui_pane_layout", |layout: GuiLayout| {
+    Some(layout.sanitized())
+  })
+}
+
+/// Reads an optional field that falls back to None when it does not parse.
+fn deserialize_lenient<'de, D, T>(
+  deserializer: D,
+  field: &str,
+  sanitize: impl FnOnce(T) -> Option<T>,
+) -> Result<Option<T>, D::Error>
+where
+  D: serde::Deserializer<'de>,
+  T: serde::de::DeserializeOwned,
+{
   let value = Option::<serde_yaml::Value>::deserialize(deserializer)?;
   Ok(
-    value.and_then(|value| match serde_yaml::from_value::<PaneNode>(value) {
-      Ok(layout) => layout.sanitized(),
+    value.and_then(|value| match serde_yaml::from_value::<T>(value) {
+      Ok(parsed) => sanitize(parsed),
       Err(e) => {
-        log::warn!("[state] ignoring an unreadable pane_layout: {e}");
+        log::warn!("[state] ignoring an unreadable {field}: {e}");
         None
       }
     }),
@@ -755,6 +809,18 @@ mod tests {
   }
 
   #[test]
+  fn a_now_playing_leaf_in_the_tui_layout_is_dropped_on_load() {
+    let mut layout = lyrics_beside_main();
+    layout.detach(Pane::Lyrics, Pane::NowPlaying, SplitAxis::Vertical);
+    let persisted = PersistedRuntimeState::pane_layout(&layout);
+
+    let mut runtime = RuntimeState::default();
+    runtime.apply_persisted(&persisted);
+
+    assert_eq!(runtime.pane_layout, lyrics_beside_main());
+  }
+
+  #[test]
   fn missing_file_loads_as_empty_state() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("state.yml");
@@ -776,6 +842,7 @@ mod tests {
       playbar_height_rows: Some(7),
       library_height_percent: Some(35),
       pane_layout: Some(lyrics_beside_main()),
+      gui_pane_layout: Some(GuiLayout::default()),
       pitch_view_chosen: Some(false),
       radio_stations: Some(vec![RadioStationConfig {
         name: "Station".to_string(),

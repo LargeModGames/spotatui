@@ -1,5 +1,6 @@
 use crate::core::action::LibraryTarget;
 use crate::core::geometry::Viewport;
+use crate::core::gui_layout::GuiLayout;
 use crate::core::input::Key;
 use crate::core::pagination::{CursorPaged, Paged};
 use crate::core::pane::{Pane, PaneNode};

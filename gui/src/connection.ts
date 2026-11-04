@@ -138,6 +138,7 @@ export class Connection {
     changelog: null,
   };
   private socket: Socket | null = null;
+  private unsentLayout: ClientMessage | null = null;
   /** The last item the playback channel named, kept across a blank update. */
   private lastUri: string | null = null;
   private readonly listeners = new Set<() => void>();
@@ -185,7 +186,11 @@ export class Connection {
 
   send(message: ClientMessage): void {
     // A socket that is still connecting throws on send; the server hello marks it open.
-    if (!this.state.connected) return;
+    // A layout is state, not a command: the last one waits for the next hello.
+    if (!this.state.connected) {
+      if (message.type === "pane_layout") this.unsentLayout = message;
+      return;
+    }
     this.socket?.send(JSON.stringify(message));
   }
 
@@ -259,6 +264,10 @@ export class Connection {
         // The server keeps the ask per socket, so a new socket asks again.
         if (this.viewers.size > 0) this.send({ type: "visualizer", on: true });
         if (this.screenViewers.size > 0) this.askScreen();
+        if (this.unsentLayout) {
+          this.send(this.unsentLayout);
+          this.unsentLayout = null;
+        }
         return;
       case "visualizer": {
         const frame = { payload: message.payload, at: this.now() };

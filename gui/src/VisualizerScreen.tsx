@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { NowPlaying } from "./bindings/NowPlaying";
 import type { ScreenStrings } from "./bindings/ScreenStrings";
 import { pageStorage } from "./commandModel";
@@ -9,20 +9,21 @@ import {
   type Audio,
   audioOf,
   barCount,
+  chooseStyle,
   sceneAudio,
   nextStyle,
   NO_TRACK,
   readStyle,
-  saveStyle,
   settleBands,
+  shownStyle,
   SILENT,
   stepSeconds,
-  STYLE_KEY,
   STYLES,
   type Style,
   type TrackView,
   type ScreenFeed,
   styleName,
+  watchStyle,
 } from "./screenModel";
 import { PAINTERS } from "./screenPaint";
 import { parseHex, rgba, STALE_MS } from "./visualizerModel";
@@ -33,6 +34,7 @@ const RESIZE_SETTLE_MS = 250;
 /** With no frame at all this long after the ask, the screen says it waits for audio. */
 const WAITING_MS = 1500;
 const CYCLE_KEY = "V";
+const readShown = () => shownStyle(pageStorage());
 
 function trackAt(
   item: NowPlaying | null,
@@ -70,9 +72,7 @@ export function VisualizerScreen({
   available: boolean;
   feed?: ScreenFeed;
 }) {
-  const [style, setStyle] = useState<Style>(() =>
-    readStyle(pageStorage().getItem(STYLE_KEY)),
-  );
+  const style = useSyncExternalStore(watchStyle, readShown, readShown);
   const canvas = useRef<HTMLCanvasElement>(null);
   const [width, setWidth] = useState(0);
   const [shown, setShown] = useState(false);
@@ -91,10 +91,7 @@ export function VisualizerScreen({
     latestProps.current = { item, position, waiting: screens.audio_waiting };
   });
 
-  const choose = (next: Style) => {
-    setStyle(next);
-    saveStyle(pageStorage(), next);
-  };
+  const choose = (next: Style) => chooseStyle(pageStorage(), next);
 
   useEffect(() => {
     const element = canvas.current;
@@ -127,9 +124,10 @@ export function VisualizerScreen({
     });
   }, [active, available, shown, feed]);
 
+  // Only the shown copy names the band count: the page and a pane share one feed.
   useEffect(() => {
-    if (width > 0) feed?.bars(bars);
-  }, [feed, bars, width]);
+    if (active && width > 0) feed?.bars(bars);
+  }, [feed, bars, width, active]);
 
   useEffect(() => {
     const element = canvas.current;

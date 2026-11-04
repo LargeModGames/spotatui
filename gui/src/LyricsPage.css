@@ -4,7 +4,7 @@
   position: relative;
   min-height: 0;
   overflow-y: auto;
-  padding: 48px 48px 40vh;
+  padding: 48px 48px 40cqh;
   box-sizing: border-box;
   background: var(--lyrics-bg);
   color: var(--text);
@@ -57,10 +57,21 @@
 
 @media (max-width: 900px) {
   .lyrics-page {
-    padding: 32px 24px 40vh;
+    padding: 32px 24px 40cqh;
   }
 
   .lyrics-lines {
     font-size: 22px;
+  }
+}
+
+/* In a narrow pane beside the page. */
+@container (max-width: 600px) {
+  .lyrics-page {
+    padding: 24px 20px 40cqh;
+  }
+
+  .lyrics-lines {
+    font-size: 20px;
   }
 }

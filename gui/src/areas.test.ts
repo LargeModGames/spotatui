@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { shellKey, type ShellKey } from "./areas";
+import type { PaneKeys } from "./bindings/PaneKeys";
+import { modified, paneKey, shellKey, type ShellKey } from "./areas";
 
 const press = (key: string, patch: Partial<ShellKey> = {}): ShellKey => ({
   key,
@@ -10,6 +11,10 @@ const press = (key: string, patch: Partial<ShellKey> = {}): ShellKey => ({
   typing: false,
   interactive: false,
   overlay: false,
+  code: "",
+  alt: false,
+  ctrl: false,
+  shift: false,
   ...patch,
 });
 
@@ -80,5 +85,55 @@ describe("shellKey", () => {
     expect(shellKey(press("1", { overlay: true }))).toBeNull();
     expect(shellKey(press("Escape", { overlay: true }))).toBe("escape");
     expect(shellKey(press("Escape", { typing: true }))).toBe("escape");
+  });
+});
+
+const alt = (code: string) => ({ code, alt: true, ctrl: false, shift: false });
+const KEYS: PaneKeys = {
+  detach: alt("KeyD"),
+  close: alt("KeyX"),
+  focus_left: alt("KeyH"),
+  focus_down: alt("KeyJ"),
+  focus_up: alt("KeyK"),
+  focus_right: alt("KeyL"),
+  reset: alt("Digit0"),
+};
+
+describe("paneKey", () => {
+  it("matches a configured chord by its key place, so macOS Option works", () => {
+    const optionD = press("∂", { modified: true, code: "KeyD", alt: true });
+    expect(paneKey(optionD, KEYS)).toBe("detach");
+    expect(paneKey(press("0", { code: "Digit0", alt: true }), KEYS)).toBe(
+      "reset",
+    );
+    expect(paneKey(press("l", { code: "KeyL", alt: true }), KEYS)).toEqual({
+      focus: "right",
+    });
+  });
+
+  it("an unbound or unmodified key passes through", () => {
+    expect(paneKey(press("q", { code: "KeyQ", alt: true }), KEYS)).toBeNull();
+    expect(paneKey(press("d", { code: "KeyD" }), KEYS)).toBeNull();
+    expect(paneKey(press("d", { code: "KeyD", alt: true }), null)).toBeNull();
+  });
+
+  it("does nothing while typing or under an overlay", () => {
+    const chord = { code: "KeyX", alt: true };
+    expect(paneKey(press("x", { ...chord, typing: true }), KEYS)).toBeNull();
+    expect(paneKey(press("x", { ...chord, overlay: true }), KEYS)).toBeNull();
+  });
+});
+
+describe("modified", () => {
+  it("is true while alt, ctrl, meta or shift is held, so a grip or divider lets the press go on", () => {
+    const keys = {
+      altKey: false,
+      ctrlKey: false,
+      metaKey: false,
+      shiftKey: false,
+    };
+    expect(modified(keys)).toBe(false);
+    for (const key of ["altKey", "ctrlKey", "metaKey", "shiftKey"] as const)
+      expect(modified({ ...keys, [key]: true })).toBe(true);
   });
 });

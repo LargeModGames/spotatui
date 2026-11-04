@@ -27,7 +27,7 @@ pub fn draw_detached_panes(f: &mut Frame<'_>, app: &App) {
 
 fn draw_pane(f: &mut Frame<'_>, app: &App, pane: Pane, area: Rect) {
   match pane {
-    Pane::Main => {}
+    Pane::Main | Pane::NowPlaying => {}
     Pane::Lyrics => super::lyrics::draw_lyrics(f, app, area),
     Pane::Visualizer => super::audio_analysis::draw_in(f, app, area, 0),
     Pane::CoverArt => {

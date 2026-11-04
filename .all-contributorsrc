@@ -703,6 +703,24 @@
       "contributions": [
         "code"
       ]
+    },
+    {
+      "login": "IDLinares",
+      "name": "Isaiah Linares",
+      "avatar_url": "https://avatars.githubusercontent.com/u/32106028?v=4",
+      "profile": "https://github.com/IDLinares",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "everyoneexe",
+      "name": "everyoneexe",
+      "avatar_url": "https://avatars.githubusercontent.com/u/198324830?v=4",
+      "profile": "https://github.com/everyoneexe",
+      "contributions": [
+        "code"
+      ]
     }
   ],
   "contributorsPerLine": 7,
