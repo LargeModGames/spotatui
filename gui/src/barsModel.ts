@@ -1,7 +1,7 @@
 import type { BarPlacement } from "./bindings/BarPlacement";
 import type { FrameBar } from "./bindings/FrameBar";
 import type { WindowEdge } from "./bindings/WindowEdge";
-import { DEFAULT_LAYOUT } from "./paneModel";
+import { band, DEFAULT_LAYOUT, vertical, type Rect } from "./paneModel";
 
 export const DEFAULT_BARS: BarPlacement[] = DEFAULT_LAYOUT.bars;
 
@@ -11,8 +11,8 @@ const THICKNESS: Record<FrameBar, { across: number; along: number }> = {
   player: { across: 72, along: 280 },
 };
 
-export const vertical = (edge: WindowEdge) =>
-  edge === "left" || edge === "right";
+/** The gap between the frame's grid cells; style.css has it too. */
+const GAP = 8;
 
 export const thickness = (bar: FrameBar, edge: WindowEdge) =>
   vertical(edge) ? THICKNESS[bar].along : THICKNESS[bar].across;
@@ -26,8 +26,10 @@ export function frameGrid(bars: BarPlacement[]): {
   rows: string;
   columns: string;
   padding: string;
+  /** How far the bars on the bottom edge reach up, in pixels. */
+  insetBottom: number;
 } {
-  const tracks: Record<WindowEdge, string[]> = {
+  const tracks: Record<WindowEdge, number[]> = {
     top: [],
     bottom: [],
     left: [],
@@ -49,7 +51,7 @@ export function frameGrid(bars: BarPlacement[]): {
         right: tracks.right.length,
       },
     });
-    tracks[edge].push(`${thickness(bar, edge)}px`);
+    tracks[edge].push(thickness(bar, edge));
   }
   const rows = tracks.top.length + 1 + tracks.bottom.length;
   const columns = tracks.left.length + 1 + tracks.right.length;
@@ -71,19 +73,24 @@ export function frameGrid(bars: BarPlacement[]): {
     else fill(rowFrom, rowTo, colTo - 1, colTo);
   }
   const edgeHas = (edge: WindowEdge) => tracks[edge].length > 0;
+  const sizes = (list: number[]) => list.map((size) => `${size}px`);
+  const bottom = tracks.bottom;
   return {
     areas: cells.map((row) => `"${row.join(" ")}"`).join(" "),
     rows: [
-      ...tracks.top,
+      ...sizes(tracks.top),
       "minmax(0, 1fr)",
-      ...[...tracks.bottom].reverse(),
+      ...sizes(bottom).reverse(),
     ].join(" "),
     columns: [
-      ...tracks.left,
+      ...sizes(tracks.left),
       "minmax(0, 1fr)",
-      ...[...tracks.right].reverse(),
+      ...sizes(tracks.right).reverse(),
     ].join(" "),
-    padding: `${edgeHas("top") ? 0 : 8}px 8px ${edgeHas("bottom") ? 0 : 8}px`,
+    padding: `${edgeHas("top") ? 0 : GAP}px ${GAP}px ${edgeHas("bottom") ? 0 : GAP}px`,
+    insetBottom:
+      bottom.reduce((sum, size) => sum + size, 0) +
+      GAP * Math.max(0, bottom.length - 1),
   };
 }
 
@@ -115,21 +122,10 @@ export function moveBar(
 }
 
 /** The bar's footprint on `edge` of a window, in pixels, for the drop preview. */
-export function barPreview(
+export const barPreview = (
   bar: FrameBar,
   edge: WindowEdge,
   width: number,
   height: number,
-): { x: number; y: number; w: number; h: number } {
-  const size = thickness(bar, edge);
-  switch (edge) {
-    case "top":
-      return { x: 0, y: 0, w: width, h: size };
-    case "bottom":
-      return { x: 0, y: height - size, w: width, h: size };
-    case "left":
-      return { x: 0, y: 0, w: size, h: height };
-    case "right":
-      return { x: width - size, y: 0, w: size, h: height };
-  }
-}
+): Rect =>
+  band({ x: 0, y: 0, w: width, h: height }, edge, thickness(bar, edge));

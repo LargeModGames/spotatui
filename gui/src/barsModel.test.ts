@@ -12,6 +12,7 @@ describe("barsModel", () => {
       rows: "64px minmax(0, 1fr) 72px",
       columns: "minmax(0, 1fr)",
       padding: "0px 8px 0px",
+      insetBottom: 72,
     });
   });
 
@@ -22,6 +23,14 @@ describe("barsModel", () => {
       rows: "64px minmax(0, 1fr)",
       columns: "280px minmax(0, 1fr)",
     });
+  });
+
+  it("the bottom inset holds every bar on the bottom edge and the gap between them", () => {
+    const bars = moveBar(DEFAULT_BARS, "top", "bottom");
+    expect(frameGrid(bars).insetBottom).toBe(72 + 8 + 64);
+    expect(frameGrid(moveBar(DEFAULT_BARS, "player", "left")).insetBottom).toBe(
+      0,
+    );
   });
 
   it("a bar dropped on an occupied edge goes inside the bar there", () => {

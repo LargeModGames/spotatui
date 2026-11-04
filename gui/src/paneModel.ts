@@ -4,11 +4,19 @@ import type { GuiLayout } from "./bindings/GuiLayout";
 import type { Pane } from "./bindings/Pane";
 import type { PaneNode } from "./bindings/PaneNode";
 import type { Split } from "./bindings/Split";
+import type { WindowEdge } from "./bindings/WindowEdge";
 
 /** The Rust `GuiLayout::default()`, written by the bindings test. */
 export const DEFAULT_LAYOUT = defaults as unknown as GuiLayout;
 
-export type Side = "left" | "right" | "top" | "bottom";
+export type Side = WindowEdge;
+
+/** The left and right sides. */
+export const vertical = (side: Side) => side === "left" || side === "right";
+
+/** The panes the player-bar buttons open; they take turns in one slot. */
+export const SIDE_PANES = ["now_playing", "queue"] as const;
+export type SidePane = (typeof SIDE_PANES)[number];
 
 /** A box in fractions of the pane area, or in pixels where a function says so. */
 export interface Rect {
@@ -27,12 +35,12 @@ export interface Divider {
   percent: number;
 }
 
-const MIN_PERCENT = 10;
-const MAX_PERCENT = 90;
+export const MIN_PERCENT = 10;
+export const MAX_PERCENT = 90;
 const SNAP_POINTS = [25, 33, 50, 67, 75];
 const SNAP_RANGE = 2;
-export const MIN_PANE = { w: 240, h: 160 };
-export const MIN_MAIN = { w: 560, h: 200 };
+const MIN_PANE = { w: 240, h: 160 };
+const MIN_MAIN = { w: 560, h: 200 };
 const PERMILLE = 1000;
 
 export const isLeaf = (node: PaneNode): node is Pane =>
@@ -45,23 +53,42 @@ export function panes(node: PaneNode): Pane[] {
 export const contains = (node: PaneNode, pane: Pane): boolean =>
   panes(node).includes(pane);
 
+/** Main when the tree has it, else the first pane. */
+export const firstPane = (node: PaneNode): Pane =>
+  contains(node, "main") ? "main" : panes(node)[0]!;
+
+const withChildren = (node: Split, first: PaneNode, second: PaneNode): Split =>
+  first === node.first && second === node.second
+    ? node
+    : { ...node, first, second };
+
 /** The tree without `pane`; its sibling takes the parent's place, and Main takes a lone pane's. */
 export function close(node: PaneNode, pane: Pane): PaneNode {
   if (isLeaf(node)) return node === pane && pane !== "main" ? "main" : node;
   if (node.first === pane) return node.second;
   if (node.second === pane) return node.first;
-  const first = close(node.first, pane);
-  const second = close(node.second, pane);
-  return first === node.first && second === node.second
-    ? node
-    : { ...node, first, second };
+  return withChildren(node, close(node.first, pane), close(node.second, pane));
 }
 
 const axisOf = (side: Side): Split["axis"] =>
-  side === "left" || side === "right" ? "horizontal" : "vertical";
+  vertical(side) ? "horizontal" : "vertical";
 
-/** `pane` beside `around` on `side`, taking `share` percent. */
-function beside(
+/** A strip of `depth` along `side` of `box`. */
+export function band(box: Rect, side: Side, depth: number): Rect {
+  switch (side) {
+    case "left":
+      return { ...box, w: depth };
+    case "right":
+      return { ...box, x: box.x + box.w - depth, w: depth };
+    case "top":
+      return { ...box, h: depth };
+    case "bottom":
+      return { ...box, y: box.y + box.h - depth, h: depth };
+  }
+}
+
+/** `pane` along the `side` edge of `around`, taking `share` percent. */
+export function dockAtEdge(
   around: PaneNode,
   pane: Pane,
   side: Side,
@@ -85,38 +112,22 @@ export function dock(
   share: number,
 ): PaneNode {
   if (isLeaf(node))
-    return node === target ? beside(node, pane, side, share) : node;
-  const first = dock(node.first, pane, target, side, share);
-  const second = dock(node.second, pane, target, side, share);
-  return first === node.first && second === node.second
-    ? node
-    : { ...node, first, second };
+    return node === target ? dockAtEdge(node, pane, side, share) : node;
+  return withChildren(
+    node,
+    dock(node.first, pane, target, side, share),
+    dock(node.second, pane, target, side, share),
+  );
 }
-
-/** Put `pane` along a whole edge of the area. */
-export const dockAtEdge = (
-  node: PaneNode,
-  pane: Pane,
-  side: Side,
-  share: number,
-): PaneNode => beside(node, pane, side, share);
 
 /** A hidden Main back on the left, as the Rust `show_main` puts it. */
 export const showMain = (node: PaneNode): PaneNode =>
-  contains(node, "main") ? node : beside(node, "main", "left", 60);
+  contains(node, "main") ? node : dockAtEdge(node, "main", "left", 60);
 
 export function swap(node: PaneNode, a: Pane, b: Pane): PaneNode {
   if (isLeaf(node)) return node === a ? b : node === b ? a : node;
-  return {
-    ...node,
-    first: swap(node.first, a, b),
-    second: swap(node.second, a, b),
-  };
+  return withChildren(node, swap(node.first, a, b), swap(node.second, a, b));
 }
-
-/** Replace the `from` leaf with `to`. */
-const replace = (node: PaneNode, from: Pane, to: Pane): PaneNode =>
-  swap(node, from, to);
 
 export function setSplitPercent(
   node: PaneNode,
@@ -132,11 +143,7 @@ export function setSplitPercent(
         ? current
         : { ...current, percent: clamped };
     }
-    const first = walk(current.first);
-    const second = walk(current.second);
-    return first === current.first && second === current.second
-      ? current
-      : { ...current, first, second };
+    return withChildren(current, walk(current.first), walk(current.second));
   };
   return walk(node);
 }
@@ -186,8 +193,16 @@ export function layoutRects(node: PaneNode): {
 }
 
 /** Whether every leaf gets its minimum size in an area of `width` by `height` pixels. */
-export function fits(node: PaneNode, width: number, height: number): boolean {
-  for (const [pane, rect] of layoutRects(node).rects) {
+export const fits = (node: PaneNode, width: number, height: number) =>
+  rectsFit(layoutRects(node).rects, width, height);
+
+/** `fits` for the boxes `layoutRects` gave. */
+export function rectsFit(
+  rects: Map<Pane, Rect>,
+  width: number,
+  height: number,
+): boolean {
+  for (const [pane, rect] of rects) {
     const min = pane === "main" ? MIN_MAIN : MIN_PANE;
     if (rect.w * width < min.w || rect.h * height < min.h) return false;
   }
@@ -229,8 +244,7 @@ export const floatRect = (float: FloatingPane): Rect => ({
   h: float.height / PERMILLE,
 });
 
-/** The side panes take turns in one slot, as the right panel did. */
-const SIDE_PARTNER: Partial<Record<Pane, Pane>> = {
+const SIDE_PARTNER: Partial<Record<Pane, SidePane>> = {
   now_playing: "queue",
   queue: "now_playing",
 };
@@ -246,14 +260,14 @@ export function open(layout: GuiLayout, pane: Pane): GuiLayout {
   if (placed(layout, pane)) return layout;
   const partner = SIDE_PARTNER[pane];
   if (partner && contains(layout.tree, partner))
-    return { ...layout, tree: replace(layout.tree, partner, pane) };
+    return { ...layout, tree: swap(layout.tree, partner, pane) };
   return { ...layout, tree: dockAtEdge(layout.tree, pane, "right", 25) };
 }
 
 /** The queue's own close: Now Playing takes its slot back when it is not open elsewhere. */
 export function closeQueue(layout: GuiLayout): GuiLayout {
   if (contains(layout.tree, "queue") && !placed(layout, "now_playing"))
-    return { ...layout, tree: replace(layout.tree, "queue", "now_playing") };
+    return { ...layout, tree: swap(layout.tree, "queue", "now_playing") };
   return without(layout, "queue");
 }
 

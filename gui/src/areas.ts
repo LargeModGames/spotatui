@@ -1,6 +1,7 @@
 import { EN, type GuiStrings } from "./i18n";
 import type { PaneChord } from "./bindings/PaneChord";
 import type { PaneKeys } from "./bindings/PaneKeys";
+import type { WindowEdge } from "./bindings/WindowEdge";
 import type { Page } from "./nav";
 
 /** The pages that digit keys open, in key order. */
@@ -59,8 +60,7 @@ export interface ShellKey {
   shift: boolean;
 }
 
-export type PaneCommand =
-  "detach" | "close" | "reset" | { focus: "left" | "right" | "top" | "bottom" };
+export type PaneCommand = "detach" | "close" | "reset" | { focus: WindowEdge };
 
 /** The pane key from `config.yml` that a press matches; never while typing or under an overlay. */
 export function paneKey(

@@ -1,15 +1,16 @@
 import type { GuiLayout } from "./bindings/GuiLayout";
 import type { Pane } from "./bindings/Pane";
 import {
-  close,
-  contains,
+  band,
   dock,
   dockAtEdge,
-  fits,
   float,
   layoutRects,
+  rectsFit,
   swap,
+  without,
   type Rect,
+  vertical,
   type Side,
 } from "./paneModel";
 
@@ -42,19 +43,6 @@ const px = (rect: Rect, area: Area): Rect => ({
   h: rect.h * area.h,
 });
 
-function band(box: Rect, side: Side, depth: number): Rect {
-  switch (side) {
-    case "left":
-      return { ...box, w: depth };
-    case "right":
-      return { ...box, x: box.x + box.w - depth, w: depth };
-    case "top":
-      return { ...box, h: depth };
-    case "bottom":
-      return { ...box, y: box.y + box.h - depth, h: depth };
-  }
-}
-
 function centred(box: Rect, part: number): Rect {
   const w = box.w * part;
   const h = box.h * part;
@@ -71,21 +59,18 @@ export function dockTargets(
   dragged: Pane,
   area: Area,
 ): Target[] {
-  const docked = contains(layout.tree, dragged);
-  const rest = {
-    ...layout,
-    tree: close(layout.tree, dragged),
-    floating: layout.floating.filter((entry) => entry.pane !== dragged),
-  };
+  const rest = without(layout, dragged);
   const now = layoutRects(layout.tree).rects;
+  const own = now.get(dragged);
   const target = (id: string, zone: Rect, result: GuiLayout): Target => {
-    const preview = layoutRects(result.tree).rects.get(dragged);
+    const rects = layoutRects(result.tree).rects;
+    const preview = rects.get(dragged);
     return {
       id,
       zone,
       result,
       preview: preview ? px(preview, area) : null,
-      ok: fits(result.tree, area.w, area.h),
+      ok: rectsFit(rects, area.w, area.h),
     };
   };
 
@@ -101,7 +86,7 @@ export function dockTargets(
     const box = px(rect, area);
     const share = pane === "main" ? 25 : 50;
     for (const side of SIDES) {
-      const along = side === "left" || side === "right" ? box.w : box.h;
+      const along = vertical(side) ? box.w : box.h;
       targets.push(
         target(
           `${pane}-${side}`,
@@ -111,20 +96,16 @@ export function dockTargets(
       );
     }
   }
-  if (docked)
+  if (own) {
     for (const [pane, rect] of now) {
       if (pane === dragged) continue;
-      const box = px(rect, area);
-      targets.push({
-        ...target(`${pane}-swap`, centred(box, SWAP_BOX), {
+      targets.push(
+        target(`${pane}-swap`, centred(px(rect, area), SWAP_BOX), {
           ...layout,
           tree: swap(layout.tree, dragged, pane),
         }),
-        preview: box,
-      });
+      );
     }
-  const own = now.get(dragged);
-  if (own)
     targets.push({
       id: "own",
       zone: px(own, area),
@@ -132,6 +113,7 @@ export function dockTargets(
       preview: null,
       ok: true,
     });
+  }
   return targets;
 }
 
