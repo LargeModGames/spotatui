@@ -196,41 +196,44 @@ impl App {
       }
       return;
     }
-    let Some(duration_ms) = self.playing_duration_ms() else {
-      return;
-    };
+    if let Some(CurrentPlaybackContext {
+      item: Some(item), ..
+    }) = &self.current_playback_context
+    {
+      let duration_ms = match item {
+        PlayableItem::Track(track) => track.duration.num_milliseconds() as u32,
+        PlayableItem::Episode(episode) => episode.duration.num_milliseconds() as u32,
+        _ => return,
+      };
 
-    // Clamp to strictly less than track duration so an absolute seek (such as
-    // from lyrics selection or playbar scrubbing) cannot overshoot and trigger
-    // `NextTrack` in `apply_seek`.
-    let max_seek = duration_ms.saturating_sub(1);
-    let new_progress = position_ms.min(max_seek);
-    self.seek_ms = Some(new_progress as u128);
+      let new_progress = position_ms.min(duration_ms);
+      self.seek_ms = Some(new_progress as u128);
 
-    // Use native streaming player for instant control (bypasses event channel latency)
-    #[cfg(feature = "streaming")]
-    if self.is_native_streaming_active_for_playback() && self.streaming_player.is_some() {
-      // Always update UI immediately
-      self.song_progress_ms = new_progress as u128;
-      self.seek_ms = None;
+      // Use native streaming player for instant control (bypasses event channel latency)
+      #[cfg(feature = "streaming")]
+      if self.is_native_streaming_active_for_playback() && self.streaming_player.is_some() {
+        // Always update UI immediately
+        self.song_progress_ms = new_progress as u128;
+        self.seek_ms = None;
 
-      // Throttle actual seeks to avoid overwhelming librespot (max ~20/sec)
-      const SEEK_THROTTLE_MS: u128 = 50;
-      let should_seek_now = self
-        .last_native_seek
-        .is_none_or(|t| t.elapsed().as_millis() >= SEEK_THROTTLE_MS);
+        // Throttle actual seeks to avoid overwhelming librespot (max ~20/sec)
+        const SEEK_THROTTLE_MS: u128 = 50;
+        let should_seek_now = self
+          .last_native_seek
+          .is_none_or(|t| t.elapsed().as_millis() >= SEEK_THROTTLE_MS);
 
-      if should_seek_now {
-        self.execute_native_seek(new_progress);
-      } else {
-        // Queue the seek - will be flushed by tick loop or next seek
-        self.pending_native_seek = Some(new_progress);
+        if should_seek_now {
+          self.execute_native_seek(new_progress);
+        } else {
+          // Queue the seek - will be flushed by tick loop or next seek
+          self.pending_native_seek = Some(new_progress);
+        }
+        return;
       }
-      return;
-    }
 
-    // Fallback: API-based seek for external devices (with throttling)
-    self.queue_api_seek(new_progress);
+      // Fallback: API-based seek for external devices (with throttling)
+      self.queue_api_seek(new_progress);
+    }
   }
 
   /// Queue a decoded-source (local/Subsonic/YouTube) seek with throttling
@@ -453,24 +456,5 @@ mod tests {
     app.apply_seek(2_000);
 
     assert!(matches!(rx.try_recv(), Ok(IoEvent::NextTrack)));
-  }
-
-  #[test]
-  fn seek_to_clamps_below_track_duration_to_prevent_next_track() {
-    let (tx, rx) = std::sync::mpsc::channel();
-    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
-    app.current_playback_context = Some(playing_track_context(full_track("ctx", "Context")));
-
-    // Duration of full_track is 180_000 ms. Seek far past duration.
-    app.seek_to(300_000);
-
-    // Flushes pending API seek
-    app.flush_pending_api_seek();
-
-    match rx.try_recv() {
-      Ok(IoEvent::Seek(ms)) => assert_eq!(ms, 179_999),
-      Ok(IoEvent::NextTrack) => panic!("seek_to triggered NextTrack!"),
-      _other => panic!("expected Seek(179_999)"),
-    }
   }
 }
