@@ -41,7 +41,7 @@ export function readStyle(stored: string | null): Style {
   return STYLES.find((style) => style === stored) ?? "Cava";
 }
 
-export function saveStyle(storage: Pick<Storage, "setItem">, style: Style) {
+function saveStyle(storage: Pick<Storage, "setItem">, style: Style) {
   try {
     storage.setItem(STYLE_KEY, style);
   } catch {
@@ -54,7 +54,7 @@ const styleWatchers = new Set<() => void>();
 
 /** The style every visualizer copy shows: the last choice, else the stored one. */
 export const shownStyle = (storage: Pick<Storage, "getItem">): Style =>
-  chosen ?? readStyle(storage.getItem(STYLE_KEY));
+  (chosen ??= readStyle(storage.getItem(STYLE_KEY)));
 
 export function watchStyle(notify: () => void) {
   styleWatchers.add(notify);

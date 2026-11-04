@@ -34,6 +34,7 @@ const RESIZE_SETTLE_MS = 250;
 /** With no frame at all this long after the ask, the screen says it waits for audio. */
 const WAITING_MS = 1500;
 const CYCLE_KEY = "V";
+const readShown = () => shownStyle(pageStorage());
 
 function trackAt(
   item: NowPlaying | null,
@@ -71,7 +72,6 @@ export function VisualizerScreen({
   available: boolean;
   feed?: ScreenFeed;
 }) {
-  const readShown = () => shownStyle(pageStorage());
   const style = useSyncExternalStore(watchStyle, readShown, readShown);
   const canvas = useRef<HTMLCanvasElement>(null);
   const [width, setWidth] = useState(0);
