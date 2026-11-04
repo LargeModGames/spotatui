@@ -471,8 +471,12 @@ pub enum NowPlayingHidden {
 /// The width the now playing panel takes out of a content area this wide,
 /// or `None` when the rest would be too narrow.
 pub fn now_playing_panel_width(content_width: u16) -> Option<u16> {
-  let width =
-    (content_width * NOW_PLAYING_PERCENT / 100).clamp(NOW_PLAYING_MIN_WIDTH, NOW_PLAYING_MAX_WIDTH);
+  // In u32: `content_width * 30` overflows a u16 past 2184 columns.
+  let share = u32::from(content_width) * u32::from(NOW_PLAYING_PERCENT) / 100;
+  let width = share.clamp(
+    u32::from(NOW_PLAYING_MIN_WIDTH),
+    u32::from(NOW_PLAYING_MAX_WIDTH),
+  ) as u16;
   (content_width.saturating_sub(width) >= NOW_PLAYING_MIN_CONTENT_WIDTH).then_some(width)
 }
 
@@ -963,5 +967,10 @@ mod tests {
     assert_eq!(now_playing_panel_width(200), Some(NOW_PLAYING_MAX_WIDTH));
     assert_eq!(now_playing_panel_width(100), Some(30));
     assert_eq!(now_playing_panel_width(89), None);
+    assert_eq!(
+      now_playing_panel_width(u16::MAX),
+      Some(NOW_PLAYING_MAX_WIDTH),
+      "a huge width does not overflow"
+    );
   }
 }
