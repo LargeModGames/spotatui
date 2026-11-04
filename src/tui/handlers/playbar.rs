@@ -40,6 +40,7 @@ fn toggle_now_playing_panel(app: &mut App) {
   if !app.view.now_playing_panel {
     return;
   }
+  app.refresh_up_next();
   let too_narrow = content_width_without_now_playing(app).is_some_and(|width| {
     now_playing_hidden_reason(app, width) == Some(NowPlayingHidden::TooNarrow)
   });

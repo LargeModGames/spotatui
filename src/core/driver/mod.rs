@@ -376,6 +376,8 @@ impl Driver {
               .bump(crate::core::app::PluginDataKind::Lyrics);
           }
         }
+        // The queue fetched for the last track says nothing about this one.
+        app.refresh_up_next();
       }
 
       // Cover art is re-evaluated EVERY tick against the desired image key,

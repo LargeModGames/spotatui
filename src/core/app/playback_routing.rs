@@ -143,6 +143,20 @@ impl App {
     }
   }
 
+  /// Fetch Spotify's queue for the now playing panel's "Up next", when the
+  /// panel is open and a Spotify item plays with a session up. Only the queue
+  /// screen fetched it before, and a fetch with no Spotify item to follow
+  /// would only report a failed load.
+  pub(crate) fn refresh_up_next(&mut self) {
+    let spotify_item = matches!(
+      self.playing_item(),
+      PlayingItem::Spotify(_) | PlayingItem::QueuedSpotify(_)
+    );
+    if self.view.now_playing_panel && self.spotify_connected && spotify_item {
+      self.apply(crate::core::action::Action::RefreshQueue);
+    }
+  }
+
   pub(crate) fn playback_owner(&self) -> PlaybackOwner {
     // First: a claim holds from the start request until Music acknowledges a
     // pause, so nothing below can take the sink back in between.
@@ -1272,6 +1286,47 @@ mod tests {
       resolve_playing_item(PlaybackOwner::None, None, false, Some(&cached)),
       PlayingItem::Nothing
     ));
+  }
+
+  /// A session playing a Spotify track on another device.
+  fn spotify_track_playing() -> (App, std::sync::mpsc::Receiver<IoEvent>) {
+    let (mut app, rx) = session_free_app();
+    app.spotify_connected = true;
+    app.current_playback_context = Some(CurrentPlaybackContext {
+      item: Some(PlayableItem::Track(full_track(
+        "0000000000000000000001",
+        "Playing",
+      ))),
+      ..make_external_context()
+    });
+    (app, rx)
+  }
+
+  #[test]
+  fn the_open_now_playing_panel_fetches_the_spotify_queue_for_up_next() {
+    let (mut app, rx) = spotify_track_playing();
+    app.view.now_playing_panel = true;
+
+    app.refresh_up_next();
+
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::GetQueue)));
+  }
+
+  #[test]
+  fn up_next_fetches_nothing_with_the_panel_closed_or_no_spotify_item() {
+    let (mut app, rx) = spotify_track_playing();
+    app.refresh_up_next();
+    assert!(rx.try_recv().is_err(), "the panel is closed");
+
+    app.view.now_playing_panel = true;
+    app.spotify_connected = false;
+    app.refresh_up_next();
+    assert!(rx.try_recv().is_err(), "no session");
+
+    app.spotify_connected = true;
+    app.current_playback_context = None;
+    app.refresh_up_next();
+    assert!(rx.try_recv().is_err(), "nothing plays");
   }
 
   #[test]

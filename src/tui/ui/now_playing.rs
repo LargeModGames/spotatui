@@ -89,10 +89,23 @@ impl NowPlayingView {
   }
 }
 
-/// The names queued after the playing item, from the last queue fetch. A fetch
-/// made for an earlier track says nothing about this one, so it counts only
-/// while its playing item is the one playing now.
+/// The names that play after the playing item, in the order the queue screen
+/// lists them: spotatui's own queue first, then Spotify's.
 fn queued_after(app: &App, playing_uri: Option<&str>) -> Vec<String> {
+  let native = app
+    .native_queue
+    .iter()
+    .map(|track| track.display_name(app.strings()).to_owned());
+  native
+    .chain(spotify_queued_after(app, playing_uri))
+    .take(UP_NEXT_LEN)
+    .collect()
+}
+
+/// Spotify's queue from the last fetch. A fetch made for an earlier track says
+/// nothing about this one, so it counts only while its playing item is the one
+/// playing now.
+fn spotify_queued_after(app: &App, playing_uri: Option<&str>) -> Vec<String> {
   let Some(queue) = app.queue.as_ref() else {
     return Vec::new();
   };
@@ -425,6 +438,50 @@ mod tests {
 
     assert_eq!(view.length, None);
     assert!(!view.liked, "an item with no id is never liked");
+  }
+
+  #[test]
+  fn up_next_lists_spotatuis_queue_before_spotifys() {
+    use crate::core::app::QueueState;
+    use crate::core::plugin_api::TrackInfo;
+    let queued_track = |uri: &str, name: &str| TrackInfo {
+      generated_name: None,
+      uri: Some(uri.to_string()),
+      name: name.to_string(),
+      artists: vec!["Artist".to_string()],
+      album: "Album".to_string(),
+      duration_ms: 180_000,
+      id: None,
+      album_id: None,
+      artist_refs: Vec::new(),
+      is_playable: true,
+      is_local: false,
+      track_number: 1,
+      explicit: false,
+      image_url: None,
+      release_date: None,
+    };
+    let mut app = App::default();
+    app.native_queue = vec![queued_track("spotify:track:mine", "Mine")];
+    let spotify = |uri: &str, name: &str| PlayableInfo::Track(queued_track(uri, name));
+    app.queue = Some(QueueState {
+      currently_playing: Some(spotify("spotify:track:now", "Now")),
+      queue: vec![
+        spotify("spotify:track:a", "Next A"),
+        spotify("spotify:track:b", "Next B"),
+        spotify("spotify:track:c", "Next C"),
+      ],
+    });
+
+    assert_eq!(
+      queued_after(&app, Some("spotify:track:now")),
+      vec!["Mine", "Next A", "Next B"]
+    );
+    assert_eq!(
+      queued_after(&app, Some("spotify:track:other")),
+      vec!["Mine"],
+      "a fetch for another track is ignored"
+    );
   }
 
   #[test]
