@@ -30,9 +30,9 @@ import {
   barPreview,
   DEFAULT_BARS,
   edgeAt,
+  edgeOf,
   frameGrid,
   moveBar,
-  thickness,
 } from "./barsModel";
 import { AlbumPage } from "./AlbumPage";
 import { AnnouncementDialog } from "./AnnouncementDialog";
@@ -68,17 +68,19 @@ import {
   closeQueue,
   contains,
   DEFAULT_LAYOUT,
+  firstPane,
   isLeaf,
   layoutRects,
   neighbor,
   open as openPane,
-  panes,
   placed,
   showMain,
+  SIDE_PANES,
   toggle,
   without,
 } from "./paneModel";
 import { Party } from "./Party";
+import { placeBox, trackDrag, type Point } from "./pointerDrag";
 import { PodcastPage } from "./PodcastPage";
 import { PlayerBar, type CoverSrc, type Panel } from "./PlayerBar";
 import type { WatchVisualizer } from "./PlayerBarVisualizer";
@@ -108,9 +110,11 @@ const NO_PLAYS: SessionPlay[] = [];
 const NO_ANNOUNCEMENTS: AnnouncementEntry[] = [];
 /** The width from which panes sit beside the main view; style.css has it too. */
 const WIDE = "(min-width: 1101px)";
-const isWide = () => window.matchMedia(WIDE).matches;
+let wideQuery: MediaQueryList | null = null;
+const wideList = () => (wideQuery ??= window.matchMedia(WIDE));
+const isWide = () => wideList().matches;
 const watchWide = (notify: () => void) => {
-  const query = window.matchMedia(WIDE);
+  const query = wideList();
   query.addEventListener("change", notify);
   return () => query.removeEventListener("change", notify);
 };
@@ -175,10 +179,17 @@ export function Shell({
     layout: GuiLayout;
     rev: number;
   } | null>(null);
-  const layout =
-    sentLayout && serverRev <= sentLayout.rev
-      ? sentLayout.layout
-      : (layoutChannel?.payload.layout ?? DEFAULT_LAYOUT);
+  const served = layoutChannel?.payload.layout ?? DEFAULT_LAYOUT;
+  // An answer equal to the sent layout keeps the sent object, so nothing keyed on it reruns.
+  const layout = useMemo(
+    () =>
+      sentLayout &&
+      (serverRev <= sentLayout.rev ||
+        JSON.stringify(served) === JSON.stringify(sentLayout.layout))
+        ? sentLayout.layout
+        : served,
+    [sentLayout, serverRev, served],
+  );
   const commitLayout = useCallback(
     (next: GuiLayout | null) => {
       setSentLayout({ layout: next ?? DEFAULT_LAYOUT, rev: serverRev });
@@ -205,7 +216,7 @@ export function Shell({
       const after = base ?? layout;
       if (!contains(after.tree, "main"))
         commitLayout({ ...after, tree: showMain(after.tree) });
-      else if (base) commitLayout(base);
+      else if (after !== layout) commitLayout(after);
       setViews((seen) =>
         seen[next.now.page] === next.now
           ? seen
@@ -230,7 +241,8 @@ export function Shell({
     [history, show],
   );
   const playback = channels.playback?.payload ?? null;
-  const playingUri = playback?.item?.uri ?? null;
+  const item = playback?.item ?? null;
+  const playingUri = item?.uri ?? null;
   const queue = channels.queue?.payload;
   const spotifyPlays = sourceOf(playingUri) === "Spotify";
   const queued = useMemo(
@@ -243,7 +255,7 @@ export function Shell({
   const paneKeys = layoutChannel?.payload.keys ?? null;
   const [panesFit, setPanesFit] = useState(true);
   // A narrow window has no panes; the side panel opens over the main view.
-  const [overlayPane, setOverlayPane] = useState<Pane | null>(null);
+  const [overlayPane, setOverlayPane] = useState<Panel | null>(null);
   // A queue open at launch leaves the keyboard where it is.
   const [queueGrab, setQueueGrab] = useState(false);
   const [room, setRoom] = useState(false);
@@ -323,12 +335,16 @@ export function Shell({
     [send, searchRev, statusRev, open],
   );
 
-  // The Web API queue is fetched on request only: on open and on each Spotify track change.
   const panesShown = wide && panesFit && !room && !mini;
   const paneShown = (pane: Pane) => panesShown && placed(layout, pane);
   // A hidden Main hides the page too, so a Lyrics or Visualizer pane draws in its place.
   const mainHidden = panesShown && !contains(layout.tree, "main");
   const pageShown = (kind: Page) => page === kind && !mainHidden;
+  const lyricsPaned = paneShown("lyrics");
+  const lyricsPaneActive = lyricsPaned && !pageShown("lyrics");
+  const visualizerPaneActive =
+    paneShown("visualizer") && !pageShown("visualizer");
+  // The Web API queue is fetched on request only: on open and on each Spotify track change.
   const showsQueue =
     paneShown("queue") ||
     paneShown("now_playing") ||
@@ -577,20 +593,13 @@ export function Shell({
           ?.contains(document.activeElement) ??
           false);
       commitLayout(next);
-      if (held)
-        focusPane(
-          contains(next.tree, "main") ? "main" : panes(next.tree)[0]!,
-          page,
-        );
+      if (held) focusPane(firstPane(next.tree), page);
     },
     [commitLayout, page],
   );
-  const panePanel = (panel: Panel): Pane =>
-    panel === "now" ? "now_playing" : "queue";
   // The player-bar buttons open and close a side pane, or the overlay on a narrow window.
   const togglePanel = useCallback(
-    (panel: Panel) => {
-      const pane = panePanel(panel);
+    (pane: Panel) => {
       if (!wide) {
         setOverlayPane((shown) => (shown === pane ? null : pane));
         return;
@@ -638,21 +647,17 @@ export function Shell({
     [commitLayout, layout, page, history, show],
   );
   const toggleLyrics = useCallback(() => {
-    if (paneShown("lyrics")) closePane("lyrics");
+    if (lyricsPaned) closePane("lyrics");
     else if (page === "lyrics") show(goBack(history), false);
     else open({ page: "lyrics" });
-    // paneShown reads the values listed here.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, history, show, open, closePane, layout, panesShown]);
+  }, [lyricsPaned, page, history, show, open, closePane]);
 
   const paneCommand = useCallback(
     (command: PaneCommand) => {
       const focused = (
         document.activeElement?.closest("[data-pane]") as HTMLElement | null
       )?.dataset.pane as Pane | undefined;
-      const current =
-        focused ??
-        (contains(layout.tree, "main") ? "main" : panes(layout.tree)[0]!);
+      const current = focused ?? firstPane(layout.tree);
       if (command === "reset") commitLayout(null);
       else if (command === "close") closePane(current);
       else if (command === "detach") {
@@ -802,22 +807,13 @@ export function Shell({
 
   // Below the wide width the bars go back to their default edges; the saved ones stay.
   const bars = wide ? layout.bars : DEFAULT_BARS;
-  const edgeOf = (bar: FrameBar): WindowEdge =>
-    bars.find((placement) => placement.bar === bar)?.edge ?? "top";
   const grid = frameGrid(bars);
-  const insetBottom = bars
-    .filter((placement) => placement.edge === "bottom")
-    .reduce(
-      (sum, placement, index) =>
-        sum + thickness(placement.bar, "bottom") + (index > 0 ? 8 : 0),
-      0,
-    );
   useEffect(() => {
     document.documentElement.style.setProperty(
       "--inset-bottom",
-      `${insetBottom}px`,
+      `${grid.insetBottom}px`,
     );
-  }, [insetBottom]);
+  }, [grid.insetBottom]);
   const barPreviewBox = useRef<HTMLDivElement>(null);
   const moveBarTo = (bar: FrameBar, edge: WindowEdge) => {
     const next = moveBar(layout.bars, bar, edge);
@@ -826,68 +822,24 @@ export function Shell({
   const dragBar =
     (bar: FrameBar) => (event: ReactPointerEvent<HTMLButtonElement>) => {
       if (event.button !== 0 || !wide) return;
-      const handle = event.currentTarget;
-      const pointer = event.pointerId;
-      const start = { x: event.clientX, y: event.clientY };
-      const before = layout;
-      let at = start;
-      let started = false;
-      let frame = 0;
-      const target = () =>
+      const edgeUnder = (at: Point) =>
         edgeAt(at.x, at.y, window.innerWidth, window.innerHeight);
-      const paint = () => {
-        frame = 0;
-        const box = barPreview(
-          bar,
-          target(),
-          window.innerWidth,
-          window.innerHeight,
-        );
-        const element = barPreviewBox.current;
-        if (!element) return;
-        Object.assign(element.style, {
-          left: `${box.x}px`,
-          top: `${box.y}px`,
-          width: `${box.w}px`,
-          height: `${box.h}px`,
-        });
-        element.dataset.show = "true";
-      };
-      const move = (next: PointerEvent) => {
-        if (next.pointerId !== pointer) return;
-        at = { x: next.clientX, y: next.clientY };
-        if (!started) {
-          if (Math.hypot(at.x - start.x, at.y - start.y) < 4) return;
-          started = true;
-          handle.setPointerCapture(pointer);
-          document.body.classList.add("pane-dragging");
-        }
-        if (!frame) frame = requestAnimationFrame(paint);
-      };
-      const stop = (commit: boolean) => {
-        cancelAnimationFrame(frame);
-        window.removeEventListener("pointermove", move);
-        window.removeEventListener("pointerup", up);
-        window.removeEventListener("keydown", key, true);
-        if (!started) return;
-        document.body.classList.remove("pane-dragging");
-        if (barPreviewBox.current) barPreviewBox.current.dataset.show = "false";
-        if (!commit) return;
-        const moved = moveBar(before.bars, bar, target());
-        if (moved !== before.bars) commitLayout({ ...before, bars: moved });
-      };
-      const up = (next: PointerEvent) => {
-        if (next.pointerId === pointer) stop(true);
-      };
-      const key = (next: KeyboardEvent) => {
-        if (next.key !== "Escape" || !started) return;
-        next.preventDefault();
-        next.stopPropagation();
-        stop(false);
-      };
-      window.addEventListener("pointermove", move);
-      window.addEventListener("pointerup", up);
-      window.addEventListener("keydown", key, true);
+      let shown: WindowEdge | null = null;
+      trackDrag(event, {
+        paint: (at) => {
+          const edge = edgeUnder(at);
+          if (edge === shown) return;
+          shown = edge;
+          placeBox(
+            barPreviewBox.current,
+            barPreview(bar, edge, window.innerWidth, window.innerHeight),
+          );
+        },
+        end: (drop) => {
+          placeBox(barPreviewBox.current, null);
+          if (drop) moveBarTo(bar, edgeUnder(drop));
+        },
+      });
     };
   const grip = (bar: FrameBar) =>
     wide ? (
@@ -908,7 +860,6 @@ export function Shell({
       />
     ) : null;
 
-  const item = playback?.item ?? null;
   const coverUri =
     item?.image_url ??
     (playingUri?.startsWith("file:") ? (coverSrc?.(playingUri) ?? null) : null);
@@ -952,7 +903,7 @@ export function Shell({
           item={item}
           lyrics={channels.lyrics?.payload ?? null}
           position={state.position}
-          active={paneShown("lyrics") && !pageShown("lyrics")}
+          active={lyricsPaneActive}
           connected={state.connected}
           send={send}
         />
@@ -962,12 +913,12 @@ export function Shell({
       title: s.visualizer,
       node: (
         <VisualizerScreen
-          key={String(paneShown("visualizer") && !pageShown("visualizer"))}
+          key={String(visualizerPaneActive)}
           s={s}
           screens={state.localization?.strings.screens}
           item={item}
           position={state.position}
-          active={paneShown("visualizer") && !pageShown("visualizer")}
+          active={visualizerPaneActive}
           available={choice(VISUALIZER_SETTING) !== null}
           feed={visualizerScreen}
         />
@@ -983,14 +934,10 @@ export function Shell({
     },
   };
   const panels: Panel[] = wide
-    ? (["now", "queue"] as Panel[]).filter((panel) =>
-        placed(layout, panePanel(panel)),
-      )
-    : overlayPane === "now_playing"
-      ? ["now"]
-      : overlayPane === "queue"
-        ? ["queue"]
-        : [];
+    ? SIDE_PANES.filter((pane) => placed(layout, pane))
+    : overlayPane
+      ? [overlayPane]
+      : [];
   const mainPane = (
     <>
       <LibraryPanel
@@ -1020,7 +967,7 @@ export function Shell({
               {wide && (kind === "lyrics" || kind === "visualizer") && (
                 <button
                   type="button"
-                  className="pane-detach"
+                  className="panel-close pane-detach"
                   aria-label={s.detach_pane}
                   title={s.detach_pane}
                   onClick={() => detachPage(kind)}
@@ -1072,7 +1019,7 @@ export function Shell({
           connected={state.connected}
           update={channels.update?.payload ?? null}
           onUpdate={onUpdate}
-          edge={edgeOf("top")}
+          edge={edgeOf(bars, "top")}
           grip={grip("top")}
           mainHidden={
             panesShown && (mainHidden || !isLeaf(layout.tree))
@@ -1106,7 +1053,7 @@ export function Shell({
           devices={channels.devices?.payload ?? NO_DEVICES}
           panels={panels}
           onPanel={togglePanel}
-          lyricsOpen={page === "lyrics" || paneShown("lyrics")}
+          lyricsOpen={page === "lyrics" || lyricsPaned}
           onLyrics={toggleLyrics}
           onRoom={() => setRoom(true)}
           onMini={() => showMini(true)}
@@ -1116,7 +1063,7 @@ export function Shell({
           covered={room}
           look={channels.settings?.payload.visualizer ?? null}
           coverSrc={coverSrc}
-          edge={edgeOf("player")}
+          edge={edgeOf(bars, "player")}
           grip={grip("player")}
         />
         {room && (
@@ -1218,9 +1165,7 @@ function focusPane(pane: Pane, page: Page) {
     return;
   }
   const slot = document.querySelector<HTMLElement>(`[data-pane="${pane}"]`);
-  (slot?.querySelector<HTMLElement>("[data-focus]") ?? slot)?.focus({
-    preventScroll: true,
-  });
+  focusIn(slot, slot);
 }
 
 function focusScreen(page: Page) {
@@ -1228,8 +1173,16 @@ function focusScreen(page: Page) {
     document.querySelector<HTMLInputElement>("#top-search")?.focus();
     return;
   }
-  const screen = document.querySelector(`[data-area="${page}"]`);
-  const target = screen?.querySelector<HTMLElement>("[data-focus]");
+  focusIn(document.querySelector(`[data-area="${page}"]`));
+}
+
+/** Focuses the `[data-focus]` target in `container`, or `fallback`, and shows a list's selected row. */
+function focusIn(
+  container: Element | null,
+  fallback: HTMLElement | null = null,
+) {
+  const target =
+    container?.querySelector<HTMLElement>("[data-focus]") ?? fallback;
   // A tall list would scroll the page header away.
   target?.focus({ preventScroll: true });
   if (target?.getAttribute("role") === "listbox")

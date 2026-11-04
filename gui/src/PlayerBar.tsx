@@ -2,6 +2,7 @@ import { EN, type GuiStrings } from "./i18n";
 import { useCallback, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { WindowEdge } from "./bindings/WindowEdge";
+import type { SidePane } from "./paneModel";
 import type { Action } from "./bindings/Action";
 import type { DeviceInfo } from "./bindings/DeviceInfo";
 import type { PlaybackPayload } from "./bindings/PlaybackPayload";
@@ -23,7 +24,7 @@ import { usePosition } from "./usePosition";
 import { isEmptySpace, nextMode, VISUALIZER_SETTING } from "./visualizerModel";
 
 /** A side pane that a player-bar button opens and closes. */
-export type Panel = "now" | "queue";
+export type Panel = SidePane;
 
 /** The volume an unmute restores when the mute happened elsewhere. */
 const UNMUTE_VOLUME = 50;
@@ -207,8 +208,8 @@ export function PlayerBar({
           type="button"
           className="icon-button"
           aria-label={s.now_playing_view}
-          aria-pressed={panels.includes("now")}
-          onClick={() => onPanel("now")}
+          aria-pressed={panels.includes("now_playing")}
+          onClick={() => onPanel("now_playing")}
         >
           <Glyph name="panel" />
         </button>

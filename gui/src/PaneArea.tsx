@@ -1,12 +1,5 @@
 import { EN, type GuiStrings } from "./i18n";
-import {
-  memo,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type {
   CSSProperties,
   KeyboardEvent,
@@ -21,11 +14,15 @@ import {
   fits,
   floatRect,
   layoutRects,
+  MAX_PERCENT,
+  MIN_PERCENT,
+  rectsFit,
   setSplitPercent,
   snapPercent,
   type Divider,
   type Rect,
 } from "./paneModel";
+import { placeBox, trackDrag, type Point } from "./pointerDrag";
 import {
   dockTargets,
   floatAt,
@@ -51,7 +48,6 @@ const ORDER: Pane[] = [
   "visualizer",
   "cover_art",
 ];
-const DRAG_START_PX = 4;
 const GHOST_MAX = { w: 480, h: 320 };
 const STEP_PERCENT = 5;
 
@@ -64,7 +60,7 @@ const boxStyle = (rect: Rect): CSSProperties =>
   }) as CSSProperties;
 
 /** The panes beside Main: docked in the split tree or floating over it. */
-export const PaneArea = memo(function PaneArea({
+export function PaneArea({
   s = EN,
   layout,
   wide,
@@ -92,7 +88,7 @@ export const PaneArea = memo(function PaneArea({
   const [live, setLive] = useState<PaneNode | null>(null);
   const tree = live ?? layout.tree;
   const { rects, dividers } = useMemo(() => layoutRects(tree), [tree]);
-  const shown = wide && (size.w === 0 || fits(tree, size.w, size.h));
+  const shown = wide && (size.w === 0 || rectsFit(rects, size.w, size.h));
 
   useLayoutEffect(() => {
     const element = area.current;
@@ -116,33 +112,21 @@ export const PaneArea = memo(function PaneArea({
   useEffect(() => onShown(shown), [shown, onShown]);
 
   const showPreview = (target: Target | null) => {
-    const element = preview.current;
-    if (!element) return;
-    if (!target?.preview) {
-      element.dataset.show = "false";
-      return;
-    }
-    Object.assign(element.style, {
-      left: `${target.preview.x}px`,
-      top: `${target.preview.y}px`,
-      width: `${target.preview.w}px`,
-      height: `${target.preview.h}px`,
-    });
-    element.dataset.show = "true";
-    element.dataset.refused = String(!target.ok);
+    placeBox(preview.current, target?.preview ?? null);
+    if (target?.preview && preview.current)
+      preview.current.dataset.refused = String(!target.ok);
   };
 
-  /** Ends the drag in progress; `true` drops the pane where the pointer is. */
-  const stopDrag = useRef<((commit: boolean) => void) | null>(null);
-  useEffect(() => () => stopDrag.current?.(false), []);
+  /** Cancels the drag in progress. */
+  const stopDrag = useRef<(() => void) | null>(null);
+  useEffect(() => () => stopDrag.current?.(), []);
 
   const startDrag = (pane: Pane) => (event: PointerEvent<HTMLElement>) => {
     const target = event.target as Element;
     if (event.button !== 0 || stopDrag.current) return;
-    if (!target.closest(".pane-head, .panel-head")) return;
+    if (!target.closest(".panel-head")) return;
     if (target.closest("button, a, input, [role=slider]")) return;
     const slot = event.currentTarget;
-    const pointer = event.pointerId;
     const box = slot.getBoundingClientRect();
     const size = {
       w: Math.min(box.width, GHOST_MAX.w),
@@ -152,149 +136,103 @@ export const PaneArea = memo(function PaneArea({
       x: ((event.clientX - box.left) * size.w) / box.width,
       y: Math.min(event.clientY - box.top, size.h - 8),
     };
-    const start = { x: event.clientX, y: event.clientY };
     const before = layout;
-    let at = start;
     let bounds: DOMRect | null = null;
     let targets: Target[] = [];
     let hit: Target | null = null;
-    let frame = 0;
-
-    const hitNow = () =>
+    const hitAt = (at: Point) =>
       bounds ? hitTarget(targets, at.x - bounds.left, at.y - bounds.top) : null;
-    const paint = () => {
-      frame = 0;
-      if (ghost.current)
-        ghost.current.style.transform = `translate3d(${at.x - grab.x}px, ${at.y - grab.y}px, 0)`;
-      const next = hitNow();
-      if (next?.id !== hit?.id) showPreview(next);
-      hit = next;
-    };
-    const begin = () => {
-      bounds = area.current?.getBoundingClientRect() ?? null;
-      if (!bounds) return;
-      targets = dockTargets(before, pane, {
-        w: bounds.width,
-        h: bounds.height,
-      });
-      slot.setPointerCapture(pointer);
-      slot.dataset.source = "";
-      document.body.classList.add("pane-dragging");
-      const element = ghost.current;
-      if (!element) return;
-      element.querySelector(".pane-ghost-title")!.textContent =
-        views[pane]?.title ?? "";
-      element.style.width = `${size.w}px`;
-      element.style.height = `${size.h}px`;
-      element.dataset.show = "true";
-    };
-    const move = (next: globalThis.PointerEvent) => {
-      if (next.pointerId !== pointer) return;
-      at = { x: next.clientX, y: next.clientY };
-      if (!bounds) {
-        if (Math.hypot(at.x - start.x, at.y - start.y) < DRAG_START_PX) return;
-        begin();
+
+    stopDrag.current = trackDrag(event, {
+      begin: () => {
+        bounds = area.current?.getBoundingClientRect() ?? null;
+        if (!bounds) return false;
+        targets = dockTargets(before, pane, {
+          w: bounds.width,
+          h: bounds.height,
+        });
+        slot.dataset.source = "";
+        const element = ghost.current;
+        if (element) {
+          element.querySelector(".pane-ghost-title")!.textContent =
+            views[pane]?.title ?? "";
+          element.style.width = `${size.w}px`;
+          element.style.height = `${size.h}px`;
+          element.dataset.show = "true";
+        }
+        return true;
+      },
+      paint: (at) => {
+        if (ghost.current)
+          ghost.current.style.transform = `translate3d(${at.x - grab.x}px, ${at.y - grab.y}px, 0)`;
+        const next = hitAt(at);
+        if (next?.id !== hit?.id) showPreview(next);
+        hit = next;
+      },
+      end: (drop) => {
+        stopDrag.current = null;
         if (!bounds) return;
-      }
-      if (!frame) frame = requestAnimationFrame(paint);
-    };
-    const up = (next: globalThis.PointerEvent) => {
-      if (next.pointerId === pointer) stop(true);
-    };
-    const cancel = () => stop(false);
-    const key = (next: globalThis.KeyboardEvent) => {
-      if (next.key !== "Escape" || !bounds) return;
-      next.preventDefault();
-      next.stopPropagation();
-      stop(false);
-    };
-    const stop = (commit: boolean) => {
-      stopDrag.current = null;
-      cancelAnimationFrame(frame);
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-      window.removeEventListener("pointercancel", cancel);
-      window.removeEventListener("keydown", key, true);
-      if (!bounds) return;
-      delete slot.dataset.source;
-      document.body.classList.remove("pane-dragging");
-      if (ghost.current) ghost.current.dataset.show = "false";
-      showPreview(null);
-      if (!commit) return;
-      const dropped = hitNow();
-      if (dropped) {
-        if (dropped.preview && dropped.ok && dropped.result !== before)
-          onLayout(dropped.result);
-        return;
-      }
-      onLayout(
-        floatAt(
-          before,
-          pane,
-          {
-            x: at.x - grab.x - bounds.left,
-            y: at.y - grab.y - bounds.top,
-            ...size,
-          },
-          { w: bounds.width, h: bounds.height },
-        ),
-      );
-    };
-    stopDrag.current = stop;
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
-    window.addEventListener("pointercancel", cancel);
-    window.addEventListener("keydown", key, true);
+        delete slot.dataset.source;
+        if (ghost.current) ghost.current.dataset.show = "false";
+        showPreview(null);
+        if (!drop) return;
+        const dropped = hitAt(drop);
+        if (dropped) {
+          if (dropped.preview && dropped.ok && dropped.result !== before)
+            onLayout(dropped.result);
+          return;
+        }
+        onLayout(
+          floatAt(
+            before,
+            pane,
+            {
+              x: drop.x - grab.x - bounds.left,
+              y: drop.y - grab.y - bounds.top,
+              ...size,
+            },
+            { w: bounds.width, h: bounds.height },
+          ),
+        );
+      },
+    });
   };
 
   const dividerDrag =
     (divider: Divider) => (event: PointerEvent<HTMLElement>) => {
       const element = area.current;
-      if (event.button !== 0 || !element) return;
-      const target = event.currentTarget;
-      target.setPointerCapture(event.pointerId);
+      if (event.button !== 0 || !element || stopDrag.current) return;
       const box = element.getBoundingClientRect();
       const base = layout.tree;
+      const horizontal = divider.axis === "horizontal";
       let next: PaneNode | null = null;
-      let frame = 0;
-      let at = 0;
-      const paintDivider = () => {
-        frame = 0;
+      let last = divider.percent;
+      const follow = (at: Point) => {
         const { x, y, w, h } = divider.box;
-        const raw =
-          divider.axis === "horizontal"
-            ? ((at - box.left - x * box.width) / (w * box.width)) * 100
-            : ((at - box.top - y * box.height) / (h * box.height)) * 100;
-        const candidate = setSplitPercent(
-          base,
-          divider.index,
-          snapPercent(raw),
-        );
-        if (candidate !== next && fits(candidate, box.width, box.height)) {
+        const raw = horizontal
+          ? ((at.x - box.left - x * box.width) / (w * box.width)) * 100
+          : ((at.y - box.top - y * box.height) / (h * box.height)) * 100;
+        const percent = snapPercent(raw);
+        if (percent === last) return;
+        last = percent;
+        const candidate = setSplitPercent(base, divider.index, percent);
+        if (fits(candidate, box.width, box.height)) {
           next = candidate;
           setLive(candidate);
         }
       };
-      const move = (move: globalThis.PointerEvent) => {
-        at = divider.axis === "horizontal" ? move.clientX : move.clientY;
-        if (!frame) frame = requestAnimationFrame(paintDivider);
-      };
-      const up = () => {
-        if (frame) {
-          cancelAnimationFrame(frame);
-          paintDivider();
-        }
-        window.removeEventListener("pointermove", move);
-        window.removeEventListener("pointerup", up);
-        window.removeEventListener("pointercancel", up);
-        document.body.classList.remove("pane-dragging");
-        setLive(null);
-        if (next && next !== base) onLayout({ ...layout, tree: next });
-      };
-      document.body.classList.add("pane-dragging");
-      window.addEventListener("pointermove", move);
-      window.addEventListener("pointerup", up);
-      window.addEventListener("pointercancel", up);
+      stopDrag.current = trackDrag(event, {
+        threshold: 0,
+        cursor: horizontal ? "col-resize" : "row-resize",
+        paint: follow,
+        end: (drop) => {
+          stopDrag.current = null;
+          if (drop) follow(drop);
+          setLive(null);
+          if (drop && next && next !== base)
+            onLayout({ ...layout, tree: next });
+        },
+      });
     };
 
   const setPercent = (divider: Divider, percent: number) => {
@@ -353,7 +291,7 @@ export const PaneArea = memo(function PaneArea({
                 view.node
               ) : (
                 <section className="pane-frame" aria-label={view.title}>
-                  <header className="pane-head" title={s.drag_pane}>
+                  <header className="panel-head" title={s.drag_pane}>
                     <h2>{view.title}</h2>
                     <button
                       type="button"
@@ -382,8 +320,8 @@ export const PaneArea = memo(function PaneArea({
                 role="separator"
                 aria-orientation={horizontal ? "vertical" : "horizontal"}
                 aria-valuenow={divider.percent}
-                aria-valuemin={10}
-                aria-valuemax={90}
+                aria-valuemin={MIN_PERCENT}
+                aria-valuemax={MAX_PERCENT}
                 tabIndex={0}
                 data-axis={divider.axis}
                 style={boxStyle(
@@ -411,4 +349,4 @@ export const PaneArea = memo(function PaneArea({
       </div>
     </>
   );
-});
+}
