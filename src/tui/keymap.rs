@@ -270,6 +270,18 @@ pub fn help_entries_for(strings: &crate::core::i18n::Strings) -> Vec<HelpEntry> 
       help.context_lyrics,
     ),
     row(
+      help.lyrics_seek,
+      Custom(|app| {
+        let submit = app.user_config.keys.submit;
+        if submit == Key::Enter {
+          "<Enter>".to_string()
+        } else {
+          format!("{submit} | <Enter>")
+        }
+      }),
+      help.context_lyrics,
+    ),
+    row(
       help.miniplayer,
       Binding(|k| k.miniplayer_view),
       help.context_general,
@@ -1125,6 +1137,7 @@ mod tests {
         event(help.lyrics_follow),
         help.key_alternative("f", "<Esc>")
       );
+      assert_eq!(event(help.lyrics_seek), "<Enter>");
     }
   }
 

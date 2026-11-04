@@ -310,6 +310,13 @@ impl App {
     self
   }
 
+  /// This app with song progress seeded, for tests.
+  #[cfg(all(test, feature = "tui"))]
+  pub(crate) fn with_song_progress(mut self, progress_ms: u128) -> App {
+    self.song_progress_ms = progress_ms;
+    self
+  }
+
   /// Mark the native backend parked with no player, for tests.
   #[cfg(all(test, feature = "streaming"))]
   pub(crate) fn seed_native_parked(&mut self) {
