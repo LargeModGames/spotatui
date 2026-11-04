@@ -2,23 +2,11 @@ import { expect, test, type Page } from "@playwright/test";
 import type { ClientMessage } from "../src/bindings/ClientMessage";
 import type { GuiLayout } from "../src/bindings/GuiLayout";
 import type { ServerMessage } from "../src/bindings/ServerMessage";
+import defaults from "../src/bindings/default_layout.json" with { type: "json" };
 import { shot } from "./bridge";
 import { library, playing, room } from "./fixtures";
 
-/** The default layout, as `GuiLayout::default()` writes it. */
-const DEFAULT_LAYOUT: GuiLayout = {
-  tree: {
-    axis: "horizontal",
-    percent: 75,
-    first: "main",
-    second: "now_playing",
-  },
-  floating: [],
-  bars: [
-    { bar: "top", edge: "top" },
-    { bar: "player", edge: "bottom" },
-  ],
-};
+const DEFAULT_LAYOUT = defaults as unknown as GuiLayout;
 
 const alt = (code: string) => ({ code, alt: true, ctrl: false, shift: false });
 
