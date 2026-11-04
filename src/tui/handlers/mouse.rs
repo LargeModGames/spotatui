@@ -294,7 +294,7 @@ fn handle_pane_mouse(mouse: MouseEvent, app: &mut App) -> bool {
     app.view.focused_pane = pane;
   }
   match pane {
-    Pane::Main => return false,
+    Pane::Main | Pane::NowPlaying => return false,
     Pane::Lyrics => match mouse.kind {
       MouseEventKind::ScrollUp => lyrics_view::scroll_by(app, -1),
       MouseEventKind::ScrollDown => lyrics_view::scroll_by(app, 1),

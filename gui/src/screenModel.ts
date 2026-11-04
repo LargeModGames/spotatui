@@ -41,12 +41,32 @@ export function readStyle(stored: string | null): Style {
   return STYLES.find((style) => style === stored) ?? "Cava";
 }
 
-export function saveStyle(storage: Pick<Storage, "setItem">, style: Style) {
+function saveStyle(storage: Pick<Storage, "setItem">, style: Style) {
   try {
     storage.setItem(STYLE_KEY, style);
   } catch {
     // A full or blocked storage only forgets the choice at the next load.
   }
+}
+
+let chosen: Style | null = null;
+const styleWatchers = new Set<() => void>();
+
+/** The style every visualizer copy shows: the last choice, else the stored one. */
+export const shownStyle = (storage: Pick<Storage, "getItem">): Style =>
+  (chosen ??= readStyle(storage.getItem(STYLE_KEY)));
+
+export function watchStyle(notify: () => void) {
+  styleWatchers.add(notify);
+  return () => {
+    styleWatchers.delete(notify);
+  };
+}
+
+export function chooseStyle(storage: Pick<Storage, "setItem">, style: Style) {
+  chosen = style;
+  saveStyle(storage, style);
+  for (const notify of styleWatchers) notify();
 }
 
 export function nextStyle(style: Style): Style {

@@ -7,7 +7,9 @@ use crate::core::app::{
   AnnouncementLevel, App, DiscoverShelf, DisplayDomain, DisplayRevisions, SessionPlay,
 };
 use crate::core::first_run::compiled_in_sources;
+use crate::core::gui_layout::GuiLayout;
 use crate::core::i18n::{Language, Strings};
+use crate::core::input::{Arrow, Key};
 use crate::core::playlist_sync::Unmatched;
 use crate::core::plugin_api::{
   device_list, recently_played_snapshot, route_name, AlbumInfo, ArtistInfo, DeviceInfo,
@@ -16,6 +18,7 @@ use crate::core::plugin_api::{
 use crate::core::source::Source;
 use crate::core::theme::{resolve, Color, Palette, Theme, ThemeField};
 use crate::core::update::{UpdateAsk, UpdateStatus};
+use crate::core::user_config::KeyBindings;
 use crate::core::visualizer_look::VisualizerLook;
 use crate::gui::onboarding::{OnboardingReply, OnboardingView};
 use serde::{Deserialize, Serialize};
@@ -173,6 +176,99 @@ pub(crate) enum ServerMessage {
     rev: u64,
     payload: AnnouncementsPayload,
   },
+  /// The window layout: panes, floating panes and bar edges, with the pane keys.
+  PaneLayout {
+    rev: u64,
+    payload: PaneLayoutPayload,
+  },
+}
+
+#[derive(Serialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
+pub(crate) struct PaneLayoutPayload {
+  layout: GuiLayout,
+  keys: PaneKeys,
+}
+
+/// The pane keys from `config.yml`; `null` for a key the page cannot match.
+#[derive(Serialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
+pub(crate) struct PaneKeys {
+  detach: Option<PaneChord>,
+  close: Option<PaneChord>,
+  focus_left: Option<PaneChord>,
+  focus_down: Option<PaneChord>,
+  focus_up: Option<PaneChord>,
+  focus_right: Option<PaneChord>,
+  reset: Option<PaneChord>,
+}
+
+/// A key as the browser's `KeyboardEvent.code` names it, with its modifiers.
+#[derive(Serialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
+pub(crate) struct PaneChord {
+  code: String,
+  alt: bool,
+  ctrl: bool,
+  shift: bool,
+}
+
+fn chord(key: Key) -> Option<PaneChord> {
+  let arrow = |arrow: Arrow, alt: bool, shift: bool| PaneChord {
+    code: format!("Arrow{arrow:?}"),
+    alt,
+    ctrl: false,
+    shift,
+  };
+  let (c, alt, ctrl) = match key {
+    Key::Left => return Some(arrow(Arrow::Left, false, false)),
+    Key::Right => return Some(arrow(Arrow::Right, false, false)),
+    Key::Up => return Some(arrow(Arrow::Up, false, false)),
+    Key::Down => return Some(arrow(Arrow::Down, false, false)),
+    Key::AltArrow(direction) => return Some(arrow(direction, true, false)),
+    Key::AltShiftArrow(direction) => return Some(arrow(direction, true, true)),
+    Key::Char(c) => (c, false, false),
+    Key::Alt(c) => (c, true, false),
+    Key::Ctrl(c) => (c, false, true),
+    _ => return None,
+  };
+  let code = match c {
+    'a'..='z' | 'A'..='Z' => format!("Key{}", c.to_ascii_uppercase()),
+    '0'..='9' => format!("Digit{c}"),
+    _ => match c {
+      '=' => "Equal",
+      '-' => "Minus",
+      '.' => "Period",
+      ',' => "Comma",
+      '/' => "Slash",
+      ';' => "Semicolon",
+      '\'' => "Quote",
+      '[' => "BracketLeft",
+      ']' => "BracketRight",
+      '\\' => "Backslash",
+      '`' => "Backquote",
+      _ => return None,
+    }
+    .to_string(),
+  };
+  Some(PaneChord {
+    code,
+    alt,
+    ctrl,
+    shift: c.is_ascii_uppercase(),
+  })
+}
+
+fn pane_keys(keys: &KeyBindings) -> PaneKeys {
+  PaneKeys {
+    detach: chord(keys.detach_pane),
+    close: chord(keys.close_pane),
+    focus_left: chord(keys.focus_pane_left),
+    focus_down: chord(keys.focus_pane_down),
+    focus_up: chord(keys.focus_pane_up),
+    focus_right: chord(keys.focus_pane_right),
+    reset: chord(keys.reset_panes),
+  }
 }
 
 #[derive(Serialize)]
@@ -748,6 +844,10 @@ pub(crate) enum ClientMessage {
   },
   /// The Home page asks for the changelog once it shows.
   Changelog,
+  /// The layout after a drop or a key; `null` resets it.
+  PaneLayout {
+    layout: Option<GuiLayout>,
+  },
   Quit,
 }
 
@@ -1104,6 +1204,13 @@ fn channel_message(
             total,
           }),
         history: app.announcement_history().map(Into::into).collect(),
+      },
+    },
+    DisplayDomain::PaneLayout => ServerMessage::PaneLayout {
+      rev,
+      payload: PaneLayoutPayload {
+        layout: app.gui_pane_layout().clone(),
+        keys: pane_keys(&app.user_config.keys),
       },
     },
   })
@@ -1817,6 +1924,7 @@ mod tests {
     assert_eq!(
       kinds,
       [
+        "pane_layout",
         "route",
         "status",
         "source",
@@ -1849,6 +1957,88 @@ mod tests {
     assert_eq!(
       revisions.as_object().unwrap().len(),
       DisplayDomain::ALL.len()
+    );
+  }
+
+  #[test]
+  fn a_layout_change_pushes_the_pane_layout_channel_and_null_resets_it() {
+    use crate::core::gui_layout::{GuiLayout, WindowEdge};
+    let (mut app, _rx) = app();
+    let mut moved = GuiLayout::default();
+    moved.bars[1].edge = WindowEdge::Left;
+    let before = app.display_revisions();
+
+    assert!(app.set_gui_pane_layout(Some(moved)));
+    let payload = &pushed(&diff(&before, &app, Language::En), "pane_layout")["payload"];
+    assert_eq!(payload["layout"]["bars"][1]["edge"], "left");
+    assert_eq!(payload["keys"]["detach"]["code"], "KeyD");
+
+    let message: ClientMessage =
+      serde_json::from_str(r#"{"type":"pane_layout","layout":null}"#).unwrap();
+    let ClientMessage::PaneLayout { layout } = message else {
+      panic!("not a pane layout message");
+    };
+    assert!(app.set_gui_pane_layout(layout));
+    assert_eq!(app.gui_pane_layout(), &GuiLayout::default());
+    assert!(!app.set_gui_pane_layout(None));
+  }
+
+  #[test]
+  fn chord_maps_letters_digits_and_symbols_to_browser_codes() {
+    let code = |key| chord(key).map(|chord| (chord.code, chord.alt, chord.ctrl, chord.shift));
+
+    assert_eq!(
+      code(Key::Alt('d')),
+      Some(("KeyD".into(), true, false, false))
+    );
+    assert_eq!(
+      code(Key::Alt('H')),
+      Some(("KeyH".into(), true, false, true))
+    );
+    assert_eq!(
+      code(Key::Alt('0')),
+      Some(("Digit0".into(), true, false, false))
+    );
+    assert_eq!(
+      code(Key::Ctrl('=')),
+      Some(("Equal".into(), false, true, false))
+    );
+    assert_eq!(
+      code(Key::Char('-')),
+      Some(("Minus".into(), false, false, false))
+    );
+    assert_eq!(
+      code(Key::Alt('.')),
+      Some(("Period".into(), true, false, false))
+    );
+    assert_eq!(
+      code(Key::Ctrl('/')),
+      Some(("Slash".into(), false, true, false))
+    );
+    assert_eq!(
+      code(Key::Alt('[')),
+      Some(("BracketLeft".into(), true, false, false))
+    );
+    assert_eq!(code(Key::Alt('?')), None);
+    assert_eq!(code(Key::Alt('ä')), None);
+    assert_eq!(code(Key::Enter), None);
+  }
+
+  #[test]
+  fn chord_maps_arrow_keys_with_their_modifiers_to_browser_codes() {
+    let code = |key| chord(key).map(|chord| (chord.code, chord.alt, chord.ctrl, chord.shift));
+
+    assert_eq!(
+      code(Key::Down),
+      Some(("ArrowDown".into(), false, false, false))
+    );
+    assert_eq!(
+      code(Key::AltArrow(Arrow::Left)),
+      Some(("ArrowLeft".into(), true, false, false))
+    );
+    assert_eq!(
+      code(Key::AltShiftArrow(Arrow::Up)),
+      Some(("ArrowUp".into(), true, false, true))
     );
   }
 
@@ -3522,6 +3712,16 @@ mod tests {
     written::<WelcomePayload>(&dir, &cfg);
     written::<WelcomeStreak>(&dir, &cfg);
     written::<AnnouncementsPayload>(&dir, &cfg);
+    written::<PaneLayoutPayload>(&dir, &cfg);
+    written::<crate::core::gui_layout::GuiLayout>(&dir, &cfg);
+    written::<crate::core::pane::PaneNode>(&dir, &cfg);
+    written::<crate::core::pane::Split>(&dir, &cfg);
+    written::<crate::core::pane::Pane>(&dir, &cfg);
+    std::fs::write(
+      dir.join("default_layout.json"),
+      serde_json::to_string_pretty(&crate::core::gui_layout::GuiLayout::default()).unwrap(),
+    )
+    .unwrap();
     std::fs::write(
       dir.join("strings.json"),
       serde_json::to_string_pretty(&serde_json::json!({

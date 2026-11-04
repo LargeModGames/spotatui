@@ -8,6 +8,7 @@ pub const MAX_SPLIT_PERCENT: u8 = 90;
 /// One leaf of the layout. `Main` is the sidebar, content and playbar.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub enum Pane {
   #[default]
   Main,
@@ -16,11 +17,14 @@ pub enum Pane {
   CoverArt,
   Queue,
   MiniPlayer,
+  /// The GUI's now-playing panel; the TUI never opens it.
+  NowPlaying,
 }
 
 /// `Horizontal` puts the two children side by side, `Vertical` stacks them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub enum SplitAxis {
   Horizontal,
   Vertical,
@@ -37,6 +41,7 @@ impl SplitAxis {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub enum PaneNode {
   Leaf(Pane),
   Split(Box<Split>),
@@ -44,6 +49,7 @@ pub enum PaneNode {
 
 /// `percent` is the share of `first` along `axis`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub struct Split {
   pub axis: SplitAxis,
   pub percent: u8,

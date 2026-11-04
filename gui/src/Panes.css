@@ -1,0 +1,339 @@
+/* The panes: Main and the views beside it, each placed by fractions of the area. */
+.pane-area {
+  grid-area: panes;
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  /* The slots' padding makes the 8px gaps; the outer half lines up with the frame. */
+  margin: -4px;
+}
+
+.pane-slot {
+  position: absolute;
+  left: calc(var(--x) * 100%);
+  top: calc(var(--y) * 100%);
+  width: calc(var(--w) * 100%);
+  height: calc(var(--h) * 100%);
+  display: grid;
+  grid-template: minmax(0, 1fr) / minmax(0, 1fr);
+  padding: 4px;
+  box-sizing: border-box;
+  contain: layout paint;
+  container-type: size;
+  outline: none;
+}
+
+.pane-slot.floating {
+  contain: layout;
+}
+
+.main-slot {
+  grid-template-columns: 280px minmax(0, 1fr);
+  gap: 8px;
+}
+
+@media (max-width: 1100px) {
+  .main-slot {
+    grid-template-columns: 240px minmax(0, 1fr);
+  }
+}
+
+.pane-slot.floating > * {
+  box-shadow: 0 8px 32px rgb(0 0 0 / 60%);
+}
+
+.pane-slot[data-source] {
+  opacity: 0.4;
+}
+
+.pane-slot .panel-head {
+  cursor: grab;
+  touch-action: none;
+}
+
+.pane-body {
+  flex: 1;
+  display: grid;
+  grid-template: minmax(0, 1fr) / minmax(0, 1fr);
+  min-height: 0;
+}
+
+.pane-divider {
+  position: absolute;
+  z-index: 4;
+  left: calc(var(--x) * 100%);
+  top: calc(var(--y) * 100%);
+  touch-action: none;
+  outline: none;
+}
+
+.pane-divider[data-axis="horizontal"] {
+  width: 8px;
+  height: calc(var(--h) * 100%);
+  margin-left: -4px;
+  cursor: col-resize;
+}
+
+.pane-divider[data-axis="vertical"] {
+  width: calc(var(--w) * 100%);
+  height: 8px;
+  margin-top: -4px;
+  cursor: row-resize;
+}
+
+.pane-divider::after {
+  content: "";
+  position: absolute;
+  inset: 0 3px;
+  border-radius: 1px;
+}
+
+.pane-divider[data-axis="vertical"]::after {
+  inset: 3px 0;
+}
+
+.pane-divider:hover::after,
+.pane-divider:focus-visible::after {
+  background: var(--accent);
+}
+
+.drop-preview,
+.bar-preview {
+  box-sizing: border-box;
+  border: 2px solid var(--accent);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  pointer-events: none;
+}
+
+/* The tile a dragged pane will become. */
+.drop-preview {
+  position: absolute;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  opacity: 0;
+  transition: opacity 80ms;
+}
+
+.drop-preview[data-show="true"] {
+  opacity: 1;
+}
+
+.drop-preview span {
+  display: none;
+  font-weight: 700;
+}
+
+.drop-preview[data-refused="true"] {
+  border-color: #e5534b;
+  background: rgb(229 83 75 / 14%);
+}
+
+.drop-preview[data-refused="true"] span {
+  display: block;
+}
+
+.pane-ghost {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 60;
+  display: none;
+  padding: 12px 16px;
+  box-sizing: border-box;
+  border: 1px solid var(--press);
+  border-radius: var(--radius);
+  background: var(--raised);
+  box-shadow: 0 16px 32px rgb(0 0 0 / 50%);
+  font-weight: 700;
+  opacity: 0.9;
+  pointer-events: none;
+  will-change: transform;
+}
+
+.pane-ghost[data-show="true"] {
+  display: block;
+}
+
+body.pane-dragging,
+body.pane-dragging * {
+  cursor: var(--drag-cursor, grabbing) !important;
+  user-select: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .drop-preview {
+    transition: none;
+  }
+}
+
+/* The detach button on a page that can show beside the others. */
+.screen > .pane-detach {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 2;
+  background: rgb(0 0 0 / 40%);
+  color: var(--text);
+}
+
+.screen > .pane-detach:hover {
+  background: var(--hover);
+}
+
+/* The cover takes the largest square the pane holds, as in the mini player. */
+.cover-pane {
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  container-type: size;
+}
+
+.cover-pane > .cover-art {
+  width: min(100cqw, 100cqh);
+  height: min(100cqw, 100cqh);
+}
+
+/* The grip a bar moves by; it shows when the pointer is over the bar. */
+.bar-grip {
+  position: absolute;
+  z-index: 3;
+  top: 4px;
+  left: 50%;
+  width: 24px;
+  height: 12px;
+  transform: translateX(-50%);
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: radial-gradient(circle, var(--sub) 1.5px, transparent 2px) 0 0 /
+    8px 8px;
+  opacity: 0;
+  cursor: grab;
+  touch-action: none;
+}
+
+.playerbar:not([data-edge="left"], [data-edge="right"]) > .bar-grip {
+  top: 2px;
+}
+
+.topbar:hover > .bar-grip,
+.playerbar:hover > .bar-grip,
+.bar-grip:focus-visible {
+  opacity: 0.7;
+}
+
+.bar-preview {
+  position: fixed;
+  z-index: 60;
+  display: none;
+}
+
+.bar-preview[data-show="true"] {
+  display: block;
+}
+
+/* A player bar on the left or right edge: one column. */
+.playerbar:is([data-edge="left"], [data-edge="right"]) {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto auto;
+  align-content: start;
+  gap: 16px;
+  padding: 24px 8px 112px;
+}
+
+.playerbar:is([data-edge="left"], [data-edge="right"]) .now-track {
+  flex-wrap: wrap;
+  padding-left: 0;
+}
+
+.playerbar:is([data-edge="left"], [data-edge="right"]) .now-track > .cover-art {
+  width: 100% !important;
+  height: auto !important;
+  aspect-ratio: 1;
+}
+
+.playerbar:is([data-edge="left"], [data-edge="right"]) .titles {
+  flex: 1;
+}
+
+.playerbar:is([data-edge="left"], [data-edge="right"]) .side {
+  flex-wrap: wrap;
+  justify-content: center;
+  padding-right: 0;
+}
+
+.playerbar:is([data-edge="left"], [data-edge="right"]) .playerbar-viz {
+  top: auto;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  height: 96px;
+}
+
+.playerbar[data-edge="top"] .devices-popover {
+  top: calc(100% + 16px);
+  bottom: auto;
+}
+
+.playerbar[data-edge="left"] .devices-popover {
+  right: auto;
+  left: 0;
+}
+
+/* A top bar on the left or right edge: a rail of icons. */
+.topbar:is([data-edge="left"], [data-edge="right"]) {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
+  align-items: start;
+  justify-items: center;
+  padding: 24px 0 8px;
+}
+
+.topbar:is([data-edge="left"], [data-edge="right"])
+  :is(.topbar-start, .topbar-center, .topbar-end, nav) {
+  flex-direction: column;
+}
+
+.topbar:is([data-edge="left"], [data-edge="right"]) .topbar-end {
+  height: 100%;
+  justify-content: flex-start;
+}
+
+.topbar:is([data-edge="left"], [data-edge="right"])
+  :is(.wordmark, .device-name, .update-pill) {
+  display: none;
+}
+
+.topbar:is([data-edge="left"], [data-edge="right"]) .top-search {
+  flex: none;
+  width: 48px;
+  padding: 0 14px;
+}
+
+.topbar:is([data-edge="left"], [data-edge="right"])
+  .top-search:not(:focus-within)
+  input {
+  width: 0;
+}
+
+/* The search field opens beside the rail while it has the keyboard. */
+.topbar:is([data-edge="left"], [data-edge="right"]) .top-search:focus-within {
+  position: absolute;
+  z-index: 40;
+  top: 0;
+  width: 360px;
+  max-width: none;
+  box-shadow:
+    inset 0 0 0 2px var(--text),
+    0 16px 24px rgb(0 0 0 / 40%);
+}
+
+.topbar[data-edge="left"] .top-search:focus-within {
+  left: 0;
+}
+
+.topbar[data-edge="right"] .top-search:focus-within {
+  right: 0;
+}

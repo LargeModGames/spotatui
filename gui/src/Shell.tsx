@@ -6,15 +6,35 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
-import type { ReactNode } from "react";
+import type { PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import type { Action } from "./bindings/Action";
 import type { AnnouncementEntry } from "./bindings/AnnouncementEntry";
 import type { DeviceInfo } from "./bindings/DeviceInfo";
+import type { FrameBar } from "./bindings/FrameBar";
+import type { GuiLayout } from "./bindings/GuiLayout";
+import type { Pane } from "./bindings/Pane";
 import type { SessionPlay } from "./bindings/SessionPlay";
 import type { UpdateAsk } from "./bindings/UpdateAsk";
+import type { WindowEdge } from "./bindings/WindowEdge";
 import type { WindowMode } from "./bindings/WindowMode";
-import { MAC, shellKey, type ShellKey } from "./areas";
+import {
+  MAC,
+  modified,
+  paneKey,
+  shellKey,
+  type PaneCommand,
+  type ShellKey,
+} from "./areas";
+import {
+  barPreview,
+  DEFAULT_BARS,
+  edgeAt,
+  edgeOf,
+  frameGrid,
+  moveBar,
+} from "./barsModel";
 import { AlbumPage } from "./AlbumPage";
 import { AnnouncementDialog } from "./AnnouncementDialog";
 import { ArtistPage } from "./ArtistPage";
@@ -25,6 +45,7 @@ import { pageStorage } from "./commandModel";
 import { Discover } from "./Discover";
 import { sourceOf } from "./format";
 import { Home } from "./Home";
+import { Glyph } from "./Icon";
 import { LibraryHealth } from "./LibraryHealth";
 import { LibraryPanel } from "./LibraryPanel";
 import { upNext } from "./libraryModel";
@@ -43,9 +64,27 @@ import {
   type View,
 } from "./nav";
 import { NowPlayingPanel } from "./NowPlayingPanel";
+import { PaneArea, type PaneView } from "./PaneArea";
+import {
+  closeQueue,
+  contains,
+  DEFAULT_LAYOUT,
+  firstPane,
+  isLeaf,
+  layoutRects,
+  neighbor,
+  open as openPane,
+  placed,
+  showMain,
+  SIDE_PANES,
+  type SidePane,
+  toggle,
+  without,
+} from "./paneModel";
 import { Party } from "./Party";
+import { placeBox, trackDrag, type Point } from "./pointerDrag";
 import { PodcastPage } from "./PodcastPage";
-import { PlayerBar, type CoverSrc, type Panel } from "./PlayerBar";
+import { PlayerBar, type CoverSrc } from "./PlayerBar";
 import type { WatchVisualizer } from "./PlayerBarVisualizer";
 import { QueueDrawer } from "./QueueDrawer";
 import { RadioPage } from "./RadioPage";
@@ -62,6 +101,7 @@ import { Toast } from "./Toast";
 import { TopBar } from "./TopBar";
 import { TrackActionsContext, type TrackActions } from "./TrackMenu";
 import type { ScreenFeed } from "./screenModel";
+import { Cover } from "./ui";
 import { VISUALIZER_SETTING } from "./visualizerModel";
 import { VisualizerScreen } from "./VisualizerScreen";
 
@@ -70,10 +110,24 @@ const NO_DEVICES: DeviceInfo[] = [];
 const PENDING_MS = 10_000;
 const NO_PLAYS: SessionPlay[] = [];
 const NO_ANNOUNCEMENTS: AnnouncementEntry[] = [];
-/** The width from which the right panel sits beside the main view; style.css has it too. */
+/** The width from which panes sit beside the main view; Panes.css has it too. */
 const WIDE = "(min-width: 1101px)";
+let wideQuery: MediaQueryList | null = null;
+const wideList = () => (wideQuery ??= window.matchMedia(WIDE));
+const isWide = () => wideList().matches;
+const watchWide = (notify: () => void) => {
+  const query = wideList();
+  query.addEventListener("change", notify);
+  return () => query.removeEventListener("change", notify);
+};
+const ARROW_EDGES: Partial<Record<string, WindowEdge>> = {
+  ArrowUp: "top",
+  ArrowDown: "bottom",
+  ArrowLeft: "left",
+  ArrowRight: "right",
+};
 
-/** The frame: the top bar, the library panel, the main view, the right panel, the player bar. */
+/** The frame: the top bar, the library panel, the main view, the panes, the player bar. */
 export function Shell({
   s = EN,
   state,
@@ -85,6 +139,7 @@ export function Shell({
   visualizerScreen,
   coverSrc,
   askChangelog,
+  onLayout = () => {},
 }: {
   s?: GuiStrings;
   state: State;
@@ -98,6 +153,8 @@ export function Shell({
   coverSrc?: CoverSrc;
   /** Asks the server for the changelog the Home page shows. */
   askChangelog: () => void;
+  /** Sends the pane layout to the server; null resets it. */
+  onLayout?: (layout: GuiLayout | null) => void;
 }) {
   const { channels } = state;
   const [history, setHistory] = useState<History>(HOME);
@@ -116,8 +173,35 @@ export function Shell({
   const artistId = channels.artist?.payload.page?.id ?? null;
   const showId = heldShowId(channels.show?.payload.page);
   const radioId = channels.track_table?.payload.radio ?? null;
+  const wide = useSyncExternalStore(watchWide, isWide);
+  // The layout this page sent last wins until the server's next revision answers it.
+  const layoutChannel = channels.pane_layout;
+  const serverRev = layoutChannel?.rev ?? -1;
+  const [sentLayout, setSentLayout] = useState<{
+    layout: GuiLayout;
+    rev: number;
+  } | null>(null);
+  const served = layoutChannel?.payload.layout ?? DEFAULT_LAYOUT;
+  // An answer equal to the sent layout keeps the sent object, so nothing keyed on it reruns.
+  const layout = useMemo(
+    () =>
+      sentLayout &&
+      (serverRev <= sentLayout.rev ||
+        JSON.stringify(served) === JSON.stringify(sentLayout.layout))
+        ? sentLayout.layout
+        : served,
+    [sentLayout, serverRev, served],
+  );
+  const commitLayout = useCallback(
+    (next: GuiLayout | null) => {
+      setSentLayout({ layout: next ?? DEFAULT_LAYOUT, rev: serverRev });
+      onLayout(next);
+    },
+    [serverRev, onLayout],
+  );
   const show = useCallback(
-    (next: History, fresh: boolean) => {
+    // `base` is a layout the caller changes in the same step; a hidden Main shows on each new page.
+    (next: History, fresh: boolean, base?: GuiLayout) => {
       // A late target can take focus from the control that opened it.
       navigationFocus.current = document.activeElement;
       const action = fetchFor(next.now, fresh, {
@@ -131,20 +215,36 @@ export function Shell({
       });
       if (action) send(action);
       setHistory(next);
+      const after = base ?? layout;
+      if (!contains(after.tree, "main"))
+        commitLayout({ ...after, tree: showMain(after.tree) });
+      else if (after !== layout) commitLayout(after);
       setViews((seen) =>
         seen[next.now.page] === next.now
           ? seen
           : { ...seen, [next.now.page]: next.now },
       );
     },
-    [send, spotify, likedLoaded, tableUri, albumId, artistId, showId, radioId],
+    [
+      send,
+      spotify,
+      likedLoaded,
+      tableUri,
+      albumId,
+      artistId,
+      showId,
+      radioId,
+      layout,
+      commitLayout,
+    ],
   );
   const open = useCallback(
     (next: View) => show(push(history, next), true),
     [history, show],
   );
   const playback = channels.playback?.payload ?? null;
-  const playingUri = playback?.item?.uri ?? null;
+  const item = playback?.item ?? null;
+  const playingUri = item?.uri ?? null;
   const queue = channels.queue?.payload;
   const spotifyPlays = sourceOf(playingUri) === "Spotify";
   const queued = useMemo(
@@ -154,10 +254,12 @@ export function Shell({
   const playlists = channels.library?.payload ?? null;
   const likedMarks = channels.liked_marks?.payload;
   const [overlay, setOverlay] = useState<"command" | null>(null);
-  // A narrow window starts with the main view alone; the panel opens over it.
-  const [panel, setPanel] = useState<Panel>(() =>
-    window.matchMedia(WIDE).matches ? "now" : null,
-  );
+  const paneKeys = layoutChannel?.payload.keys ?? null;
+  const [panesFit, setPanesFit] = useState(true);
+  // A narrow window has no panes; the side panel opens over the main view.
+  const [overlayPane, setOverlayPane] = useState<SidePane | null>(null);
+  // A queue open at launch leaves the keyboard where it is.
+  const [queueGrab, setQueueGrab] = useState(false);
   const [room, setRoom] = useState(false);
   const [mini, setMini] = useState(false);
   const showMini = useCallback((on: boolean) => {
@@ -235,9 +337,25 @@ export function Shell({
     [send, searchRev, statusRev, open],
   );
 
+  const panesShown = wide && panesFit && !room && !mini;
+  // Without room for panes the side panel opens over the main view, as on a narrow window.
+  const overlayMode = !wide || !panesFit;
+  const paneShown = (pane: Pane) => panesShown && placed(layout, pane);
+  // A hidden Main hides the page too, so a Lyrics or Visualizer pane draws in its place.
+  const mainHidden = panesShown && !contains(layout.tree, "main");
+  const pageShown = (kind: Page) => page === kind && !mainHidden;
+  const lyricsPaned = paneShown("lyrics");
+  const lyricsPaneActive = lyricsPaned && !pageShown("lyrics");
+  const visualizerPaneActive =
+    paneShown("visualizer") && !pageShown("visualizer");
   // The Web API queue is fetched on request only: on open and on each Spotify track change.
   const showsQueue =
-    panel !== null || room || page === "session" || page === "party";
+    paneShown("queue") ||
+    paneShown("now_playing") ||
+    (overlayMode && overlayPane !== null) ||
+    room ||
+    page === "session" ||
+    page === "party";
   useEffect(() => {
     if (showsQueue && spotifyPlays) send("RefreshQueue");
   }, [showsQueue, spotifyPlays, playingUri, send]);
@@ -388,7 +506,7 @@ export function Shell({
         item={playback?.item ?? null}
         lyrics={channels.lyrics?.payload ?? null}
         position={state.position}
-        active={page === "lyrics"}
+        active={pageShown("lyrics")}
         connected={state.connected}
         send={send}
       />
@@ -434,7 +552,7 @@ export function Shell({
         screens={state.localization?.strings.screens}
         item={playback?.item ?? null}
         position={state.position}
-        active={page === "visualizer" && !room}
+        active={pageShown("visualizer") && !room}
         // The player bar's setting row is offered only where the build can capture.
         available={choice(VISUALIZER_SETTING) !== null}
         feed={visualizerScreen}
@@ -466,32 +584,120 @@ export function Shell({
     else open({ page: "search" });
   }, [page, open]);
 
-  // Leaving the queue hands the keyboard back to the page when the panel held it.
-  const setPanelFocus = useCallback(
-    (next: Panel) => {
+  // Leaving a pane hands the keyboard back to the page when the pane held it, or to the
+  // first pane when Main hides.
+  const changeLayout = useCallback(
+    (next: GuiLayout, leaving?: Pane) => {
       const held =
-        document
-          .querySelector(".queue-panel")
-          ?.contains(document.activeElement) ?? false;
-      setPanel(next);
-      if (held && next !== "queue") focusScreen(page);
+        leaving !== undefined &&
+        (document
+          .querySelector(`[data-pane="${leaving}"]`)
+          ?.contains(document.activeElement) ??
+          false);
+      commitLayout(next);
+      if (held) focusPane(firstPane(next.tree), page);
     },
-    [page],
+    [commitLayout, page],
+  );
+  // The player-bar buttons open and close a side pane, or the overlay on a narrow window.
+  const togglePanel = useCallback(
+    (pane: SidePane) => {
+      if (overlayMode) {
+        setOverlayPane((shown) => (shown === pane ? null : pane));
+        return;
+      }
+      if (pane === "queue" && !placed(layout, pane)) setQueueGrab(true);
+      changeLayout(toggle(layout, pane), pane);
+    },
+    [overlayMode, layout, changeLayout],
+  );
+  // The queue's own close and Q bring Now Playing back to its slot.
+  const leaveQueue = useCallback(() => {
+    if (overlayMode) setOverlayPane("now_playing");
+    else changeLayout(closeQueue(layout), "queue");
+  }, [overlayMode, layout, changeLayout]);
+  const queueKey = useCallback(() => {
+    if (overlayMode) {
+      setOverlayPane((shown) => (shown === "queue" ? "now_playing" : "queue"));
+      return;
+    }
+    if (placed(layout, "queue")) {
+      leaveQueue();
+      return;
+    }
+    setQueueGrab(true);
+    changeLayout(openPane(layout, "queue"));
+  }, [overlayMode, layout, leaveQueue, changeLayout]);
+  const closePane = useCallback(
+    (pane: Pane) => {
+      if (pane === "queue") leaveQueue();
+      else changeLayout(without(layout, pane), pane);
+    },
+    [layout, leaveQueue, changeLayout],
+  );
+  const toggleMain = useCallback(() => {
+    if (mainHidden) commitLayout({ ...layout, tree: showMain(layout.tree) });
+    else closePane("main");
+  }, [mainHidden, layout, commitLayout, closePane]);
+  // A page with a pane of its own moves beside the page it came from.
+  const detachPage = useCallback(
+    (pane: "lyrics" | "visualizer") => {
+      const next = openPane(layout, pane);
+      if (page === pane) show(goBack(history), false, next);
+      else commitLayout(next);
+    },
+    [commitLayout, layout, page, history, show],
   );
   const toggleLyrics = useCallback(() => {
-    if (page === "lyrics") show(goBack(history), false);
+    if (lyricsPaned) closePane("lyrics");
+    else if (page === "lyrics") show(goBack(history), false);
     else open({ page: "lyrics" });
-  }, [page, history, show, open]);
+  }, [lyricsPaned, page, history, show, open, closePane]);
+
+  const paneCommand = useCallback(
+    (command: PaneCommand) => {
+      const focused = (
+        document.activeElement?.closest("[data-pane]") as HTMLElement | null
+      )?.dataset.pane as Pane | undefined;
+      const current = focused ?? firstPane(layout.tree);
+      if (command === "reset") commitLayout(null);
+      else if (command === "close") closePane(current);
+      else if (command === "detach") {
+        if (current === "lyrics" || current === "visualizer") {
+          show(
+            push(history, { page: current }),
+            true,
+            without(layout, current),
+          );
+        } else if (page === "lyrics" || page === "visualizer") detachPage(page);
+      } else {
+        const next = neighbor(
+          layoutRects(layout.tree).rects,
+          current,
+          command.focus,
+        );
+        if (next) focusPane(next, page);
+      }
+    },
+    [commitLayout, closePane, detachPage, history, layout, page, show],
+  );
 
   // A layout effect: the keys work from the first painted frame.
   useLayoutEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      const pressed = shellKey(describe(event, overlay !== null));
+      const press = describe(event, overlay !== null);
+      const pane = mini || room ? null : paneKey(press, paneKeys);
+      // With the panes hidden a pane key is left to the shell, so / can still search.
+      if (pane && panesShown) {
+        paneCommand(pane);
+        event.preventDefault();
+        return;
+      }
+      const pressed = shellKey(press);
       const command = mini ? miniCommand(pressed) : pressed;
       if (!command) return;
       if (command === "toggle") send("TogglePlayback");
-      else if (command === "queue")
-        setPanelFocus(panel === "queue" ? "now" : "queue");
+      else if (command === "queue") queueKey();
       else if (command === "command") setOverlay("command");
       else if (command === "search") {
         // An open Room owns the keyboard; / stays with it.
@@ -534,8 +740,10 @@ export function Shell({
     showMini,
     toggleLyrics,
     open,
-    panel,
-    setPanelFocus,
+    queueKey,
+    paneKeys,
+    panesShown,
+    paneCommand,
   ]);
 
   // A switch or a closed overlay hands the keyboard to the page; the first render leaves focus alone.
@@ -565,19 +773,13 @@ export function Shell({
     if (!screen || screen.querySelector("[data-focus]")) return;
     const before = navigationFocus.current;
     const seen = new MutationObserver(() => {
-      const target = screen.querySelector<HTMLElement>("[data-focus]");
-      if (!target) return;
+      if (!screen.querySelector("[data-focus]")) return;
       seen.disconnect();
       if (
         document.activeElement === document.body ||
         document.activeElement === before
-      ) {
-        target.focus({ preventScroll: true });
-        if (target.getAttribute("role") === "listbox")
-          target
-            .querySelector('[aria-selected="true"]')
-            ?.scrollIntoView({ block: "nearest" });
-      }
+      )
+        focusIn(screen);
     });
     seen.observe(screen, { childList: true, subtree: true });
     return () => seen.disconnect();
@@ -599,6 +801,183 @@ export function Shell({
   const mounted = (Object.keys(views) as Page[]).filter(
     (kind) => pages[kind] != null,
   );
+
+  // Below the wide width the bars go back to their default edges; the saved ones stay.
+  const bars = wide ? layout.bars : DEFAULT_BARS;
+  const grid = frameGrid(bars);
+  useEffect(() => {
+    document.documentElement.style.setProperty(
+      "--inset-bottom",
+      `${grid.insetBottom}px`,
+    );
+  }, [grid.insetBottom]);
+  const barPreviewBox = useRef<HTMLDivElement>(null);
+  const moveBarTo = (bar: FrameBar, edge: WindowEdge) => {
+    const next = moveBar(layout.bars, bar, edge);
+    if (next !== layout.bars) commitLayout({ ...layout, bars: next });
+  };
+  const dragBar =
+    (bar: FrameBar) => (event: ReactPointerEvent<HTMLButtonElement>) => {
+      if (event.button !== 0) return;
+      const edgeUnder = (at: Point) =>
+        edgeAt(at.x, at.y, window.innerWidth, window.innerHeight);
+      let shown: WindowEdge | null = null;
+      trackDrag(event, {
+        paint: (at) => {
+          const edge = edgeUnder(at);
+          if (edge === shown) return;
+          shown = edge;
+          placeBox(
+            barPreviewBox.current,
+            barPreview(bar, edge, window.innerWidth, window.innerHeight),
+          );
+        },
+        end: (drop) => {
+          placeBox(barPreviewBox.current, null);
+          if (drop) moveBarTo(bar, edgeUnder(drop));
+        },
+      });
+    };
+  const grip = (bar: FrameBar) =>
+    wide ? (
+      <button
+        type="button"
+        className="bar-grip"
+        aria-label={s.move_bar}
+        title={s.move_bar}
+        aria-keyshortcuts="ArrowUp ArrowDown ArrowLeft ArrowRight"
+        onPointerDown={dragBar(bar)}
+        onKeyDown={(event) => {
+          const edge = ARROW_EDGES[event.key];
+          // A modified arrow can be a pane key, so it goes on to the page.
+          if (!edge || modified(event)) return;
+          event.preventDefault();
+          event.stopPropagation();
+          moveBarTo(bar, edge);
+        }}
+      />
+    ) : null;
+
+  const coverUri =
+    item?.image_url ??
+    (playingUri?.startsWith("file:") ? (coverSrc?.(playingUri) ?? null) : null);
+  const nowPanel = (onClose: () => void) => (
+    <NowPlayingPanel
+      s={s}
+      playback={playback}
+      upNext={queued}
+      open={open}
+      send={send}
+      onClose={onClose}
+      onCover={
+        !overlayMode && !placed(layout, "cover_art")
+          ? () => commitLayout(openPane(layout, "cover_art"))
+          : undefined
+      }
+    />
+  );
+  const queuePanel = (grab: boolean) => (
+    <QueueDrawer
+      s={s}
+      queue={queue ?? null}
+      item={item}
+      send={send}
+      grab={grab}
+      onClose={leaveQueue}
+    />
+  );
+  const paneViews: Partial<Record<Pane, PaneView>> = {
+    now_playing: {
+      title: s.now_playing_view,
+      ownHead: true,
+      node: nowPanel(() => closePane("now_playing")),
+    },
+    queue: { title: s.queue, ownHead: true, node: queuePanel(queueGrab) },
+    lyrics: {
+      title: s.lyrics,
+      node: (
+        <LyricsPage
+          s={s}
+          item={item}
+          lyrics={channels.lyrics?.payload ?? null}
+          position={state.position}
+          active={lyricsPaneActive}
+          connected={state.connected}
+          send={send}
+        />
+      ),
+    },
+    visualizer: {
+      title: s.visualizer,
+      node: (
+        <VisualizerScreen
+          s={s}
+          screens={state.localization?.strings.screens}
+          item={item}
+          position={state.position}
+          active={visualizerPaneActive}
+          available={choice(VISUALIZER_SETTING) !== null}
+          feed={visualizerScreen}
+        />
+      ),
+    },
+    cover_art: {
+      title: s.cover_art,
+      node: (
+        <div className="cover-pane">
+          <Cover src={coverUri} />
+        </div>
+      ),
+    },
+  };
+  const panels: SidePane[] = overlayMode
+    ? overlayPane
+      ? [overlayPane]
+      : []
+    : SIDE_PANES.filter((pane) => placed(layout, pane));
+  const mainPane = (
+    <>
+      <LibraryPanel
+        s={s}
+        playlists={channels.library?.payload ?? null}
+        artists={playlists?.followed_artists ?? null}
+        albumSort={choice("behavior.default_sort_saved_albums")}
+        artistSort={choice("behavior.default_sort_saved_artists")}
+        source={channels.source?.payload ?? null}
+        sync={channels.playlist_sync?.payload ?? null}
+        loggedOut={channels.liked?.payload.available === false}
+        errorRev={statusError ? statusRev : null}
+        view={view}
+        open={open}
+        send={send}
+      />
+      <div className="main-view">
+        <div className="screens">
+          {mounted.map((kind) => (
+            <div
+              key={kind}
+              className="screen"
+              data-area={kind}
+              hidden={kind !== page}
+            >
+              {pages[kind]}
+              {wide && (kind === "lyrics" || kind === "visualizer") && (
+                <button
+                  type="button"
+                  className="panel-close pane-detach"
+                  aria-label={s.detach_pane}
+                  title={s.detach_pane}
+                  onClick={() => detachPage(kind)}
+                >
+                  <Glyph name="panel" />
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    </>
+  );
   return (
     <TrackActionsContext.Provider value={trackActions}>
       {mini && (
@@ -612,7 +991,16 @@ export function Shell({
         />
       )}
       {/* Hidden, not unmounted: the pages keep their cursors for the way back. */}
-      <main className={panel ? "shell" : "shell no-right"} hidden={mini}>
+      <main
+        className="shell"
+        hidden={mini}
+        style={{
+          gridTemplateAreas: grid.areas,
+          gridTemplateRows: grid.rows,
+          gridTemplateColumns: grid.columns,
+          padding: grid.padding,
+        }}
+      >
         <TopBar
           s={s}
           page={page}
@@ -628,55 +1016,30 @@ export function Shell({
           connected={state.connected}
           update={channels.update?.payload ?? null}
           onUpdate={onUpdate}
+          edge={edgeOf(bars, "top")}
+          grip={grip("top")}
+          mainHidden={
+            panesShown && (mainHidden || !isLeaf(layout.tree))
+              ? mainHidden
+              : undefined
+          }
+          onMain={toggleMain}
         />
-        <LibraryPanel
+        <PaneArea
           s={s}
-          playlists={channels.library?.payload ?? null}
-          artists={playlists?.followed_artists ?? null}
-          albumSort={choice("behavior.default_sort_saved_albums")}
-          artistSort={choice("behavior.default_sort_saved_artists")}
-          source={channels.source?.payload ?? null}
-          sync={channels.playlist_sync?.payload ?? null}
-          loggedOut={channels.liked?.payload.available === false}
-          errorRev={statusError ? statusRev : null}
-          view={view}
-          open={open}
-          send={send}
+          layout={layout}
+          wide={wide}
+          main={mainPane}
+          views={paneViews}
+          onLayout={commitLayout}
+          onShown={setPanesFit}
+          onClose={closePane}
         />
-        <div className="main-view">
-          <div className="screens">
-            {mounted.map((kind) => (
-              <div
-                key={kind}
-                className="screen"
-                data-area={kind}
-                hidden={kind !== page}
-              >
-                {pages[kind]}
-              </div>
-            ))}
-          </div>
-        </div>
-        {panel && (
+        {overlayMode && overlayPane && (
           <aside className="right-panel" aria-label={s.side_panel}>
-            {panel === "queue" ? (
-              <QueueDrawer
-                s={s}
-                queue={queue ?? null}
-                item={playback?.item ?? null}
-                send={send}
-                onClose={() => setPanelFocus("now")}
-              />
-            ) : (
-              <NowPlayingPanel
-                s={s}
-                playback={playback}
-                upNext={queued}
-                open={open}
-                send={send}
-                onClose={() => setPanel(null)}
-              />
-            )}
+            {overlayPane === "queue"
+              ? queuePanel(true)
+              : nowPanel(() => setOverlayPane(null))}
           </aside>
         )}
         <PlayerBar
@@ -685,9 +1048,9 @@ export function Shell({
           position={state.position}
           connected={state.connected}
           devices={channels.devices?.payload ?? NO_DEVICES}
-          panel={panel}
-          onPanel={setPanelFocus}
-          lyricsOpen={page === "lyrics"}
+          panels={panels}
+          onPanel={togglePanel}
+          lyricsOpen={page === "lyrics" || lyricsPaned}
           onLyrics={toggleLyrics}
           onRoom={() => setRoom(true)}
           onMini={() => showMini(true)}
@@ -697,6 +1060,8 @@ export function Shell({
           covered={room}
           look={channels.settings?.payload.visualizer ?? null}
           coverSrc={coverSrc}
+          edge={edgeOf(bars, "player")}
+          grip={grip("player")}
         />
         {room && (
           <div className="room-layer">
@@ -734,6 +1099,7 @@ export function Shell({
           />
         )}
       </main>
+      <div ref={barPreviewBox} className="bar-preview" data-show="false" />
       {/* Outside the main view, so the mini player shows it too. */}
       <Toast
         s={s}
@@ -773,6 +1139,10 @@ function describe(event: KeyboardEvent, overlay: boolean): ShellKey {
     typing: target !== null && isText(target),
     interactive: target?.closest("button, a[href], [role=slider]") != null,
     overlay,
+    code: event.code,
+    alt: event.altKey,
+    ctrl: event.ctrlKey || event.metaKey,
+    shift: event.shiftKey,
   };
 }
 
@@ -785,13 +1155,31 @@ function isText(element: HTMLElement): boolean {
   );
 }
 
+/** Gives the keyboard to a pane's own focus target, or to the page for Main. */
+function focusPane(pane: Pane, page: Page) {
+  if (pane === "main") {
+    focusScreen(page);
+    return;
+  }
+  const slot = document.querySelector<HTMLElement>(`[data-pane="${pane}"]`);
+  focusIn(slot, slot);
+}
+
 function focusScreen(page: Page) {
   if (page === "search") {
     document.querySelector<HTMLInputElement>("#top-search")?.focus();
     return;
   }
-  const screen = document.querySelector(`[data-area="${page}"]`);
-  const target = screen?.querySelector<HTMLElement>("[data-focus]");
+  focusIn(document.querySelector(`[data-area="${page}"]`));
+}
+
+/** Focuses the `[data-focus]` target in `container`, or `fallback`, and shows a list's selected row. */
+function focusIn(
+  container: Element | null,
+  fallback: HTMLElement | null = null,
+) {
+  const target =
+    container?.querySelector<HTMLElement>("[data-focus]") ?? fallback;
   // A tall list would scroll the page header away.
   target?.focus({ preventScroll: true });
   if (target?.getAttribute("role") === "listbox")

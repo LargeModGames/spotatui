@@ -481,6 +481,12 @@ async fn serve_until_quit(
             set(mode);
           }
         }
+        Some(ClientMessage::PaneLayout { layout }) => {
+          let mut app = app.lock().await;
+          if app.set_gui_pane_layout(layout) {
+            publisher.publish(&app);
+          }
+        }
         Some(ClientMessage::Quit) | None => break,
       },
       () = &mut ctrl_c => break,

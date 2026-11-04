@@ -57,6 +57,26 @@ impl App {
     true
   }
 
+  #[cfg_attr(not(feature = "gui"), allow(dead_code))]
+  pub fn gui_pane_layout(&self) -> &GuiLayout {
+    &self.runtime_state.gui_pane_layout
+  }
+
+  /// Store and save the GUI layout, or the default for `None`; false when nothing changed.
+  #[cfg_attr(not(feature = "gui"), allow(dead_code))]
+  pub fn set_gui_pane_layout(&mut self, layout: Option<GuiLayout>) -> bool {
+    let layout = layout.map_or_else(GuiLayout::default, |layout| layout.sanitized());
+    if layout == self.runtime_state.gui_pane_layout {
+      return false;
+    }
+    self.runtime_state.gui_pane_layout = layout;
+    self.bump_display(DisplayDomain::PaneLayout);
+    self.schedule_state_save(PersistedRuntimeState::gui_pane_layout(
+      &self.runtime_state.gui_pane_layout,
+    ));
+    true
+  }
+
   /// Every pane back to its configured default, or the runtime default.
   pub fn reset_layout(&mut self) {
     let defaults = RuntimeState::default();
