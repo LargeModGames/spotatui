@@ -21,6 +21,7 @@ import type { WindowEdge } from "./bindings/WindowEdge";
 import type { WindowMode } from "./bindings/WindowMode";
 import {
   MAC,
+  modified,
   paneKey,
   shellKey,
   type PaneCommand,
@@ -845,7 +846,8 @@ export function Shell({
         onPointerDown={dragBar(bar)}
         onKeyDown={(event) => {
           const edge = ARROW_EDGES[event.key];
-          if (!edge) return;
+          // A modified arrow can be a pane key, so it goes on to the page.
+          if (!edge || modified(event)) return;
           event.preventDefault();
           event.stopPropagation();
           moveBarTo(bar, edge);

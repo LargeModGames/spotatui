@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { PaneKeys } from "./bindings/PaneKeys";
-import { paneKey, shellKey, type ShellKey } from "./areas";
+import { modified, paneKey, shellKey, type ShellKey } from "./areas";
 
 const press = (key: string, patch: Partial<ShellKey> = {}): ShellKey => ({
   key,
@@ -121,5 +121,19 @@ describe("paneKey", () => {
     const chord = { code: "KeyX", alt: true };
     expect(paneKey(press("x", { ...chord, typing: true }), KEYS)).toBeNull();
     expect(paneKey(press("x", { ...chord, overlay: true }), KEYS)).toBeNull();
+  });
+});
+
+describe("modified", () => {
+  it("is true while alt, ctrl, meta or shift is held, so a grip or divider lets the press go on", () => {
+    const keys = {
+      altKey: false,
+      ctrlKey: false,
+      metaKey: false,
+      shiftKey: false,
+    };
+    expect(modified(keys)).toBe(false);
+    for (const key of ["altKey", "ctrlKey", "metaKey", "shiftKey"] as const)
+      expect(modified({ ...keys, [key]: true })).toBe(true);
   });
 });

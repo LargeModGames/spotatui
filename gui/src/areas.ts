@@ -62,6 +62,14 @@ export interface ShellKey {
 
 export type PaneCommand = "detach" | "close" | "reset" | { focus: WindowEdge };
 
+/** A key press with any modifier held. */
+export const modified = (event: {
+  altKey: boolean;
+  ctrlKey: boolean;
+  metaKey: boolean;
+  shiftKey: boolean;
+}) => event.altKey || event.ctrlKey || event.metaKey || event.shiftKey;
+
 /** The pane key from `config.yml` that a press matches; never while typing or under an overlay. */
 export function paneKey(
   press: ShellKey,

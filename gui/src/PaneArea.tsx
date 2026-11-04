@@ -9,6 +9,7 @@ import type {
 import type { GuiLayout } from "./bindings/GuiLayout";
 import type { Pane } from "./bindings/Pane";
 import type { PaneNode } from "./bindings/PaneNode";
+import { modified } from "./areas";
 import { Glyph } from "./Icon";
 import {
   fits,
@@ -241,6 +242,8 @@ export function PaneArea({
       onLayout({ ...layout, tree: next });
   };
   const dividerKey = (divider: Divider) => (event: KeyboardEvent) => {
+    // A modified arrow can be a pane key, so it goes on to the page.
+    if (modified(event)) return;
     const back = divider.axis === "horizontal" ? "ArrowLeft" : "ArrowUp";
     const ahead = divider.axis === "horizontal" ? "ArrowRight" : "ArrowDown";
     if (event.key === back) setPercent(divider, divider.percent - STEP_PERCENT);
