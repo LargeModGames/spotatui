@@ -691,12 +691,23 @@ impl StreamingPlayer {
       std::fs::create_dir_all(path).ok();
     }
 
-    let cache = Cache::new(
-      cache_path.clone(),
-      None,
-      audio_cache_path,
-      config.audio_cache_limit,
-    )?;
+    // Cache::new walks and prunes the audio directory when a limit is set,
+    // which can take a while for a long-unlimited cache; keep that off the
+    // async runtime workers.
+    let cache = tokio::task::spawn_blocking({
+      let credentials_cache_path = cache_path.clone();
+      let audio_cache_limit = config.audio_cache_limit;
+      move || {
+        Cache::new(
+          credentials_cache_path,
+          None,
+          audio_cache_path,
+          audio_cache_limit,
+        )
+      }
+    })
+    .await
+    .context("Streaming cache initialization task failed")??;
 
     let credentials = cache
       .credentials()
