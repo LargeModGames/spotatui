@@ -193,10 +193,12 @@ export function Shell({
   );
   const commitLayout = useCallback(
     (next: GuiLayout | null) => {
+      // A closed socket drops the message, so the page keeps the server's layout.
+      if (!state.connected) return;
       setSentLayout({ layout: next ?? DEFAULT_LAYOUT, rev: serverRev });
       onLayout(next);
     },
-    [serverRev, onLayout],
+    [serverRev, onLayout, state.connected],
   );
   const show = useCallback(
     // `base` is a layout the caller changes in the same step; a hidden Main shows on each new page.
