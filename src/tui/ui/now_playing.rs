@@ -178,6 +178,7 @@ fn cover_area(inner: Rect, text_rows: u16) -> Rect {
 /// including the blank row under it.
 #[cfg(feature = "cover-art")]
 fn draw_cover(f: &mut Frame<'_>, app: &App, area: Rect) -> u16 {
+  use crate::tui::theme::ThemeExt;
   use ratatui::widgets::Clear;
   if area.height < 3 || area.width < 6 {
     return 0;
@@ -190,7 +191,10 @@ fn draw_cover(f: &mut Frame<'_>, app: &App, area: Rect) -> u16 {
     height: area.height.saturating_sub(2),
   };
   // Clear first: an image protocol leaves its pixels behind when the art changes size.
+  // Clear also resets the cells to the terminal default, so paint the theme
+  // background back before anything is drawn over them.
   f.render_widget(Clear, area);
+  f.render_widget(Block::default().style(theme.base_style()), area);
   // Same gate as the playbar: the art can be decoded for the adaptive theme
   // while the user turned the picture off, or the terminal cannot show it.
   if !app
@@ -452,5 +456,29 @@ mod tests {
       .unwrap();
 
     assert_eq!(rows, Some(0), "the text starts at the top of the panel");
+  }
+
+  #[cfg(feature = "cover-art")]
+  #[test]
+  fn the_cleared_cover_area_keeps_the_theme_background() {
+    use crate::core::theme::Color;
+    use ratatui::{backend::TestBackend, Terminal};
+    let mut app = App::default();
+    app.user_config.theme.background = Color::Rgb(250, 250, 240);
+    let area = Rect::new(0, 0, 38, 19);
+    let mut terminal = Terminal::new(TestBackend::new(40, 20)).unwrap();
+
+    terminal
+      .draw(|f| {
+        draw_cover(f, &app, area);
+      })
+      .unwrap();
+
+    let cell = terminal.backend().buffer().cell((5, 2)).unwrap().clone();
+    assert_eq!(
+      cell.bg,
+      app.user_config.theme.background.into(),
+      "Clear must not leave the terminal default behind"
+    );
   }
 }
