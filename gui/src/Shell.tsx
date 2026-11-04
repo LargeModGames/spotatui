@@ -545,8 +545,6 @@ export function Shell({
     ),
     visualizer: (
       <VisualizerScreen
-        // A copy remounts when it shows, so it reads the style the other copy chose.
-        key={String(pageShown("visualizer"))}
         s={s}
         screens={state.localization?.strings.screens}
         item={playback?.item ?? null}
@@ -908,7 +906,6 @@ export function Shell({
       title: s.visualizer,
       node: (
         <VisualizerScreen
-          key={String(visualizerPaneActive)}
           s={s}
           screens={state.localization?.strings.screens}
           item={item}

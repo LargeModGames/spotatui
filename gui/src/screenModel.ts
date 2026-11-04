@@ -49,6 +49,26 @@ export function saveStyle(storage: Pick<Storage, "setItem">, style: Style) {
   }
 }
 
+let chosen: Style | null = null;
+const styleWatchers = new Set<() => void>();
+
+/** The style every visualizer copy shows: the last choice, else the stored one. */
+export const shownStyle = (storage: Pick<Storage, "getItem">): Style =>
+  chosen ?? readStyle(storage.getItem(STYLE_KEY));
+
+export function watchStyle(notify: () => void) {
+  styleWatchers.add(notify);
+  return () => {
+    styleWatchers.delete(notify);
+  };
+}
+
+export function chooseStyle(storage: Pick<Storage, "setItem">, style: Style) {
+  chosen = style;
+  saveStyle(storage, style);
+  for (const notify of styleWatchers) notify();
+}
+
 export function nextStyle(style: Style): Style {
   return STYLES[(STYLES.indexOf(style) + 1) % STYLES.length];
 }

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { NowPlaying } from "./bindings/NowPlaying";
 import type { ScreenStrings } from "./bindings/ScreenStrings";
 import { pageStorage } from "./commandModel";
@@ -9,20 +9,21 @@ import {
   type Audio,
   audioOf,
   barCount,
+  chooseStyle,
   sceneAudio,
   nextStyle,
   NO_TRACK,
   readStyle,
-  saveStyle,
   settleBands,
+  shownStyle,
   SILENT,
   stepSeconds,
-  STYLE_KEY,
   STYLES,
   type Style,
   type TrackView,
   type ScreenFeed,
   styleName,
+  watchStyle,
 } from "./screenModel";
 import { PAINTERS } from "./screenPaint";
 import { parseHex, rgba, STALE_MS } from "./visualizerModel";
@@ -70,9 +71,8 @@ export function VisualizerScreen({
   available: boolean;
   feed?: ScreenFeed;
 }) {
-  const [style, setStyle] = useState<Style>(() =>
-    readStyle(pageStorage().getItem(STYLE_KEY)),
-  );
+  const readShown = () => shownStyle(pageStorage());
+  const style = useSyncExternalStore(watchStyle, readShown, readShown);
   const canvas = useRef<HTMLCanvasElement>(null);
   const [width, setWidth] = useState(0);
   const [shown, setShown] = useState(false);
@@ -91,10 +91,7 @@ export function VisualizerScreen({
     latestProps.current = { item, position, waiting: screens.audio_waiting };
   });
 
-  const choose = (next: Style) => {
-    setStyle(next);
-    saveStyle(pageStorage(), next);
-  };
+  const choose = (next: Style) => chooseStyle(pageStorage(), next);
 
   useEffect(() => {
     const element = canvas.current;
