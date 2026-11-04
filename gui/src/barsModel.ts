@@ -14,7 +14,7 @@ const THICKNESS: Record<FrameBar, { across: number; along: number }> = {
 /** The gap between the frame's grid cells; style.css has it too. */
 const GAP = 8;
 
-export const thickness = (bar: FrameBar, edge: WindowEdge) =>
+const thickness = (bar: FrameBar, edge: WindowEdge) =>
   vertical(edge) ? THICKNESS[bar].along : THICKNESS[bar].across;
 
 export const edgeOf = (bars: BarPlacement[], bar: FrameBar): WindowEdge =>

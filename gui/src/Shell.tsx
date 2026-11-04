@@ -76,13 +76,14 @@ import {
   placed,
   showMain,
   SIDE_PANES,
+  type SidePane,
   toggle,
   without,
 } from "./paneModel";
 import { Party } from "./Party";
 import { placeBox, trackDrag, type Point } from "./pointerDrag";
 import { PodcastPage } from "./PodcastPage";
-import { PlayerBar, type CoverSrc, type Panel } from "./PlayerBar";
+import { PlayerBar, type CoverSrc } from "./PlayerBar";
 import type { WatchVisualizer } from "./PlayerBarVisualizer";
 import { QueueDrawer } from "./QueueDrawer";
 import { RadioPage } from "./RadioPage";
@@ -108,7 +109,7 @@ const NO_DEVICES: DeviceInfo[] = [];
 const PENDING_MS = 10_000;
 const NO_PLAYS: SessionPlay[] = [];
 const NO_ANNOUNCEMENTS: AnnouncementEntry[] = [];
-/** The width from which panes sit beside the main view; style.css has it too. */
+/** The width from which panes sit beside the main view; Panes.css has it too. */
 const WIDE = "(min-width: 1101px)";
 let wideQuery: MediaQueryList | null = null;
 const wideList = () => (wideQuery ??= window.matchMedia(WIDE));
@@ -255,7 +256,7 @@ export function Shell({
   const paneKeys = layoutChannel?.payload.keys ?? null;
   const [panesFit, setPanesFit] = useState(true);
   // A narrow window has no panes; the side panel opens over the main view.
-  const [overlayPane, setOverlayPane] = useState<Panel | null>(null);
+  const [overlayPane, setOverlayPane] = useState<SidePane | null>(null);
   // A queue open at launch leaves the keyboard where it is.
   const [queueGrab, setQueueGrab] = useState(false);
   const [room, setRoom] = useState(false);
@@ -599,7 +600,7 @@ export function Shell({
   );
   // The player-bar buttons open and close a side pane, or the overlay on a narrow window.
   const togglePanel = useCallback(
-    (pane: Panel) => {
+    (pane: SidePane) => {
       if (!wide) {
         setOverlayPane((shown) => (shown === pane ? null : pane));
         return;
@@ -770,19 +771,13 @@ export function Shell({
     if (!screen || screen.querySelector("[data-focus]")) return;
     const before = navigationFocus.current;
     const seen = new MutationObserver(() => {
-      const target = screen.querySelector<HTMLElement>("[data-focus]");
-      if (!target) return;
+      if (!screen.querySelector("[data-focus]")) return;
       seen.disconnect();
       if (
         document.activeElement === document.body ||
         document.activeElement === before
-      ) {
-        target.focus({ preventScroll: true });
-        if (target.getAttribute("role") === "listbox")
-          target
-            .querySelector('[aria-selected="true"]')
-            ?.scrollIntoView({ block: "nearest" });
-      }
+      )
+        focusIn(screen);
     });
     seen.observe(screen, { childList: true, subtree: true });
     return () => seen.disconnect();
@@ -933,7 +928,7 @@ export function Shell({
       ),
     },
   };
-  const panels: Panel[] = wide
+  const panels: SidePane[] = wide
     ? SIDE_PANES.filter((pane) => placed(layout, pane))
     : overlayPane
       ? [overlayPane]

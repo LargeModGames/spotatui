@@ -9,10 +9,9 @@ import type { WindowEdge } from "./bindings/WindowEdge";
 /** The Rust `GuiLayout::default()`, written by the bindings test. */
 export const DEFAULT_LAYOUT = defaults as unknown as GuiLayout;
 
-export type Side = WindowEdge;
-
 /** The left and right sides. */
-export const vertical = (side: Side) => side === "left" || side === "right";
+export const vertical = (side: WindowEdge) =>
+  side === "left" || side === "right";
 
 /** The panes the player-bar buttons open; they take turns in one slot. */
 export const SIDE_PANES = ["now_playing", "queue"] as const;
@@ -70,11 +69,11 @@ export function close(node: PaneNode, pane: Pane): PaneNode {
   return withChildren(node, close(node.first, pane), close(node.second, pane));
 }
 
-const axisOf = (side: Side): Split["axis"] =>
+const axisOf = (side: WindowEdge): Split["axis"] =>
   vertical(side) ? "horizontal" : "vertical";
 
 /** A strip of `depth` along `side` of `box`. */
-export function band(box: Rect, side: Side, depth: number): Rect {
+export function band(box: Rect, side: WindowEdge, depth: number): Rect {
   switch (side) {
     case "left":
       return { ...box, w: depth };
@@ -91,7 +90,7 @@ export function band(box: Rect, side: Side, depth: number): Rect {
 export function dockAtEdge(
   around: PaneNode,
   pane: Pane,
-  side: Side,
+  side: WindowEdge,
   share: number,
 ): PaneNode {
   const leading = side === "left" || side === "top";
@@ -108,7 +107,7 @@ export function dock(
   node: PaneNode,
   pane: Pane,
   target: Pane,
-  side: Side,
+  side: WindowEdge,
   share: number,
 ): PaneNode {
   if (isLeaf(node))
@@ -275,7 +274,7 @@ export function closeQueue(layout: GuiLayout): GuiLayout {
 export function neighbor(
   rects: Map<Pane, Rect>,
   from: Pane,
-  side: Side,
+  side: WindowEdge,
 ): Pane | null {
   const origin = rects.get(from);
   if (!origin) return null;

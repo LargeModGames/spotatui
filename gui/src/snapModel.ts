@@ -1,5 +1,6 @@
 import type { GuiLayout } from "./bindings/GuiLayout";
 import type { Pane } from "./bindings/Pane";
+import type { WindowEdge } from "./bindings/WindowEdge";
 import {
   band,
   dock,
@@ -11,7 +12,6 @@ import {
   without,
   type Rect,
   vertical,
-  type Side,
 } from "./paneModel";
 
 /** A place a dragged pane can land. Boxes are in pixels of the pane area. */
@@ -34,7 +34,7 @@ const ROOT_BAND = 24;
 const EDGE_BAND = 96;
 const EDGE_SHARE = 0.25;
 const SWAP_BOX = 0.3;
-const SIDES: Side[] = ["left", "right", "top", "bottom"];
+const SIDES: WindowEdge[] = ["left", "right", "top", "bottom"];
 
 const px = (rect: Rect, area: Area): Rect => ({
   x: rect.x * area.w,

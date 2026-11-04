@@ -96,7 +96,7 @@ button:disabled {
   display: grid;
 }
 
-/* Below the wide width (Shell.tsx has it too) the side panel opens over the main view. */
+/* Below the wide width (`WIDE` in Shell.tsx) the side panel opens over the main view. */
 .right-panel {
   position: fixed;
   top: 72px;

@@ -7,7 +7,7 @@ import { Glyph } from "./Icon";
 import type { OpenView } from "./nav";
 import { Cover } from "./ui";
 
-/** The right panel: the playing track large, and the next track in the queue. */
+/** The Now Playing pane: the playing track large, and the next track in the queue. */
 export function NowPlayingPanel({
   s = EN,
   playback,

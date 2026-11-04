@@ -4,7 +4,8 @@ import type { NowPlaying } from "./bindings/NowPlaying";
 import type { UpdateAsk } from "./bindings/UpdateAsk";
 import type { UpdateStatus } from "./bindings/UpdateStatus";
 import type { Page } from "./nav";
-import { PlayerBar, type Panel } from "./PlayerBar";
+import { PlayerBar } from "./PlayerBar";
+import type { SidePane } from "./paneModel";
 import { byName } from "./testTree";
 import { TopBar } from "./TopBar";
 import { Meter } from "./Transport";
@@ -35,7 +36,7 @@ const player = (
     liked = false,
     volume = 72,
     connected = true,
-    panels = ["now_playing"] as Panel[],
+    panels = ["now_playing"] as SidePane[],
     lyricsOpen = false,
   } = {},
 ) =>

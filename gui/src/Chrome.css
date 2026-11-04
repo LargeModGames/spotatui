@@ -608,7 +608,7 @@
   }
 }
 
-/* Right panel contents: the now playing view and the queue. */
+/* Side panel contents: the now playing view, the queue and a pane's frame. */
 .now-panel,
 .queue-panel,
 .pane-frame {

@@ -23,9 +23,6 @@ import { Cover } from "./ui";
 import { usePosition } from "./usePosition";
 import { isEmptySpace, nextMode, VISUALIZER_SETTING } from "./visualizerModel";
 
-/** A side pane that a player-bar button opens and closes. */
-export type Panel = SidePane;
-
 /** The volume an unmute restores when the mute happened elsewhere. */
 const UNMUTE_VOLUME = 50;
 
@@ -63,8 +60,8 @@ export function PlayerBar({
   connected: boolean;
   devices: DeviceInfo[];
   /** The side panes that show now. */
-  panels: Panel[];
-  onPanel: (panel: Panel) => void;
+  panels: SidePane[];
+  onPanel: (panel: SidePane) => void;
   lyricsOpen: boolean;
   onLyrics: () => void;
   onRoom: () => void;
