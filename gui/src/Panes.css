@@ -182,18 +182,17 @@ body.pane-dragging * {
   background: var(--hover);
 }
 
+/* The cover takes the largest square the pane holds, as in the mini player. */
 .cover-pane {
   display: grid;
   place-items: center;
   padding: 16px;
+  container-type: size;
 }
 
-.cover-pane .cover-art {
-  width: auto;
-  height: auto;
-  max-width: 100%;
-  max-height: 100%;
-  object-fit: contain;
+.cover-pane > .cover-art {
+  width: min(100cqw, 100cqh);
+  height: min(100cqw, 100cqh);
 }
 
 /* The grip a bar moves by; it shows when the pointer is over the bar. */
