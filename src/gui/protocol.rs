@@ -9,7 +9,7 @@ use crate::core::app::{
 use crate::core::first_run::compiled_in_sources;
 use crate::core::gui_layout::GuiLayout;
 use crate::core::i18n::{Language, Strings};
-use crate::core::input::Key;
+use crate::core::input::{Arrow, Key};
 use crate::core::playlist_sync::Unmatched;
 use crate::core::plugin_api::{
   device_list, recently_played_snapshot, route_name, AlbumInfo, ArtistInfo, DeviceInfo,
@@ -214,7 +214,19 @@ pub(crate) struct PaneChord {
 }
 
 fn chord(key: Key) -> Option<PaneChord> {
+  let arrow = |arrow: Arrow, alt: bool, shift: bool| PaneChord {
+    code: format!("Arrow{arrow:?}"),
+    alt,
+    ctrl: false,
+    shift,
+  };
   let (c, alt, ctrl) = match key {
+    Key::Left => return Some(arrow(Arrow::Left, false, false)),
+    Key::Right => return Some(arrow(Arrow::Right, false, false)),
+    Key::Up => return Some(arrow(Arrow::Up, false, false)),
+    Key::Down => return Some(arrow(Arrow::Down, false, false)),
+    Key::AltArrow(direction) => return Some(arrow(direction, true, false)),
+    Key::AltShiftArrow(direction) => return Some(arrow(direction, true, true)),
     Key::Char(c) => (c, false, false),
     Key::Alt(c) => (c, true, false),
     Key::Ctrl(c) => (c, false, true),
@@ -1985,6 +1997,24 @@ mod tests {
     );
     assert_eq!(code(Key::Alt('ä')), None);
     assert_eq!(code(Key::Enter), None);
+  }
+
+  #[test]
+  fn chord_maps_arrow_keys_with_their_modifiers_to_browser_codes() {
+    let code = |key| chord(key).map(|chord| (chord.code, chord.alt, chord.ctrl, chord.shift));
+
+    assert_eq!(
+      code(Key::Down),
+      Some(("ArrowDown".into(), false, false, false))
+    );
+    assert_eq!(
+      code(Key::AltArrow(Arrow::Left)),
+      Some(("ArrowLeft".into(), true, false, false))
+    );
+    assert_eq!(
+      code(Key::AltShiftArrow(Arrow::Up)),
+      Some(("ArrowUp".into(), true, false, true))
+    );
   }
 
   #[test]
