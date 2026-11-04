@@ -84,7 +84,8 @@ button:disabled {
 
 .library-panel,
 .main-view,
-.right-panel {
+.right-panel,
+.pane-slot:not(.main-slot) > * {
   min-height: 0;
   overflow: hidden;
   border-radius: var(--radius);
@@ -114,6 +115,7 @@ button:disabled {
 }
 
 .screen {
+  position: relative;
   grid-area: 1 / 1;
   overflow-y: auto;
 }

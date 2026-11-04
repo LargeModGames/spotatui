@@ -38,13 +38,6 @@
   }
 }
 
-.pane-slot:not(.main-slot) > * {
-  min-height: 0;
-  overflow: hidden;
-  border-radius: var(--radius);
-  background: var(--panel);
-}
-
 .pane-slot.floating > * {
   box-shadow: 0 8px 32px rgb(0 0 0 / 60%);
 }
@@ -53,30 +46,6 @@
   opacity: 0.4;
 }
 
-.pane-frame {
-  display: flex;
-  flex-direction: column;
-}
-
-.pane-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 12px 16px 8px;
-}
-
-.pane-head h2 {
-  margin: 0;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 16px;
-  font-weight: 700;
-}
-
-.pane-head,
 .pane-slot .panel-head {
   cursor: grab;
   touch-action: none;
@@ -128,17 +97,21 @@
   background: var(--accent);
 }
 
+.drop-preview,
+.bar-preview {
+  box-sizing: border-box;
+  border: 2px solid var(--accent);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  pointer-events: none;
+}
+
 /* The tile a dragged pane will become. */
 .drop-preview {
   position: absolute;
   z-index: 50;
   display: grid;
   place-items: center;
-  box-sizing: border-box;
-  border: 2px solid var(--accent);
-  border-radius: var(--radius);
-  background: rgb(240 168 58 / 16%);
-  pointer-events: none;
   opacity: 0;
   transition: opacity 80ms;
 }
@@ -185,7 +158,7 @@
 
 body.pane-dragging,
 body.pane-dragging * {
-  cursor: grabbing !important;
+  cursor: var(--drag-cursor, grabbing) !important;
   user-select: none;
 }
 
@@ -201,21 +174,11 @@ body.pane-dragging * {
   top: 16px;
   right: 16px;
   z-index: 2;
-}
-
-.pane-detach {
-  width: 32px;
-  height: 32px;
-  display: grid;
-  place-items: center;
-  padding: 0;
-  border: none;
-  border-radius: 50%;
   background: rgb(0 0 0 / 40%);
   color: var(--text);
 }
 
-.pane-detach:hover {
+.screen > .pane-detach:hover {
   background: var(--hover);
 }
 
@@ -237,8 +200,11 @@ body.pane-dragging * {
 .bar-grip {
   position: absolute;
   z-index: 3;
+  top: 4px;
+  left: 50%;
   width: 24px;
-  height: 24px;
+  height: 12px;
+  transform: translateX(-50%);
   padding: 0;
   border: none;
   border-radius: 4px;
@@ -249,35 +215,8 @@ body.pane-dragging * {
   touch-action: none;
 }
 
-.topbar,
-.playerbar {
-  position: relative;
-}
-
-.topbar > .bar-grip,
-.playerbar > .bar-grip {
-  position: absolute;
-}
-
-.topbar > .bar-grip {
-  top: 4px;
-  left: 50%;
-  height: 12px;
-  transform: translateX(-50%);
-}
-
-.playerbar > .bar-grip {
+.playerbar:not([data-edge="left"], [data-edge="right"]) > .bar-grip {
   top: 2px;
-  left: 50%;
-  height: 12px;
-  transform: translateX(-50%);
-}
-
-.topbar[data-edge="left"] > .bar-grip,
-.topbar[data-edge="right"] > .bar-grip,
-.playerbar[data-edge="left"] > .bar-grip,
-.playerbar[data-edge="right"] > .bar-grip {
-  top: 4px;
 }
 
 .topbar:hover > .bar-grip,
@@ -290,11 +229,6 @@ body.pane-dragging * {
   position: fixed;
   z-index: 60;
   display: none;
-  box-sizing: border-box;
-  border: 2px solid var(--accent);
-  border-radius: var(--radius);
-  background: rgb(240 168 58 / 16%);
-  pointer-events: none;
 }
 
 .bar-preview[data-show="true"] {
@@ -302,8 +236,7 @@ body.pane-dragging * {
 }
 
 /* A player bar on the left or right edge: one column. */
-.playerbar[data-edge="left"],
-.playerbar[data-edge="right"] {
+.playerbar:is([data-edge="left"], [data-edge="right"]) {
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto auto auto;
   align-content: start;
@@ -311,33 +244,28 @@ body.pane-dragging * {
   padding: 24px 8px 112px;
 }
 
-.playerbar[data-edge="left"] .now-track,
-.playerbar[data-edge="right"] .now-track {
+.playerbar:is([data-edge="left"], [data-edge="right"]) .now-track {
   flex-wrap: wrap;
   padding-left: 0;
 }
 
-.playerbar[data-edge="left"] .now-track > .cover-art,
-.playerbar[data-edge="right"] .now-track > .cover-art {
+.playerbar:is([data-edge="left"], [data-edge="right"]) .now-track > .cover-art {
   width: 100% !important;
   height: auto !important;
   aspect-ratio: 1;
 }
 
-.playerbar[data-edge="left"] .titles,
-.playerbar[data-edge="right"] .titles {
+.playerbar:is([data-edge="left"], [data-edge="right"]) .titles {
   flex: 1;
 }
 
-.playerbar[data-edge="left"] .side,
-.playerbar[data-edge="right"] .side {
+.playerbar:is([data-edge="left"], [data-edge="right"]) .side {
   flex-wrap: wrap;
   justify-content: center;
   padding-right: 0;
 }
 
-.playerbar[data-edge="left"] .playerbar-viz,
-.playerbar[data-edge="right"] .playerbar-viz {
+.playerbar:is([data-edge="left"], [data-edge="right"]) .playerbar-viz {
   top: auto;
   bottom: 0;
   left: 0;
@@ -356,8 +284,7 @@ body.pane-dragging * {
 }
 
 /* A top bar on the left or right edge: a rail of icons. */
-.topbar[data-edge="left"],
-.topbar[data-edge="right"] {
+.topbar:is([data-edge="left"], [data-edge="right"]) {
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto auto minmax(0, 1fr);
   align-items: start;
@@ -365,38 +292,35 @@ body.pane-dragging * {
   padding: 24px 0 8px;
 }
 
-.topbar[data-edge="left"] :is(.topbar-start, .topbar-center, .topbar-end, nav),
-.topbar[data-edge="right"]
+.topbar:is([data-edge="left"], [data-edge="right"])
   :is(.topbar-start, .topbar-center, .topbar-end, nav) {
   flex-direction: column;
 }
 
-.topbar[data-edge="left"] .topbar-end,
-.topbar[data-edge="right"] .topbar-end {
+.topbar:is([data-edge="left"], [data-edge="right"]) .topbar-end {
   height: 100%;
   justify-content: flex-start;
 }
 
-.topbar[data-edge="left"] :is(.wordmark, .device-name, .update-pill),
-.topbar[data-edge="right"] :is(.wordmark, .device-name, .update-pill) {
+.topbar:is([data-edge="left"], [data-edge="right"])
+  :is(.wordmark, .device-name, .update-pill) {
   display: none;
 }
 
-.topbar[data-edge="left"] .top-search,
-.topbar[data-edge="right"] .top-search {
+.topbar:is([data-edge="left"], [data-edge="right"]) .top-search {
   flex: none;
   width: 48px;
   padding: 0 14px;
 }
 
-.topbar[data-edge="left"] .top-search:not(:focus-within) input,
-.topbar[data-edge="right"] .top-search:not(:focus-within) input {
+.topbar:is([data-edge="left"], [data-edge="right"])
+  .top-search:not(:focus-within)
+  input {
   width: 0;
 }
 
 /* The search field opens beside the rail while it has the keyboard. */
-.topbar[data-edge="left"] .top-search:focus-within,
-.topbar[data-edge="right"] .top-search:focus-within {
+.topbar:is([data-edge="left"], [data-edge="right"]) .top-search:focus-within {
   position: absolute;
   z-index: 40;
   top: 0;
@@ -413,18 +337,4 @@ body.pane-dragging * {
 
 .topbar[data-edge="right"] .top-search:focus-within {
   right: 0;
-}
-
-.topbar-center {
-  position: relative;
-}
-
-.panel-actions {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.screen {
-  position: relative;
 }
