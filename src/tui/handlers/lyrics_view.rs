@@ -128,9 +128,8 @@ mod tests {
   }
 
   fn app_with_sample_lyrics() -> App {
-    let mut test_app = App::default_connected();
-    test_app.current_playback_context = Some(playing_context());
-    test_app.set_lyrics(
+    let mut app = App::default_connected().with_playback(playing_context());
+    app.set_lyrics(
       LyricsStatus::Found,
       Some(vec![
         (0, "Line 0".to_string()),
@@ -139,65 +138,64 @@ mod tests {
       ]),
       true,
     );
-    test_app
+    app
   }
 
   #[test]
   fn enter_seeks_to_browsed_lyric_and_resumes_follow() {
-    let mut test_app = app_with_sample_lyrics();
-    test_app.view.lyrics_view.timing_offset_ms = 500;
+    let mut app = app_with_sample_lyrics();
+    app.view.lyrics_view.timing_offset_ms = 500;
     // Browse to Line 2 (at 10_000 ms)
-    scroll_by(&mut test_app, 2);
-    assert_eq!(test_app.view.lyrics_view.manual_index, Some(2));
+    scroll_by(&mut app, 2);
+    assert_eq!(app.view.lyrics_view.manual_index, Some(2));
 
-    handler(Key::Enter, &mut test_app);
+    handler(Key::Enter, &mut app);
 
     // 10_000 ms browsed lyric minus 500 ms timing offset
-    assert_eq!(test_app.song_progress_ms, 9_500);
+    assert_eq!(app.song_progress_ms, 9_500);
     // Manual browsing should be cleared (auto-follow resumes)
-    assert_eq!(test_app.view.lyrics_view.manual_index, None);
+    assert_eq!(app.view.lyrics_view.manual_index, None);
   }
 
   #[test]
   fn enter_without_browsing_seeks_to_active_lyric() {
-    let mut test_app = app_with_sample_lyrics();
-    test_app.song_progress_ms = 6_000;
-    assert_eq!(test_app.view.lyrics_view.manual_index, None);
+    let mut app = app_with_sample_lyrics().with_song_progress(6_000);
+    assert_eq!(app.view.lyrics_view.manual_index, None);
 
-    handler(Key::Enter, &mut test_app);
+    handler(Key::Enter, &mut app);
 
     // Active line at 6_000 ms is Line 1 (5_000 ms)
-    assert_eq!(test_app.song_progress_ms, 5_000);
-    assert_eq!(test_app.view.lyrics_view.manual_index, None);
+    assert_eq!(app.song_progress_ms, 5_000);
+    assert_eq!(app.view.lyrics_view.manual_index, None);
   }
 
   #[test]
   fn enter_does_nothing_when_lyrics_unsynced() {
-    let mut test_app = App::default();
-    test_app.current_playback_context = Some(playing_context());
-    test_app.song_progress_ms = 1_000;
-    test_app.set_lyrics(
+    let mut app = App::default()
+      .with_playback(playing_context())
+      .with_song_progress(1_000);
+    app.set_lyrics(
       LyricsStatus::Found,
       Some(vec![(0, "Unsynced text".to_string())]),
       false,
     );
-    test_app.view.lyrics_view.manual_index = Some(0);
+    app.view.lyrics_view.manual_index = Some(0);
 
-    handler(Key::Enter, &mut test_app);
+    handler(Key::Enter, &mut app);
 
-    assert_eq!(test_app.song_progress_ms, 1_000);
-    assert_eq!(test_app.view.lyrics_view.manual_index, Some(0));
+    assert_eq!(app.song_progress_ms, 1_000);
+    assert_eq!(app.view.lyrics_view.manual_index, Some(0));
   }
 
   #[test]
   fn enter_does_nothing_when_lyrics_not_found() {
-    let mut test_app = App::default();
-    test_app.current_playback_context = Some(playing_context());
-    test_app.song_progress_ms = 1_000;
-    test_app.set_lyrics(LyricsStatus::NotFound, None, false);
+    let mut app = App::default()
+      .with_playback(playing_context())
+      .with_song_progress(1_000);
+    app.set_lyrics(LyricsStatus::NotFound, None, false);
 
-    handler(Key::Enter, &mut test_app);
+    handler(Key::Enter, &mut app);
 
-    assert_eq!(test_app.song_progress_ms, 1_000);
+    assert_eq!(app.song_progress_ms, 1_000);
   }
 }
