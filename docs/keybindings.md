@@ -67,6 +67,16 @@ key and its default from `UserConfig::new`. The five AI DJ keys live in the
 | Like / save track | `F` | `like_track` |
 | Generate recap | `R` | `generate_recap` |
 
+### Now playing panel
+
+`Enter` on the playbar opens a panel to the right of the main content with the
+cover (cover-art builds) and the playing track's album, year, track number,
+length, device, liked and explicit marks, and the next items in the queue once
+the queue has been fetched for this track. `Enter` again closes it. The panel
+steps aside while you type a search or read its results, and on a terminal too
+narrow to keep the content 60 columns wide; it comes back by itself afterwards.
+The playbar leaves out its own cover thumbnail while the panel shows.
+
 ### Pane keys
 
 These keys arrange the views you detach beside the main layout. `Alt` with an

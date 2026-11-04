@@ -11,6 +11,7 @@ pub mod help;
 pub mod home;
 pub mod library;
 pub mod lyrics;
+pub mod now_playing;
 pub mod panes;
 pub mod player;
 pub mod playlist_sync;
@@ -65,6 +66,9 @@ pub fn draw_main_layout(f: &mut Frame<'_>, app: &App) {
     if !main_hidden(app) {
       draw_user_block(f, app, areas.sidebar);
       draw_route_content(f, app, areas.content);
+      if let Some(now_playing_area) = areas.now_playing {
+        now_playing::draw_now_playing(f, app, now_playing_area);
+      }
     }
     draw_playbar(f, app, areas.playbar);
   }
@@ -169,6 +173,32 @@ mod tests {
     terminal.draw(|f| draw_main_layout(f, &app)).unwrap();
     let buffer = terminal.backend().buffer().clone();
     (app, buffer)
+  }
+
+  #[test]
+  fn the_now_playing_panel_draws_beside_the_content_with_nothing_playing() {
+    let (width, height) = (160, 50);
+    let mut app = App::default();
+    app.view.size = Viewport { width, height };
+    app.push_navigation_stack(RouteId::Home, ActiveBlock::Home);
+    app.view.now_playing_panel = true;
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    terminal.draw(|f| draw_main_layout(f, &app)).unwrap();
+    let buffer = terminal.backend().buffer().clone();
+
+    let panel = compute_main_layout(&app).unwrap().now_playing.unwrap();
+    let title_row = row_text(&buffer, panel.y);
+    let strings = &app.strings().screens;
+    let from_panel: String = title_row.chars().skip(usize::from(panel.x)).collect();
+    assert!(
+      from_panel.starts_with(&format!("╭{}", strings.now_playing_title)),
+      "title row: {title_row}"
+    );
+    let middle_row = row_text(&buffer, panel.y + 1 + (panel.height - 2) / 2);
+    assert!(
+      middle_row.contains(strings.now_playing_nothing),
+      "middle row: {middle_row}"
+    );
   }
 
   fn row_text(buffer: &Buffer, y: u16) -> String {

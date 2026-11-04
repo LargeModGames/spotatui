@@ -314,6 +314,11 @@ pub fn help_entries_for(strings: &crate::core::i18n::Strings) -> Vec<HelpEntry> 
       help.context_playbar,
     )
     .needs(SESSION),
+    row(
+      help.now_playing_panel,
+      Literal("<Enter>"),
+      help.context_playbar,
+    ),
     row(help.quick_add_playing, Literal("W"), help.context_global).needs(SESSION),
     row(help.sidebar_narrower, Literal("{"), help.context_layout),
     row(help.sidebar_wider, Literal("}"), help.context_layout),

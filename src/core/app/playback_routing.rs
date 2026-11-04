@@ -58,6 +58,22 @@ pub(super) enum PlayingItem<'a> {
   Nothing,
 }
 
+/// What [`App::playing_track_details`] reports beyond the playback snapshot.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PlayingTrackDetails {
+  /// Spotify base62 track id, to match against the snapshot's `item_id`.
+  pub id: Option<String>,
+  /// `YYYY`, `YYYY-MM` or `YYYY-MM-DD`; Spotify reports an unknown date as `0000`.
+  pub release_date: Option<String>,
+  /// 1-based; 0 when unknown.
+  pub track_number: u32,
+  /// 1-based; 0 when unknown.
+  pub disc_number: u32,
+  pub explicit: bool,
+  /// The Connect device the cached context names.
+  pub device: Option<String>,
+}
+
 /// The pure half of [`App::playing_item`], so every owner is testable without
 /// an audio device.
 fn resolve_playing_item<'a>(
@@ -91,6 +107,40 @@ impl App {
         .as_ref()
         .and_then(|context| context.item.as_ref()),
     )
+  }
+
+  /// The track-level details the playback snapshot does not carry, for the
+  /// Spotify track playing now. `None` for an episode, a decoded owner, or
+  /// nothing playing. The cached context lags the native player after a skip,
+  /// so a caller matches `id` against the snapshot's item before using it.
+  pub(crate) fn playing_track_details(&self) -> Option<PlayingTrackDetails> {
+    use rspotify::prelude::Id;
+    let device = || {
+      self
+        .current_playback_context
+        .as_ref()
+        .map(|context| context.device.name.clone())
+        .filter(|name| !name.is_empty())
+    };
+    match self.playing_item() {
+      PlayingItem::Spotify(PlayableItem::Track(track)) => Some(PlayingTrackDetails {
+        id: track.id.as_ref().map(|id| id.id().to_string()),
+        release_date: track.album.release_date.clone(),
+        track_number: track.track_number,
+        disc_number: u32::try_from(track.disc_number).unwrap_or(0),
+        explicit: track.explicit,
+        device: device(),
+      }),
+      PlayingItem::QueuedSpotify(track) => Some(PlayingTrackDetails {
+        id: track.id.clone(),
+        release_date: track.release_date.clone(),
+        track_number: track.track_number,
+        disc_number: 0,
+        explicit: track.explicit,
+        device: device(),
+      }),
+      PlayingItem::Spotify(_) | PlayingItem::NotSpotify | PlayingItem::Nothing => None,
+    }
   }
 
   pub(crate) fn playback_owner(&self) -> PlaybackOwner {

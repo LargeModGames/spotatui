@@ -1,4 +1,4 @@
-use crate::core::app::{ActiveBlock, App};
+use crate::core::app::{ActiveBlock, App, RouteId};
 use crate::core::input::Arrow;
 use crate::core::pane::{Pane, PaneNode, SplitAxis};
 use crate::core::state::RuntimeState;
@@ -20,6 +20,8 @@ pub struct MainLayoutAreas {
   pub library: Rect,
   pub playlists: Rect,
   pub content: Rect,
+  /// The now playing panel to the right of `content`, when it shows.
+  pub now_playing: Option<Rect>,
 }
 
 pub fn small_terminal_width(behavior: &BehaviorConfig) -> u16 {
@@ -401,6 +403,7 @@ pub fn compute_main_layout(app: &App) -> Option<MainLayoutAreas> {
   };
 
   let (user_area, content_area) = split_routes_area(app, routes_area);
+  let (content_area, now_playing_area) = split_now_playing(app, content_area);
   let library = library_constraints(runtime_state);
   let (input, help, settings, library_area, playlist_area) = if wide_layout {
     let [input_area, library_area, playlist_area] = user_area.layout(&Layout::vertical([
@@ -444,7 +447,73 @@ pub fn compute_main_layout(app: &App) -> Option<MainLayoutAreas> {
     library: library_area,
     playlists: playlist_area,
     content: content_area,
+    now_playing: now_playing_area,
   })
+}
+
+/// The narrowest and widest the now playing panel gets, and the share of the
+/// content area it takes in between.
+const NOW_PLAYING_MIN_WIDTH: u16 = 30;
+const NOW_PLAYING_MAX_WIDTH: u16 = 48;
+const NOW_PLAYING_PERCENT: u16 = 30;
+/// The content a panel must leave beside it, so a track table keeps its columns.
+const NOW_PLAYING_MIN_CONTENT_WIDTH: u16 = 60;
+
+/// Why the now playing panel the user asked for is not on screen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NowPlayingHidden {
+  /// The search box has the keys or the search results show: they get the width.
+  Searching,
+  /// The content area cannot spare the panel's minimum width.
+  TooNarrow,
+}
+
+/// The width the now playing panel takes out of a content area this wide,
+/// or `None` when the rest would be too narrow.
+pub fn now_playing_panel_width(content_width: u16) -> Option<u16> {
+  let width =
+    (content_width * NOW_PLAYING_PERCENT / 100).clamp(NOW_PLAYING_MIN_WIDTH, NOW_PLAYING_MAX_WIDTH);
+  (content_width.saturating_sub(width) >= NOW_PLAYING_MIN_CONTENT_WIDTH).then_some(width)
+}
+
+/// Whether the screen the user is on hides the panel: searching needs the width.
+fn now_playing_hidden_by_route(app: &App) -> bool {
+  let route = app.get_current_route();
+  route.id == RouteId::Search || route.active_block == ActiveBlock::Input
+}
+
+/// Why the panel the user asked for does not show over a content area this wide.
+pub fn now_playing_hidden_reason(app: &App, content_width: u16) -> Option<NowPlayingHidden> {
+  if now_playing_hidden_by_route(app) {
+    Some(NowPlayingHidden::Searching)
+  } else if now_playing_panel_width(content_width).is_none() {
+    Some(NowPlayingHidden::TooNarrow)
+  } else {
+    None
+  }
+}
+
+/// Take the now playing panel off the right of `content` when the user asked
+/// for it and it fits; the content keeps the whole area otherwise.
+fn split_now_playing(app: &App, content: Rect) -> (Rect, Option<Rect>) {
+  if !app.view.now_playing_panel || now_playing_hidden_by_route(app) {
+    return (content, None);
+  }
+  let Some(width) = now_playing_panel_width(content.width) else {
+    return (content, None);
+  };
+  let [content, panel] = content.layout(&Layout::horizontal([
+    Constraint::Min(0),
+    Constraint::Length(width),
+  ]));
+  (content, Some(panel))
+}
+
+/// The content area as it would be with the now playing panel closed, to tell
+/// the user why opening it shows nothing.
+pub fn content_width_without_now_playing(app: &App) -> Option<u16> {
+  compute_main_layout(app)
+    .map(|areas| areas.content.width + areas.now_playing.map_or(0, |panel| panel.width))
 }
 
 /// Returns horizontal constraints for the [sidebar, content] split based on runtime state.
@@ -818,5 +887,81 @@ mod tests {
     let area = Rect::new(0, 0, 60, 12);
 
     assert_eq!(miniplayer_playbar_area(area), Rect::new(1, 1, 58, 10));
+  }
+
+  fn app_with_now_playing(width: u16, height: u16) -> App {
+    let mut app = App::default();
+    app.view.size = crate::core::geometry::Viewport { width, height };
+    app.push_navigation_stack(RouteId::TrackTable, ActiveBlock::TrackTable);
+    app.view.now_playing_panel = true;
+    app
+  }
+
+  #[test]
+  fn the_now_playing_panel_takes_the_right_of_the_content_above_a_full_width_playbar() {
+    let app = app_with_now_playing(160, 50);
+
+    let areas = compute_main_layout(&app).unwrap();
+    let panel = areas.now_playing.expect("panel shows on a wide terminal");
+
+    assert_eq!(panel.x, areas.content.x + areas.content.width);
+    assert_eq!(
+      (panel.y, panel.height),
+      (areas.content.y, areas.content.height)
+    );
+    assert_eq!(
+      areas.playbar.x + areas.playbar.width,
+      panel.x + panel.width,
+      "the playbar keeps the whole width under the panel"
+    );
+    assert!(areas.content.width >= NOW_PLAYING_MIN_CONTENT_WIDTH);
+  }
+
+  #[test]
+  fn the_now_playing_panel_stays_closed_until_asked_for() {
+    let mut app = app_with_now_playing(160, 50);
+    app.view.now_playing_panel = false;
+
+    assert_eq!(compute_main_layout(&app).unwrap().now_playing, None);
+  }
+
+  #[test]
+  fn searching_hides_the_now_playing_panel_and_gives_the_results_its_width() {
+    let mut app = app_with_now_playing(160, 50);
+    let with_panel = compute_main_layout(&app).unwrap();
+
+    app.push_navigation_stack(RouteId::Search, ActiveBlock::SearchResultBlock);
+    let results = compute_main_layout(&app).unwrap();
+    assert_eq!(results.now_playing, None);
+    assert_eq!(
+      results.content.width,
+      with_panel.content.width + with_panel.now_playing.unwrap().width
+    );
+
+    app.set_current_route_state(Some(ActiveBlock::Input), None);
+    assert_eq!(compute_main_layout(&app).unwrap().now_playing, None);
+    assert_eq!(
+      now_playing_hidden_reason(&app, results.content.width),
+      Some(NowPlayingHidden::Searching)
+    );
+  }
+
+  #[test]
+  fn a_narrow_terminal_leaves_the_now_playing_panel_out() {
+    let app = app_with_now_playing(100, 40);
+    let width = content_width_without_now_playing(&app).unwrap();
+
+    assert_eq!(compute_main_layout(&app).unwrap().now_playing, None);
+    assert_eq!(
+      now_playing_hidden_reason(&app, width),
+      Some(NowPlayingHidden::TooNarrow)
+    );
+  }
+
+  #[test]
+  fn the_now_playing_panel_width_is_clamped_and_leaves_the_content_room() {
+    assert_eq!(now_playing_panel_width(200), Some(NOW_PLAYING_MAX_WIDTH));
+    assert_eq!(now_playing_panel_width(100), Some(30));
+    assert_eq!(now_playing_panel_width(89), None);
   }
 }
