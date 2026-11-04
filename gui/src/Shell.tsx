@@ -338,6 +338,8 @@ export function Shell({
   );
 
   const panesShown = wide && panesFit && !room && !mini;
+  // Without room for panes the side panel opens over the main view, as on a narrow window.
+  const overlayMode = !wide || !panesFit;
   const paneShown = (pane: Pane) => panesShown && placed(layout, pane);
   // A hidden Main hides the page too, so a Lyrics or Visualizer pane draws in its place.
   const mainHidden = panesShown && !contains(layout.tree, "main");
@@ -350,7 +352,7 @@ export function Shell({
   const showsQueue =
     paneShown("queue") ||
     paneShown("now_playing") ||
-    (!wide && overlayPane !== null) ||
+    (overlayMode && overlayPane !== null) ||
     room ||
     page === "session" ||
     page === "party";
@@ -600,22 +602,22 @@ export function Shell({
   // The player-bar buttons open and close a side pane, or the overlay on a narrow window.
   const togglePanel = useCallback(
     (pane: SidePane) => {
-      if (!wide) {
+      if (overlayMode) {
         setOverlayPane((shown) => (shown === pane ? null : pane));
         return;
       }
       if (pane === "queue" && !placed(layout, pane)) setQueueGrab(true);
       changeLayout(toggle(layout, pane), pane);
     },
-    [wide, layout, changeLayout],
+    [overlayMode, layout, changeLayout],
   );
   // The queue's own close and Q bring Now Playing back to its slot.
   const leaveQueue = useCallback(() => {
-    if (!wide) setOverlayPane("now_playing");
+    if (overlayMode) setOverlayPane("now_playing");
     else changeLayout(closeQueue(layout), "queue");
-  }, [wide, layout, changeLayout]);
+  }, [overlayMode, layout, changeLayout]);
   const queueKey = useCallback(() => {
-    if (!wide) {
+    if (overlayMode) {
       setOverlayPane((shown) => (shown === "queue" ? "now_playing" : "queue"));
       return;
     }
@@ -625,7 +627,7 @@ export function Shell({
     }
     setQueueGrab(true);
     changeLayout(openPane(layout, "queue"));
-  }, [wide, layout, leaveQueue, changeLayout]);
+  }, [overlayMode, layout, leaveQueue, changeLayout]);
   const closePane = useCallback(
     (pane: Pane) => {
       if (pane === "queue") leaveQueue();
@@ -685,8 +687,9 @@ export function Shell({
     const onKeyDown = (event: KeyboardEvent) => {
       const press = describe(event, overlay !== null);
       const pane = mini || room ? null : paneKey(press, paneKeys);
-      if (pane) {
-        if (panesShown) paneCommand(pane);
+      // With the panes hidden a pane key is left to the shell, so / can still search.
+      if (pane && panesShown) {
+        paneCommand(pane);
         event.preventDefault();
         return;
       }
@@ -867,7 +870,7 @@ export function Shell({
       send={send}
       onClose={onClose}
       onCover={
-        wide && !placed(layout, "cover_art")
+        !overlayMode && !placed(layout, "cover_art")
           ? () => commitLayout(openPane(layout, "cover_art"))
           : undefined
       }
@@ -927,11 +930,11 @@ export function Shell({
       ),
     },
   };
-  const panels: SidePane[] = wide
-    ? SIDE_PANES.filter((pane) => placed(layout, pane))
-    : overlayPane
+  const panels: SidePane[] = overlayMode
+    ? overlayPane
       ? [overlayPane]
-      : [];
+      : []
+    : SIDE_PANES.filter((pane) => placed(layout, pane));
   const mainPane = (
     <>
       <LibraryPanel
@@ -1032,7 +1035,7 @@ export function Shell({
           onShown={setPanesFit}
           onClose={closePane}
         />
-        {!wide && overlayPane && (
+        {overlayMode && overlayPane && (
           <aside className="right-panel" aria-label={s.side_panel}>
             {overlayPane === "queue"
               ? queuePanel(true)

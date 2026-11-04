@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import type { ClientMessage } from "../src/bindings/ClientMessage";
 import type { GuiLayout } from "../src/bindings/GuiLayout";
+import type { PaneKeys } from "../src/bindings/PaneKeys";
 import type { ServerMessage } from "../src/bindings/ServerMessage";
 import defaults from "../src/bindings/default_layout.json" with { type: "json" };
 import { shot } from "./bridge";
@@ -10,7 +11,10 @@ const DEFAULT_LAYOUT = defaults as unknown as GuiLayout;
 
 const alt = (code: string) => ({ code, alt: true, ctrl: false, shift: false });
 
-const paneLayout = (layout: GuiLayout): ServerMessage => ({
+const paneLayout = (
+  layout: GuiLayout,
+  keys: Partial<PaneKeys> = {},
+): ServerMessage => ({
   kind: "pane_layout",
   rev: 2,
   payload: {
@@ -23,6 +27,7 @@ const paneLayout = (layout: GuiLayout): ServerMessage => ({
       focus_up: alt("KeyK"),
       focus_right: alt("KeyL"),
       reset: alt("Digit0"),
+      ...keys,
     },
   },
 });
@@ -31,6 +36,7 @@ const paneLayout = (layout: GuiLayout): ServerMessage => ({
 async function openPanes(
   page: Page,
   layout: GuiLayout,
+  keys: Partial<PaneKeys> = {},
 ): Promise<(GuiLayout | null)[]> {
   const sent: (GuiLayout | null)[] = [];
   await page.routeWebSocket("**/ws", (ws) => {
@@ -38,7 +44,12 @@ async function openPanes(
       const message = JSON.parse(String(text)) as ClientMessage;
       if (message.type === "pane_layout") sent.push(message.layout);
     });
-    for (const message of [...playing, ...library, ...room, paneLayout(layout)])
+    for (const message of [
+      ...playing,
+      ...library,
+      ...room,
+      paneLayout(layout, keys),
+    ])
       ws.send(JSON.stringify(message));
   });
   await page.goto("/#code=shot");
@@ -256,4 +267,47 @@ test("a layout change made while the socket is closed goes out when it opens aga
   await expect.poll(() => sent.map((entry) => entry.socket)).toEqual([1]);
   expect(sent[0]?.layout?.tree).toBe("now_playing");
   await expect(page.locator('[data-pane="main"]')).toBeHidden();
+});
+
+test("the side-pane buttons open the overlay when the panes do not fit", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1200, height: 480 });
+  const sent = await openPanes(page, {
+    tree: {
+      axis: "horizontal",
+      percent: 60,
+      first: "main",
+      second: {
+        axis: "vertical",
+        percent: 50,
+        first: "now_playing",
+        second: {
+          axis: "vertical",
+          percent: 50,
+          first: "lyrics",
+          second: "visualizer",
+        },
+      },
+    },
+    floating: [],
+    bars: DEFAULT_LAYOUT.bars,
+  });
+  await expect(page.locator('[data-pane="now_playing"]')).toHaveCount(0);
+  await page.getByRole("button", { name: "Queue", exact: true }).click();
+  await expect(
+    page.getByRole("complementary").getByRole("region", { name: "Queue" }),
+  ).toBeVisible();
+  expect(sent).toEqual([]);
+});
+
+test("a pane key on / leaves search to the shell while the panes are hidden", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1000, height: 800 });
+  await openPanes(page, DEFAULT_LAYOUT, {
+    detach: { code: "Slash", alt: false, ctrl: false, shift: false },
+  });
+  await page.keyboard.press("/");
+  await expect(page.locator("#top-search")).toBeFocused();
 });
