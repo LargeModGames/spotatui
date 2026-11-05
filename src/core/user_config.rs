@@ -2140,8 +2140,16 @@ impl UserConfig {
       self.behavior.streaming_audio_cache = audio_cache;
     }
     if let Some(limit) = behavior_config.streaming_audio_cache_limit {
-      parse_audio_cache_limit(&limit).map_err(|e| anyhow!("Invalid audio cache limit: {e}"))?;
-      self.behavior.streaming_audio_cache_limit = limit.trim().to_string();
+      // Invalid values warn and fall back to unlimited, like most settings.
+      self.behavior.streaming_audio_cache_limit = match parse_audio_cache_limit(&limit) {
+        Ok(_) => limit.trim().to_string(),
+        Err(e) => {
+          log::warn!(
+            "[config] behavior.streaming_audio_cache_limit: {e}; using no cache size limit"
+          );
+          String::new()
+        }
+      };
     }
     if let Some(autoplay) = behavior_config.streaming_autoplay {
       self.behavior.streaming_autoplay = autoplay;
@@ -3611,15 +3619,39 @@ mod tests {
   }
 
   #[test]
-  fn invalid_audio_cache_limit_is_rejected_even_when_cache_is_off() {
+  fn invalid_audio_cache_limit_warns_and_falls_back_to_unlimited() {
     use super::{BehaviorConfigString, UserConfig};
 
-    let behavior: BehaviorConfigString =
-      serde_yaml::from_str("streaming_audio_cache: false\nstreaming_audio_cache_limit: abc\n")
-        .unwrap();
     let mut config = UserConfig::new();
+    let behavior: BehaviorConfigString =
+      serde_yaml::from_str("streaming_audio_cache_limit: 1G").unwrap();
+    config.load_behaviorconfig(behavior).unwrap();
+    assert_eq!(config.behavior.streaming_audio_cache_limit, "1G");
 
-    assert!(config.load_behaviorconfig(behavior).is_err());
+    for cache_enabled in [false, true] {
+      for invalid in ["abc", "18446744073709551616"] {
+        let behavior: BehaviorConfigString = serde_yaml::from_str(&format!(
+          "streaming_audio_cache: {cache_enabled}\nstreaming_audio_cache_limit: {invalid}\n"
+        ))
+        .unwrap();
+        config.load_behaviorconfig(behavior).unwrap();
+        assert!(config.behavior.streaming_audio_cache_limit.is_empty());
+
+        // Reloading a valid value afterwards stores it again.
+        let behavior: BehaviorConfigString =
+          serde_yaml::from_str("streaming_audio_cache_limit: 512M").unwrap();
+        config.load_behaviorconfig(behavior).unwrap();
+        assert_eq!(config.behavior.streaming_audio_cache_limit, "512M");
+
+        let behavior: BehaviorConfigString = serde_yaml::from_str(&format!(
+          "streaming_audio_cache: {cache_enabled}\nstreaming_audio_cache_limit: {invalid}\n"
+        ))
+        .unwrap();
+        config.load_behaviorconfig(behavior).unwrap();
+        assert!(config.behavior.streaming_audio_cache_limit.is_empty());
+        assert_eq!(config.behavior.streaming_audio_cache, cache_enabled);
+      }
+    }
   }
 
   #[cfg(feature = "art-decode")]
