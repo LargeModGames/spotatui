@@ -552,7 +552,8 @@ impl App {
 
   /// Write Soloist's live state over the stored context when it is Soloist's,
   /// and restart the tick's position clock from it. A `polled` context always
-  /// restarts it: its API item and progress come from one response.
+  /// restarts it outside a seek's settle window: its API item and progress come
+  /// from one response.
   #[cfg(feature = "soloist")]
   pub(crate) fn overlay_soloist_snapshot(&mut self, polled: bool) {
     let Some(link) = self.soloist_link.as_ref() else {
@@ -569,7 +570,15 @@ impl App {
       &link.snapshot(),
       chrono::Utc::now().timestamp_millis(),
     );
-    if let Some(progress) = context.progress.filter(|_| polled || wrote_position) {
+    let seek_settling = self
+      .last_api_seek
+      .is_some_and(|at| at.elapsed().as_millis() < SEEK_POSITION_IGNORE_MS);
+    let resync = if polled {
+      !seek_settling
+    } else {
+      wrote_position
+    };
+    if let Some(progress) = context.progress.filter(|_| resync) {
       self.song_progress_ms = progress.num_milliseconds().max(0) as u128;
       self.instant_since_last_current_playback_poll = Instant::now();
     }
@@ -1728,5 +1737,10 @@ mod soloist_tests {
     app.song_progress_ms = 9_000;
     app.apply_soloist_event(&link, &Event::Playback(Status::Playing));
     assert_eq!(app.song_progress_ms, 9_000, "an event rewound the clock");
+
+    app.song_progress_ms = 60_000;
+    app.last_api_seek = Some(Instant::now());
+    app.overlay_soloist_snapshot(true);
+    assert_eq!(app.song_progress_ms, 60_000, "a poll undid the seek");
   }
 }
