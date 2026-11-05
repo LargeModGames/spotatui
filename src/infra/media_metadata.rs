@@ -232,7 +232,7 @@ fn source_playback_snapshot(
   strings: Option<&crate::core::i18n::Strings>,
 ) -> Option<PlaybackSnapshot> {
   // A radio-only build has no generated title to show.
-  #[cfg(not(any(feature = "audio-decode-queue", feature = "local-files")))]
+  #[cfg(not(feature = "audio-decode-queue"))]
   let _ = strings;
   // The native queue slot playing a decoded track wins over every per-source
   // context: it is what is actually audible, and it drives the playbar / MPRIS /
