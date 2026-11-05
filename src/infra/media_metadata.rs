@@ -229,15 +229,18 @@ fn snapshot_track_title(
 #[cfg(feature = "audio-decode")]
 fn source_playback_snapshot(
   app: &App,
-  _strings: Option<&crate::core::i18n::Strings>,
+  strings: Option<&crate::core::i18n::Strings>,
 ) -> Option<PlaybackSnapshot> {
+  // A radio-only build has no generated title to show.
+  #[cfg(not(any(feature = "audio-decode-queue", feature = "local-files")))]
+  let _ = strings;
   // The native queue slot playing a decoded track wins over every per-source
   // context: it is what is actually audible, and it drives the playbar / MPRIS /
   // cover art / lyrics via the shared track-change detector.
   #[cfg(feature = "audio-decode-queue")]
   if let Some(crate::infra::queue::QueueNowPlaying::Decoded(d)) = app.queue_now.as_ref() {
     let mut snapshot = source_snapshot(
-      snapshot_track_title(&d.track.name, d.track.generated_name, _strings),
+      snapshot_track_title(&d.track.name, d.track.generated_name, strings),
       d.track.artists.clone(),
       d.track.album.clone(),
       d.track.duration_ms as u32,
@@ -268,7 +271,7 @@ fn source_playback_snapshot(
   #[cfg(feature = "local-files")]
   if let Some(local) = app.local_playback.as_ref() {
     return Some(source_snapshot(
-      snapshot_track_title(&local.name, local.generated_name, _strings),
+      snapshot_track_title(&local.name, local.generated_name, strings),
       vec![local.artists.clone()],
       local.album.clone(),
       local.duration_ms as u32,
