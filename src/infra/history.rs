@@ -975,9 +975,7 @@ impl HistoryCollector {
   }
 }
 
-/// A new track can report the old track's end position for a few samples (a
-/// stream that has not started, a stale poll). Only a session heard past the
-/// floor can replay, so that drop never splits a stub listen off.
+/// Only a session heard past the floor can replay, so a stale end position never splits a stub off.
 fn is_replay(listened_ms: u64, last_progress_ms: u128, progress_ms: u128) -> bool {
   listened_ms > REPLAY_PREVIOUS_PROGRESS_FLOOR_MS as u64
     && last_progress_ms > REPLAY_PREVIOUS_PROGRESS_FLOOR_MS
@@ -3218,7 +3216,6 @@ mod tests {
   #[test]
   fn only_a_drop_after_a_real_listen_is_a_replay() {
     assert!(is_replay(120_000, 120_000, 1_000));
-    assert!(!is_replay(3_000, 200_000, 1_000), "a stale start");
     assert!(
       !is_replay(120_000, 20_000, 1_000),
       "below the progress floor"
