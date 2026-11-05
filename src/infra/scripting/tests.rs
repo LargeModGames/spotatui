@@ -1128,7 +1128,7 @@ mod playbar_effect_tests {
         text: None,
       });
     engine.drain_effects(&mut app);
-    assert!(app.plugin_playbar_segments.get("myplugin").is_none());
+    assert!(!app.plugin_playbar_segments.contains_key("myplugin"));
   }
 }
 

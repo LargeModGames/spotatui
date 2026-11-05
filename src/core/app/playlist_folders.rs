@@ -310,8 +310,10 @@ mod tests {
 
   #[test]
   fn community_pin_hidden_under_non_spotify_source() {
-    let mut app = App::default();
-    app.active_source = Source::Local;
+    let app = App {
+      active_source: Source::Local,
+      ..Default::default()
+    };
     assert!(!app.community_pin_visible());
   }
 

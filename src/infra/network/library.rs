@@ -3569,7 +3569,7 @@ mod folder_label_tests {
     ];
     let names = |items: &[PlaylistFolderItem], strings: &crate::core::i18n::Strings| {
       items
-        .into_iter()
+        .iter()
         .filter_map(|item| match item {
           PlaylistFolderItem::Folder(folder) => Some(folder.display_name(strings).into_owned()),
           _ => None,

@@ -330,6 +330,7 @@ mod tests {
   ///
   /// The directory is per-process for the adjacent reason: a fixed path collides
   /// with a previous `cargo test` run still finishing.
+  #[cfg(unix)]
   fn stubs() -> &'static std::collections::HashMap<&'static str, PathBuf> {
     static STUBS: std::sync::OnceLock<std::collections::HashMap<&'static str, PathBuf>> =
       std::sync::OnceLock::new();
@@ -394,13 +395,10 @@ esac"#,
       ]
       .into_iter()
       .map(|(name, body)| {
+        use std::os::unix::fs::PermissionsExt;
         let path = dir.join(name);
         std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
-        #[cfg(unix)]
-        {
-          use std::os::unix::fs::PermissionsExt;
-          std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
         (name, path)
       })
       .collect()
@@ -408,6 +406,7 @@ esac"#,
   }
 
   /// Path of one stand-in, as an argv entry.
+  #[cfg(unix)]
   fn stub(name: &str) -> String {
     stubs()[name].to_string_lossy().to_string()
   }

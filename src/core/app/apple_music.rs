@@ -1640,8 +1640,10 @@ mod tests {
   #[test]
   fn an_apple_music_list_names_its_uri_once_its_first_page_lands() {
     use crate::infra::apple_music::{Browse, LIBRARY_URI};
-    let mut app = App::default();
-    app.source_table_uri = Some("qobuz:playlist:1".into());
+    let mut app = App {
+      source_table_uri: Some("qobuz:playlist:1".into()),
+      ..Default::default()
+    };
     app.open_source_playlist_tracks(LIBRARY_URI.into());
     app.apple_music.browse = Some(Browse::Tracks(LIBRARY_URI.into()));
     app.note_track_table_changes();
@@ -2137,8 +2139,10 @@ mod tests {
   #[test]
   fn apple_music_late_pages_are_rejected_once_the_list_moved_on() {
     use crate::infra::apple_music::{Browse, LIBRARY_URI};
-    let mut app = App::default();
-    app.active_source = Source::AppleMusic;
+    let mut app = App {
+      active_source: Source::AppleMusic,
+      ..Default::default()
+    };
     let request = Browse::Tracks(LIBRARY_URI.into());
     app.apple_music.browse = Some(request.clone());
     app.track_table.context = Some(TrackTableContext::AppleMusicPlaylist);

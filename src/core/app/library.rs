@@ -1760,9 +1760,11 @@ mod tests {
 
   #[test]
   fn clear_saved_artists_in_flight_resets_guard_and_pending_selection() {
-    let mut app = App::default();
-    app.saved_artists_prefetch_in_flight = Some("cursor_token".to_string());
-    app.pending_artist_selection = Some(15);
+    let mut app = App {
+      saved_artists_prefetch_in_flight: Some("cursor_token".to_string()),
+      pending_artist_selection: Some(15),
+      ..Default::default()
+    };
 
     app.clear_saved_artists_in_flight();
 

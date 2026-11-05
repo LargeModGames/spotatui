@@ -618,6 +618,12 @@ impl App {
   }
 }
 
+pub fn playlist_track_info_matches_terms(track: &TrackInfo, terms: &[String]) -> bool {
+  let haystack =
+    format!("{} {} {}", track.name, track.album, track.artists.join(" "),).to_lowercase();
+  terms.iter().all(|term| haystack.contains(term))
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -890,10 +896,4 @@ mod tests {
     assert!(app.try_sort_playlist_tracks_from_cached_pages(&playlist_id));
     assert_eq!(app.track_table.tracks.len(), 2);
   }
-}
-
-pub fn playlist_track_info_matches_terms(track: &TrackInfo, terms: &[String]) -> bool {
-  let haystack =
-    format!("{} {} {}", track.name, track.album, track.artists.join(" "),).to_lowercase();
-  terms.iter().all(|term| haystack.contains(term))
 }

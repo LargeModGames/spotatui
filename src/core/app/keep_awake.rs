@@ -99,8 +99,10 @@ mod tests {
         None::<()>
       }
     };
-    let mut keep = KeepAwake::default();
-    keep.tx = Some(spawn_worker(create));
+    let mut keep = KeepAwake {
+      tx: Some(spawn_worker(create)),
+      ..Default::default()
+    };
     let settled = |done_rx: &std::sync::mpsc::Receiver<()>| {
       done_rx.recv_timeout(Duration::from_secs(5)).unwrap();
       // A second attempt would arrive well inside this wait.
@@ -123,8 +125,10 @@ mod tests {
     let (dead_tx, dead_rx) = std::sync::mpsc::channel::<bool>();
     drop(dead_rx);
     let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
-    let mut keep = KeepAwake::default();
-    keep.tx = Some(dead_tx);
+    let mut keep = KeepAwake {
+      tx: Some(dead_tx),
+      ..Default::default()
+    };
 
     keep.request_with(true, move || {
       let _ = done_tx.send(());

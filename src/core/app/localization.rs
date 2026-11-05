@@ -94,8 +94,10 @@ mod tests {
 
   #[test]
   fn auto_resolves_the_startup_locale_and_cli_keeps_english() {
-    let mut app = App::default();
-    app.system_language = Language::ZhHant;
+    let mut app = App {
+      system_language: Language::ZhHant,
+      ..Default::default()
+    };
     app.refresh_language();
     assert_eq!(app.language(), Language::ZhHant);
     app.use_english_messages();

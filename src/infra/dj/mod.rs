@@ -348,6 +348,39 @@ impl DjState {
   }
 }
 
+/// Payload for `IoEvent::AskDj`.
+#[cfg(feature = "ai-dj")]
+pub struct AskDjRequest {
+  /// A one-shot steer for the brain that is **not** in the transcript.
+  ///
+  /// The caller owns the transcript: whatever the listener typed is pushed by the
+  /// handler before this event is dispatched, and reaches the brain through the
+  /// conversation history that `session::turn_context` builds from it. Pushing it
+  /// here as well is what produced the doubled `you` line. Use this field only for
+  /// an instruction the listener never typed, such as the vibe shift's "change
+  /// direction" — those are deliberately transient and do not persist into later
+  /// turns' history.
+  pub extra_instruction: Option<String>,
+  /// Generation this turn was dispatched for. Re-checked before anything is
+  /// queued so a turn the user has since abandoned is dropped.
+  pub generation: u64,
+  /// Whether this turn must end in music rather than words.
+  ///
+  /// Set for an auto-queue refill and a vibe shift. Both run with nobody watching
+  /// the screen, where a clarifying question is indistinguishable from a hang.
+  pub must_act: bool,
+  /// Which turn this is, from [`DjState::begin_turn`]. Only this turn may clear
+  /// the progress flag when it ends.
+  pub turn_seq: u64,
+  /// What to store as the standing auto-queue direction, but only if the turn
+  /// actually queues something.
+  ///
+  /// Conditional because the DJ can now hold a conversation: setting it
+  /// unconditionally made "what have I been listening to?" the vibe every later
+  /// refill followed.
+  pub vibe_on_success: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -392,10 +425,12 @@ mod tests {
 
   #[test]
   fn clear_input_clears_cursor_state() {
-    let mut state = DjState::default();
-    state.input = "chill".chars().collect();
-    state.input_idx = 5;
-    state.input_cursor = 5;
+    let mut state = DjState {
+      input: "chill".chars().collect(),
+      input_idx: 5,
+      input_cursor: 5,
+      ..Default::default()
+    };
     state.clear_input();
     assert!(state.input.is_empty());
     assert_eq!(state.input_idx, 0);
@@ -411,37 +446,4 @@ mod tests {
     };
     assert_eq!(suggestion.label(), "Nude — Radiohead");
   }
-}
-
-/// Payload for `IoEvent::AskDj`.
-#[cfg(feature = "ai-dj")]
-pub struct AskDjRequest {
-  /// A one-shot steer for the brain that is **not** in the transcript.
-  ///
-  /// The caller owns the transcript: whatever the listener typed is pushed by the
-  /// handler before this event is dispatched, and reaches the brain through the
-  /// conversation history that `session::turn_context` builds from it. Pushing it
-  /// here as well is what produced the doubled `you` line. Use this field only for
-  /// an instruction the listener never typed, such as the vibe shift's "change
-  /// direction" — those are deliberately transient and do not persist into later
-  /// turns' history.
-  pub extra_instruction: Option<String>,
-  /// Generation this turn was dispatched for. Re-checked before anything is
-  /// queued so a turn the user has since abandoned is dropped.
-  pub generation: u64,
-  /// Whether this turn must end in music rather than words.
-  ///
-  /// Set for an auto-queue refill and a vibe shift. Both run with nobody watching
-  /// the screen, where a clarifying question is indistinguishable from a hang.
-  pub must_act: bool,
-  /// Which turn this is, from [`DjState::begin_turn`]. Only this turn may clear
-  /// the progress flag when it ends.
-  pub turn_seq: u64,
-  /// What to store as the standing auto-queue direction, but only if the turn
-  /// actually queues something.
-  ///
-  /// Conditional because the DJ can now hold a conversation: setting it
-  /// unconditionally made "what have I been listening to?" the vibe every later
-  /// refill followed.
-  pub vibe_on_success: Option<String>,
 }

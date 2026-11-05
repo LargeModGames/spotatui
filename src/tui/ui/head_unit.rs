@@ -856,7 +856,7 @@ mod tests {
     for k in 1..BANDS / 2 {
       assert!(width(k) < width(k - 1), "panel {k}");
     }
-    assert!(BACK_TOP_RIGHT > BACK_TOP_LEFT, "and shorter to the right");
+    const { assert!(BACK_TOP_RIGHT > BACK_TOP_LEFT, "and shorter to the right") };
   }
 
   #[test]
@@ -897,7 +897,7 @@ mod tests {
     }
     for cy in 0..canvas.height / 4 {
       let colors: std::collections::HashSet<Rgb> = (0..canvas.width)
-        .flat_map(|x| (0..4).filter_map(move |dy| Some((x, cy * 4 + dy))))
+        .flat_map(|x| (0..4).map(move |dy| (x, cy * 4 + dy)))
         .filter_map(|(x, y)| canvas.get(x, y))
         .collect();
       assert!(colors.len() <= 1, "cell row {cy} mixes colors");
