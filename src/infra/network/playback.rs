@@ -3005,6 +3005,8 @@ impl PlaybackNetwork for Network {
         let mut app = self.app.lock().await;
         let strings = app.strings();
         app.set_status_message(strings.status.infra.queue_added.to_string(), 3);
+        // The now playing panel lists the queue: show the new item now.
+        app.refresh_up_next();
       }
       Err(e) => {
         #[cfg(feature = "streaming")]
