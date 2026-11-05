@@ -58,6 +58,22 @@ pub(super) enum PlayingItem<'a> {
   Nothing,
 }
 
+/// What [`App::playing_track_details`] reports beyond the playback snapshot.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PlayingTrackDetails {
+  /// Spotify base62 track id, to match against the snapshot's `item_id`.
+  pub id: Option<String>,
+  /// `YYYY`, `YYYY-MM` or `YYYY-MM-DD`; Spotify reports an unknown date as `0000`.
+  pub release_date: Option<String>,
+  /// 1-based; 0 when unknown.
+  pub track_number: u32,
+  /// 1-based; 0 when unknown.
+  pub disc_number: u32,
+  pub explicit: bool,
+  /// The Connect device the cached context names.
+  pub device: Option<String>,
+}
+
 /// The pure half of [`App::playing_item`], so every owner is testable without
 /// an audio device.
 fn resolve_playing_item<'a>(
@@ -91,6 +107,78 @@ impl App {
         .as_ref()
         .and_then(|context| context.item.as_ref()),
     )
+  }
+
+  /// The track-level details the playback snapshot does not carry, for the
+  /// Spotify track playing now. `None` for an episode, a decoded owner, or
+  /// nothing playing. The cached context lags the native player after a skip,
+  /// so a caller matches `id` against the snapshot's item before using it.
+  pub(crate) fn playing_track_details(&self) -> Option<PlayingTrackDetails> {
+    use rspotify::prelude::Id;
+    let device = || {
+      self
+        .current_playback_context
+        .as_ref()
+        .map(|context| context.device.name.clone())
+        .filter(|name| !name.is_empty())
+    };
+    match self.playing_item() {
+      PlayingItem::Spotify(PlayableItem::Track(track)) => Some(PlayingTrackDetails {
+        id: track.id.as_ref().map(|id| id.id().to_string()),
+        release_date: track.album.release_date.clone(),
+        track_number: track.track_number,
+        disc_number: u32::try_from(track.disc_number).unwrap_or(0),
+        explicit: track.explicit,
+        device: device(),
+      }),
+      PlayingItem::QueuedSpotify(track) => Some(PlayingTrackDetails {
+        id: track.id.clone(),
+        release_date: track.release_date.clone(),
+        track_number: track.track_number,
+        disc_number: 0,
+        explicit: track.explicit,
+        device: device(),
+      }),
+      PlayingItem::Spotify(_) | PlayingItem::NotSpotify | PlayingItem::Nothing => None,
+    }
+  }
+
+  /// Ask for Spotify's queue for the now playing panel's "Up next". The fetch
+  /// goes out from [`Self::follow_up_next`] once it can follow the right item.
+  pub(crate) fn request_up_next(&mut self) {
+    self.up_next_pending = true;
+  }
+
+  /// Send a requested "Up next" fetch when it is due, given the id of the item
+  /// playing now. Only the queue screen fetched Spotify's queue before. A
+  /// request stays pending while the panel is open and no fetch can go out, and
+  /// a closed panel drops it, since opening the panel requests one anyway.
+  pub(crate) fn follow_up_next(&mut self, playing_id: Option<&str>) {
+    if !self.up_next_pending {
+      return;
+    }
+    if !self.view.now_playing_panel {
+      self.up_next_pending = false;
+    } else if self.spotify_connected && self.up_next_can_follow(playing_id) {
+      self.up_next_pending = false;
+      self.apply(crate::core::action::Action::RefreshQueue);
+    }
+  }
+
+  /// Whether a queue fetch now would answer for `playing_id`. A fetch with no
+  /// Spotify item to follow only reports a failed load, and under native
+  /// streaming the cached context names the previous item for a moment after a
+  /// skip, so the fetch waits for it. A queue slot's track is not the cached one.
+  fn up_next_can_follow(&self, playing_id: Option<&str>) -> bool {
+    match self.playing_item() {
+      PlayingItem::QueuedSpotify(_) => true,
+      PlayingItem::Spotify(_) => match (self.cached_playback_item_id(), playing_id) {
+        (Some(cached), Some(playing)) => cached == playing,
+        // A Spotify local file has no id to compare.
+        _ => true,
+      },
+      PlayingItem::NotSpotify | PlayingItem::Nothing => false,
+    }
   }
 
   pub(crate) fn playback_owner(&self) -> PlaybackOwner {
@@ -1222,6 +1310,93 @@ mod tests {
       resolve_playing_item(PlaybackOwner::None, None, false, Some(&cached)),
       PlayingItem::Nothing
     ));
+  }
+
+  /// A session playing a Spotify track on another device.
+  fn spotify_track_playing() -> (App, std::sync::mpsc::Receiver<IoEvent>) {
+    let (mut app, rx) = session_free_app();
+    app.spotify_connected = true;
+    app.current_playback_context = Some(CurrentPlaybackContext {
+      item: Some(PlayableItem::Track(full_track(
+        "0000000000000000000001",
+        "Playing",
+      ))),
+      ..make_external_context()
+    });
+    (app, rx)
+  }
+
+  const PLAYING_ID: Option<&str> = Some("0000000000000000000001");
+
+  #[test]
+  fn a_requested_up_next_fetches_the_spotify_queue_once() {
+    let (mut app, rx) = spotify_track_playing();
+    app.view.now_playing_panel = true;
+
+    app.request_up_next();
+    app.follow_up_next(PLAYING_ID);
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::GetQueue)));
+
+    app.follow_up_next(PLAYING_ID);
+    assert!(rx.try_recv().is_err(), "nothing was requested again");
+  }
+
+  #[test]
+  fn up_next_fetches_nothing_unless_it_was_requested() {
+    let (mut app, rx) = spotify_track_playing();
+    app.view.now_playing_panel = true;
+
+    app.follow_up_next(PLAYING_ID);
+
+    assert!(rx.try_recv().is_err());
+  }
+
+  #[test]
+  fn up_next_waits_for_a_session_and_a_spotify_item() {
+    let (mut app, rx) = spotify_track_playing();
+    let context = app.current_playback_context.take();
+    app.view.now_playing_panel = true;
+    app.request_up_next();
+
+    app.follow_up_next(PLAYING_ID);
+    assert!(rx.try_recv().is_err(), "no context names the item yet");
+
+    app.current_playback_context = context;
+    app.spotify_connected = false;
+    app.follow_up_next(PLAYING_ID);
+    assert!(rx.try_recv().is_err(), "no session");
+
+    app.spotify_connected = true;
+    app.follow_up_next(PLAYING_ID);
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::GetQueue)));
+  }
+
+  #[test]
+  fn up_next_waits_while_the_cached_context_names_the_previous_item() {
+    let (mut app, rx) = spotify_track_playing();
+    app.view.now_playing_panel = true;
+    app.request_up_next();
+
+    app.follow_up_next(Some("0000000000000000000002"));
+    assert!(
+      rx.try_recv().is_err(),
+      "a fetch now would answer for the old item"
+    );
+
+    app.follow_up_next(PLAYING_ID);
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::GetQueue)));
+  }
+
+  #[test]
+  fn a_closed_panel_drops_a_requested_up_next() {
+    let (mut app, rx) = spotify_track_playing();
+    app.request_up_next();
+    app.follow_up_next(PLAYING_ID);
+
+    app.view.now_playing_panel = true;
+    app.follow_up_next(PLAYING_ID);
+
+    assert!(rx.try_recv().is_err());
   }
 
   #[test]

@@ -23,6 +23,9 @@ pub struct ViewState {
   pub size: Viewport,
   /// The pane that gets the keys; `Pane::Main` is the normal layout.
   pub focused_pane: Pane,
+  /// Whether the user asked for the now playing panel beside the main content.
+  /// The layout still leaves it out on the search screen and when it would not fit.
+  pub now_playing_panel: bool,
   /// The pre-order index of the split border the mouse drags, from Down until Up.
   pub dragged_pane_split: Option<usize>,
   /// What the terminal can report about key presses, probed at startup and

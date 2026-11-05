@@ -80,6 +80,7 @@ pub fn sync(store: &CoverArtStore) {
     &renderer.playbar,
     &renderer.pane_playbar,
     &renderer.fullscreen,
+    &renderer.now_playing,
     &renderer.plugin,
   ] {
     let mut lock = lock_surface(surface);
@@ -152,6 +153,30 @@ pub fn fullscreen_size_for(area: Rect, store: &CoverArtStore) -> Option<Rect> {
   renderer.surface_size_for(&renderer.fullscreen, area, Resize::Fit(None), store)
 }
 
+/// Render into the now playing panel's cover slot.
+pub fn render_now_playing(f: &mut Frame, area: Rect, store: &CoverArtStore, config: &UserConfig) {
+  if let Some(renderer) = RENDERER.get() {
+    renderer.render_surface(
+      &renderer.now_playing,
+      f,
+      area,
+      store,
+      config,
+      RenderStyle {
+        resize: Resize::Fit(None),
+        background: config.theme.background,
+        fill: false,
+      },
+    );
+  }
+}
+
+/// Measure the now playing panel image's fitted size, so the caller can center it.
+pub fn now_playing_size_for(area: Rect, store: &CoverArtStore) -> Option<Rect> {
+  let renderer = RENDERER.get()?;
+  renderer.surface_size_for(&renderer.now_playing, area, Resize::Fit(None), store)
+}
+
 /// Render into a plugin screen's `cover_art` widget slot.
 pub fn render_plugin(
   f: &mut Frame,
@@ -193,6 +218,9 @@ struct CoverArtRenderer {
   /// conflicts when the same image is rendered in both the playbar and
   /// fullscreen in one frame.
   fullscreen: Mutex<Option<Surface>>,
+  /// The now playing panel beside the main content, drawn in the same frame
+  /// as the playbar and possibly a cover art pane, each at its own size.
+  now_playing: Mutex<Option<Surface>>,
   /// Separate protocol state for a plugin screen's `cover_art` widget, for the
   /// same reason: a plugin can size its image differently from the playbar, and
   /// a shared protocol would re-encode on every switch between them.
@@ -354,6 +382,7 @@ impl CoverArtRenderer {
       playbar: Mutex::new(None),
       pane_playbar: Mutex::new(None),
       fullscreen: Mutex::new(None),
+      now_playing: Mutex::new(None),
       plugin: Mutex::new(None),
     }
   }

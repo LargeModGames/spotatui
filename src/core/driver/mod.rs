@@ -176,6 +176,9 @@ pub struct Driver {
   /// Last track the shared detector fired lyrics for, so the lookup re-fires
   /// only on an actual track change rather than every tick.
   last_track_identity: Option<TrackIdentity>,
+  /// The item and position the last tick saw, so "Up next" refreshes on every
+  /// playback transition, a repeated track included.
+  last_playback_mark: plan::PlaybackMark,
   play_counter: play_count::PlayCounter,
   /// Cache key (URL / file URI) of the cover art last requested, so the
   /// per-tick cover-art evaluation dispatches a fetch only when the resolved
@@ -263,6 +266,7 @@ impl Driver {
       mpris_state: presence::MprisState::default(),
       window_title: presence::WindowTitleState::default(),
       last_track_identity: None,
+      last_playback_mark: plan::PlaybackMark::default(),
       play_counter: play_count::PlayCounter::default(),
       #[cfg(feature = "art-decode")]
       last_cover_art_key: None,
@@ -377,6 +381,20 @@ impl Driver {
           }
         }
       }
+
+      // "Up next" follows every playback transition, including the same
+      // track starting again, which leaves the lyrics identity unchanged.
+      let mark = snapshot
+        .as_ref()
+        .map_or_else(plan::PlaybackMark::default, |snapshot| plan::PlaybackMark {
+          uri: snapshot.item_uri.clone(),
+          progress_ms: snapshot.progress_ms,
+        });
+      if plan::playback_transition(&self.last_playback_mark, &mark) {
+        app.request_up_next();
+      }
+      self.last_playback_mark = mark;
+      app.follow_up_next(snapshot.as_ref().and_then(|s| s.item_id.as_deref()));
 
       // Cover art is re-evaluated EVERY tick against the desired image key,
       // NOT latched to the identity change. With native streaming the

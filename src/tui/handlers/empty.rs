@@ -7,6 +7,11 @@ use crate::{
 // When no block is actively selected, just handle regular event
 pub fn handler(key: Key, app: &mut App) {
   match key {
+    // Enter on the hovered playbar toggles the now playing panel at once, like
+    // `w` below: selecting the playbar first gives it no keys it lacks here.
+    Key::Enter if app.get_current_route().hovered_block == ActiveBlock::PlayBar => {
+      super::playbar::handler(key, app);
+    }
     Key::Enter => {
       let current_hovered = app.get_current_route().hovered_block;
       app.set_current_route_state(Some(current_hovered), None);
@@ -278,6 +283,23 @@ mod tests {
     handler(Key::Char('w'), &mut app);
 
     assert_eq!(app.status_message(), Some("No track currently playing"));
+  }
+
+  #[test]
+  fn one_enter_over_the_hovered_playbar_toggles_the_now_playing_panel() {
+    let mut app = App::default();
+    app.set_current_route_state(Some(ActiveBlock::Empty), Some(ActiveBlock::PlayBar));
+
+    handler(Key::Enter, &mut app);
+    assert!(app.view.now_playing_panel, "the first Enter opens it");
+    assert_eq!(
+      app.get_current_route().active_block,
+      ActiveBlock::Empty,
+      "the playbar stays hovered, so the next Enter toggles again"
+    );
+
+    handler(Key::Enter, &mut app);
+    assert!(!app.view.now_playing_panel);
   }
 
   #[test]

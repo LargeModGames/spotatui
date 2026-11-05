@@ -150,11 +150,75 @@ pub(super) fn audio_analysis_track(
   item_id.filter(|id| session && is_track && base62(id))
 }
 
+/// How far the position must fall back on the same item for it to count as
+/// playing again (repeat one, the same track twice in a row) rather than as
+/// the clock catching up.
+const REPLAY_JUMP_MS: u128 = 5_000;
+
+/// The item and position one tick saw, for [`playback_transition`].
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct PlaybackMark {
+  pub uri: Option<String>,
+  pub progress_ms: u128,
+}
+
+/// Whether playback moved from `last` to another item or started the same
+/// item again. The lyrics latch keys on the track's title and artists, so a
+/// track that repeats never trips it; this does.
+pub(super) fn playback_transition(last: &PlaybackMark, now: &PlaybackMark) -> bool {
+  last.uri != now.uri
+    || (now.uri.is_some() && last.progress_ms.saturating_sub(now.progress_ms) >= REPLAY_JUMP_MS)
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
 
   const TRACK: &str = "0DiWol3AO6WpXZgp0goxAV";
+
+  fn mark(uri: Option<&str>, progress_ms: u128) -> PlaybackMark {
+    PlaybackMark {
+      uri: uri.map(str::to_string),
+      progress_ms,
+    }
+  }
+
+  #[test]
+  fn another_item_is_a_playback_transition() {
+    assert!(playback_transition(
+      &mark(Some("spotify:track:a"), 90_000),
+      &mark(Some("spotify:track:b"), 0)
+    ));
+    assert!(playback_transition(
+      &mark(None, 0),
+      &mark(Some("spotify:track:a"), 0)
+    ));
+  }
+
+  #[test]
+  fn the_same_item_starting_again_is_a_playback_transition() {
+    assert!(
+      playback_transition(
+        &mark(Some("spotify:track:a"), 178_000),
+        &mark(Some("spotify:track:a"), 400)
+      ),
+      "repeat one, or the same track twice in a row"
+    );
+  }
+
+  #[test]
+  fn the_same_item_playing_on_is_no_transition() {
+    let playing = mark(Some("spotify:track:a"), 60_000);
+    assert!(!playback_transition(
+      &playing,
+      &mark(Some("spotify:track:a"), 61_000)
+    ));
+    assert!(
+      !playback_transition(&playing, &mark(Some("spotify:track:a"), 58_500)),
+      "a small step back is the polled clock catching up"
+    );
+    assert!(!playback_transition(&mark(None, 0), &mark(None, 0)));
+  }
 
   #[test]
   fn a_spotify_track_has_an_analysis_only_with_a_session() {
