@@ -42,17 +42,26 @@ static RENDERER: OnceLock<CoverArtRenderer> = OnceLock::new();
 pub fn init_renderer() {
   RENDERER.get_or_init(|| {
     let mut options = QueryStdioOptions::default();
-    if is_iterm2(
+    let iterm2 = is_iterm2(
       std::env::var("TERM_PROGRAM").ok().as_deref(),
       std::env::var("LC_TERMINAL").ok().as_deref(),
       tmux_client_termtype().as_deref(),
-    ) {
+    );
+    if iterm2 {
       options.blacklist_protocols = vec![ProtocolType::Kitty, ProtocolType::Sixel];
     }
-    let picker = Picker::from_query_stdio_with_options(options).unwrap_or_else(|err| {
-      warn!("cover art renderer fallback to halfblocks: {err}");
-      Picker::halfblocks()
-    });
+    let picker = match Picker::from_query_stdio_with_options(options) {
+      Ok(mut picker) => {
+        if iterm2 {
+          picker.set_protocol_type(ProtocolType::Iterm2);
+        }
+        picker
+      }
+      Err(err) => {
+        warn!("cover art renderer fallback to halfblocks: {err}");
+        Picker::halfblocks()
+      }
+    };
 
     info!(
       "cover art renderer detected a {:?} backend",
