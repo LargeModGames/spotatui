@@ -43,7 +43,7 @@ impl App {
     item.value = match (item.value, input) {
       (SettingValue::Bool(_), SettingInput::Bool(v)) => SettingValue::Bool(v),
       (SettingValue::Number(_), SettingInput::Number(v)) => SettingValue::Number(v),
-      // The checks the terminal fields make: invalid config stops the next launch.
+      // Match the settings editors' validation before accepting either value.
       (SettingValue::String(_), SettingInput::Text(v))
         if (id == "behavior.auto_update_delay"
           && crate::core::user_config::parse_update_delay_secs(&v).is_err())
