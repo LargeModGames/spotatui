@@ -752,7 +752,6 @@ impl Driver {
     // the (paused) librespot position below clobber it. Music's position was
     // set by `update_on_tick`.
     #[allow(unused_mut)]
-    #[cfg_attr(not(feature = "streaming"), allow(unused_variables))]
     let mut source_owns_playback = app.apple_music_owns_playback();
     // The native queue slot owns the sink when playing a decoded track; read
     // progress from its player first (it may share the suspended context's
@@ -844,6 +843,9 @@ impl Driver {
     }
     self.session_was_present = has_session;
 
+    // Only the native position below reads the flag.
+    #[cfg(not(feature = "streaming"))]
+    let _ = source_owns_playback;
     #[cfg(feature = "streaming")]
     if !source_owns_playback && app.is_streaming_active {
       if let Some(position_ms) = app.native_position_ms(env.now) {
