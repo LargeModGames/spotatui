@@ -52,7 +52,11 @@ pub fn init_renderer() {
     }
     let picker = match Picker::from_query_stdio_with_options(options) {
       Ok(mut picker) => {
-        if iterm2 {
+        let measured = picker
+          .capabilities()
+          .iter()
+          .any(|cap| matches!(cap, Capability::CellSize(Some(_))));
+        if iterm2 && measured {
           picker.set_protocol_type(ProtocolType::Iterm2);
         }
         picker
