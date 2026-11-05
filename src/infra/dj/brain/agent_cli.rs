@@ -335,6 +335,7 @@ mod tests {
     static STUBS: std::sync::OnceLock<std::collections::HashMap<&'static str, PathBuf>> =
       std::sync::OnceLock::new();
     STUBS.get_or_init(|| {
+      use std::os::unix::fs::PermissionsExt;
       let dir = std::env::temp_dir().join(format!("spotatui-dj-stubs-{}", std::process::id()));
       std::fs::create_dir_all(&dir).unwrap();
       [
@@ -395,7 +396,6 @@ esac"#,
       ]
       .into_iter()
       .map(|(name, body)| {
-        use std::os::unix::fs::PermissionsExt;
         let path = dir.join(name);
         std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
