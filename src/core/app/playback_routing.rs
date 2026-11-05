@@ -551,8 +551,8 @@ impl App {
   }
 
   /// Write Soloist's live state over the stored context when it is Soloist's,
-  /// and restart the tick's position clock from it; only a `polled` context
-  /// falls back to its API progress.
+  /// and restart the tick's position clock from it. A `polled` context always
+  /// restarts it: its API item and progress come from one response.
   #[cfg(feature = "soloist")]
   pub(crate) fn overlay_soloist_snapshot(&mut self, polled: bool) {
     let Some(link) = self.soloist_link.as_ref() else {
@@ -564,13 +564,12 @@ impl App {
     if context.device.id.as_deref() != Some(link.device_id()) {
       return;
     }
-    let resync = overlay_soloist(
+    let wrote_position = overlay_soloist(
       context,
       &link.snapshot(),
       chrono::Utc::now().timestamp_millis(),
-    )
-    .is_some_and(|wrote_position| wrote_position || polled);
-    if let Some(progress) = context.progress.filter(|_| resync) {
+    );
+    if let Some(progress) = context.progress.filter(|_| polled || wrote_position) {
       self.song_progress_ms = progress.num_milliseconds().max(0) as u128;
       self.instant_since_last_current_playback_poll = Instant::now();
     }
@@ -985,13 +984,13 @@ fn soloist_targets(logged_in: bool, active_device_id: Option<&str>, soloist_id: 
   }
 }
 
-/// `None` while Soloist plays another item than the context shows, else whether it wrote Soloist's position.
+/// Returns whether it wrote Soloist's position as the progress.
 #[cfg(feature = "soloist")]
 fn overlay_soloist(
   context: &mut rspotify::model::CurrentPlaybackContext,
   snapshot: &crate::infra::soloist::link::Snapshot,
   now_ms: i64,
-) -> Option<bool> {
+) -> bool {
   use crate::infra::soloist::protocol::Repeat;
   context.is_playing = snapshot.status.is_playing();
   let context_uri = context.item.as_ref().and_then(|item| match item {
@@ -1022,7 +1021,7 @@ fn overlay_soloist(
     Repeat::Context => rspotify::model::RepeatState::Context,
     Repeat::Track => rspotify::model::RepeatState::Track,
   };
-  same_item.then_some(anchor.is_some())
+  anchor.is_some()
 }
 
 #[cfg(test)]
@@ -1688,6 +1687,15 @@ mod soloist_tests {
     let context = app.current_playback_context.as_ref().unwrap();
     assert_eq!(context.progress.unwrap().num_milliseconds(), 170_000);
     assert_eq!(app.song_progress_ms, 179_000, "the clock went back");
+
+    let mut lagging = soloist_track_context("oldtrack");
+    lagging.progress = Some(chrono::Duration::milliseconds(178_000));
+    app.current_playback_context = Some(lagging);
+    app.overlay_soloist_snapshot(true);
+    assert_eq!(
+      app.song_progress_ms, 178_000,
+      "a lagging poll keeps its own progress"
+    );
 
     app.current_playback_context = Some(soloist_track_context("newtrack"));
     app.overlay_soloist_snapshot(true);
