@@ -1310,15 +1310,14 @@ impl PlaybackNetwork for Network {
         {
           c.is_playing = false;
         }
-        // Soloist's WebSocket is newer than the cluster the poll read.
-        #[cfg(feature = "soloist")]
-        app.overlay_soloist_onto(&mut c);
-
         if !stale_api_item_for_native {
           // Cover art (Spotify album/episode image) is fetched by the shared
           // track-change detector in `core/driver/`, from the snapshot's image URL.
           app.current_playback_context = Some(c);
           app.set_spotify_context_name(context_name);
+          // Soloist's WebSocket is newer than the cluster the poll read.
+          #[cfg(feature = "soloist")]
+          app.overlay_soloist_snapshot(true);
         }
 
         // Update is_streaming_active based on whether the current device matches native streaming

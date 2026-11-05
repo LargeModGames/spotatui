@@ -9,6 +9,9 @@ use chrono::{DateTime, Utc};
 use librespot_metadata::Track;
 use serde_json::{json, Value};
 
+/// Spotify's own rule: a listen counts as played after 30 s.
+const MIN_PLAYED_MS: u64 = 30_000;
+
 async fn listens() -> Vec<ListenRecord> {
   tokio::task::spawn_blocking(load_listens)
     .await
@@ -17,11 +20,11 @@ async fn listens() -> Vec<ListenRecord> {
     .unwrap_or_default()
 }
 
-fn spotify_track_uri(listen: &ListenRecord) -> Option<&str> {
+fn played_spotify_track_uri(listen: &ListenRecord) -> Option<&str> {
   listen
     .item_uri
     .as_deref()
-    .filter(|uri| uri.starts_with("spotify:track:"))
+    .filter(|uri| uri.starts_with("spotify:track:") && listen.listened_ms >= MIN_PLAYED_MS)
 }
 
 pub async fn recently_played(session: &SpotifySession, limit: usize) -> anyhow::Result<Value> {
@@ -29,7 +32,7 @@ pub async fn recently_played(session: &SpotifySession, limit: usize) -> anyhow::
   let recent: Vec<(&str, DateTime<Utc>)> = listens
     .iter()
     .rev()
-    .filter_map(|listen| spotify_track_uri(listen).map(|uri| (uri, listen.started_at)))
+    .filter_map(|listen| played_spotify_track_uri(listen).map(|uri| (uri, listen.started_at)))
     .take(limit)
     .collect();
   let uris: Vec<String> = recent.iter().map(|(uri, _)| uri.to_string()).collect();
@@ -42,4 +45,43 @@ pub async fn recently_played(session: &SpotifySession, limit: usize) -> anyhow::
     })
     .collect();
   Ok(json!({ "href": "", "items": items, "limit": limit, "next": null }))
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::infra::history::{HistoryItemKind, HistoryPlaybackSource};
+
+  fn listen(uri: &str, listened_ms: u64) -> ListenRecord {
+    ListenRecord {
+      started_at: Utc::now(),
+      ended_at: Utc::now(),
+      listened_ms,
+      duration_ms: 200_000,
+      qualified: false,
+      title: "Song".to_string(),
+      artists: vec!["Artist".to_string()],
+      album: "Album".to_string(),
+      item_kind: HistoryItemKind::Track,
+      item_id: None,
+      item_uri: Some(uri.to_string()),
+      context_uri: None,
+      source: HistoryPlaybackSource::NativeContext,
+      image_url: None,
+    }
+  }
+
+  #[test]
+  fn recently_played_skips_stub_listens_and_other_sources() {
+    let track = "spotify:track:abc";
+    assert_eq!(
+      played_spotify_track_uri(&listen(track, 204_915)),
+      Some(track)
+    );
+    assert_eq!(played_spotify_track_uri(&listen(track, 994)), None);
+    assert_eq!(
+      played_spotify_track_uri(&listen("qobuz:track:1", 204_915)),
+      None
+    );
+  }
 }

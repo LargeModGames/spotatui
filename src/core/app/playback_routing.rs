@@ -550,34 +550,38 @@ impl App {
     }
   }
 
-  /// Write Soloist's live state over the polled context when the context is Soloist's.
+  /// Write Soloist's live state over the stored context when it is Soloist's,
+  /// and restart the tick's position clock from it. A `polled` context always
+  /// restarts it (its API item and progress come from one response); nothing
+  /// does inside a seek's settle window, where any report can predate the seek.
   #[cfg(feature = "soloist")]
-  pub(crate) fn overlay_soloist_onto(&self, context: &mut rspotify::model::CurrentPlaybackContext) {
+  pub(crate) fn overlay_soloist_snapshot(&mut self, polled: bool) {
     let Some(link) = self.soloist_link.as_ref() else {
+      return;
+    };
+    let Some(context) = self.current_playback_context.as_mut() else {
       return;
     };
     if context.device.id.as_deref() != Some(link.device_id()) {
       return;
     }
-    overlay_soloist(
+    let wrote_position = overlay_soloist(
       context,
       &link.snapshot(),
       chrono::Utc::now().timestamp_millis(),
     );
-  }
-
-  /// Apply the overlay to the stored context and restart the tick's position clock from it.
-  #[cfg(feature = "soloist")]
-  pub(super) fn overlay_soloist_snapshot(&mut self) {
-    let Some(mut context) = self.current_playback_context.take() else {
-      return;
-    };
-    self.overlay_soloist_onto(&mut context);
-    if let Some(progress) = context.progress {
+    let settling_seek = self
+      .last_api_seek
+      .filter(|at| at.elapsed().as_millis() < SEEK_POSITION_IGNORE_MS);
+    if let Some(seek_at) = settling_seek {
+      // Keep a suppressed poll stale, so the tick does not resync from it later.
+      if polled {
+        self.instant_since_last_current_playback_poll = seek_at;
+      }
+    } else if let Some(progress) = context.progress.filter(|_| polled || wrote_position) {
       self.song_progress_ms = progress.num_milliseconds().max(0) as u128;
       self.instant_since_last_current_playback_poll = Instant::now();
     }
-    self.current_playback_context = Some(context);
   }
 
   /// The stream Soloist reports, worded like the Qobuz badge, while it plays for us.
@@ -989,15 +993,27 @@ fn soloist_targets(logged_in: bool, active_device_id: Option<&str>, soloist_id: 
   }
 }
 
+/// Returns whether it wrote Soloist's position as the progress.
 #[cfg(feature = "soloist")]
 fn overlay_soloist(
   context: &mut rspotify::model::CurrentPlaybackContext,
   snapshot: &crate::infra::soloist::link::Snapshot,
   now_ms: i64,
-) {
+) -> bool {
   use crate::infra::soloist::protocol::Repeat;
   context.is_playing = snapshot.status.is_playing();
-  if let Some(anchor) = snapshot.position {
+  let context_uri = context.item.as_ref().and_then(|item| match item {
+    PlayableItem::Track(track) => track.id.as_ref().map(|id| id.uri()),
+    PlayableItem::Episode(episode) => Some(episode.id.uri()),
+    PlayableItem::Unknown(_) => None,
+  });
+  // Until the poll brings the new item, the new track's position must not land under the old one.
+  let same_item = !matches!(
+    (snapshot.item_uri.as_deref(), context_uri.as_deref()),
+    (Some(soloist), Some(context)) if soloist != context
+  );
+  let anchor = snapshot.position.filter(|_| same_item);
+  if let Some(anchor) = anchor {
     let position = if context.is_playing {
       anchor.at(now_ms)
     } else {
@@ -1014,6 +1030,7 @@ fn overlay_soloist(
     Repeat::Context => rspotify::model::RepeatState::Context,
     Repeat::Track => rspotify::model::RepeatState::Track,
   };
+  anchor.is_some()
 }
 
 #[cfg(test)]
@@ -1641,9 +1658,98 @@ mod soloist_tests {
     app.current_playback_context = Some(soloist_context());
     app.apply_soloist_event(&link, &playing_state());
 
-    let mut polled = soloist_context();
-    app.overlay_soloist_onto(&mut polled);
+    app.current_playback_context = Some(soloist_context());
+    app.overlay_soloist_snapshot(true);
+    let polled = app.current_playback_context.as_ref().unwrap();
     assert!(polled.is_playing);
     assert_eq!(polled.device.volume_percent, Some(30));
+  }
+
+  #[test]
+  fn a_new_soloist_track_keeps_its_position_off_the_old_item() {
+    let (mut app, link) = app_with_soloist();
+    let soloist_track_context = |id: &str| {
+      let mut context = playing_track_context(full_track(id, id));
+      context.device.id = Some(SOLOIST_ID.to_string());
+      context.progress = Some(chrono::Duration::milliseconds(170_000));
+      context
+    };
+    app.current_playback_context = Some(soloist_track_context("oldtrack"));
+    app.song_progress_ms = 179_000;
+
+    app.apply_soloist_event(
+      &link,
+      &Event::Track {
+        uri: Some("spotify:track:newtrack".to_string()),
+        is_episode: false,
+      },
+    );
+    app.apply_soloist_event(
+      &link,
+      &Event::Position(PositionAnchor {
+        position_ms: 0,
+        timestamp_ms: chrono::Utc::now().timestamp_millis(),
+        speed: 1.0,
+      }),
+    );
+
+    let context = app.current_playback_context.as_ref().unwrap();
+    assert_eq!(context.progress.unwrap().num_milliseconds(), 170_000);
+    assert_eq!(app.song_progress_ms, 179_000, "the clock went back");
+
+    let mut lagging = soloist_track_context("oldtrack");
+    lagging.progress = Some(chrono::Duration::milliseconds(178_000));
+    app.current_playback_context = Some(lagging);
+    app.overlay_soloist_snapshot(true);
+    assert_eq!(
+      app.song_progress_ms, 178_000,
+      "a lagging poll keeps its own progress"
+    );
+
+    app.current_playback_context = Some(soloist_track_context("newtrack"));
+    app.overlay_soloist_snapshot(true);
+    assert!(
+      app.song_progress_ms < 5_000,
+      "the poll did not resync the clock"
+    );
+  }
+
+  #[test]
+  fn a_poll_before_the_new_tracks_position_keeps_the_api_progress() {
+    let (mut app, link) = app_with_soloist();
+    app.current_playback_context = Some(soloist_context());
+    app.apply_soloist_event(&link, &playing_state());
+    app.apply_soloist_event(
+      &link,
+      &Event::Track {
+        uri: Some("spotify:track:newtrack".to_string()),
+        is_episode: false,
+      },
+    );
+
+    let mut polled = playing_track_context(full_track("newtrack", "New"));
+    polled.device.id = Some(SOLOIST_ID.to_string());
+    polled.progress = Some(chrono::Duration::milliseconds(2_000));
+    app.current_playback_context = Some(polled);
+    app.overlay_soloist_snapshot(true);
+    assert_eq!(app.song_progress_ms, 2_000);
+
+    app.song_progress_ms = 9_000;
+    app.apply_soloist_event(&link, &Event::Playback(Status::Playing));
+    assert_eq!(app.song_progress_ms, 9_000, "an event rewound the clock");
+
+    app.song_progress_ms = 60_000;
+    let seek_at = Instant::now();
+    app.last_api_seek = Some(seek_at);
+    app.overlay_soloist_snapshot(true);
+    assert_eq!(app.song_progress_ms, 60_000, "a poll undid the seek");
+    assert_eq!(app.instant_since_last_current_playback_poll, seek_at);
+
+    let Event::State(mut cached) = playing_state() else {
+      unreachable!()
+    };
+    cached.item_uri = Some("spotify:track:newtrack".to_string());
+    app.apply_soloist_event(&link, &Event::State(cached));
+    assert_eq!(app.song_progress_ms, 60_000, "an event undid the seek");
   }
 }

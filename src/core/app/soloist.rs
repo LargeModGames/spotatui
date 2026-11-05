@@ -83,7 +83,7 @@ impl App {
     ) {
       link.pause();
     }
-    self.overlay_soloist_snapshot();
+    self.overlay_soloist_snapshot(false);
   }
 
   /// Report the stream Soloist plays: once per engine start, and again on a drop from lossless.

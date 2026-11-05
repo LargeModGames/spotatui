@@ -30,6 +30,8 @@ const SYNC_BASE_URL_ENV_KEY: &str = "SPOTATUI_SYNC_BASE_URL";
 const MAX_INTERVAL_MS: u64 = 5_000;
 const REPLAY_RESET_THRESHOLD_MS: u128 = 15_000;
 const REPLAY_PREVIOUS_PROGRESS_FLOOR_MS: u128 = 30_000;
+/// Longer than a stale start: one playback poll at the default 5 s plus a collector tick.
+const REPLAY_MIN_LISTENED_MS: u64 = 10_000;
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -930,8 +932,11 @@ impl HistoryCollector {
         }
         let should_roll = self.current.as_ref().is_some_and(|current| {
           current.identity != identity
-            || (current.last_progress_ms > REPLAY_PREVIOUS_PROGRESS_FLOOR_MS
-              && snapshot.progress_ms + REPLAY_RESET_THRESHOLD_MS < current.last_progress_ms)
+            || is_replay(
+              current.listened_ms,
+              current.last_progress_ms,
+              snapshot.progress_ms,
+            )
         });
 
         if should_roll {
@@ -970,6 +975,13 @@ impl HistoryCollector {
     append_listen_record(&record)?;
     Ok(Some(record))
   }
+}
+
+/// Only a session heard for a while can replay, so a stale end position never splits a stub off.
+fn is_replay(listened_ms: u64, last_progress_ms: u128, progress_ms: u128) -> bool {
+  listened_ms > REPLAY_MIN_LISTENED_MS
+    && last_progress_ms > REPLAY_PREVIOUS_PROGRESS_FLOOR_MS
+    && progress_ms + REPLAY_RESET_THRESHOLD_MS < last_progress_ms
 }
 
 impl SessionIdentity {
@@ -3182,6 +3194,37 @@ mod tests {
     assert_eq!(current.started_at, started_at, "the listen was rolled");
     assert_eq!(current.title, "Real Title");
     assert_eq!(current.artists, ["Real Artist"]);
+  }
+
+  #[test]
+  fn a_new_track_sampled_at_the_old_end_position_is_not_a_replay() {
+    let uri = "subsonic:track:42";
+    let mut collector = HistoryCollector::default();
+    for _ in 0..3 {
+      let mut stale = subsonic_snapshot(uri, "Next", &["Artist"]);
+      stale.progress_ms = 200_000;
+      collector.observe(Some(stale)).unwrap();
+    }
+    let started_at = Utc.with_ymd_and_hms(2026, 5, 1, 12, 0, 0).unwrap();
+    collector.current.as_mut().unwrap().started_at = started_at;
+
+    let mut fresh = subsonic_snapshot(uri, "Next", &["Artist"]);
+    fresh.progress_ms = 1_000;
+    collector.observe(Some(fresh)).unwrap();
+
+    assert_eq!(collector.current.as_ref().unwrap().started_at, started_at);
+  }
+
+  #[test]
+  fn only_a_drop_after_a_real_listen_is_a_replay() {
+    assert!(is_replay(120_000, 120_000, 1_000));
+    assert!(is_replay(25_000, 70_000, 1_000), "a short first listen");
+    assert!(!is_replay(6_000, 200_000, 1_000), "a stale start");
+    assert!(
+      !is_replay(120_000, 20_000, 1_000),
+      "below the progress floor"
+    );
+    assert!(!is_replay(120_000, 120_000, 110_000), "a small step back");
   }
 
   #[test]
