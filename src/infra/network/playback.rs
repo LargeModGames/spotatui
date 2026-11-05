@@ -1317,7 +1317,7 @@ impl PlaybackNetwork for Network {
           app.set_spotify_context_name(context_name);
           // Soloist's WebSocket is newer than the cluster the poll read.
           #[cfg(feature = "soloist")]
-          app.overlay_soloist_snapshot();
+          app.overlay_soloist_snapshot(true);
         }
 
         // Update is_streaming_active based on whether the current device matches native streaming
