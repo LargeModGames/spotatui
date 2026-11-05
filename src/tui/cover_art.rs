@@ -61,8 +61,7 @@ pub fn init_renderer() {
   });
 }
 
-/// iTerm2 answers the Kitty query but cannot draw Kitty's Unicode placeholders,
-/// so the probe skips Kitty and Sixel there and the iTerm2 protocol wins.
+/// iTerm2 answers the Kitty query but cannot draw Kitty placeholders, so skip Kitty and Sixel.
 fn is_iterm2(term_program: Option<&str>, lc_terminal: Option<&str>) -> bool {
   [term_program, lc_terminal]
     .into_iter()
