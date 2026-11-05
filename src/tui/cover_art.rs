@@ -41,10 +41,15 @@ static RENDERER: OnceLock<CoverArtRenderer> = OnceLock::new();
 /// stdio round-trip and must not run during `App` construction.
 pub fn init_renderer() {
   RENDERER.get_or_init(|| {
-    let picker = Picker::from_query_stdio().unwrap_or_else(|err| {
+    let mut picker = Picker::from_query_stdio().unwrap_or_else(|err| {
       warn!("cover art renderer fallback to halfblocks: {err}");
       Picker::halfblocks()
     });
+    picker.set_protocol_type(corrected_protocol(
+      picker.protocol_type(),
+      std::env::var("TERM_PROGRAM").ok().as_deref(),
+      std::env::var("LC_TERMINAL").ok().as_deref(),
+    ));
 
     info!(
       "cover art renderer detected a {:?} backend",
@@ -52,6 +57,24 @@ pub fn init_renderer() {
     );
     CoverArtRenderer::new(picker)
   });
+}
+
+/// iTerm2 answers the Kitty graphics query but cannot draw Kitty's Unicode
+/// placeholders, so it gets the iTerm2 protocol instead.
+fn corrected_protocol(
+  detected: ProtocolType,
+  term_program: Option<&str>,
+  lc_terminal: Option<&str>,
+) -> ProtocolType {
+  let is_iterm = [term_program, lc_terminal]
+    .into_iter()
+    .flatten()
+    .any(|name| name.contains("iTerm"));
+  if detected == ProtocolType::Kitty && is_iterm {
+    ProtocolType::Iterm2
+  } else {
+    detected
+  }
 }
 
 /// Install a halfblocks renderer without probing stdio, so `TestBackend`
@@ -580,6 +603,34 @@ mod tests {
   use super::*;
   use image::{DynamicImage, Rgb, RgbImage};
   use ratatui::{backend::TestBackend, Terminal};
+
+  #[test]
+  fn iterm2_that_answers_the_kitty_query_uses_the_iterm2_protocol() {
+    assert_eq!(
+      corrected_protocol(ProtocolType::Kitty, Some("iTerm.app"), None),
+      ProtocolType::Iterm2
+    );
+    assert_eq!(
+      corrected_protocol(ProtocolType::Kitty, Some("tmux"), Some("iTerm2")),
+      ProtocolType::Iterm2
+    );
+  }
+
+  #[test]
+  fn protocol_correction_leaves_other_terminals_and_protocols_alone() {
+    assert_eq!(
+      corrected_protocol(ProtocolType::Kitty, Some("ghostty"), None),
+      ProtocolType::Kitty
+    );
+    assert_eq!(
+      corrected_protocol(ProtocolType::Kitty, None, None),
+      ProtocolType::Kitty
+    );
+    assert_eq!(
+      corrected_protocol(ProtocolType::Sixel, Some("iTerm.app"), None),
+      ProtocolType::Sixel
+    );
+  }
 
   #[test]
   fn dither_grid_matches_braille_and_graphics_pixels() {
