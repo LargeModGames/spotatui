@@ -1059,7 +1059,7 @@ mod tests {
     assert!(t.is_local, "track should be marked local");
     assert!(t.is_playable, "track should be playable");
     assert!(
-      t.uri.as_deref().map_or(false, |u| u.starts_with("file://")),
+      t.uri.as_deref().is_some_and(|u| u.starts_with("file://")),
       "track URI should be a file:// URI"
     );
   }
@@ -1349,7 +1349,7 @@ mod tests {
     // real player by building the queue fields directly is not possible
     // (player is required), so assert the underlying slice access contract that
     // current_uri relies on.
-    let queue = vec!["x".to_string(), "y".to_string()];
+    let queue = ["x".to_string(), "y".to_string()];
     assert_eq!(queue.get(1).map(String::as_str), Some("y"));
     assert_eq!(queue.get(5).map(String::as_str), None);
   }

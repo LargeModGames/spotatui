@@ -195,6 +195,261 @@ fn dispatch_key(key: Key, app: &mut App) -> bool {
   false
 }
 
+/// The terminal state `start_ui` leaves for the exit path; fields drop in the order the old locals did.
+pub struct TerminalSession {
+  _events: event::Events,
+  _terminal: DefaultTerminal,
+  keyboard_enhancement_enabled: bool,
+}
+
+impl TerminalSession {
+  /// Undoes the terminal setup of `start_ui`.
+  pub fn restore(&self, driver: &mut Driver) {
+    if let Some(title) = driver.window_title_reset() {
+      let _ = execute!(stdout(), SetTitle(title));
+    }
+    let _ = execute!(stdout(), DisableMouseCapture);
+    if self.keyboard_enhancement_enabled {
+      let _ = execute!(stdout(), PopKeyboardEnhancementFlags);
+    }
+    ratatui::restore();
+  }
+}
+
+/// Runs the terminal loop; the returned session keeps the terminal alive until the exit path restores it.
+pub async fn start_ui(
+  user_config: UserConfig,
+  app: &Arc<Mutex<App>>,
+  driver: &mut Driver,
+) -> Result<TerminalSession> {
+  let mut terminal = ratatui::init();
+  // Probe the terminal's image protocol only now that the terminal is set up;
+  // `App` construction must not touch stdout.
+  #[cfg(feature = "cover-art")]
+  crate::tui::cover_art::init_renderer();
+  execute!(stdout(), EnableMouseCapture)?;
+  let keyboard_enhancement_supported = supports_keyboard_enhancement().unwrap_or(false);
+  let keyboard_enhancement_enabled = keyboard_enhancement_supported
+    && execute!(
+      stdout(),
+      PushKeyboardEnhancementFlags(
+        KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+          | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
+          | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
+      )
+    )
+    .is_ok();
+  if keyboard_enhancement_enabled {
+    info!("enabled keyboard enhancement flags");
+  }
+  {
+    let mut app = app.lock().await;
+    app.view.terminal_input_caps.keyboard_enhancement_supported = keyboard_enhancement_supported;
+    app.view.terminal_input_caps.keyboard_enhancement_enabled = keyboard_enhancement_enabled;
+    app.view.terminal_input_caps.ctrl_punct_reliable = app::CapabilityState::Unknown;
+    app.keep_pane_focus_in_layout();
+  }
+  let mut route_depth = app.lock().await.navigation_depth();
+
+  let mut events = event::Events::new(user_config.behavior.tick_rate_milliseconds);
+  let inspector = crate::tui::dev_inspect::Inspector::from_env(events.sender());
+  let mut pending_snapshot = None;
+
+  let mut is_first_render = true;
+
+  loop {
+    let terminal_size =
+      terminal
+        .backend()
+        .size()
+        .ok()
+        .map(|size| crate::core::geometry::Viewport {
+          width: size.width,
+          height: size.height,
+        });
+    let title_update = {
+      let mut app = app.lock().await;
+
+      if let Some(size) = terminal_size {
+        if is_first_render || app.view.size != size {
+          app.view.help_menu_offset = 0;
+          app.view.help_menu_page = 0;
+          app.view.size = size;
+
+          let potential_limit = max((size.height as i32) - 13, 0) as u32;
+          let max_limit = min(potential_limit, 50);
+          let large_search_limit = min((f32::from(size.height) / 1.4) as u32, max_limit);
+          let small_search_limit = min((f32::from(size.height) / 2.85) as u32, max_limit / 2);
+
+          app.dispatch(IoEvent::UpdateSearchLimits(
+            large_search_limit,
+            small_search_limit,
+          ));
+
+          app.view.help_menu_max_lines = (size.height as u32).saturating_sub(8);
+        }
+      };
+
+      // Rebuild the formatted Help rows before drawing so the render path
+      // below reads immutable App state only.
+      if app.get_current_route().active_block == ActiveBlock::HelpMenu {
+        ui::ensure_help_menu_model(&mut app);
+      }
+      handlers::show_main_for_new_screen(&mut app, route_depth);
+      route_depth = app.navigation_depth();
+
+      let current_route = app.get_current_route();
+      let current_tick_rate = if animation_active(&app) {
+        app.user_config.behavior.animation_tick_rate_milliseconds
+      } else {
+        app.user_config.behavior.tick_rate_milliseconds
+      };
+      events.set_tick_rate(current_tick_rate);
+
+      // Drop protocol caches for art the store no longer holds; rebuilds are
+      // lazy, so this is a no-op whenever the art is unchanged.
+      #[cfg(feature = "cover-art")]
+      crate::tui::cover_art::sync(&app.cover_art);
+
+      // The cursor must be invisible while the frame diff is written. Ratatui
+      // applies the diff first and shows or hides the cursor afterwards, so a
+      // cursor left visible by the previous frame travels over every freshly
+      // written cell run and shows up as a strobing block inside the animated
+      // banner. Hide it here; the draw closure below re-shows it at the input
+      // position after the write.
+      terminal.hide_cursor()?;
+
+      let frame = terminal.draw(|f| {
+        use ratatui::{prelude::Style, widgets::Block};
+        f.render_widget(
+          Block::default().style(Style::default().bg(app.user_config.theme.background.into())),
+          f.area(),
+        );
+
+        match current_route.active_block {
+          ActiveBlock::HelpMenu => ui::draw_help_menu(f, &app),
+          ActiveBlock::Queue => ui::draw_queue(f, &app),
+          ActiveBlock::Party => {
+            ui::draw_main_layout(f, &app);
+            ui::draw_party(f, &app);
+          }
+          ActiveBlock::Error => ui::draw_error_screen(f, &app),
+          ActiveBlock::SelectDevice => ui::draw_device_list(f, &app),
+          ActiveBlock::Analysis => ui::audio_analysis::draw(f, &app),
+          ActiveBlock::LyricsView => ui::draw_lyrics_view(f, &app),
+          ActiveBlock::MiniPlayer => ui::draw_miniplayer(f, &app),
+          #[cfg(feature = "cover-art")]
+          ActiveBlock::CoverArtView => ui::draw_cover_art_view(f, &app),
+          ActiveBlock::AnnouncementPrompt => ui::draw_announcement_prompt(f, &app),
+          ActiveBlock::RecapPrompt => {
+            ui::draw_main_layout(f, &app);
+            ui::draw_recap_prompt(f, &app);
+          }
+          ActiveBlock::CommunityPinPrompt => {
+            ui::draw_main_layout(f, &app);
+            ui::draw_community_pin_prompt(f, &app);
+          }
+          ActiveBlock::ExitPrompt => ui::draw_exit_prompt(f, &app),
+          ActiveBlock::Settings => ui::settings::draw_settings(f, &app),
+          ActiveBlock::PluginScreen => ui::draw_plugin_screen(f, &app),
+          ActiveBlock::CreatePlaylistForm => {
+            ui::draw_main_layout(f, &app);
+            ui::draw_create_playlist_form(f, &app);
+          }
+          _ => ui::draw_main_layout(f, &app),
+        }
+
+        ui::draw_soloist_pairing(f, &app);
+        ui::draw_soloist_offer(f, &app);
+        // Plugin popup overlays every screen.
+        ui::draw_plugin_popup(f, &app);
+
+        // Cursor management lives inside the frame: ratatui shows and moves the
+        // terminal cursor when a widget requests a position and hides it when
+        // none does. The old post-draw hide/show pair ran on every animation
+        // frame (16 ms on Home), and the alternating toggle reset the
+        // terminal's blink phase each frame, so the cursor strobed.
+        if let Some(position) = frame_cursor_position(&app, current_route.active_block) {
+          f.set_cursor_position(position);
+        }
+      })?;
+      if let (Some(inspector), Some(snapshot)) = (&inspector, pending_snapshot.take()) {
+        let route = format!("{:?}/{:?}", current_route.id, current_route.active_block);
+        inspector.write_frame(&snapshot, &route, frame.buffer);
+      }
+
+      driver.next_window_title(&app)
+    };
+    if let Some(title) = title_update {
+      execute!(stdout(), SetTitle(title.as_str()))?;
+    }
+
+    match events.next()? {
+      event::Event::Input(key) => {
+        let mut app = app.lock().await;
+        if key == Key::Ctrl('c') {
+          app.close_io_channel();
+          break;
+        }
+
+        // `break` before the scripting hook below, not after: a quit must not run
+        // one more round of pending plugin commands on its way out.
+        if dispatch_key(key, &mut app) {
+          break;
+        }
+        driver.run_pending_script_commands(&mut app);
+      }
+      event::Event::Snapshot(snapshot) => pending_snapshot = Some(snapshot),
+      event::Event::Mouse(mouse) => {
+        let mut app = app.lock().await;
+        if !app.user_config.behavior.disable_mouse_inputs {
+          handlers::mouse_handler(mouse, &mut app);
+        }
+      }
+      event::Event::Tick(elapsed) => {
+        // The frontend owns the macOS main thread, so its run loop is pumped
+        // here rather than by the driver.
+        #[cfg(all(feature = "macos-media", target_os = "macos"))]
+        {
+          use objc2_foundation::{NSDate, NSRunLoop};
+          NSRunLoop::currentRunLoop().runUntilDate(&NSDate::dateWithTimeIntervalSinceNow(0.001));
+        }
+
+        let mut app = app.lock().await;
+        // The visualizer bar count is frontend geometry (terminal width and
+        // layout margin), so it is resolved here and injected.
+        #[cfg(any(feature = "audio-viz", feature = "audio-viz-cpal"))]
+        let viz_bars = ui::audio_analysis::visualizer_inner_width(&app).map(|width| {
+          ui::audio_analysis::visualizer_bar_count(app.user_config.behavior.visualizer_style, width)
+        });
+        driver.tick(
+          &mut app,
+          elapsed,
+          TickEnv {
+            now: Instant::now(),
+            #[cfg(any(feature = "audio-viz", feature = "audio-viz-cpal"))]
+            viz: viz_bars.map(crate::core::driver::VizNeed::Bars),
+            #[cfg(feature = "art-decode")]
+            cover_art_full_image_support: cover_art_full_image_support(),
+          },
+        );
+      }
+    }
+
+    if is_first_render {
+      let mut app = app.lock().await;
+      driver.dispatch_startup(&mut app);
+      is_first_render = false;
+    }
+  }
+
+  Ok(TerminalSession {
+    _events: events,
+    _terminal: terminal,
+    keyboard_enhancement_enabled,
+  })
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -650,259 +905,4 @@ mod tests {
     assert_eq!(app.soloist_pairing_device(), None);
     assert_eq!(app.get_current_route().active_block, ActiveBlock::Input);
   }
-}
-
-/// The terminal state `start_ui` leaves for the exit path; fields drop in the order the old locals did.
-pub struct TerminalSession {
-  _events: event::Events,
-  _terminal: DefaultTerminal,
-  keyboard_enhancement_enabled: bool,
-}
-
-impl TerminalSession {
-  /// Undoes the terminal setup of `start_ui`.
-  pub fn restore(&self, driver: &mut Driver) {
-    if let Some(title) = driver.window_title_reset() {
-      let _ = execute!(stdout(), SetTitle(title));
-    }
-    let _ = execute!(stdout(), DisableMouseCapture);
-    if self.keyboard_enhancement_enabled {
-      let _ = execute!(stdout(), PopKeyboardEnhancementFlags);
-    }
-    ratatui::restore();
-  }
-}
-
-/// Runs the terminal loop; the returned session keeps the terminal alive until the exit path restores it.
-pub async fn start_ui(
-  user_config: UserConfig,
-  app: &Arc<Mutex<App>>,
-  driver: &mut Driver,
-) -> Result<TerminalSession> {
-  let mut terminal = ratatui::init();
-  // Probe the terminal's image protocol only now that the terminal is set up;
-  // `App` construction must not touch stdout.
-  #[cfg(feature = "cover-art")]
-  crate::tui::cover_art::init_renderer();
-  execute!(stdout(), EnableMouseCapture)?;
-  let keyboard_enhancement_supported = supports_keyboard_enhancement().unwrap_or(false);
-  let keyboard_enhancement_enabled = keyboard_enhancement_supported
-    && execute!(
-      stdout(),
-      PushKeyboardEnhancementFlags(
-        KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
-          | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
-          | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
-      )
-    )
-    .is_ok();
-  if keyboard_enhancement_enabled {
-    info!("enabled keyboard enhancement flags");
-  }
-  {
-    let mut app = app.lock().await;
-    app.view.terminal_input_caps.keyboard_enhancement_supported = keyboard_enhancement_supported;
-    app.view.terminal_input_caps.keyboard_enhancement_enabled = keyboard_enhancement_enabled;
-    app.view.terminal_input_caps.ctrl_punct_reliable = app::CapabilityState::Unknown;
-    app.keep_pane_focus_in_layout();
-  }
-  let mut route_depth = app.lock().await.navigation_depth();
-
-  let mut events = event::Events::new(user_config.behavior.tick_rate_milliseconds);
-  let inspector = crate::tui::dev_inspect::Inspector::from_env(events.sender());
-  let mut pending_snapshot = None;
-
-  let mut is_first_render = true;
-
-  loop {
-    let terminal_size =
-      terminal
-        .backend()
-        .size()
-        .ok()
-        .map(|size| crate::core::geometry::Viewport {
-          width: size.width,
-          height: size.height,
-        });
-    let title_update = {
-      let mut app = app.lock().await;
-
-      if let Some(size) = terminal_size {
-        if is_first_render || app.view.size != size {
-          app.view.help_menu_offset = 0;
-          app.view.help_menu_page = 0;
-          app.view.size = size;
-
-          let potential_limit = max((size.height as i32) - 13, 0) as u32;
-          let max_limit = min(potential_limit, 50);
-          let large_search_limit = min((f32::from(size.height) / 1.4) as u32, max_limit);
-          let small_search_limit = min((f32::from(size.height) / 2.85) as u32, max_limit / 2);
-
-          app.dispatch(IoEvent::UpdateSearchLimits(
-            large_search_limit,
-            small_search_limit,
-          ));
-
-          app.view.help_menu_max_lines = (size.height as u32).saturating_sub(8);
-        }
-      };
-
-      // Rebuild the formatted Help rows before drawing so the render path
-      // below reads immutable App state only.
-      if app.get_current_route().active_block == ActiveBlock::HelpMenu {
-        ui::ensure_help_menu_model(&mut app);
-      }
-      handlers::show_main_for_new_screen(&mut app, route_depth);
-      route_depth = app.navigation_depth();
-
-      let current_route = app.get_current_route();
-      let current_tick_rate = if animation_active(&app) {
-        app.user_config.behavior.animation_tick_rate_milliseconds
-      } else {
-        app.user_config.behavior.tick_rate_milliseconds
-      };
-      events.set_tick_rate(current_tick_rate);
-
-      // Drop protocol caches for art the store no longer holds; rebuilds are
-      // lazy, so this is a no-op whenever the art is unchanged.
-      #[cfg(feature = "cover-art")]
-      crate::tui::cover_art::sync(&app.cover_art);
-
-      // The cursor must be invisible while the frame diff is written. Ratatui
-      // applies the diff first and shows or hides the cursor afterwards, so a
-      // cursor left visible by the previous frame travels over every freshly
-      // written cell run and shows up as a strobing block inside the animated
-      // banner. Hide it here; the draw closure below re-shows it at the input
-      // position after the write.
-      terminal.hide_cursor()?;
-
-      let frame = terminal.draw(|f| {
-        use ratatui::{prelude::Style, widgets::Block};
-        f.render_widget(
-          Block::default().style(Style::default().bg(app.user_config.theme.background.into())),
-          f.area(),
-        );
-
-        match current_route.active_block {
-          ActiveBlock::HelpMenu => ui::draw_help_menu(f, &app),
-          ActiveBlock::Queue => ui::draw_queue(f, &app),
-          ActiveBlock::Party => {
-            ui::draw_main_layout(f, &app);
-            ui::draw_party(f, &app);
-          }
-          ActiveBlock::Error => ui::draw_error_screen(f, &app),
-          ActiveBlock::SelectDevice => ui::draw_device_list(f, &app),
-          ActiveBlock::Analysis => ui::audio_analysis::draw(f, &app),
-          ActiveBlock::LyricsView => ui::draw_lyrics_view(f, &app),
-          ActiveBlock::MiniPlayer => ui::draw_miniplayer(f, &app),
-          #[cfg(feature = "cover-art")]
-          ActiveBlock::CoverArtView => ui::draw_cover_art_view(f, &app),
-          ActiveBlock::AnnouncementPrompt => ui::draw_announcement_prompt(f, &app),
-          ActiveBlock::RecapPrompt => {
-            ui::draw_main_layout(f, &app);
-            ui::draw_recap_prompt(f, &app);
-          }
-          ActiveBlock::CommunityPinPrompt => {
-            ui::draw_main_layout(f, &app);
-            ui::draw_community_pin_prompt(f, &app);
-          }
-          ActiveBlock::ExitPrompt => ui::draw_exit_prompt(f, &app),
-          ActiveBlock::Settings => ui::settings::draw_settings(f, &app),
-          ActiveBlock::PluginScreen => ui::draw_plugin_screen(f, &app),
-          ActiveBlock::CreatePlaylistForm => {
-            ui::draw_main_layout(f, &app);
-            ui::draw_create_playlist_form(f, &app);
-          }
-          _ => ui::draw_main_layout(f, &app),
-        }
-
-        ui::draw_soloist_pairing(f, &app);
-        ui::draw_soloist_offer(f, &app);
-        // Plugin popup overlays every screen.
-        ui::draw_plugin_popup(f, &app);
-
-        // Cursor management lives inside the frame: ratatui shows and moves the
-        // terminal cursor when a widget requests a position and hides it when
-        // none does. The old post-draw hide/show pair ran on every animation
-        // frame (16 ms on Home), and the alternating toggle reset the
-        // terminal's blink phase each frame, so the cursor strobed.
-        if let Some(position) = frame_cursor_position(&app, current_route.active_block) {
-          f.set_cursor_position(position);
-        }
-      })?;
-      if let (Some(inspector), Some(snapshot)) = (&inspector, pending_snapshot.take()) {
-        let route = format!("{:?}/{:?}", current_route.id, current_route.active_block);
-        inspector.write_frame(&snapshot, &route, frame.buffer);
-      }
-
-      driver.next_window_title(&app)
-    };
-    if let Some(title) = title_update {
-      execute!(stdout(), SetTitle(title.as_str()))?;
-    }
-
-    match events.next()? {
-      event::Event::Input(key) => {
-        let mut app = app.lock().await;
-        if key == Key::Ctrl('c') {
-          app.close_io_channel();
-          break;
-        }
-
-        // `break` before the scripting hook below, not after: a quit must not run
-        // one more round of pending plugin commands on its way out.
-        if dispatch_key(key, &mut app) {
-          break;
-        }
-        driver.run_pending_script_commands(&mut app);
-      }
-      event::Event::Snapshot(snapshot) => pending_snapshot = Some(snapshot),
-      event::Event::Mouse(mouse) => {
-        let mut app = app.lock().await;
-        if !app.user_config.behavior.disable_mouse_inputs {
-          handlers::mouse_handler(mouse, &mut app);
-        }
-      }
-      event::Event::Tick(elapsed) => {
-        // The frontend owns the macOS main thread, so its run loop is pumped
-        // here rather than by the driver.
-        #[cfg(all(feature = "macos-media", target_os = "macos"))]
-        {
-          use objc2_foundation::{NSDate, NSRunLoop};
-          NSRunLoop::currentRunLoop().runUntilDate(&NSDate::dateWithTimeIntervalSinceNow(0.001));
-        }
-
-        let mut app = app.lock().await;
-        // The visualizer bar count is frontend geometry (terminal width and
-        // layout margin), so it is resolved here and injected.
-        #[cfg(any(feature = "audio-viz", feature = "audio-viz-cpal"))]
-        let viz_bars = ui::audio_analysis::visualizer_inner_width(&app).map(|width| {
-          ui::audio_analysis::visualizer_bar_count(app.user_config.behavior.visualizer_style, width)
-        });
-        driver.tick(
-          &mut app,
-          elapsed,
-          TickEnv {
-            now: Instant::now(),
-            #[cfg(any(feature = "audio-viz", feature = "audio-viz-cpal"))]
-            viz: viz_bars.map(crate::core::driver::VizNeed::Bars),
-            #[cfg(feature = "art-decode")]
-            cover_art_full_image_support: cover_art_full_image_support(),
-          },
-        );
-      }
-    }
-
-    if is_first_render {
-      let mut app = app.lock().await;
-      driver.dispatch_startup(&mut app);
-      is_first_render = false;
-    }
-  }
-
-  Ok(TerminalSession {
-    _events: events,
-    _terminal: terminal,
-    keyboard_enhancement_enabled,
-  })
 }

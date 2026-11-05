@@ -449,7 +449,7 @@ mod tests {
   #[test]
   fn a_refill_gets_fewer_steps_than_a_conversation() {
     // The queue runway is the budget: four agent-CLI steps can outlast it.
-    assert!(MAX_STEPS_MUST_ACT < MAX_STEPS);
+    const { assert!(MAX_STEPS_MUST_ACT < MAX_STEPS) };
   }
 
   // --- the loop itself, driven end to end ---------------------------------
@@ -534,6 +534,7 @@ echo '{"say":"Still going.","tool_calls":[{"name":"get_queue","arguments":{}}]}'
   }
 
   /// Answers a scripted outcome and can disturb the app while it "runs".
+  #[cfg(unix)]
   struct SlowExecutor {
     app: Arc<Mutex<App>>,
     /// Simulates the listener hitting vibe-shift during a serial-lane call.
@@ -541,6 +542,7 @@ echo '{"say":"Still going.","tool_calls":[{"name":"get_queue","arguments":{}}]}'
     calls: std::sync::Mutex<Vec<DjToolCall>>,
   }
 
+  #[cfg(unix)]
   impl ToolExecutor for SlowExecutor {
     async fn call(&self, call: DjToolCall) -> ToolOutcome {
       self.calls.lock().unwrap().push(call);
@@ -551,6 +553,7 @@ echo '{"say":"Still going.","tool_calls":[{"name":"get_queue","arguments":{}}]}'
     }
   }
 
+  #[cfg(unix)]
   fn slow_executor(app: &Arc<Mutex<App>>, bump_during_call: bool) -> SlowExecutor {
     SlowExecutor {
       app: Arc::clone(app),

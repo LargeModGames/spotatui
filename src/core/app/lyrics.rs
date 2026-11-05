@@ -195,9 +195,11 @@ mod tests {
 
   #[test]
   fn browsing_resnaps_to_follow_after_timeout() {
-    let mut app = App::default();
-    app.lyrics = Some(vec![(0, "a".to_string()), (5_000, "b".to_string())]);
-    app.lyrics_status = LyricsStatus::Found;
+    let mut app = App {
+      lyrics: Some(vec![(0, "a".to_string()), (5_000, "b".to_string())]),
+      lyrics_status: LyricsStatus::Found,
+      ..Default::default()
+    };
     app.view.lyrics_view.manual_index = Some(1);
     app.view.lyrics_view.last_manual_input = Instant::now().checked_sub(Duration::from_secs(9));
     app.advance_lyrics_scroll(Duration::from_millis(16));
@@ -206,8 +208,10 @@ mod tests {
 
   #[test]
   fn lyric_progress_applies_offset_and_clamps_at_zero() {
-    let mut app = App::default();
-    app.song_progress_ms = 10_000;
+    let mut app = App {
+      song_progress_ms: 10_000,
+      ..Default::default()
+    };
     app.view.lyrics_view.timing_offset_ms = 2_500;
     assert_eq!(app.lyric_progress_ms(), 12_500);
     app.view.lyrics_view.timing_offset_ms = -15_000;
@@ -216,9 +220,11 @@ mod tests {
 
   #[test]
   fn browsing_persists_while_input_is_recent() {
-    let mut app = App::default();
-    app.lyrics = Some(vec![(0, "a".to_string()), (5_000, "b".to_string())]);
-    app.lyrics_status = LyricsStatus::Found;
+    let mut app = App {
+      lyrics: Some(vec![(0, "a".to_string()), (5_000, "b".to_string())]),
+      lyrics_status: LyricsStatus::Found,
+      ..Default::default()
+    };
     app.view.lyrics_view.manual_index = Some(1);
     app.view.lyrics_view.last_manual_input = Some(Instant::now());
     app.advance_lyrics_scroll(Duration::from_millis(16));

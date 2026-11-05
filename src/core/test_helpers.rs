@@ -1,6 +1,8 @@
 #![cfg(test)]
 
-use crate::core::app::{App, DiscoverPlaylist, DiscoverShelf, UserInfo};
+#[cfg(feature = "tui")]
+use crate::core::app::App;
+use crate::core::app::{DiscoverPlaylist, DiscoverShelf, UserInfo};
 use crate::core::plugin_api::PlaylistInfo;
 #[cfg(feature = "streaming")]
 use crate::core::plugin_api::TrackInfo;
@@ -172,12 +174,14 @@ pub fn full_track(id: &str, name: &str) -> FullTrack {
   }
 }
 
+#[cfg(feature = "tui")]
 pub fn app_with_sidebar(position: &str) -> App {
   let mut app = App::default();
   app.user_config.behavior.sidebar_position = position.to_string();
   app
 }
 
+#[cfg(feature = "tui")]
 pub fn app_with_playbar(position: &str) -> App {
   let mut app = App::default();
   app.user_config.behavior.playbar_position = position.to_string();

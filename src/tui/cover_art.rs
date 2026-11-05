@@ -10,7 +10,7 @@ use ratatui::{
   Frame,
 };
 use ratatui_image::{
-  picker::{Capability, Picker, ProtocolType},
+  picker::{cap_parser::QueryStdioOptions, Capability, Picker, ProtocolType},
   protocol::StatefulProtocol,
   Resize, StatefulImage,
 };
@@ -41,10 +41,31 @@ static RENDERER: OnceLock<CoverArtRenderer> = OnceLock::new();
 /// stdio round-trip and must not run during `App` construction.
 pub fn init_renderer() {
   RENDERER.get_or_init(|| {
-    let picker = Picker::from_query_stdio().unwrap_or_else(|err| {
-      warn!("cover art renderer fallback to halfblocks: {err}");
-      Picker::halfblocks()
-    });
+    let mut options = QueryStdioOptions::default();
+    let iterm2 = is_iterm2(
+      std::env::var("TERM_PROGRAM").ok().as_deref(),
+      std::env::var("LC_TERMINAL").ok().as_deref(),
+      tmux_client_termtype().as_deref(),
+    );
+    if iterm2 {
+      options.blacklist_protocols = vec![ProtocolType::Kitty, ProtocolType::Sixel];
+    }
+    let picker = match Picker::from_query_stdio_with_options(options) {
+      Ok(mut picker) => {
+        let measured = picker
+          .capabilities()
+          .iter()
+          .any(|cap| matches!(cap, Capability::CellSize(Some(_))));
+        if iterm2 && measured {
+          picker.set_protocol_type(ProtocolType::Iterm2);
+        }
+        picker
+      }
+      Err(err) => {
+        warn!("cover art renderer fallback to halfblocks: {err}");
+        Picker::halfblocks()
+      }
+    };
 
     info!(
       "cover art renderer detected a {:?} backend",
@@ -52,6 +73,34 @@ pub fn init_renderer() {
     );
     CoverArtRenderer::new(picker)
   });
+}
+
+/// iTerm2 answers the Kitty query but cannot draw Kitty placeholders, so skip Kitty and Sixel.
+fn is_iterm2(
+  term_program: Option<&str>,
+  lc_terminal: Option<&str>,
+  tmux_client: Option<&str>,
+) -> bool {
+  if let Some(client) = tmux_client {
+    return client.contains("iTerm");
+  }
+  [term_program, lc_terminal]
+    .into_iter()
+    .flatten()
+    .any(|name| name.contains("iTerm"))
+}
+
+/// The attached tmux client's terminal, which stays current when `LC_TERMINAL` goes stale.
+fn tmux_client_termtype() -> Option<String> {
+  std::env::var_os("TMUX")?;
+  let output = std::process::Command::new("tmux")
+    .args(["display-message", "-p", "#{client_termtype}"])
+    .stdin(std::process::Stdio::null())
+    .stderr(std::process::Stdio::null())
+    .output()
+    .ok()?;
+  let termtype = String::from_utf8_lossy(&output.stdout).trim().to_string();
+  (!termtype.is_empty()).then_some(termtype)
 }
 
 /// Install a halfblocks renderer without probing stdio, so `TestBackend`
@@ -609,6 +658,33 @@ mod tests {
   use super::*;
   use image::{DynamicImage, Rgb, RgbImage};
   use ratatui::{backend::TestBackend, Terminal};
+
+  #[test]
+  fn iterm2_is_found_by_term_program_or_by_lc_terminal_inside_tmux() {
+    assert!(is_iterm2(Some("iTerm.app"), None, None));
+    assert!(is_iterm2(Some("tmux"), Some("iTerm2"), None));
+    assert!(is_iterm2(
+      Some("tmux"),
+      Some("iTerm2"),
+      Some("iTerm2 3.5.10")
+    ));
+  }
+
+  #[test]
+  fn other_terminals_are_not_taken_for_iterm2() {
+    assert!(!is_iterm2(Some("ghostty"), None, None));
+    assert!(!is_iterm2(Some("tmux"), None, None));
+    assert!(!is_iterm2(None, None, None));
+  }
+
+  #[test]
+  fn a_stale_iterm_env_yields_to_the_attached_tmux_client() {
+    assert!(!is_iterm2(
+      Some("tmux"),
+      Some("iTerm2"),
+      Some("kitty(0.36.4)")
+    ));
+  }
 
   #[test]
   fn dither_grid_matches_braille_and_graphics_pixels() {

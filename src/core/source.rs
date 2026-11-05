@@ -169,6 +169,55 @@ impl Source {
   }
 }
 
+/// The required minimum every media source implements: browse playlists and the
+/// tracks within them.
+pub trait MediaSource {
+  /// Human-readable source name shown in the UI (e.g. `"Spotify"`, `"Navidrome"`).
+  fn name(&self) -> &str;
+
+  /// URI scheme this source owns, without the colon (e.g. `"spotify"`, `"file"`,
+  /// `"subsonic"`). Used to route a URI to the source that can handle it.
+  fn scheme(&self) -> &str;
+
+  /// The user's playlists for this source.
+  async fn playlists(&self) -> Result<Vec<PlaylistInfo>>;
+
+  /// The tracks of a playlist, identified by its source-native URI.
+  async fn tracks(&self, playlist_uri: &str) -> Result<Vec<TrackInfo>>;
+}
+
+/// Optional capability: search the source's catalog.
+pub trait Searcher {
+  async fn search(&self, query: &str) -> Result<SearchResults>;
+}
+
+/// Optional capability: the user's saved library (liked tracks, saved albums,
+/// followed artists).
+pub trait LibraryProvider {
+  async fn saved_tracks(&self) -> Result<Vec<TrackInfo>>;
+  async fn saved_albums(&self) -> Result<Vec<AlbumInfo>>;
+  async fn saved_artists(&self) -> Result<Vec<ArtistInfo>>;
+}
+
+/// Optional capability: mutate playlists (add/remove tracks by URI).
+pub trait PlaylistWriter {
+  async fn add_tracks(&self, playlist_uri: &str, track_uris: &[String]) -> Result<()>;
+  async fn remove_tracks(&self, playlist_uri: &str, track_uris: &[String]) -> Result<()>;
+}
+
+/// Optional capability: produce a playable audio stream for a URI and route it
+/// into the shared rodio sink (so the visualizer and volume control work
+/// uniformly across sources).
+///
+/// The concrete stream/handle return type is defined in the local-files slice
+/// (Phase 3), when the symphonia → rodio pipeline is wired. Until then this is
+/// the marker seam that lets the dispatch layer ask "can this source stream?".
+pub trait Streamer {
+  /// Begin streaming the given URI. Returns once playback has started (or
+  /// errors if the URI is not streamable by this source).
+  async fn stream(&self, uri: &str) -> Result<()>;
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -272,53 +321,4 @@ mod tests {
       assert_eq!(Source::from_config_str(source.to_config_str()), source);
     }
   }
-}
-
-/// The required minimum every media source implements: browse playlists and the
-/// tracks within them.
-pub trait MediaSource {
-  /// Human-readable source name shown in the UI (e.g. `"Spotify"`, `"Navidrome"`).
-  fn name(&self) -> &str;
-
-  /// URI scheme this source owns, without the colon (e.g. `"spotify"`, `"file"`,
-  /// `"subsonic"`). Used to route a URI to the source that can handle it.
-  fn scheme(&self) -> &str;
-
-  /// The user's playlists for this source.
-  async fn playlists(&self) -> Result<Vec<PlaylistInfo>>;
-
-  /// The tracks of a playlist, identified by its source-native URI.
-  async fn tracks(&self, playlist_uri: &str) -> Result<Vec<TrackInfo>>;
-}
-
-/// Optional capability: search the source's catalog.
-pub trait Searcher {
-  async fn search(&self, query: &str) -> Result<SearchResults>;
-}
-
-/// Optional capability: the user's saved library (liked tracks, saved albums,
-/// followed artists).
-pub trait LibraryProvider {
-  async fn saved_tracks(&self) -> Result<Vec<TrackInfo>>;
-  async fn saved_albums(&self) -> Result<Vec<AlbumInfo>>;
-  async fn saved_artists(&self) -> Result<Vec<ArtistInfo>>;
-}
-
-/// Optional capability: mutate playlists (add/remove tracks by URI).
-pub trait PlaylistWriter {
-  async fn add_tracks(&self, playlist_uri: &str, track_uris: &[String]) -> Result<()>;
-  async fn remove_tracks(&self, playlist_uri: &str, track_uris: &[String]) -> Result<()>;
-}
-
-/// Optional capability: produce a playable audio stream for a URI and route it
-/// into the shared rodio sink (so the visualizer and volume control work
-/// uniformly across sources).
-///
-/// The concrete stream/handle return type is defined in the local-files slice
-/// (Phase 3), when the symphonia → rodio pipeline is wired. Until then this is
-/// the marker seam that lets the dispatch layer ask "can this source stream?".
-pub trait Streamer {
-  /// Begin streaming the given URI. Returns once playback has started (or
-  /// errors if the URI is not streamable by this source).
-  async fn stream(&self, uri: &str) -> Result<()>;
 }

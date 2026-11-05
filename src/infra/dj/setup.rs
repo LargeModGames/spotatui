@@ -1099,7 +1099,6 @@ mod tests {
     assert!(models[models.len() - 2].value.is_none());
 
     // The same for an API model id that has aged out of the priced list.
-    let mut behavior = behavior;
     behavior.dj_backend = "anthropic".to_string();
     behavior.dj_model = Some("claude-3-5-sonnet-20241022".to_string());
     let (models, cursor) = models_for(&backend_row("anthropic"), &behavior);

@@ -330,10 +330,12 @@ mod tests {
   ///
   /// The directory is per-process for the adjacent reason: a fixed path collides
   /// with a previous `cargo test` run still finishing.
+  #[cfg(unix)]
   fn stubs() -> &'static std::collections::HashMap<&'static str, PathBuf> {
     static STUBS: std::sync::OnceLock<std::collections::HashMap<&'static str, PathBuf>> =
       std::sync::OnceLock::new();
     STUBS.get_or_init(|| {
+      use std::os::unix::fs::PermissionsExt;
       let dir = std::env::temp_dir().join(format!("spotatui-dj-stubs-{}", std::process::id()));
       std::fs::create_dir_all(&dir).unwrap();
       [
@@ -396,11 +398,7 @@ esac"#,
       .map(|(name, body)| {
         let path = dir.join(name);
         std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
-        #[cfg(unix)]
-        {
-          use std::os::unix::fs::PermissionsExt;
-          std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
         (name, path)
       })
       .collect()
@@ -408,6 +406,7 @@ esac"#,
   }
 
   /// Path of one stand-in, as an argv entry.
+  #[cfg(unix)]
   fn stub(name: &str) -> String {
     stubs()[name].to_string_lossy().to_string()
   }
