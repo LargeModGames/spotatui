@@ -552,8 +552,8 @@ impl App {
 
   /// Write Soloist's live state over the stored context when it is Soloist's,
   /// and restart the tick's position clock from it. A `polled` context always
-  /// restarts it outside a seek's settle window: its API item and progress come
-  /// from one response.
+  /// restarts it (its API item and progress come from one response); nothing
+  /// does inside a seek's settle window, where any report can predate the seek.
   #[cfg(feature = "soloist")]
   pub(crate) fn overlay_soloist_snapshot(&mut self, polled: bool) {
     let Some(link) = self.soloist_link.as_ref() else {
@@ -570,15 +570,15 @@ impl App {
       &link.snapshot(),
       chrono::Utc::now().timestamp_millis(),
     );
-    let seek_settling = self
+    let settling_seek = self
       .last_api_seek
-      .is_some_and(|at| at.elapsed().as_millis() < SEEK_POSITION_IGNORE_MS);
-    let resync = if polled {
-      !seek_settling
-    } else {
-      wrote_position
-    };
-    if let Some(progress) = context.progress.filter(|_| resync) {
+      .filter(|at| at.elapsed().as_millis() < SEEK_POSITION_IGNORE_MS);
+    if let Some(seek_at) = settling_seek {
+      // Keep a suppressed poll stale, so the tick does not resync from it later.
+      if polled {
+        self.instant_since_last_current_playback_poll = seek_at;
+      }
+    } else if let Some(progress) = context.progress.filter(|_| polled || wrote_position) {
       self.song_progress_ms = progress.num_milliseconds().max(0) as u128;
       self.instant_since_last_current_playback_poll = Instant::now();
     }
@@ -1739,8 +1739,17 @@ mod soloist_tests {
     assert_eq!(app.song_progress_ms, 9_000, "an event rewound the clock");
 
     app.song_progress_ms = 60_000;
-    app.last_api_seek = Some(Instant::now());
+    let seek_at = Instant::now();
+    app.last_api_seek = Some(seek_at);
     app.overlay_soloist_snapshot(true);
     assert_eq!(app.song_progress_ms, 60_000, "a poll undid the seek");
+    assert_eq!(app.instant_since_last_current_playback_poll, seek_at);
+
+    let Event::State(mut cached) = playing_state() else {
+      unreachable!()
+    };
+    cached.item_uri = Some("spotify:track:newtrack".to_string());
+    app.apply_soloist_event(&link, &Event::State(cached));
+    assert_eq!(app.song_progress_ms, 60_000, "an event undid the seek");
   }
 }
