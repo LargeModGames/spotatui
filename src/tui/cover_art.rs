@@ -10,7 +10,7 @@ use ratatui::{
   Frame,
 };
 use ratatui_image::{
-  picker::{Capability, Picker, ProtocolType},
+  picker::{cap_parser::QueryStdioOptions, Capability, Picker, ProtocolType},
   protocol::StatefulProtocol,
   Resize, StatefulImage,
 };
@@ -41,15 +41,17 @@ static RENDERER: OnceLock<CoverArtRenderer> = OnceLock::new();
 /// stdio round-trip and must not run during `App` construction.
 pub fn init_renderer() {
   RENDERER.get_or_init(|| {
-    let mut picker = Picker::from_query_stdio().unwrap_or_else(|err| {
+    let mut options = QueryStdioOptions::default();
+    if is_iterm2(
+      std::env::var("TERM_PROGRAM").ok().as_deref(),
+      std::env::var("LC_TERMINAL").ok().as_deref(),
+    ) {
+      options.blacklist_protocols = vec![ProtocolType::Kitty, ProtocolType::Sixel];
+    }
+    let picker = Picker::from_query_stdio_with_options(options).unwrap_or_else(|err| {
       warn!("cover art renderer fallback to halfblocks: {err}");
       Picker::halfblocks()
     });
-    picker.set_protocol_type(corrected_protocol(
-      picker.protocol_type(),
-      std::env::var("TERM_PROGRAM").ok().as_deref(),
-      std::env::var("LC_TERMINAL").ok().as_deref(),
-    ));
 
     info!(
       "cover art renderer detected a {:?} backend",
@@ -59,22 +61,13 @@ pub fn init_renderer() {
   });
 }
 
-/// iTerm2 answers the Kitty graphics query but cannot draw Kitty's Unicode
-/// placeholders, so it gets the iTerm2 protocol instead.
-fn corrected_protocol(
-  detected: ProtocolType,
-  term_program: Option<&str>,
-  lc_terminal: Option<&str>,
-) -> ProtocolType {
-  let is_iterm = [term_program, lc_terminal]
+/// iTerm2 answers the Kitty query but cannot draw Kitty's Unicode placeholders,
+/// so the probe skips Kitty and Sixel there and the iTerm2 protocol wins.
+fn is_iterm2(term_program: Option<&str>, lc_terminal: Option<&str>) -> bool {
+  [term_program, lc_terminal]
     .into_iter()
     .flatten()
-    .any(|name| name.contains("iTerm"));
-  if detected == ProtocolType::Kitty && is_iterm {
-    ProtocolType::Iterm2
-  } else {
-    detected
-  }
+    .any(|name| name.contains("iTerm"))
 }
 
 /// Install a halfblocks renderer without probing stdio, so `TestBackend`
@@ -605,31 +598,16 @@ mod tests {
   use ratatui::{backend::TestBackend, Terminal};
 
   #[test]
-  fn iterm2_that_answers_the_kitty_query_uses_the_iterm2_protocol() {
-    assert_eq!(
-      corrected_protocol(ProtocolType::Kitty, Some("iTerm.app"), None),
-      ProtocolType::Iterm2
-    );
-    assert_eq!(
-      corrected_protocol(ProtocolType::Kitty, Some("tmux"), Some("iTerm2")),
-      ProtocolType::Iterm2
-    );
+  fn iterm2_is_found_by_term_program_or_by_lc_terminal_inside_tmux() {
+    assert!(is_iterm2(Some("iTerm.app"), None));
+    assert!(is_iterm2(Some("tmux"), Some("iTerm2")));
   }
 
   #[test]
-  fn protocol_correction_leaves_other_terminals_and_protocols_alone() {
-    assert_eq!(
-      corrected_protocol(ProtocolType::Kitty, Some("ghostty"), None),
-      ProtocolType::Kitty
-    );
-    assert_eq!(
-      corrected_protocol(ProtocolType::Kitty, None, None),
-      ProtocolType::Kitty
-    );
-    assert_eq!(
-      corrected_protocol(ProtocolType::Sixel, Some("iTerm.app"), None),
-      ProtocolType::Sixel
-    );
+  fn other_terminals_are_not_taken_for_iterm2() {
+    assert!(!is_iterm2(Some("ghostty"), None));
+    assert!(!is_iterm2(Some("tmux"), None));
+    assert!(!is_iterm2(None, None));
   }
 
   #[test]
