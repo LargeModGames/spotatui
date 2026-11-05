@@ -43,6 +43,9 @@ impl Snapshot {
         self.repeat = state.repeat;
       }
       Event::Track { uri, is_episode } => {
+        if self.item_uri != *uri {
+          self.position = None;
+        }
         self.item_uri = uri.clone();
         self.item_is_episode = *is_episode;
       }

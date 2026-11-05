@@ -563,12 +563,12 @@ impl App {
     if context.device.id.as_deref() != Some(link.device_id()) {
       return;
     }
-    let overlaid = overlay_soloist(
+    let same_item = overlay_soloist(
       context,
       &link.snapshot(),
       chrono::Utc::now().timestamp_millis(),
     );
-    if let Some(progress) = context.progress.filter(|_| overlaid) {
+    if let Some(progress) = context.progress.filter(|_| same_item) {
       self.song_progress_ms = progress.num_milliseconds().max(0) as u128;
       self.instant_since_last_current_playback_poll = Instant::now();
     }
@@ -983,7 +983,7 @@ fn soloist_targets(logged_in: bool, active_device_id: Option<&str>, soloist_id: 
   }
 }
 
-/// Returns whether it wrote Soloist's position as the progress.
+/// Returns false while Soloist plays another item than the context shows.
 #[cfg(feature = "soloist")]
 fn overlay_soloist(
   context: &mut rspotify::model::CurrentPlaybackContext,
@@ -1002,8 +1002,7 @@ fn overlay_soloist(
     (snapshot.item_uri.as_deref(), context_uri.as_deref()),
     (Some(soloist), Some(context)) if soloist != context
   );
-  let anchor = snapshot.position.filter(|_| same_item);
-  if let Some(anchor) = anchor {
+  if let Some(anchor) = snapshot.position.filter(|_| same_item) {
     let position = if context.is_playing {
       anchor.at(now_ms)
     } else {
@@ -1020,7 +1019,7 @@ fn overlay_soloist(
     Repeat::Context => rspotify::model::RepeatState::Context,
     Repeat::Track => rspotify::model::RepeatState::Track,
   };
-  anchor.is_some()
+  same_item
 }
 
 #[cfg(test)]
@@ -1693,5 +1692,27 @@ mod soloist_tests {
       app.song_progress_ms < 5_000,
       "the poll did not resync the clock"
     );
+  }
+
+  #[test]
+  fn a_poll_before_the_new_tracks_position_keeps_the_api_progress() {
+    let (mut app, link) = app_with_soloist();
+    app.current_playback_context = Some(soloist_context());
+    app.apply_soloist_event(&link, &playing_state());
+    app.apply_soloist_event(
+      &link,
+      &Event::Track {
+        uri: Some("spotify:track:newtrack".to_string()),
+        is_episode: false,
+      },
+    );
+
+    let mut polled = playing_track_context(full_track("newtrack", "New"));
+    polled.device.id = Some(SOLOIST_ID.to_string());
+    polled.progress = Some(chrono::Duration::milliseconds(2_000));
+    app.current_playback_context = Some(polled);
+    app.overlay_soloist_snapshot();
+
+    assert_eq!(app.song_progress_ms, 2_000);
   }
 }

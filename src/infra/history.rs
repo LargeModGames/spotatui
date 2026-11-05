@@ -30,6 +30,8 @@ const SYNC_BASE_URL_ENV_KEY: &str = "SPOTATUI_SYNC_BASE_URL";
 const MAX_INTERVAL_MS: u64 = 5_000;
 const REPLAY_RESET_THRESHOLD_MS: u128 = 15_000;
 const REPLAY_PREVIOUS_PROGRESS_FLOOR_MS: u128 = 30_000;
+/// Longer than a stale start: one playback poll at the default 5 s plus a collector tick.
+const REPLAY_MIN_LISTENED_MS: u64 = 10_000;
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -975,9 +977,9 @@ impl HistoryCollector {
   }
 }
 
-/// Only a session heard past the floor can replay, so a stale end position never splits a stub off.
+/// Only a session heard for a while can replay, so a stale end position never splits a stub off.
 fn is_replay(listened_ms: u64, last_progress_ms: u128, progress_ms: u128) -> bool {
-  listened_ms > REPLAY_PREVIOUS_PROGRESS_FLOOR_MS as u64
+  listened_ms > REPLAY_MIN_LISTENED_MS
     && last_progress_ms > REPLAY_PREVIOUS_PROGRESS_FLOOR_MS
     && progress_ms + REPLAY_RESET_THRESHOLD_MS < last_progress_ms
 }
@@ -3216,6 +3218,8 @@ mod tests {
   #[test]
   fn only_a_drop_after_a_real_listen_is_a_replay() {
     assert!(is_replay(120_000, 120_000, 1_000));
+    assert!(is_replay(25_000, 70_000, 1_000), "a short first listen");
+    assert!(!is_replay(6_000, 200_000, 1_000), "a stale start");
     assert!(
       !is_replay(120_000, 20_000, 1_000),
       "below the progress floor"
