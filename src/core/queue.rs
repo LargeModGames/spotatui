@@ -196,7 +196,7 @@ pub enum SuspendedContext {
   /// the queue slot can take the output device).
   #[cfg(feature = "internet-radio")]
   Radio {
-    station: crate::core::plugin_api::TrackInfo,
+    station: Box<crate::core::plugin_api::TrackInfo>,
   },
 }
 
