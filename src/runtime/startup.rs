@@ -548,9 +548,8 @@ pub(super) async fn prepare_frontend(boot: Boot) -> FrontendHandles {
     let audio_cache_limit = if behavior.streaming_audio_cache {
       crate::core::user_config::parse_audio_cache_limit(&behavior.streaming_audio_cache_limit)
         .unwrap_or_else(|e| {
-          // Config load and the settings editors already reject invalid values,
-          // so this only fires if an unvalidated writer appears; fall back to
-          // unlimited caching instead of crashing startup.
+          // Config load clears invalid limits; settings editors reject them.
+          // Guard against a future unvalidated writer and fall back to unlimited.
           log::warn!("Invalid streaming_audio_cache_limit: {e}; using no cache size limit");
           None
         })
