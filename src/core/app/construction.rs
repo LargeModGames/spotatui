@@ -123,6 +123,7 @@ impl Default for App {
       is_fetching_current_playback: false,
       spotify_connected: false,
       pending_keybinding_persist: None,
+      up_next_pending: false,
       keybinding_runtime: KeybindingRuntimeState::default(),
 
       active_announcement: None,

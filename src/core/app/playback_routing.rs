@@ -143,29 +143,42 @@ impl App {
     }
   }
 
-  /// Fetch Spotify's queue for the now playing panel's "Up next", when the
-  /// panel is open and a Spotify item plays with a session up. Only the queue
-  /// screen fetched it before, and a fetch with no Spotify item to follow
-  /// would only report a failed load. Returns whether the fetch went out: under
-  /// native streaming the cached context names the new item a moment after the
-  /// track changes, so a caller keeps the refresh pending until it does.
-  pub(crate) fn refresh_up_next(&mut self) -> bool {
-    let spotify_item = matches!(
-      self.playing_item(),
-      PlayingItem::Spotify(_) | PlayingItem::QueuedSpotify(_)
-    );
-    let due = self.view.now_playing_panel && self.spotify_connected && spotify_item;
-    if due {
-      self.apply(crate::core::action::Action::RefreshQueue);
-    }
-    due
+  /// Ask for Spotify's queue for the now playing panel's "Up next". The fetch
+  /// goes out from [`Self::follow_up_next`] once it can follow the right item.
+  pub(crate) fn request_up_next(&mut self) {
+    self.up_next_pending = true;
   }
 
-  /// Fetch "Up next" for a `pending` playback transition and return whether it
-  /// is still pending: kept until the fetch goes out, dropped when the now
-  /// playing panel is closed, since opening it fetches anyway.
-  pub(crate) fn follow_up_next(&mut self, pending: bool) -> bool {
-    pending && self.view.now_playing_panel && !self.refresh_up_next()
+  /// Send a requested "Up next" fetch when it is due, given the id of the item
+  /// playing now. Only the queue screen fetched Spotify's queue before. A
+  /// request stays pending while the panel is open and no fetch can go out, and
+  /// a closed panel drops it, since opening the panel requests one anyway.
+  pub(crate) fn follow_up_next(&mut self, playing_id: Option<&str>) {
+    if !self.up_next_pending {
+      return;
+    }
+    if !self.view.now_playing_panel {
+      self.up_next_pending = false;
+    } else if self.spotify_connected && self.up_next_can_follow(playing_id) {
+      self.up_next_pending = false;
+      self.apply(crate::core::action::Action::RefreshQueue);
+    }
+  }
+
+  /// Whether a queue fetch now would answer for `playing_id`. A fetch with no
+  /// Spotify item to follow only reports a failed load, and under native
+  /// streaming the cached context names the previous item for a moment after a
+  /// skip, so the fetch waits for it. A queue slot's track is not the cached one.
+  fn up_next_can_follow(&self, playing_id: Option<&str>) -> bool {
+    match self.playing_item() {
+      PlayingItem::QueuedSpotify(_) => true,
+      PlayingItem::Spotify(_) => match (self.cached_playback_item_id(), playing_id) {
+        (Some(cached), Some(playing)) => cached == playing,
+        // A Spotify local file has no id to compare.
+        _ => true,
+      },
+      PlayingItem::NotSpotify | PlayingItem::Nothing => false,
+    }
   }
 
   pub(crate) fn playback_owner(&self) -> PlaybackOwner {
@@ -1313,55 +1326,76 @@ mod tests {
     (app, rx)
   }
 
+  const PLAYING_ID: Option<&str> = Some("0000000000000000000001");
+
   #[test]
-  fn the_open_now_playing_panel_fetches_the_spotify_queue_for_up_next() {
+  fn a_requested_up_next_fetches_the_spotify_queue_once() {
     let (mut app, rx) = spotify_track_playing();
     app.view.now_playing_panel = true;
 
-    assert!(app.refresh_up_next());
-
+    app.request_up_next();
+    app.follow_up_next(PLAYING_ID);
     assert!(matches!(rx.try_recv(), Ok(IoEvent::GetQueue)));
+
+    app.follow_up_next(PLAYING_ID);
+    assert!(rx.try_recv().is_err(), "nothing was requested again");
   }
 
   #[test]
-  fn up_next_fetches_nothing_with_the_panel_closed_or_no_spotify_item() {
+  fn up_next_fetches_nothing_unless_it_was_requested() {
     let (mut app, rx) = spotify_track_playing();
-    assert!(!app.refresh_up_next());
-    assert!(rx.try_recv().is_err(), "the panel is closed");
-
     app.view.now_playing_panel = true;
-    app.spotify_connected = false;
-    assert!(!app.refresh_up_next());
-    assert!(rx.try_recv().is_err(), "no session");
 
-    app.spotify_connected = true;
-    app.current_playback_context = None;
-    assert!(!app.refresh_up_next());
-    assert!(rx.try_recv().is_err(), "nothing plays");
+    app.follow_up_next(PLAYING_ID);
+
+    assert!(rx.try_recv().is_err());
   }
 
   #[test]
-  fn up_next_waits_for_the_spotify_context_before_it_fetches() {
+  fn up_next_waits_for_a_session_and_a_spotify_item() {
     let (mut app, rx) = spotify_track_playing();
     let context = app.current_playback_context.take();
     app.view.now_playing_panel = true;
+    app.request_up_next();
 
-    assert!(
-      app.follow_up_next(true),
-      "no context names the item yet: the refresh stays pending"
-    );
-    assert!(rx.try_recv().is_err());
+    app.follow_up_next(PLAYING_ID);
+    assert!(rx.try_recv().is_err(), "no context names the item yet");
 
     app.current_playback_context = context;
-    assert!(!app.follow_up_next(true), "sent, so no longer pending");
+    app.spotify_connected = false;
+    app.follow_up_next(PLAYING_ID);
+    assert!(rx.try_recv().is_err(), "no session");
+
+    app.spotify_connected = true;
+    app.follow_up_next(PLAYING_ID);
     assert!(matches!(rx.try_recv(), Ok(IoEvent::GetQueue)));
   }
 
   #[test]
-  fn a_closed_panel_drops_a_pending_up_next_refresh() {
+  fn up_next_waits_while_the_cached_context_names_the_previous_item() {
     let (mut app, rx) = spotify_track_playing();
+    app.view.now_playing_panel = true;
+    app.request_up_next();
 
-    assert!(!app.follow_up_next(true));
+    app.follow_up_next(Some("0000000000000000000002"));
+    assert!(
+      rx.try_recv().is_err(),
+      "a fetch now would answer for the old item"
+    );
+
+    app.follow_up_next(PLAYING_ID);
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::GetQueue)));
+  }
+
+  #[test]
+  fn a_closed_panel_drops_a_requested_up_next() {
+    let (mut app, rx) = spotify_track_playing();
+    app.request_up_next();
+    app.follow_up_next(PLAYING_ID);
+
+    app.view.now_playing_panel = true;
+    app.follow_up_next(PLAYING_ID);
+
     assert!(rx.try_recv().is_err());
   }
 
