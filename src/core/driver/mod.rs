@@ -179,6 +179,9 @@ pub struct Driver {
   /// The item and position the last tick saw, so "Up next" refreshes on every
   /// playback transition, a repeated track included.
   last_playback_mark: plan::PlaybackMark,
+  /// A transition whose queue fetch has not gone out yet: the cached context
+  /// can name the new item a few ticks after the snapshot does.
+  up_next_pending: bool,
   play_counter: play_count::PlayCounter,
   /// Cache key (URL / file URI) of the cover art last requested, so the
   /// per-tick cover-art evaluation dispatches a fetch only when the resolved
@@ -267,6 +270,7 @@ impl Driver {
       window_title: presence::WindowTitleState::default(),
       last_track_identity: None,
       last_playback_mark: plan::PlaybackMark::default(),
+      up_next_pending: false,
       play_counter: play_count::PlayCounter::default(),
       #[cfg(feature = "art-decode")]
       last_cover_art_key: None,
@@ -390,9 +394,8 @@ impl Driver {
           uri: snapshot.item_uri.clone(),
           progress_ms: snapshot.progress_ms,
         });
-      if plan::playback_transition(&self.last_playback_mark, &mark) {
-        app.refresh_up_next();
-      }
+      let transition = plan::playback_transition(&self.last_playback_mark, &mark);
+      self.up_next_pending = app.follow_up_next(self.up_next_pending || transition);
       self.last_playback_mark = mark;
 
       // Cover art is re-evaluated EVERY tick against the desired image key,

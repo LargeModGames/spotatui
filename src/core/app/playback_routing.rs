@@ -146,15 +146,26 @@ impl App {
   /// Fetch Spotify's queue for the now playing panel's "Up next", when the
   /// panel is open and a Spotify item plays with a session up. Only the queue
   /// screen fetched it before, and a fetch with no Spotify item to follow
-  /// would only report a failed load.
-  pub(crate) fn refresh_up_next(&mut self) {
+  /// would only report a failed load. Returns whether the fetch went out: under
+  /// native streaming the cached context names the new item a moment after the
+  /// track changes, so a caller keeps the refresh pending until it does.
+  pub(crate) fn refresh_up_next(&mut self) -> bool {
     let spotify_item = matches!(
       self.playing_item(),
       PlayingItem::Spotify(_) | PlayingItem::QueuedSpotify(_)
     );
-    if self.view.now_playing_panel && self.spotify_connected && spotify_item {
+    let due = self.view.now_playing_panel && self.spotify_connected && spotify_item;
+    if due {
       self.apply(crate::core::action::Action::RefreshQueue);
     }
+    due
+  }
+
+  /// Fetch "Up next" for a `pending` playback transition and return whether it
+  /// is still pending: kept until the fetch goes out, dropped when the now
+  /// playing panel is closed, since opening it fetches anyway.
+  pub(crate) fn follow_up_next(&mut self, pending: bool) -> bool {
+    pending && self.view.now_playing_panel && !self.refresh_up_next()
   }
 
   pub(crate) fn playback_owner(&self) -> PlaybackOwner {
@@ -1307,7 +1318,7 @@ mod tests {
     let (mut app, rx) = spotify_track_playing();
     app.view.now_playing_panel = true;
 
-    app.refresh_up_next();
+    assert!(app.refresh_up_next());
 
     assert!(matches!(rx.try_recv(), Ok(IoEvent::GetQueue)));
   }
@@ -1315,18 +1326,43 @@ mod tests {
   #[test]
   fn up_next_fetches_nothing_with_the_panel_closed_or_no_spotify_item() {
     let (mut app, rx) = spotify_track_playing();
-    app.refresh_up_next();
+    assert!(!app.refresh_up_next());
     assert!(rx.try_recv().is_err(), "the panel is closed");
 
     app.view.now_playing_panel = true;
     app.spotify_connected = false;
-    app.refresh_up_next();
+    assert!(!app.refresh_up_next());
     assert!(rx.try_recv().is_err(), "no session");
 
     app.spotify_connected = true;
     app.current_playback_context = None;
-    app.refresh_up_next();
+    assert!(!app.refresh_up_next());
     assert!(rx.try_recv().is_err(), "nothing plays");
+  }
+
+  #[test]
+  fn up_next_waits_for_the_spotify_context_before_it_fetches() {
+    let (mut app, rx) = spotify_track_playing();
+    let context = app.current_playback_context.take();
+    app.view.now_playing_panel = true;
+
+    assert!(
+      app.follow_up_next(true),
+      "no context names the item yet: the refresh stays pending"
+    );
+    assert!(rx.try_recv().is_err());
+
+    app.current_playback_context = context;
+    assert!(!app.follow_up_next(true), "sent, so no longer pending");
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::GetQueue)));
+  }
+
+  #[test]
+  fn a_closed_panel_drops_a_pending_up_next_refresh() {
+    let (mut app, rx) = spotify_track_playing();
+
+    assert!(!app.follow_up_next(true));
+    assert!(rx.try_recv().is_err());
   }
 
   #[test]
