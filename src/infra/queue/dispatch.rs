@@ -1049,7 +1049,7 @@ async fn resume_or_finish(app: &Arc<Mutex<App>>, end: QueueEnd) {
       } else if let Some(uri) = station.uri.clone() {
         let mut guard = app.lock().await;
         // Seed the browse table so the radio start path resolves the station.
-        guard.track_table.tracks = vec![station];
+        guard.track_table.tracks = vec![*station];
         guard.dispatch(IoEvent::StartPlayback(Some(uri), None, None));
       }
     }
