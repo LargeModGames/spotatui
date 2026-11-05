@@ -14,6 +14,7 @@ pub struct Snapshot {
   pub is_active: bool,
   pub status: Status,
   pub item_is_episode: bool,
+  pub item_uri: Option<String>,
   pub position: Option<PositionAnchor>,
   pub volume: Option<u8>,
   pub shuffle: bool,
@@ -35,12 +36,16 @@ impl Snapshot {
         self.is_active = state.is_active;
         self.status = state.status;
         self.item_is_episode = state.item_is_episode;
+        self.item_uri = state.item_uri.clone();
         self.position = state.position;
         self.volume = state.volume.or(self.volume);
         self.shuffle = state.shuffle;
         self.repeat = state.repeat;
       }
-      Event::Track { is_episode, .. } => self.item_is_episode = *is_episode,
+      Event::Track { uri, is_episode } => {
+        self.item_uri = uri.clone();
+        self.item_is_episode = *is_episode;
+      }
       Event::Playback(status) => self.status = *status,
       Event::Volume(volume) => self.volume = Some(*volume),
       Event::Device { is_active } => self.is_active = *is_active,
