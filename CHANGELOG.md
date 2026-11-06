@@ -19,6 +19,7 @@
 - **The AI DJ prompt's caret follows the cursor**: after Left, Home or a Backspace in the middle of the text, the caret stayed painted at the end of the prompt. It now sits where the next character goes ([#945](https://github.com/LargeModGames/spotatui/issues/945)).
 - **The log's startup line lists every compiled feature**: `features:` left out `soloist`, `gui`, `apple-music`, `spotify-session`, the playback backends and the shared decode features, so a release build with Soloist looked like it had none. A test now fails when a feature in `Cargo.toml` is missing from the list ([#949](https://github.com/LargeModGames/spotatui/issues/949)).
 - **Long names and queries stay inside the Create Playlist inputs**: typing a playlist name or an Add Tracks search longer than the box ran the text past the right border and carried the cursor out of it. The text now scrolls and the cursor stays at the right edge ([#829](https://github.com/LargeModGames/spotatui/issues/829)).
+- **Pausing from playerctl, media keys or a desktop widget updates spotatui at once**: an MPRIS Pause, Play, PlayPause or Stop drove the native player directly and waited for librespot's event to update the playbar and the MPRIS status. When that event did not come, spotatui kept showing Playing after a pause, and a second PlayPause paused again instead of resuming. These commands now take the same path as the TUI's play/pause, so the state changes as soon as the command is sent ([#985](https://github.com/LargeModGames/spotatui/issues/985)).
 
 ## [v0.47.0] 2026-10-25
 

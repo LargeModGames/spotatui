@@ -1125,14 +1125,23 @@ async fn handle_mpris_events(
 
     match event {
       MprisEvent::PlayPause => {
+        // The local player takes the same paths as the TUI's play/pause, so the
+        // App state, the playbar and the MPRIS status follow at once (#985).
+        // Read the App's own play state: librespot's last event can be stale.
         #[cfg(feature = "streaming")]
-        if let Some(ref player) = current_player {
-          if shared_is_playing.load(Ordering::Relaxed) {
-            player.pause();
-          } else {
-            player.play();
+        {
+          let mut app_lock = app.lock().await;
+          if local_player_takes_play_key(&app_lock, &shared_is_playing) {
+            let is_playing = app_lock
+              .native_is_playing
+              .unwrap_or_else(|| shared_is_playing.load(Ordering::Relaxed));
+            if is_playing {
+              app_lock.pause_native_playback();
+            } else {
+              app_lock.resume_native_playback();
+            }
+            continue;
           }
-          continue;
         }
         // Fallback: the same toggle as the TUI's play/pause. It follows the playback
         // owner; `native_is_playing` still describes the idle local player while
@@ -1141,20 +1150,24 @@ async fn handle_mpris_events(
       }
       MprisEvent::Play => {
         #[cfg(feature = "streaming")]
-        if let Some(ref player) = current_player {
-          player.play();
-          app.lock().await.arm_native_play_intent();
-          continue;
+        {
+          let mut app_lock = app.lock().await;
+          if local_player_takes_play_key(&app_lock, &shared_is_playing) {
+            app_lock.resume_native_playback();
+            continue;
+          }
         }
         let mut app_lock = app.lock().await;
         app_lock.dispatch_spotify_fallback(IoEvent::StartPlayback(None, None, None));
       }
       MprisEvent::Pause => {
         #[cfg(feature = "streaming")]
-        if let Some(ref player) = current_player {
-          player.pause();
-          app.lock().await.set_native_playback_intent(false);
-          continue;
+        {
+          let mut app_lock = app.lock().await;
+          if local_player_takes_play_key(&app_lock, &shared_is_playing) {
+            app_lock.pause_native_playback();
+            continue;
+          }
         }
         let mut app_lock = app.lock().await;
         app_lock.dispatch_spotify_fallback(IoEvent::PausePlayback);
@@ -1167,10 +1180,12 @@ async fn handle_mpris_events(
       }
       MprisEvent::Stop => {
         #[cfg(feature = "streaming")]
-        if let Some(ref player) = current_player {
-          player.pause();
-          app.lock().await.set_native_playback_intent(false);
-          continue;
+        {
+          let mut app_lock = app.lock().await;
+          if local_player_takes_play_key(&app_lock, &shared_is_playing) {
+            app_lock.pause_native_playback();
+            continue;
+          }
         }
         let mut app_lock = app.lock().await;
         app_lock.dispatch_spotify_fallback(IoEvent::PausePlayback);
@@ -1567,6 +1582,40 @@ fn local_player_takes_media_keys(owner: PlaybackOwner, native_playing: bool) -> 
   native_playing || owner != PlaybackOwner::Spotify
 }
 
+/// The same choice as `current_player` in `handle_mpris_events`, made on the
+/// locked `App` that runs the play/pause: recovery can remove the player
+/// between the two locks, and a pause or resume without one would still flip
+/// the play state.
+#[cfg(all(feature = "streaming", feature = "mpris", target_os = "linux"))]
+fn local_player_takes_play_key(
+  app: &App,
+  shared_is_playing: &std::sync::atomic::AtomicBool,
+) -> bool {
+  play_key_goes_to_local_player(
+    app.streaming_player.is_some(),
+    app.playback_owner(),
+    shared_is_playing.load(std::sync::atomic::Ordering::Relaxed),
+    app.native_is_playing,
+  )
+}
+
+/// The decision behind `local_player_takes_play_key`, on plain values.
+/// `shared_is_playing` changes only on librespot's Playing/Paused events, so
+/// it can still say playing after another device took over, when `Stopped`
+/// has already set `native_is_playing` to false. Count the local player as
+/// playing only while the App agrees, so PlayPause pauses the other device
+/// instead of resuming here. An active pull-back (#693) has the App flag set.
+#[cfg(all(feature = "streaming", feature = "mpris", target_os = "linux"))]
+fn play_key_goes_to_local_player(
+  has_player: bool,
+  owner: PlaybackOwner,
+  shared_is_playing: bool,
+  native_is_playing: Option<bool>,
+) -> bool {
+  has_player
+    && local_player_takes_media_keys(owner, shared_is_playing && native_is_playing != Some(false))
+}
+
 /// While Music owns playback, a media key that still reaches spotatui drives
 /// Music through the same transport the keyboard uses. There is no native
 /// player to toggle.
@@ -1818,5 +1867,52 @@ mod media_key_tests {
     ] {
       assert!(local_player_takes_media_keys(owner, false), "{owner:?}");
     }
+  }
+
+  /// Recovery can remove the player after `current_player` was picked; the
+  /// recheck under the action's lock then sends the key to the fallback (#986).
+  #[cfg(all(feature = "mpris", target_os = "linux"))]
+  #[test]
+  fn a_play_key_without_a_local_player_takes_the_fallback() {
+    let (tx, _rx) = std::sync::mpsc::channel();
+    let app = App::new(tx, UserConfig::new(), Some(std::time::SystemTime::now()));
+    let playing = std::sync::atomic::AtomicBool::new(true);
+
+    assert!(!local_player_takes_play_key(&app, &playing));
+  }
+
+  /// Another device took over: `Stopped` cleared the App flag before a
+  /// `Paused` cleared the shared one. PlayPause must pause that device.
+  #[cfg(all(feature = "mpris", target_os = "linux"))]
+  #[test]
+  fn after_another_device_takes_over_the_play_key_goes_to_that_device() {
+    assert!(!play_key_goes_to_local_player(
+      true,
+      PlaybackOwner::Spotify,
+      true,
+      Some(false)
+    ));
+  }
+
+  #[cfg(all(feature = "mpris", target_os = "linux"))]
+  #[test]
+  fn a_pull_back_that_plays_here_keeps_the_play_key() {
+    for native in [Some(true), None] {
+      assert!(
+        play_key_goes_to_local_player(true, PlaybackOwner::Spotify, true, native),
+        "{native:?}"
+      );
+    }
+  }
+
+  #[cfg(all(feature = "mpris", target_os = "linux"))]
+  #[test]
+  fn a_paused_local_player_keeps_the_play_key_to_resume() {
+    assert!(play_key_goes_to_local_player(
+      true,
+      PlaybackOwner::NativeSpotify,
+      false,
+      Some(false)
+    ));
   }
 }
