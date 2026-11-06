@@ -1125,12 +1125,19 @@ async fn handle_mpris_events(
 
     match event {
       MprisEvent::PlayPause => {
+        // The local player takes the same paths as the TUI's play/pause, so the
+        // App state, the playbar and the MPRIS status follow at once (#985).
+        // Read the App's own play state: librespot's last event can be stale.
         #[cfg(feature = "streaming")]
-        if let Some(ref player) = current_player {
-          if shared_is_playing.load(Ordering::Relaxed) {
-            player.pause();
+        if current_player.is_some() {
+          let mut app_lock = app.lock().await;
+          let is_playing = app_lock
+            .native_is_playing
+            .unwrap_or_else(|| shared_is_playing.load(Ordering::Relaxed));
+          if is_playing {
+            app_lock.pause_native_playback();
           } else {
-            player.play();
+            app_lock.resume_native_playback();
           }
           continue;
         }
@@ -1141,9 +1148,8 @@ async fn handle_mpris_events(
       }
       MprisEvent::Play => {
         #[cfg(feature = "streaming")]
-        if let Some(ref player) = current_player {
-          player.play();
-          app.lock().await.arm_native_play_intent();
+        if current_player.is_some() {
+          app.lock().await.resume_native_playback();
           continue;
         }
         let mut app_lock = app.lock().await;
@@ -1151,9 +1157,8 @@ async fn handle_mpris_events(
       }
       MprisEvent::Pause => {
         #[cfg(feature = "streaming")]
-        if let Some(ref player) = current_player {
-          player.pause();
-          app.lock().await.set_native_playback_intent(false);
+        if current_player.is_some() {
+          app.lock().await.pause_native_playback();
           continue;
         }
         let mut app_lock = app.lock().await;
@@ -1167,9 +1172,8 @@ async fn handle_mpris_events(
       }
       MprisEvent::Stop => {
         #[cfg(feature = "streaming")]
-        if let Some(ref player) = current_player {
-          player.pause();
-          app.lock().await.set_native_playback_intent(false);
+        if current_player.is_some() {
+          app.lock().await.pause_native_playback();
           continue;
         }
         let mut app_lock = app.lock().await;

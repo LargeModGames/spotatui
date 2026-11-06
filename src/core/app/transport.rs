@@ -34,6 +34,26 @@ impl App {
     self.native_is_playing = Some(false);
   }
 
+  /// Resume native streaming playback with the bookkeeping the resume branch
+  /// of [`toggle_playback`](Self::toggle_playback) does: refuse while the
+  /// unavailable-track guard holds playback, arm the play intent, resume the
+  /// player, and flip the UI playing state without waiting for librespot's
+  /// Playing event.
+  #[cfg(feature = "streaming")]
+  pub fn resume_native_playback(&mut self) {
+    if self.refuse_resume_after_unavailable_halt() {
+      return;
+    }
+    self.arm_native_play_intent();
+    if let Some(player) = &self.streaming_player {
+      player.play();
+    }
+    if let Some(ctx) = &mut self.current_playback_context {
+      ctx.is_playing = true;
+    }
+    self.native_is_playing = Some(true);
+  }
+
   /// Hand the sink to a decoded source: park librespot when it owned the
   /// sink, else only pause it.
   #[cfg(feature = "streaming")]
@@ -190,7 +210,7 @@ impl App {
         return;
       }
 
-      if let Some(player) = self.streaming_player.clone() {
+      if self.streaming_player.is_some() {
         let is_playing = self
           .native_is_playing
           .or_else(|| self.current_playback_context.as_ref().map(|c| c.is_playing))
@@ -201,14 +221,8 @@ impl App {
         );
         if is_playing {
           self.pause_native_playback();
-        } else if !self.refuse_resume_after_unavailable_halt() {
-          self.arm_native_play_intent();
-          player.play();
-          // Update UI state immediately
-          if let Some(ctx) = &mut self.current_playback_context {
-            ctx.is_playing = true;
-          }
-          self.native_is_playing = Some(true);
+        } else {
+          self.resume_native_playback();
         }
         return;
       }
@@ -862,6 +876,38 @@ mod tests {
 
     assert!(rx.try_recv().is_err());
     assert_eq!(app.status_message.as_deref(), Some(NOTHING_PLAYING_STATUS));
+  }
+
+  /// MPRIS Pause/Play call these directly (#985): the playbar and the MPRIS
+  /// status must follow at once, not wait for a librespot event.
+  #[test]
+  fn pause_and_resume_flip_the_play_state_without_a_player_event() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.current_playback_context = Some(playing_track_context(full_track(
+      "0000000000000000000001",
+      "T",
+    )));
+    app.native_is_playing = Some(true);
+
+    app.pause_native_playback();
+    assert_eq!(app.native_is_playing, Some(false));
+
+    app.resume_native_playback();
+    assert_eq!(app.native_is_playing, Some(true));
+    assert!(rx.try_recv().is_err());
+  }
+
+  #[test]
+  fn resume_is_refused_while_the_unavailable_track_guard_holds() {
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.halt_native_after_unavailable();
+
+    app.resume_native_playback();
+
+    assert_eq!(app.native_is_playing, Some(false));
+    assert!(app.status_message.is_some());
   }
 }
 
