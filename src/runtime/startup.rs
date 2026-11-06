@@ -1591,11 +1591,29 @@ fn local_player_takes_play_key(
   app: &App,
   shared_is_playing: &std::sync::atomic::AtomicBool,
 ) -> bool {
-  app.streaming_player.is_some()
-    && local_player_takes_media_keys(
-      app.playback_owner(),
-      shared_is_playing.load(std::sync::atomic::Ordering::Relaxed),
-    )
+  play_key_goes_to_local_player(
+    app.streaming_player.is_some(),
+    app.playback_owner(),
+    shared_is_playing.load(std::sync::atomic::Ordering::Relaxed),
+    app.native_is_playing,
+  )
+}
+
+/// The decision behind `local_player_takes_play_key`, on plain values.
+/// `shared_is_playing` changes only on librespot's Playing/Paused events, so
+/// it can still say playing after another device took over, when `Stopped`
+/// has already set `native_is_playing` to false. Count the local player as
+/// playing only while the App agrees, so PlayPause pauses the other device
+/// instead of resuming here. An active pull-back (#693) has the App flag set.
+#[cfg(all(feature = "streaming", feature = "mpris", target_os = "linux"))]
+fn play_key_goes_to_local_player(
+  has_player: bool,
+  owner: PlaybackOwner,
+  shared_is_playing: bool,
+  native_is_playing: Option<bool>,
+) -> bool {
+  has_player
+    && local_player_takes_media_keys(owner, shared_is_playing && native_is_playing != Some(false))
 }
 
 /// While Music owns playback, a media key that still reaches spotatui drives
@@ -1861,5 +1879,40 @@ mod media_key_tests {
     let playing = std::sync::atomic::AtomicBool::new(true);
 
     assert!(!local_player_takes_play_key(&app, &playing));
+  }
+
+  /// Another device took over: `Stopped` cleared the App flag before a
+  /// `Paused` cleared the shared one. PlayPause must pause that device.
+  #[cfg(all(feature = "mpris", target_os = "linux"))]
+  #[test]
+  fn after_another_device_takes_over_the_play_key_goes_to_that_device() {
+    assert!(!play_key_goes_to_local_player(
+      true,
+      PlaybackOwner::Spotify,
+      true,
+      Some(false)
+    ));
+  }
+
+  #[cfg(all(feature = "mpris", target_os = "linux"))]
+  #[test]
+  fn a_pull_back_that_plays_here_keeps_the_play_key() {
+    for native in [Some(true), None] {
+      assert!(
+        play_key_goes_to_local_player(true, PlaybackOwner::Spotify, true, native),
+        "{native:?}"
+      );
+    }
+  }
+
+  #[cfg(all(feature = "mpris", target_os = "linux"))]
+  #[test]
+  fn a_paused_local_player_keeps_the_play_key_to_resume() {
+    assert!(play_key_goes_to_local_player(
+      true,
+      PlaybackOwner::NativeSpotify,
+      false,
+      Some(false)
+    ));
   }
 }
