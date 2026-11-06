@@ -44,6 +44,12 @@ impl App {
     if self.refuse_resume_after_unavailable_halt() {
       return;
     }
+    // librespot has nothing to resume, so ask Spotify for the last playback,
+    // like the TUI's play/pause.
+    if self.native_has_nothing_loaded() {
+      self.dispatch(IoEvent::StartPlayback(None, None, None));
+      return;
+    }
     self.arm_native_play_intent();
     if let Some(player) = &self.streaming_player {
       player.play();
@@ -52,6 +58,16 @@ impl App {
       ctx.is_playing = true;
     }
     self.native_is_playing = Some(true);
+  }
+
+  /// No track is loaded for the native player, e.g. right after startup.
+  #[cfg(feature = "streaming")]
+  fn native_has_nothing_loaded(&self) -> bool {
+    self
+      .current_playback_context
+      .as_ref()
+      .and_then(|ctx| ctx.item.as_ref())
+      .is_none()
   }
 
   /// Hand the sink to a decoded source: park librespot when it owned the
@@ -200,12 +216,7 @@ impl App {
     // Use native streaming player for instant control (bypasses event channel latency)
     #[cfg(feature = "streaming")]
     if self.is_native_streaming_active_for_playback() {
-      if self
-        .current_playback_context
-        .as_ref()
-        .and_then(|ctx| ctx.item.as_ref())
-        .is_none()
-      {
+      if self.native_has_nothing_loaded() {
         self.dispatch(IoEvent::StartPlayback(None, None, None));
         return;
       }
@@ -896,6 +907,22 @@ mod tests {
     app.resume_native_playback();
     assert_eq!(app.native_is_playing, Some(true));
     assert!(rx.try_recv().is_err());
+  }
+
+  /// MPRIS Play right after startup: librespot has no track, so the resume
+  /// asks Spotify for the last playback instead of showing Playing in silence.
+  #[test]
+  fn resume_with_nothing_loaded_asks_spotify_for_the_last_playback() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+
+    app.resume_native_playback();
+
+    assert!(matches!(
+      rx.try_recv(),
+      Ok(IoEvent::StartPlayback(None, None, None))
+    ));
+    assert_ne!(app.native_is_playing, Some(true));
   }
 
   #[test]
