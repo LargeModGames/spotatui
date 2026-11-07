@@ -2,6 +2,15 @@
   "version": 1,
   "announcements": [
     {
+      "id": "2026-11-07-security-release-0-48-0",
+      "title": "Security release: update to v0.48.0",
+      "body": "spotatui v0.48.0 fixes a credential leak for Subsonic users: the cover URL of a playing Subsonic track carried your Subsonic login token and reached Discord Rich Presence, MPRIS, macOS Now Playing and the cloud now-playing feed. Update to v0.48.0, then change your Subsonic password, because the token may already have been seen. The release also restricts the AI DJ's agent commands and hardens the browser GUI, the MCP relay and the party relay. Details are in the security advisories on GitHub.",
+      "level": "warning",
+      "url": "https://github.com/LargeModGames/spotatui/security/advisories/GHSA-h73v-9vw7-q597",
+      "starts_at": "2026-11-07T19:30:00Z",
+      "ends_at": "2026-12-19T23:59:59Z"
+    },
+    {
       "id": "2026-08-06-discord-community",
       "title": "Join the spotatui Discord",
       "body": "spotatui now has a community Discord: a place for install help, feature ideas, listening parties, and showing off your terminal setup. Come hang out, get support faster, and hear about new releases first.",
