@@ -262,9 +262,9 @@ A **bare binary name expands to a known preset**, so this is enough:
 | `opencode` | `opencode run` | `opencode run -m openai/gpt-5.4` | argv (trailing positional) |
 | `gemini` (legacy) | `gemini -p` | `gemini -m MODEL -p` | argv |
 
-At run time `claude` also gets `--tools ""` right after the program name, and `codex exec`
+At run time `claude` also gets `--tools "" --strict-mcp-config` right after the program name, and `codex exec`
 gets `--sandbox read-only` after `exec` (see below), so `claude -p` runs as
-`claude --tools "" -p`.
+`claude --tools "" --strict-mcp-config -p`.
 
 `agy` is Google's current CLI. The Gemini CLI it superseded is kept as a preset only
 so an existing config keeps working, and it is not offered in the picker unless the
@@ -308,10 +308,12 @@ current directory — otherwise it reads the `CLAUDE.md` and source files of wha
 project you happen to be in and starts recommending music about Rust.
 
 The prompt carries track titles, and anyone can write a title. So spotatui restricts
-the agent: `claude` gets `--tools ""`, which turns its tools off, and `codex exec` gets
+the agent: `claude` gets `--tools "" --strict-mcp-config`, which turns its built-in
+tools and your configured MCP servers off, and `codex exec` gets
 `--sandbox read-only`, which stops writes but still lets it read files and run
-read-only commands. Neither is added when your `dj_agent_command` already names a tool
-or sandbox flag. `copilot -p` denies tools in prompt mode by itself. `opencode`, `agy` and `gemini`
+read-only commands. Neither is added when your `dj_agent_command` already names a tool,
+MCP or sandbox flag. `copilot -p` denies a tool request that needs approval, but its
+policy can still let read-only operations through. `opencode`, `agy` and `gemini`
 have no such flag, so they run with whatever permissions you gave them.
 
 ### `anthropic` — API key
