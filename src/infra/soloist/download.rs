@@ -56,11 +56,6 @@ fn percent(received: u64, total: Option<u64>) -> Option<u8> {
   Some((received.min(total) * 100 / total) as u8)
 }
 
-/// Whether a download of `received` bytes, with `declared` announced, stays under the cap.
-fn within_cap(declared: Option<u64>, received: u64) -> bool {
-  declared.unwrap_or(0) <= MAX_ARCHIVE_BYTES && received <= MAX_ARCHIVE_BYTES
-}
-
 /// The binary in an extracted archive, at most three folders down.
 fn find_binary(dir: &Path, depth: u8) -> Option<PathBuf> {
   let entries: Vec<_> = std::fs::read_dir(dir).ok()?.flatten().collect();
@@ -141,7 +136,7 @@ async fn fetch(app: &Arc<Mutex<App>>, url: &str, to: &Path) -> Result<(), Failur
       "the archive is larger than {MAX_ARCHIVE_BYTES} bytes"
     ))
   };
-  if !within_cap(total, 0) {
+  if total.is_some_and(|total| total > MAX_ARCHIVE_BYTES) {
     return Err(too_large());
   }
   let mut file = tokio::fs::File::create(to).await.map_err(failed)?;
@@ -150,7 +145,7 @@ async fn fetch(app: &Arc<Mutex<App>>, url: &str, to: &Path) -> Result<(), Failur
   while let Some(chunk) = response.chunk().await.map_err(failed)? {
     file.write_all(&chunk).await.map_err(failed)?;
     received += chunk.len() as u64;
-    if !within_cap(None, received) {
+    if received > MAX_ARCHIVE_BYTES {
       return Err(too_large());
     }
     if let Some(now) = percent(received, total).filter(|now| *now >= shown + 10) {
@@ -225,14 +220,6 @@ mod tests {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
       Some(&self.1)
     }
-  }
-
-  #[test]
-  fn a_download_over_the_cap_is_refused() {
-    assert!(within_cap(Some(40_000_000), 40_000_000));
-    assert!(within_cap(None, MAX_ARCHIVE_BYTES));
-    assert!(!within_cap(Some(MAX_ARCHIVE_BYTES + 1), 0));
-    assert!(!within_cap(None, MAX_ARCHIVE_BYTES + 1));
   }
 
   #[test]
