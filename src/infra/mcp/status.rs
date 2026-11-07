@@ -154,19 +154,14 @@ fn render_text(checks: &[Check], ready: bool) -> String {
 /// Connect, authenticate, and ask the server which protocol it speaks.
 async fn probe(handshake: &Handshake) -> Result<String, String> {
   let connect = TcpStream::connect(("127.0.0.1", handshake.port));
-  let stream = tokio::time::timeout(PROBE_TIMEOUT, connect)
+  let mut stream = tokio::time::timeout(PROBE_TIMEOUT, connect)
     .await
     .map_err(|_| "connection timed out".to_string())?
     .map_err(|e| format!("could not connect on port {}: {e}", handshake.port))?;
+  super::control::authenticate(&mut stream, handshake).await?;
 
   let (read_half, mut write_half) = stream.into_split();
   let mut lines = BufReader::new(read_half).lines();
-
-  let hello = json!({ "token": handshake.token });
-  write_half
-    .write_all(format!("{hello}\n").as_bytes())
-    .await
-    .map_err(|e| format!("could not send the handshake: {e}"))?;
 
   // A modern `server/discover`, which every version of this server answers.
   let request = json!({
@@ -257,6 +252,30 @@ mod tests {
     assert_eq!(value["checks"][0]["detail"], "missing");
   }
 
+  /// The listener's side of the handshake for the token "t": proof, then the token line.
+  async fn prove(
+    lines: &mut tokio::io::Lines<BufReader<tokio::net::tcp::OwnedReadHalf>>,
+    write_half: &mut tokio::net::tcp::OwnedWriteHalf,
+  ) {
+    let hello: serde_json::Value =
+      serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+    let proof = super::super::control::server_proof("t", hello["nonce"].as_str().unwrap());
+    let reply = json!({ "proof": proof });
+    write_half
+      .write_all(
+        format!(
+          "{reply}
+"
+        )
+        .as_bytes(),
+      )
+      .await
+      .unwrap();
+    let token: serde_json::Value =
+      serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+    assert_eq!(token["token"], "t");
+  }
+
   #[tokio::test]
   async fn probe_reports_the_protocol_when_the_server_answers() {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
@@ -267,7 +286,7 @@ mod tests {
       let (read_half, mut write_half) = stream.into_split();
       let mut lines = BufReader::new(read_half).lines();
       // Handshake, then the discover request.
-      let _token = lines.next_line().await.unwrap();
+      prove(&mut lines, &mut write_half).await;
       let _request = lines.next_line().await.unwrap();
       let response = json!({
         "jsonrpc": "2.0", "id": "status-probe",
@@ -330,7 +349,7 @@ mod tests {
       let (stream, _) = listener.accept().await.unwrap();
       let (read_half, mut write_half) = stream.into_split();
       let mut lines = BufReader::new(read_half).lines();
-      let _ = lines.next_line().await;
+      prove(&mut lines, &mut write_half).await;
       let _ = lines.next_line().await;
       let response = json!({
         "jsonrpc": "2.0", "id": "status-probe",

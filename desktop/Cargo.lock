@@ -6079,6 +6079,7 @@ dependencies = [
  "futures",
  "hex",
  "hkdf",
+ "hmac 0.13.0",
  "httparse",
  "icy-metadata",
  "keepawake",

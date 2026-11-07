@@ -449,12 +449,7 @@ async fn connect(locate: &Locate) -> std::result::Result<TcpStream, String> {
       )
     })?;
 
-  let hello = serde_json::json!({ "token": handshake.token });
-  stream
-    .write_all(format!("{hello}\n").as_bytes())
-    .await
-    .map_err(|e| format!("could not send the control handshake: {e}"))?;
-
+  super::control::authenticate(&mut stream, &handshake).await?;
   Ok(stream)
 }
 
@@ -538,6 +533,30 @@ mod tests {
     assert!(responses[1]["result"]["tools"].is_array());
   }
 
+  /// Answers the relay's nonce with the listener's proof and returns the token line.
+  async fn prove(
+    lines: &mut tokio::io::Lines<BufReader<tokio::net::tcp::OwnedReadHalf>>,
+    write_half: &mut tokio::net::tcp::OwnedWriteHalf,
+    token: &str,
+  ) -> Option<String> {
+    let first = lines.next_line().await.ok()??;
+    let nonce = serde_json::from_str::<serde_json::Value>(&first).ok()?["nonce"]
+      .as_str()?
+      .to_string();
+    let proof = json!({"proof": crate::infra::mcp::control::server_proof(token, &nonce)});
+    write_half
+      .write_all(
+        format!(
+          "{proof}
+"
+        )
+        .as_bytes(),
+      )
+      .await
+      .ok()?;
+    lines.next_line().await.ok()?
+  }
+
   /// A stand-in TUI: authenticates like the real listener, echoes every request
   /// back, and keeps accepting new connections so a reconnect can be observed.
   ///
@@ -556,7 +575,7 @@ mod tests {
         tokio::spawn(async move {
           let (read_half, mut write_half) = stream.into_split();
           let mut lines = BufReader::new(read_half).lines();
-          let Ok(Some(first)) = lines.next_line().await else {
+          let Some(first) = prove(&mut lines, &mut write_half, &token).await else {
             return;
           };
           assert_eq!(
@@ -604,9 +623,9 @@ mod tests {
         let sink = Arc::clone(&sink);
         let token = token.clone();
         tokio::spawn(async move {
-          let (read_half, _write_half) = stream.into_split();
+          let (read_half, mut write_half) = stream.into_split();
           let mut lines = BufReader::new(read_half).lines();
-          let Ok(Some(first)) = lines.next_line().await else {
+          let Some(first) = prove(&mut lines, &mut write_half, &token).await else {
             return;
           };
           assert_eq!(
@@ -634,9 +653,9 @@ mod tests {
         };
         let token = token.clone();
         tokio::spawn(async move {
-          let (read_half, _write_half) = stream.into_split();
+          let (read_half, mut write_half) = stream.into_split();
           let mut lines = BufReader::new(read_half).lines();
-          let Ok(Some(first)) = lines.next_line().await else {
+          let Some(first) = prove(&mut lines, &mut write_half, &token).await else {
             return;
           };
           assert_eq!(
@@ -677,7 +696,7 @@ mod tests {
   /// A stand-in that takes the token line and then answers the replayed
   /// handshake with `reply`, whatever that is. Holds the socket open afterwards,
   /// so a rejection has to come from validating the line rather than a hang-up.
-  fn fake_tui_answering_with(listener: TcpListener, reply: String) {
+  fn fake_tui_answering_with(listener: TcpListener, token: &'static str, reply: String) {
     tokio::spawn(async move {
       loop {
         let Ok((stream, _)) = listener.accept().await else {
@@ -687,16 +706,40 @@ mod tests {
         tokio::spawn(async move {
           let (read_half, mut write_half) = stream.into_split();
           let mut lines = BufReader::new(read_half).lines();
-          for _ in 0..2 {
-            if !matches!(lines.next_line().await, Ok(Some(_))) {
-              return;
-            }
+          if prove(&mut lines, &mut write_half, token).await.is_none()
+            || !matches!(lines.next_line().await, Ok(Some(_)))
+          {
+            return;
           }
           let _ = write_half.write_all(format!("{reply}\n").as_bytes()).await;
           std::future::pending::<()>().await;
         });
       }
     });
+  }
+
+  /// A listener on a stale port that cannot prove it holds the token. It answers
+  /// the nonce with a made-up proof and records every line it gets.
+  fn impostor(listener: TcpListener) -> Arc<StdMutex<Vec<String>>> {
+    let seen = Arc::new(StdMutex::new(Vec::new()));
+    let sink = Arc::clone(&seen);
+    tokio::spawn(async move {
+      let Ok((stream, _)) = listener.accept().await else {
+        return;
+      };
+      let (read_half, mut write_half) = stream.into_split();
+      let mut lines = BufReader::new(read_half).lines();
+      let _ = write_half
+        .write_all(
+          b"{\"proof\":\"00\"}
+",
+        )
+        .await;
+      while let Ok(Some(line)) = lines.next_line().await {
+        sink.lock().unwrap().push(line);
+      }
+    });
+    seen
   }
 
   /// A relay pointed at `port`, with no dependence on any shared path or env.
@@ -842,6 +885,25 @@ mod tests {
   }
 
   #[tokio::test]
+  async fn a_listener_that_cannot_prove_the_token_never_receives_it() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let seen = impostor(listener);
+    let mut relay = relay_for(port, "secret-token");
+
+    let response: serde_json::Value =
+      serde_json::from_str(&relay.handle(&modern_call()).await.unwrap()).unwrap();
+
+    assert_eq!(response["result"]["isError"], json!(true), "{response}");
+    assert!(response.to_string().contains("control token"), "{response}");
+    let lines = wait_for_lines(&seen, 1).await;
+    assert!(
+      lines.iter().all(|line| !line.contains("secret-token")),
+      "{lines:?}"
+    );
+  }
+
+  #[tokio::test]
   async fn a_rejected_control_token_becomes_an_offline_error_not_a_response() {
     // The control channel answers a bad token with one non-MCP line and hangs
     // up. Forwarded as-is it becomes the agent's "response" to a request it is
@@ -906,7 +968,7 @@ mod tests {
     ] {
       let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
       let port = listener.local_addr().unwrap().port();
-      fake_tui_answering_with(listener, reply.clone());
+      fake_tui_answering_with(listener, "tok", reply.clone());
       let mut relay = relay_for(port, "tok");
       relay.handshake = Some(
         json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",

@@ -9,8 +9,10 @@
 //!
 //! ## Trust boundary
 //!
-//! The listener binds `127.0.0.1` only and requires a shared secret as the first
-//! line of every connection. Both the port and the secret live in
+//! The listener binds `127.0.0.1` only and requires a shared secret before any
+//! MCP traffic. A relay first sends a nonce and checks the listener's HMAC of it
+//! under the secret, so a control file left by a crash cannot point it at
+//! another process; only then does it send the secret. Both the port and the secret live in
 //! `~/.config/spotatui/mcp.json`, written `0600` inside a directory that is
 //! already `0700` on unix and carries an auto-written `.gitignore` — the same
 //! protection the Spotify token cache relies on. A local process able to read
@@ -205,34 +207,27 @@ async fn serve_connection(
   let (read_half, mut write_half) = stream.into_split();
   let mut reader = BufReader::new(read_half);
 
-  // The token line comes before any MCP traffic. This is our own transport, so a
-  // non-MCP handshake line is fine here; the stdio channel the relay presents to
-  // the agent stays pure MCP.
-  //
-  // Read through a cap rather than straight from the reader: this runs *before*
-  // the token check, so any local process could otherwise open a connection and
-  // write newline-free bytes for the whole timeout, growing one `String` per
-  // connection with no credential and no limit on connections.
-  let mut first_line = String::new();
-  let read = tokio::time::timeout(
-    handshake_timeout,
-    (&mut reader)
-      .take(MAX_HANDSHAKE_BYTES)
-      .read_line(&mut first_line),
-  )
-  .await;
-  match read {
-    Ok(Ok(0)) => anyhow::bail!("client closed before handshake"),
-    // The cap was reached without a newline, so this is not a handshake line.
-    Ok(Ok(n)) if n as u64 == MAX_HANDSHAKE_BYTES && !first_line.ends_with('\n') => {
-      anyhow::bail!("handshake line too long")
+  // The handshake lines come before any MCP traffic. This is our own transport,
+  // so a non-MCP line is fine here; the stdio channel the relay presents to the
+  // agent stays pure MCP.
+  let first_line = read_handshake_line(&mut reader, handshake_timeout).await?;
+  let nonce = serde_json::from_str::<serde_json::Value>(&first_line)
+    .ok()
+    .and_then(|value| value.get("nonce")?.as_str().map(str::to_string))
+    .filter(|nonce| (16..=128).contains(&nonce.len()));
+  let token_line = match nonce {
+    Some(nonce) => {
+      let proof = serde_json::json!({ "proof": server_proof(&expected_token, &nonce) });
+      write_half
+        .write_all(format!("{proof}\n").as_bytes())
+        .await?;
+      read_handshake_line(&mut reader, handshake_timeout).await?
     }
-    Ok(Ok(_)) => {}
-    Ok(Err(e)) => return Err(e.into()),
-    Err(_) => anyhow::bail!("handshake timed out"),
-  }
+    // A relay from before the proof sends its token first.
+    None => first_line,
+  };
 
-  let presented = serde_json::from_str::<serde_json::Value>(&first_line)
+  let presented = serde_json::from_str::<serde_json::Value>(&token_line)
     .ok()
     .and_then(|value| {
       value
@@ -255,6 +250,88 @@ async fn serve_connection(
   let executor = AppExecutor::new(app, io_tx);
   server::serve(reader, write_half, &executor).await?;
   Ok(())
+}
+
+/// One handshake line, through a cap: this runs before the token check, so any
+/// local process could otherwise write newline-free bytes for the whole timeout,
+/// growing one `String` per connection with no credential and no limit.
+async fn read_handshake_line(
+  reader: &mut BufReader<tokio::net::tcp::OwnedReadHalf>,
+  timeout: std::time::Duration,
+) -> Result<String> {
+  let mut line = String::new();
+  let read = tokio::time::timeout(
+    timeout,
+    reader.take(MAX_HANDSHAKE_BYTES).read_line(&mut line),
+  )
+  .await;
+  match read {
+    Ok(Ok(0)) => anyhow::bail!("client closed before handshake"),
+    // The cap was reached without a newline, so this is not a handshake line.
+    Ok(Ok(n)) if n as u64 == MAX_HANDSHAKE_BYTES && !line.ends_with('\n') => {
+      anyhow::bail!("handshake line too long")
+    }
+    Ok(Ok(_)) => Ok(line),
+    Ok(Err(e)) => Err(e.into()),
+    Err(_) => anyhow::bail!("handshake timed out"),
+  }
+}
+
+/// The listener's answer to a relay's nonce. It proves the listener holds the
+/// token, so a stale control file cannot point a relay at another process.
+pub(super) fn server_proof(token: &str, nonce: &str) -> String {
+  use hmac::{KeyInit, Mac};
+  let mut mac = hmac::Hmac::<sha2::Sha256>::new_from_slice(token.as_bytes())
+    .expect("HMAC takes a key of any length");
+  mac.update(b"spotatui-mcp-server-proof:");
+  mac.update(nonce.as_bytes());
+  hex::encode(mac.finalize().into_bytes())
+}
+
+/// The client half of the handshake: send a nonce, check the listener's proof,
+/// and only then send the token, which an impostor thus never sees.
+pub(super) async fn authenticate(
+  stream: &mut TcpStream,
+  handshake: &Handshake,
+) -> std::result::Result<(), String> {
+  let stale = || {
+    format!(
+      "the listener on 127.0.0.1:{} did not prove it holds the control token; the control file is stale, so restart spotatui",
+      handshake.port
+    )
+  };
+  let nonce = generate_token().map_err(|e| format!("could not make a handshake nonce: {e}"))?;
+  let hello = serde_json::json!({ "nonce": nonce });
+  stream
+    .write_all(format!("{hello}\n").as_bytes())
+    .await
+    .map_err(|e| format!("could not send the control handshake: {e}"))?;
+  let line = tokio::time::timeout(HANDSHAKE_TIMEOUT, read_proof_line(stream))
+    .await
+    .map_err(|_| stale())?
+    .map_err(|e| format!("could not read the control handshake: {e}"))?;
+  let proven = serde_json::from_str::<serde_json::Value>(&line)
+    .ok()
+    .and_then(|reply| reply.get("proof")?.as_str().map(str::to_string))
+    .is_some_and(|proof| tokens_match(&proof, &server_proof(&handshake.token, &nonce)));
+  if !proven {
+    return Err(stale());
+  }
+  let token = serde_json::json!({ "token": handshake.token });
+  stream
+    .write_all(format!("{token}\n").as_bytes())
+    .await
+    .map_err(|e| format!("could not send the control handshake: {e}"))
+}
+
+/// The proof line, read one byte at a time so that nothing after it is consumed.
+async fn read_proof_line(stream: &mut TcpStream) -> std::io::Result<String> {
+  let mut line = Vec::new();
+  let mut byte = [0u8; 1];
+  while line.len() < 256 && stream.read(&mut byte).await? == 1 && byte[0] != b'\n' {
+    line.push(byte[0]);
+  }
+  Ok(String::from_utf8_lossy(&line).into_owned())
 }
 
 #[cfg(test)]
