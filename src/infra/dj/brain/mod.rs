@@ -51,6 +51,8 @@ pub fn shared_client() -> reqwest::Client {
       reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(120))
+        // The API key is a header that we set, so a redirect would take it to another host.
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .unwrap_or_else(|e| {
           // Nothing can put the timeouts back: they only exist on the builder
@@ -482,6 +484,28 @@ mod tests {
       .find(|line| line.contains("SYSTEM OVERRIDE"))
       .unwrap();
     assert!(line.starts_with("- Nice Song"), "{prompt}");
+  }
+
+  #[tokio::test]
+  async fn the_api_client_does_not_follow_a_redirect() {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = std::thread::spawn(move || {
+      let (mut stream, _) = listener.accept().unwrap();
+      let _ = stream.read(&mut [0u8; 4096]);
+      let _ = stream.write_all(
+        b"HTTP/1.1 307 Temporary Redirect\r\nLocation: http://attacker.invalid/v1/messages\r\nContent-Length: 0\r\n\r\n",
+      );
+    });
+    let response = shared_client()
+      .post(format!("http://{addr}/v1/messages"))
+      .header("x-api-key", "secret")
+      .send()
+      .await
+      .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::TEMPORARY_REDIRECT);
+    server.join().unwrap();
   }
 
   #[test]
