@@ -374,17 +374,21 @@ const GUI_SETTINGS: &[(&str, &str)] = &[
   ("behavior.auto_update_delay", "updates"),
 ];
 
-/// Settings that name a program to run. A stolen session token must not choose
-/// one, so only `config.yml` or the terminal Settings change them.
+/// Page rows that name a program to run; only `config.yml` or the terminal change them.
 const PAGE_LOCKED_SETTINGS: &[&str] = &["behavior.ytdlp_path", "behavior.soloist_path"];
 
-/// Applies an action from the page, except a write to a [`PAGE_LOCKED_SETTINGS`] row.
+/// Applies an action from the page; a setting only when it is a page row and not a locked one.
 pub(crate) fn apply_page_action(app: &mut App, action: Action) {
-  if matches!(&action, Action::SetSetting { id, .. } if PAGE_LOCKED_SETTINGS.contains(&id.as_str()))
-  {
-    let message = app.strings().status.app.setting_locked_from_page;
-    app.set_error_status_message(message, 8);
-    return;
+  if let Action::SetSetting { id, .. } = &action {
+    if PAGE_LOCKED_SETTINGS.contains(&id.as_str()) {
+      let message = app.strings().status.app.setting_locked_from_page;
+      app.set_error_status_message(message, 8);
+      return;
+    }
+    if !GUI_SETTINGS.iter().any(|(row, _)| row == id) {
+      log::warn!("GUI: refusing a write to {id}, which is not a page row");
+      return;
+    }
   }
   app.apply(action);
 }
@@ -1894,6 +1898,15 @@ mod tests {
     assert_eq!(app.user_config.behavior.ytdlp_path, None);
     assert_eq!(app.user_config.behavior.soloist_path, None);
     assert!(app.status_message_is_error());
+
+    apply_page_action(
+      &mut app,
+      Action::SetSetting {
+        id: "behavior.sync_token".to_string(),
+        value: SettingInput::Text("stolen".to_string()),
+      },
+    );
+    assert_eq!(app.user_config.behavior.sync_token, None);
   }
 
   #[cfg(feature = "soloist")]
