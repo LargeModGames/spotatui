@@ -43,7 +43,7 @@ import type { State } from "./connection";
 import { CommandMode } from "./CommandMode";
 import { pageStorage } from "./commandModel";
 import { Discover } from "./Discover";
-import { coverOnlyFromServer, sourceOf } from "./format";
+import { sourceOf } from "./format";
 import { Home } from "./Home";
 import { Glyph } from "./Icon";
 import { LibraryHealth } from "./LibraryHealth";
@@ -860,9 +860,7 @@ export function Shell({
 
   const coverUri =
     item?.image_url ??
-    (playingUri && coverOnlyFromServer(playingUri)
-      ? (coverSrc?.(playingUri) ?? null)
-      : null);
+    (playingUri?.startsWith("file:") ? (coverSrc?.(playingUri) ?? null) : null);
   const nowPanel = (onClose: () => void) => (
     <NowPlayingPanel
       s={s}

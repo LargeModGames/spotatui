@@ -16,12 +16,6 @@ export function sourceOf(uri: string | null): Source | null {
   return PREFIXES.find(([prefix]) => uri.startsWith(prefix))?.[1] ?? null;
 }
 
-/** A cover that only the server's `/cover` gives: in a file's tags, or behind a Subsonic login. */
-export function coverOnlyFromServer(uri: string): boolean {
-  const source = sourceOf(uri);
-  return source === "Local" || source === "Subsonic";
-}
-
 /** A duration as `m:ss`, or `h:mm:ss` from one hour. */
 export function clock(ms: number): string {
   const total = Math.floor(Math.max(0, ms) / 1000);

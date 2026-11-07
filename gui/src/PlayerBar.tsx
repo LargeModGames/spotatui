@@ -8,7 +8,7 @@ import type { DeviceInfo } from "./bindings/DeviceInfo";
 import type { PlaybackPayload } from "./bindings/PlaybackPayload";
 import type { Position } from "./connection";
 import { DevicesPopover } from "./DevicesPopover";
-import { coverOnlyFromServer, sourceOf } from "./format";
+import { sourceOf } from "./format";
 import { Glyph } from "./Icon";
 import type { VisualizerLook } from "./bindings/VisualizerLook";
 import {
@@ -82,8 +82,9 @@ export function PlayerBar({
 }) {
   const item = playback?.item ?? null;
   const uri = item?.uri ?? null;
+  // A local file's cover is in its tags, so it has no URL of its own.
   const art: CoverArt | null =
-    uri !== null && (item?.image_url || coverOnlyFromServer(uri))
+    uri !== null && (item?.image_url || uri.startsWith("file:"))
       ? { key: item?.image_url ?? uri, src: coverSrc(uri) }
       : null;
   const playing = item?.is_playing ?? false;

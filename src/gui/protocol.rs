@@ -1698,7 +1698,8 @@ fn playback(app: &App) -> PlaybackPayload {
       title: snapshot.metadata.title.clone(),
       artists: snapshot.metadata.artists.clone(),
       album: snapshot.metadata.album.clone(),
-      image_url: snapshot.metadata.image_url.clone(),
+      // The page is this user's own session; a Subsonic cover URL reaches no third party here.
+      image_url: crate::infra::media_metadata::cover_fetch_url(app, snapshot),
       duration_ms: snapshot.metadata.duration_ms,
       uri: snapshot.item_uri.clone(),
       is_playing: snapshot.is_playing,
