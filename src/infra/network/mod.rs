@@ -1931,9 +1931,11 @@ impl Network {
 
   async fn handle_incoming_playback_command(&mut self, action: sync::PlaybackAction) {
     let mut app = self.app.lock().await;
+    // The relay enforces the mode too, but a host must not trust that.
     let relays = matches!(
       app.party_session(),
       Some(s) if s.role == sync::PartyRole::Host
+        && s.control_mode == sync::ControlMode::SharedControl
     ) && !app.party_yields_to_local_playback();
     if !relays {
       return;
@@ -2755,6 +2757,7 @@ mod tests {
   async fn an_oversized_party_seek_is_dropped() {
     let (app, rx) = app_with_a_session();
     let mut network = party_network(&app, sync::PartyRole::Host).await;
+    share_control(&app).await;
 
     relay(
       &mut network,
@@ -2790,10 +2793,25 @@ mod tests {
     assert!(rx.try_recv().is_err());
   }
 
+  async fn share_control(app: &Arc<Mutex<App>>) {
+    app.lock().await.party_session_mut().unwrap().control_mode = sync::ControlMode::SharedControl;
+  }
+
+  #[tokio::test]
+  async fn a_host_only_party_ignores_a_guest_command() {
+    let (app, rx) = app_with_a_session();
+    let mut network = party_network(&app, sync::PartyRole::Host).await;
+
+    relay(&mut network, guest_pause()).await;
+
+    assert!(rx.try_recv().is_err());
+  }
+
   #[tokio::test]
   async fn a_host_relays_a_guest_command_then_broadcasts() {
     let (app, rx) = app_with_a_session();
     let mut network = party_network(&app, sync::PartyRole::Host).await;
+    share_control(&app).await;
 
     relay(&mut network, guest_pause()).await;
 
@@ -2815,6 +2833,7 @@ mod tests {
     assert!(rx.try_recv().is_err());
 
     app.lock().await.party_session_mut().unwrap().role = sync::PartyRole::Host;
+    share_control(&app).await;
     relay(&mut network, guest_pause()).await;
     assert!(rx.try_recv().is_err());
   }
