@@ -2884,7 +2884,12 @@ async fn sync_history_to_cloud_with_client(
 
 /// `record` without a `file:` URI, which is an absolute path with the user name in it.
 fn without_local_paths(mut record: ListenRecord) -> ListenRecord {
-  let local = |uri: &Option<String>| uri.as_deref().is_some_and(|uri| uri.starts_with("file:"));
+  use crate::core::queue::{queue_item_source, QueueItemSource};
+  let local = |uri: &Option<String>| {
+    uri
+      .as_deref()
+      .is_some_and(|uri| queue_item_source(uri) == QueueItemSource::LocalFile)
+  };
   if local(&record.item_uri) {
     record.item_uri = None;
   }

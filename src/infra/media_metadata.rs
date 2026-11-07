@@ -367,15 +367,21 @@ fn source_playback_snapshot(
   None
 }
 
+#[cfg(any(feature = "audio-decode", feature = "art-decode", feature = "gui"))]
+fn is_subsonic(uri: &str) -> bool {
+  crate::core::queue::queue_item_source(uri) == crate::core::queue::QueueItemSource::Subsonic
+}
+
 /// The cover URL to fetch in this process; for Subsonic it carries the login, so it is not in the snapshot.
 #[cfg(any(feature = "art-decode", feature = "gui"))]
 pub fn cover_fetch_url(app: &App, snapshot: &PlaybackSnapshot) -> Option<String> {
   if snapshot.metadata.image_url.is_some() {
     return snapshot.metadata.image_url.clone();
   }
-  let uri = snapshot.item_uri.as_deref().filter(|uri| {
-    crate::core::queue::queue_item_source(uri) == crate::core::queue::QueueItemSource::Subsonic
-  })?;
+  let uri = snapshot
+    .item_uri
+    .as_deref()
+    .filter(|uri| is_subsonic(uri))?;
   #[cfg(feature = "audio-decode-queue")]
   if let Some(crate::infra::queue::QueueNowPlaying::Decoded(d)) = app.queue_now.as_ref() {
     if d.track.uri.as_deref() == Some(uri) {
@@ -384,7 +390,7 @@ pub fn cover_fetch_url(app: &App, snapshot: &PlaybackSnapshot) -> Option<String>
   }
   #[cfg(feature = "subsonic")]
   if let Some(subsonic) = app.subsonic_playback.as_ref() {
-    let track = subsonic.tracks.get(subsonic.index)?;
+    let track = subsonic.current()?;
     if track.uri.as_deref() == Some(uri) {
       return track.image_url.clone();
     }
@@ -423,11 +429,7 @@ fn source_snapshot(
   };
   // Discord, MPRIS, Now Playing, the desktop host and the cloud feed publish
   // this field, and a Subsonic URL carries the login (`u`, `t`, `s`).
-  let image_url = image_url.filter(|_| {
-    !item_uri.as_deref().is_some_and(|uri| {
-      crate::core::queue::queue_item_source(uri) == crate::core::queue::QueueItemSource::Subsonic
-    })
-  });
+  let image_url = image_url.filter(|_| !item_uri.as_deref().is_some_and(is_subsonic));
   PlaybackSnapshot {
     metadata: PlaybackMetadata {
       title,
