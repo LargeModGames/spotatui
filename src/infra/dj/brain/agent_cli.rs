@@ -114,9 +114,11 @@ pub const PRESETS: &[AgentPreset] = &[
     delivery_argv: &["-p"],
     model_flag: Some("--model"),
     delivery: PromptDelivery::Stdin,
-    no_tools: &["--tools", ""],
+    no_tools: &["--tools", "", "--strict-mcp-config"],
     tool_flags: &[
       "--tools",
+      "--mcp-config",
+      "--strict-mcp-config",
       "--allowedTools",
       "--allowed-tools",
       "--disallowedTools",
@@ -693,7 +695,15 @@ esac"#,
     let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
     assert_eq!(
       spawned(&argv),
-      vec!["claude", "--tools", "", "--model", "haiku", "-p"]
+      vec![
+        "claude",
+        "--tools",
+        "",
+        "--strict-mcp-config",
+        "--model",
+        "haiku",
+        "-p"
+      ]
     );
   }
 
