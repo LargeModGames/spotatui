@@ -374,6 +374,21 @@ const GUI_SETTINGS: &[(&str, &str)] = &[
   ("behavior.auto_update_delay", "updates"),
 ];
 
+/// Settings that name a program to run. A stolen session token must not choose
+/// one, so only `config.yml` or the terminal Settings change them.
+const PAGE_LOCKED_SETTINGS: &[&str] = &["behavior.ytdlp_path", "behavior.soloist_path"];
+
+/// Applies an action from the page, except a write to a [`PAGE_LOCKED_SETTINGS`] row.
+pub(crate) fn apply_page_action(app: &mut App, action: Action) {
+  if matches!(&action, Action::SetSetting { id, .. } if PAGE_LOCKED_SETTINGS.contains(&id.as_str()))
+  {
+    let message = app.strings().status.app.setting_locked_from_page;
+    app.set_error_status_message(message, 8);
+    return;
+  }
+  app.apply(action);
+}
+
 /// The page's rows a phone leaves out: keyboard steps, a desktop sleep lock, and the player it always runs.
 const PHONE_HIDDEN_SETTINGS: &[&str] = &[
   "behavior.seek_milliseconds",
@@ -1861,6 +1876,24 @@ mod tests {
   fn app() -> (App, Receiver<IoEvent>) {
     let (tx, rx) = std::sync::mpsc::channel();
     (App::new(tx, UserConfig::new(), Some(SystemTime::now())), rx)
+  }
+
+  #[test]
+  fn the_page_cannot_set_a_program_to_run() {
+    use crate::core::action::SettingInput;
+    let (mut app, _rx) = app();
+    for id in PAGE_LOCKED_SETTINGS {
+      apply_page_action(
+        &mut app,
+        Action::SetSetting {
+          id: id.to_string(),
+          value: SettingInput::Text("/tmp/evil".to_string()),
+        },
+      );
+    }
+    assert_eq!(app.user_config.behavior.ytdlp_path, None);
+    assert_eq!(app.user_config.behavior.soloist_path, None);
+    assert!(app.status_message_is_error());
   }
 
   #[cfg(feature = "soloist")]
