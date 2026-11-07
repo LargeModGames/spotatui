@@ -146,8 +146,7 @@ impl PlayCounter {
     if app.decoded_change_pending() {
       return;
     }
-    // A build without `telemetry` never counts, whatever config.yml says.
-    let enabled = cfg!(feature = "telemetry") && app.user_config.behavior.enable_global_song_count;
+    let enabled = app.user_config.behavior.enable_global_song_count;
     let item = snapshot.map(|snapshot| PlayingItem {
       key: snapshot
         .item_uri

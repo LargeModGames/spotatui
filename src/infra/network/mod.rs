@@ -1022,12 +1022,14 @@ impl Network {
       IoEvent::ToggleNativeShuffleSession(_)
       | IoEvent::ReshuffleNativeShuffleLap
       | IoEvent::ResumeNativeShuffleSession(_, _) => {}
-      IoEvent::IncrementGlobalSongCount => {
+      // A build without `telemetry` never contacts the counter, whatever config.yml says.
+      IoEvent::IncrementGlobalSongCount if cfg!(feature = "telemetry") => {
         self.increment_global_song_count().await;
       }
-      IoEvent::FetchGlobalSongCount => {
+      IoEvent::FetchGlobalSongCount if cfg!(feature = "telemetry") => {
         self.fetch_global_song_count().await;
       }
+      IoEvent::IncrementGlobalSongCount | IoEvent::FetchGlobalSongCount => {}
       IoEvent::FetchAnnouncements => {
         self.fetch_announcements().await;
       }
