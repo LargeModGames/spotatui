@@ -9,6 +9,7 @@ const WS_PATH = "/ws";
 const CODE_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 const RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000; // 1 hour
 const MAX_JOIN_ATTEMPTS = 10;
+const MAX_CREATES = 10;
 const CODE_LENGTH = 6;
 const MAX_MESSAGE_SIZE = 4 * 1024;
 const MAX_PARTICIPANTS = 8;
@@ -31,7 +32,35 @@ function normalizeDisplayName(value: string | null, fallback: string): string {
 
 export interface Env {
   PARTY_ROOM: DurableObjectNamespace;
-  RATE_LIMIT_KV: KVNamespace;
+  RATE_LIMITER: DurableObjectNamespace<RateLimiter>;
+}
+
+interface RateWindow {
+  start: number;
+  create: number;
+  join: number;
+}
+
+// One counter for each IP. A Durable Object handles one event at a time, so
+// concurrent requests cannot read the same count.
+export class RateLimiter extends DurableObject<Env> {
+  async take(kind: "create" | "join"): Promise<boolean> {
+    const now = Date.now();
+    let window = await this.ctx.storage.get<RateWindow>("window");
+    if (!window || now - window.start >= RATE_LIMIT_WINDOW_MS) {
+      window = { start: now, create: 0, join: 0 };
+      await this.ctx.storage.setAlarm(now + RATE_LIMIT_WINDOW_MS);
+    }
+    const limit = kind === "create" ? MAX_CREATES : MAX_JOIN_ATTEMPTS;
+    if (window[kind] >= limit) return false;
+    window[kind] += 1;
+    await this.ctx.storage.put("window", window);
+    return true;
+  }
+
+  async alarm(): Promise<void> {
+    await this.ctx.storage.deleteAll();
+  }
 }
 
 interface Session {
@@ -311,6 +340,13 @@ export default {
     }
 
     const action = url.searchParams.get("action");
+    if (action === "create" || action === "join") {
+      const clientIp = request.headers.get("CF-Connecting-IP") ?? "unknown";
+      const limiter = env.RATE_LIMITER.get(env.RATE_LIMITER.idFromName(clientIp));
+      if (!(await limiter.take(action))) {
+        return new Response("Too many attempts", { status: 429 });
+      }
+    }
     let roomCode: string;
     let doUrl: URL;
 
@@ -331,17 +367,6 @@ export default {
         return new Response("Missing guest name", { status: 400 });
       }
       roomCode = code.toUpperCase();
-
-      const clientIp = request.headers.get("CF-Connecting-IP") ?? "unknown";
-      const rateLimitKey = `ratelimit:${clientIp}`;
-      const countStr = await env.RATE_LIMIT_KV.get(rateLimitKey);
-      const count = countStr !== null ? parseInt(countStr, 10) : 0;
-      if (count >= MAX_JOIN_ATTEMPTS) {
-        return new Response("Too many attempts", { status: 429 });
-      }
-      await env.RATE_LIMIT_KV.put(rateLimitKey, String(count + 1), {
-        expirationTtl: Math.ceil(RATE_LIMIT_WINDOW_MS / 1000),
-      });
 
       doUrl = new URL(request.url);
       doUrl.searchParams.set("room_code", roomCode);
