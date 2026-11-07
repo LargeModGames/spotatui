@@ -110,7 +110,12 @@ pub(crate) fn app_log_dir() -> PathBuf {
 /// `spotatui_logs` when this user owns it, else a fresh one: another account can take that name.
 fn log_dir_in(temp: &Path) -> PathBuf {
   let shared = temp.join("spotatui_logs");
-  let owned = ensure_private_dir(&shared).is_ok()
+  // A symlink first: `ensure_private_dir` follows one and would chmod its target.
+  let is_symlink = shared
+    .symlink_metadata()
+    .is_ok_and(|meta| meta.file_type().is_symlink());
+  let owned = !is_symlink
+    && ensure_private_dir(&shared).is_ok()
     && shared
       .symlink_metadata()
       .is_ok_and(|meta| meta.file_type().is_dir());
@@ -215,6 +220,21 @@ mod tests {
     let dir = log_dir_in(temp.path());
     assert_ne!(dir, temp.path().join("spotatui_logs"));
     assert!(dir.is_dir());
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn a_planted_log_dir_symlink_leaves_its_target_alone() {
+    use std::os::unix::fs::PermissionsExt;
+    let temp = tempfile::tempdir().unwrap();
+    let target = temp.path().join("target");
+    std::fs::create_dir(&target).unwrap();
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::os::unix::fs::symlink(&target, temp.path().join("spotatui_logs")).unwrap();
+    let dir = log_dir_in(temp.path());
+    assert_ne!(dir, temp.path().join("spotatui_logs"));
+    let mode = std::fs::metadata(&target).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o755);
   }
 
   fn test_home() -> PathBuf {
