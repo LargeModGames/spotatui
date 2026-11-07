@@ -546,10 +546,22 @@ pub(super) async fn prepare_frontend(boot: Boot) -> FrontendHandles {
   #[cfg(feature = "streaming")]
   let streaming_config = {
     let behavior = &user_config.behavior;
+    let audio_cache_limit = if behavior.streaming_audio_cache {
+      crate::core::user_config::parse_audio_cache_limit(&behavior.streaming_audio_cache_limit)
+        .unwrap_or_else(|e| {
+          // Config load clears invalid limits; settings editors reject them.
+          // Guard against a future unvalidated writer and fall back to unlimited.
+          log::warn!("Invalid streaming_audio_cache_limit: {e}; using no cache size limit");
+          None
+        })
+    } else {
+      None
+    };
     player::StreamingConfig {
       device_name: behavior.streaming_device_name.clone(),
       bitrate: crate::core::user_config::streaming_bitrate_or_default(behavior.streaming_bitrate),
       audio_cache: behavior.streaming_audio_cache,
+      audio_cache_limit,
       autoplay: behavior.streaming_autoplay,
       cache_path: crate::infra::spotify::credentials::get_default_cache_path(),
       initial_volume: runtime_state.volume_percent,
