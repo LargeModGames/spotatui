@@ -533,30 +533,6 @@ mod tests {
     assert!(responses[1]["result"]["tools"].is_array());
   }
 
-  /// Answers the relay's nonce with the listener's proof and returns the token line.
-  async fn prove(
-    lines: &mut tokio::io::Lines<BufReader<tokio::net::tcp::OwnedReadHalf>>,
-    write_half: &mut tokio::net::tcp::OwnedWriteHalf,
-    token: &str,
-  ) -> Option<String> {
-    let first = lines.next_line().await.ok()??;
-    let nonce = serde_json::from_str::<serde_json::Value>(&first).ok()?["nonce"]
-      .as_str()?
-      .to_string();
-    let proof = json!({"proof": crate::infra::mcp::control::server_proof(token, &nonce)});
-    write_half
-      .write_all(
-        format!(
-          "{proof}
-"
-        )
-        .as_bytes(),
-      )
-      .await
-      .ok()?;
-    lines.next_line().await.ok()?
-  }
-
   /// A stand-in TUI: authenticates like the real listener, echoes every request
   /// back, and keeps accepting new connections so a reconnect can be observed.
   ///
@@ -575,7 +551,7 @@ mod tests {
         tokio::spawn(async move {
           let (read_half, mut write_half) = stream.into_split();
           let mut lines = BufReader::new(read_half).lines();
-          let Some(first) = prove(&mut lines, &mut write_half, &token).await else {
+          let Some(first) = control::prove(&mut lines, &mut write_half, &token).await else {
             return;
           };
           assert_eq!(
@@ -625,7 +601,7 @@ mod tests {
         tokio::spawn(async move {
           let (read_half, mut write_half) = stream.into_split();
           let mut lines = BufReader::new(read_half).lines();
-          let Some(first) = prove(&mut lines, &mut write_half, &token).await else {
+          let Some(first) = control::prove(&mut lines, &mut write_half, &token).await else {
             return;
           };
           assert_eq!(
@@ -655,7 +631,7 @@ mod tests {
         tokio::spawn(async move {
           let (read_half, mut write_half) = stream.into_split();
           let mut lines = BufReader::new(read_half).lines();
-          let Some(first) = prove(&mut lines, &mut write_half, &token).await else {
+          let Some(first) = control::prove(&mut lines, &mut write_half, &token).await else {
             return;
           };
           assert_eq!(
@@ -706,7 +682,9 @@ mod tests {
         tokio::spawn(async move {
           let (read_half, mut write_half) = stream.into_split();
           let mut lines = BufReader::new(read_half).lines();
-          if prove(&mut lines, &mut write_half, token).await.is_none()
+          if control::prove(&mut lines, &mut write_half, token)
+            .await
+            .is_none()
             || !matches!(lines.next_line().await, Ok(Some(_)))
           {
             return;
@@ -729,12 +707,7 @@ mod tests {
       };
       let (read_half, mut write_half) = stream.into_split();
       let mut lines = BufReader::new(read_half).lines();
-      let _ = write_half
-        .write_all(
-          b"{\"proof\":\"00\"}
-",
-        )
-        .await;
+      let _ = write_half.write_all(b"{\"proof\":\"00\"}\n").await;
       while let Ok(Some(line)) = lines.next_line().await {
         sink.lock().unwrap().push(line);
       }

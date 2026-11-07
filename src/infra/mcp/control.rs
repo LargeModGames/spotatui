@@ -121,9 +121,7 @@ pub fn clear_handshake() {
   }
 }
 
-/// Remove the control file of an earlier run. A UI launch holds the
-/// single-instance lock, so a file there while MCP is off is stale, and a relay
-/// would trust whatever listens on its port.
+/// Remove the control file of an earlier run; under the instance lock it can only be stale.
 pub fn remove_stale_handshake() {
   if let Ok(path) = handshake_path() {
     let _ = std::fs::remove_file(path);
@@ -252,9 +250,7 @@ async fn serve_connection(
   Ok(())
 }
 
-/// One handshake line, through a cap: this runs before the token check, so any
-/// local process could otherwise write newline-free bytes for the whole timeout,
-/// growing one `String` per connection with no credential and no limit.
+/// One handshake line, capped because it is read before the token check.
 async fn read_handshake_line(
   reader: &mut BufReader<tokio::net::tcp::OwnedReadHalf>,
   timeout: std::time::Duration,
@@ -277,8 +273,7 @@ async fn read_handshake_line(
   }
 }
 
-/// The listener's answer to a relay's nonce. It proves the listener holds the
-/// token, so a stale control file cannot point a relay at another process.
+/// The listener's proof that it holds `token`, as an HMAC of the relay's nonce.
 pub(super) fn server_proof(token: &str, nonce: &str) -> String {
   use hmac::{KeyInit, Mac};
   let mut mac = hmac::Hmac::<sha2::Sha256>::new_from_slice(token.as_bytes())
@@ -288,8 +283,7 @@ pub(super) fn server_proof(token: &str, nonce: &str) -> String {
   hex::encode(mac.finalize().into_bytes())
 }
 
-/// The client half of the handshake: send a nonce, check the listener's proof,
-/// and only then send the token, which an impostor thus never sees.
+/// The client half of the handshake: nonce, check the proof, and only then the token.
 pub(super) async fn authenticate(
   stream: &mut TcpStream,
   handshake: &Handshake,
@@ -332,6 +326,22 @@ async fn read_proof_line(stream: &mut TcpStream) -> std::io::Result<String> {
     line.push(byte[0]);
   }
   Ok(String::from_utf8_lossy(&line).into_owned())
+}
+
+/// The listener's half of the handshake under `token`, for test stand-ins: returns the token line.
+#[cfg(test)]
+pub(super) async fn prove(
+  lines: &mut tokio::io::Lines<BufReader<tokio::net::tcp::OwnedReadHalf>>,
+  write_half: &mut tokio::net::tcp::OwnedWriteHalf,
+  token: &str,
+) -> Option<String> {
+  let hello: serde_json::Value = serde_json::from_str(&lines.next_line().await.ok()??).ok()?;
+  let proof = serde_json::json!({ "proof": server_proof(token, hello["nonce"].as_str()?) });
+  write_half
+    .write_all(format!("{proof}\n").as_bytes())
+    .await
+    .ok()?;
+  lines.next_line().await.ok()?
 }
 
 #[cfg(test)]
