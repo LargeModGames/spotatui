@@ -385,7 +385,7 @@ pub(crate) fn apply_page_action(app: &mut App, action: Action) {
       app.set_error_status_message(message, 8);
       return;
     }
-    if !GUI_SETTINGS.iter().any(|(row, _)| row == id) {
+    if !settings(app).iter().any(|row| row.id == *id) {
       log::warn!("GUI: refusing a write to {id}, which is not a page row");
       return;
     }
