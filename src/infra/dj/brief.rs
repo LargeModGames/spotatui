@@ -170,8 +170,7 @@ impl TasteBrief {
     self.display_block(&crate::core::i18n::EN, self.period_label)
   }
 
-  /// The brief fenced as data for a model, the DJ's or an MCP client's. Its angle
-  /// brackets are swapped so that a title cannot close the fence.
+  /// The brief fenced as data for a model, the DJ's or an MCP client's.
   pub fn display_block(&self, strings: &crate::core::i18n::Strings, period: &str) -> String {
     let s = &strings.status.tools;
     let mut out = String::new();
