@@ -72,7 +72,11 @@ fn scratch_dir_from(preferred: Option<PathBuf>, temp: &Path) -> PathBuf {
   if let Some(dir) = preferred.as_ref().filter(|dir| usable_dir(dir)) {
     return dir.clone();
   }
-  match temp.is_absolute().then(|| fresh_temp_dir(temp)).flatten() {
+  match temp
+    .is_absolute()
+    .then(|| crate::core::paths::fresh_private_dir(temp, "spotatui-dj-scratch"))
+    .flatten()
+  {
     Some(dir) => {
       log::warn!(
         "DJ: could not use the scratch dir {preferred:?}; running agent CLIs from {}",
@@ -105,34 +109,6 @@ fn usable_dir(dir: &Path) -> bool {
   let written = std::fs::write(&probe, b"").is_ok();
   let _ = std::fs::remove_file(&probe);
   written
-}
-
-/// A new, uniquely named, owner-only directory under `temp`, or `None` when
-/// none could be made. A non-recursive create refuses an existing entry, a
-/// symlink included, so the result is always one this process made. It is not
-/// removed on exit: temp is the one location the platform clears on its own,
-/// and the per-process log file already relies on that.
-fn fresh_temp_dir(temp: &Path) -> Option<PathBuf> {
-  // Owner-only from the start, whatever the umask: the agent's working
-  // directory must not be readable or writable by other local users.
-  #[cfg(unix)]
-  let builder = {
-    use std::os::unix::fs::DirBuilderExt;
-    let mut builder = std::fs::DirBuilder::new();
-    builder.mode(0o700);
-    builder
-  };
-  #[cfg(not(unix))]
-  let builder = std::fs::DirBuilder::new();
-  let pid = std::process::id();
-  (0..8).find_map(|attempt| {
-    let nanos = std::time::SystemTime::now()
-      .duration_since(std::time::UNIX_EPOCH)
-      .map(|since| since.subsec_nanos())
-      .unwrap_or(0);
-    let dir = temp.join(format!("spotatui-dj-scratch-{pid}-{nanos}-{attempt}"));
-    builder.create(&dir).ok().map(|()| dir)
-  })
 }
 
 /// The API-key precedence rule: the env var wins, the config field is the

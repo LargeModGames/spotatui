@@ -107,9 +107,7 @@ pub(crate) fn app_log_dir() -> PathBuf {
     .clone()
 }
 
-/// `spotatui_logs` in `temp` when this user owns it as a real directory, else a
-/// fresh owner-only directory. Another account can create that name first, and
-/// startup must not stop on it.
+/// `spotatui_logs` when this user owns it, else a fresh one: another account can take that name.
 fn log_dir_in(temp: &Path) -> PathBuf {
   let shared = temp.join("spotatui_logs");
   let owned = ensure_private_dir(&shared).is_ok()
@@ -119,6 +117,15 @@ fn log_dir_in(temp: &Path) -> PathBuf {
   if owned {
     return shared;
   }
+  fresh_private_dir(temp, "spotatui_logs").unwrap_or(shared)
+}
+
+/// A new, uniquely named, owner-only directory under `temp`, or `None` when
+/// none could be made. A non-recursive create refuses an existing entry, a
+/// symlink included, so the result is always one this process made. It is not
+/// removed on exit: temp is the one location the platform clears on its own.
+pub(crate) fn fresh_private_dir(temp: &Path, prefix: &str) -> Option<PathBuf> {
+  // Owner-only from the start, whatever the umask.
   #[cfg(unix)]
   let builder = {
     use std::os::unix::fs::DirBuilderExt;
@@ -129,16 +136,14 @@ fn log_dir_in(temp: &Path) -> PathBuf {
   #[cfg(not(unix))]
   let builder = std::fs::DirBuilder::new();
   let pid = std::process::id();
-  (0..8)
-    .find_map(|attempt| {
-      let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|since| since.subsec_nanos())
-        .unwrap_or(0);
-      let dir = temp.join(format!("spotatui_logs-{pid}-{nanos}-{attempt}"));
-      builder.create(&dir).ok().map(|()| dir)
-    })
-    .unwrap_or(shared)
+  (0..8).find_map(|attempt| {
+    let nanos = std::time::SystemTime::now()
+      .duration_since(std::time::UNIX_EPOCH)
+      .map(|since| since.subsec_nanos())
+      .unwrap_or(0);
+    let dir = temp.join(format!("{prefix}-{pid}-{nanos}-{attempt}"));
+    builder.create(&dir).ok().map(|()| dir)
+  })
 }
 
 /// Path of this process's log file. Callers on both the writing side
