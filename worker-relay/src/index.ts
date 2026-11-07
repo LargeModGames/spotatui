@@ -76,7 +76,7 @@ export class PartyRoom extends DurableObject {
     const session: Session = {
       id: sessionId,
       isHost,
-      name: isHost ? "Host" : requestedName,
+      name: isHost ? "Host" : this.guestName(requestedName),
       ip: clientIp,
     };
 
@@ -147,6 +147,12 @@ export class PartyRoom extends DurableObject {
     return new Response(null, { status: 101, webSocket: client });
   }
 
+  // A guest may not pass for the host in the guest list.
+  private guestName(name: string): string {
+    const taken = [this.hostName, "Host"].some((n) => n.toLowerCase() === name.toLowerCase());
+    return taken ? "Guest" : name;
+  }
+
   private sendJson(ws: WebSocket, obj: object): void {
     try {
       const raw = JSON.stringify(obj);
@@ -176,7 +182,9 @@ export class PartyRoom extends DurableObject {
       case "set_name": {
         const name =
           typeof msg.name === "string"
-            ? normalizeDisplayName(msg.name, session.isHost ? "Host" : "Guest")
+            ? session.isHost
+              ? normalizeDisplayName(msg.name, "Host")
+              : this.guestName(normalizeDisplayName(msg.name, "Guest"))
             : session.name;
         const prevName = session.name;
         session.name = name;
