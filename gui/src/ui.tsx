@@ -31,6 +31,11 @@ export function Cover({
         alt=""
         style={style}
         loading="lazy"
+        // No cover behind the URL (a Subsonic track without art, a dead link): show the empty tile.
+        onError={(event) => {
+          event.currentTarget.removeAttribute("src");
+          event.currentTarget.classList.add("empty");
+        }}
       />
     );
   return (
