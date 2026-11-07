@@ -114,7 +114,7 @@ pub const PRESETS: &[AgentPreset] = &[
     delivery_argv: &["-p"],
     model_flag: Some("--model"),
     delivery: PromptDelivery::Stdin,
-    no_tools: &["--tools", "", "--strict-mcp-config"],
+    no_tools: &["--tools", "", "--disallowedTools", "mcp__*"],
     tool_flags: &[
       "--tools",
       "--mcp-config",
@@ -699,7 +699,8 @@ esac"#,
         "claude",
         "--tools",
         "",
-        "--strict-mcp-config",
+        "--disallowedTools",
+        "mcp__*",
         "--model",
         "haiku",
         "-p"

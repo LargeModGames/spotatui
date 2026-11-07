@@ -262,9 +262,9 @@ A **bare binary name expands to a known preset**, so this is enough:
 | `opencode` | `opencode run` | `opencode run -m openai/gpt-5.4` | argv (trailing positional) |
 | `gemini` (legacy) | `gemini -p` | `gemini -m MODEL -p` | argv |
 
-At run time `claude` also gets `--tools "" --strict-mcp-config` right after the program name, and `codex exec`
+At run time `claude` also gets `--tools "" --disallowedTools "mcp__*"` right after the program name, and `codex exec`
 gets `--sandbox read-only` after `exec` (see below), so `claude -p` runs as
-`claude --tools "" --strict-mcp-config -p`.
+`claude --tools "" --disallowedTools "mcp__*" -p`.
 
 `agy` is Google's current CLI. The Gemini CLI it superseded is kept as a preset only
 so an existing config keeps working, and it is not offered in the picker unless the
@@ -308,8 +308,9 @@ current directory — otherwise it reads the `CLAUDE.md` and source files of wha
 project you happen to be in and starts recommending music about Rust.
 
 The prompt carries track titles, and anyone can write a title. So spotatui restricts
-the agent: `claude` gets `--tools "" --strict-mcp-config`, which turns its built-in
-tools and your configured MCP servers off, and `codex exec` gets
+the agent: `claude` gets `--tools "" --disallowedTools "mcp__*"`, which turns its built-in
+tools off and denies the tools of your configured MCP servers (the servers still start),
+and `codex exec` gets
 `--sandbox read-only`, which stops writes but still lets it read files and run
 read-only commands. Neither is added when your `dj_agent_command` already names a tool,
 MCP or sandbox flag. The Codex flag goes in only when the command starts with
@@ -432,7 +433,6 @@ batch rather than per track is what keeps latency and quota sane.
 | Symptom | Fix |
 |---|---|
 | "could not run `claude`. Is it installed and on PATH?" | Install the CLI, or point `dj_agent_command` at the right binary. |
-| `claude` exits at once on a machine with a managed MCP config | A managed `managed-mcp.json` refuses `--strict-mcp-config`. Set `dj_agent_command: ["claude", "--tools", "", "--disallowedTools", "mcp__*", "-p"]`: it names its own tool flags, so spotatui adds nothing. The built-in tools stay off and MCP tools are denied, but the managed MCP servers still start. |
 | "did not answer within 90s" | Raise `dj_agent_timeout_secs`. If you go much above ~180, also revisit auto-queue: the refill watermark assumes a round trip well under the queue's runway. |
 | "could not read a decision out of … output" | The CLI answered with prose and no JSON. Check it is logged in by running the same command by hand. |
 | "There's an issue with the selected model (…)" | `dj_agent_model` names something that CLI does not accept. It fails locally in milliseconds without calling anything, so nothing was spent: pick another model with <kbd>Ctrl</kbd>+<kbd>G</kbd>, or clear the key. |
