@@ -614,8 +614,11 @@ pub(crate) mod tests {
   /// A playing Subsonic track whose stored cover URL is the real authenticated one.
   #[cfg(feature = "subsonic")]
   pub(crate) fn subsonic_snapshot() -> PlaybackSnapshot {
-    let source =
-      crate::infra::subsonic::SubsonicSource::new("http://music.example.com", "alice", "hunter2");
+    let source = crate::infra::subsonic::SubsonicSource::new(
+      "http://music.example.com",
+      "alice",
+      String::new(),
+    );
     source_snapshot(
       "Track".to_string(),
       vec!["Artist".to_string()],

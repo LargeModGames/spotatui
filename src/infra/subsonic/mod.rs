@@ -1442,7 +1442,7 @@ mod tests {
     let refused = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let base = format!("http://{}", refused.local_addr().unwrap());
     drop(refused);
-    let err = SubsonicSource::new(base, "alice", "hunter2")
+    let err = SubsonicSource::new(base, "alice", String::new())
       .song_info("42")
       .await
       .unwrap_err();
@@ -1452,7 +1452,7 @@ mod tests {
   #[tokio::test]
   async fn an_http_error_keeps_the_login_out_of_the_error() {
     let (base, server) = serve(vec![("500 Internal Server Error", "")]).await;
-    let err = SubsonicSource::new(base, "alice", "hunter2")
+    let err = SubsonicSource::new(base, "alice", String::new())
       .song_info("42")
       .await
       .unwrap_err();
