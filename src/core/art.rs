@@ -113,7 +113,7 @@ pub async fn fetch_and_decode(url: &str) -> anyhow::Result<image::DynamicImage> 
     .and_then(|r| r.error_for_status());
   let mut res = match res {
     Ok(res) => res,
-    Err(e) => return Err(anyhow!(e)),
+    Err(e) => return Err(anyhow!(e.without_url())),
   };
 
   if let Some(declared) = res.content_length() {
@@ -126,7 +126,7 @@ pub async fn fetch_and_decode(url: &str) -> anyhow::Result<image::DynamicImage> 
 
   // The declared size only pre-allocates; the cap above bounds it.
   let mut file = Vec::with_capacity(res.content_length().unwrap_or(0) as usize);
-  while let Some(chunk) = res.chunk().await.map_err(|e| anyhow!(e))? {
+  while let Some(chunk) = res.chunk().await.map_err(|e| anyhow!(e.without_url()))? {
     if (file.len() + chunk.len()) as u64 > MAX_COVER_ART_BYTES {
       return Err(anyhow!(
         "cover art response exceeded the {MAX_COVER_ART_BYTES}-byte limit"
@@ -223,6 +223,19 @@ mod tests {
       response(&mut stream);
     });
     (addr, handle)
+  }
+
+  #[tokio::test]
+  async fn a_failed_cover_fetch_keeps_the_query_out_of_the_error() {
+    let refused = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = refused.local_addr().unwrap();
+    drop(refused);
+    let err = fetch_and_decode(&format!(
+      "http://{addr}/rest/getCoverArt.view?u=alice&t=abc"
+    ))
+    .await
+    .unwrap_err();
+    assert!(!format!("{err:#}").contains("u=alice"), "{err:#}");
   }
 
   #[tokio::test]

@@ -16,11 +16,11 @@ jobs:
     name: Generate TOC
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
-      - uses: technote-space/toc-generator@v4
+      - uses: technote-space/toc-generator@9e238e7974de5fcf7b17b7acc54c896160dda0a3 # v4.3.1
         with:
           # The "Protect main" ruleset forbids direct pushes to main, so the
           # generator opens a PR with the TOC update instead of committing.

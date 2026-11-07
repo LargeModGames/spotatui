@@ -71,6 +71,9 @@ pub(crate) fn plugin_id(name: &str) -> String {
     .collect()
 }
 
+/// How long one entry into plugin code can run before the hook stops it.
+pub(super) const PLUGIN_TIME_LIMIT: std::time::Duration = std::time::Duration::from_secs(1);
+
 /// State shared between the engine and the Lua closures via `Rc`.
 ///
 /// `mlua` is built without the `send` feature, so `Rc`/`RefCell` are fine here: everything
@@ -83,6 +86,8 @@ pub(crate) struct ScriptShared {
   pub(crate) effects: RefCell<Vec<Action>>,
   /// Plugin name currently being loaded, so `spotatui.on` can tag its callbacks.
   pub(super) current_plugin: RefCell<String>,
+  /// When the running entry into plugin code must stop; `None` outside one.
+  pub(super) deadline: Cell<Option<std::time::Instant>>,
   /// Single token counter shared by HTTP requests, data requests and timers.
   pub(super) next_token: Cell<u64>,
   /// Intake queue for `spotatui.get_*` data requests.
@@ -117,6 +122,7 @@ impl ScriptShared {
       devices: RefCell::new(Vec::new()),
       effects: RefCell::new(Vec::new()),
       current_plugin: RefCell::new(String::new()),
+      deadline: Cell::new(None),
       next_token: Cell::new(0),
       data_requests: RefCell::new(Vec::new()),
       new_timers: RefCell::new(Vec::new()),
@@ -130,6 +136,27 @@ impl ScriptShared {
       storage: RefCell::new(BTreeMap::new()),
       storage_dirty: RefCell::new(BTreeSet::new()),
     }
+  }
+
+  /// The error message once the running entry is past its time limit.
+  pub(super) fn time_up(&self) -> Option<String> {
+    let past = self
+      .deadline
+      .get()
+      .is_some_and(|at| std::time::Instant::now() > at);
+    past.then(|| format!("stopped after running for {}s", PLUGIN_TIME_LIMIT.as_secs()))
+  }
+
+  /// Runs one entry into `plugin`'s code, with the caller named and the time limit armed.
+  pub(super) fn run<R>(&self, plugin: &str, call: impl FnOnce() -> R) -> std::thread::Result<R> {
+    *self.current_plugin.borrow_mut() = plugin.to_string();
+    self
+      .deadline
+      .set(Some(std::time::Instant::now() + PLUGIN_TIME_LIMIT));
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(call));
+    self.current_plugin.borrow_mut().clear();
+    self.deadline.set(None);
+    result
   }
 
   /// Path of a plugin's storage file, when a config dir is known.

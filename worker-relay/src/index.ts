@@ -9,6 +9,7 @@ const WS_PATH = "/ws";
 const CODE_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 const RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000; // 1 hour
 const MAX_JOIN_ATTEMPTS = 10;
+const MAX_CREATES = 10;
 const CODE_LENGTH = 6;
 const MAX_MESSAGE_SIZE = 4 * 1024;
 const MAX_PARTICIPANTS = 8;
@@ -31,7 +32,33 @@ function normalizeDisplayName(value: string | null, fallback: string): string {
 
 export interface Env {
   PARTY_ROOM: DurableObjectNamespace;
-  RATE_LIMIT_KV: KVNamespace;
+  RATE_LIMITER: DurableObjectNamespace<RateLimiter>;
+}
+
+interface RateWindow {
+  create: number;
+  join: number;
+}
+
+// One counter for each IP. A Durable Object handles one event at a time, so
+// concurrent requests cannot read the same count. The alarm ends the window.
+export class RateLimiter extends DurableObject<Env> {
+  async take(kind: "create" | "join"): Promise<boolean> {
+    let window = await this.ctx.storage.get<RateWindow>("window");
+    if (!window) {
+      window = { create: 0, join: 0 };
+      await this.ctx.storage.setAlarm(Date.now() + RATE_LIMIT_WINDOW_MS);
+    }
+    const limit = kind === "create" ? MAX_CREATES : MAX_JOIN_ATTEMPTS;
+    if (window[kind] >= limit) return false;
+    window[kind] += 1;
+    await this.ctx.storage.put("window", window);
+    return true;
+  }
+
+  async alarm(): Promise<void> {
+    await this.ctx.storage.deleteAll();
+  }
 }
 
 interface Session {
@@ -76,7 +103,7 @@ export class PartyRoom extends DurableObject {
     const session: Session = {
       id: sessionId,
       isHost,
-      name: isHost ? "Host" : requestedName,
+      name: isHost ? "Host" : this.guestName(requestedName),
       ip: clientIp,
     };
 
@@ -147,6 +174,20 @@ export class PartyRoom extends DurableObject {
     return new Response(null, { status: 101, webSocket: client });
   }
 
+  // A guest may not pass for the host in the guest list.
+  private guestName(name: string, self?: Session): string {
+    const taken = [this.hostName, "Host"].some((n) => n.toLowerCase() === name.toLowerCase());
+    if (!taken) return name;
+    // A replacement that no other guest already has, so join and leave events stay apart.
+    const used = new Set(
+      [...this.sessions.values()].filter((s) => s !== self).map((s) => s.name.toLowerCase()),
+    );
+    for (let i = 1; ; i++) {
+      const candidate = i === 1 ? "Guest" : `Guest ${i}`;
+      if (!used.has(candidate.toLowerCase())) return candidate;
+    }
+  }
+
   private sendJson(ws: WebSocket, obj: object): void {
     try {
       const raw = JSON.stringify(obj);
@@ -174,10 +215,11 @@ export class PartyRoom extends DurableObject {
 
     switch (msg.type) {
       case "set_name": {
-        const name =
-          typeof msg.name === "string"
-            ? normalizeDisplayName(msg.name, session.isHost ? "Host" : "Guest")
-            : session.name;
+        let name = session.name;
+        if (typeof msg.name === "string") {
+          name = normalizeDisplayName(msg.name, session.isHost ? "Host" : "Guest");
+          if (!session.isHost) name = this.guestName(name, session);
+        }
         const prevName = session.name;
         session.name = name;
         if (!session.isHost && prevName !== session.name) {
@@ -324,23 +366,18 @@ export default {
       }
       roomCode = code.toUpperCase();
 
-      const clientIp = request.headers.get("CF-Connecting-IP") ?? "unknown";
-      const rateLimitKey = `ratelimit:${clientIp}`;
-      const countStr = await env.RATE_LIMIT_KV.get(rateLimitKey);
-      const count = countStr !== null ? parseInt(countStr, 10) : 0;
-      if (count >= MAX_JOIN_ATTEMPTS) {
-        return new Response("Too many attempts", { status: 429 });
-      }
-      await env.RATE_LIMIT_KV.put(rateLimitKey, String(count + 1), {
-        expirationTtl: Math.ceil(RATE_LIMIT_WINDOW_MS / 1000),
-      });
-
       doUrl = new URL(request.url);
       doUrl.searchParams.set("room_code", roomCode);
       doUrl.searchParams.set("is_host", "0");
       doUrl.searchParams.set("name", guestName);
     } else {
       return new Response("Missing action=create or action=join", { status: 400 });
+    }
+
+    const clientIp = request.headers.get("CF-Connecting-IP") ?? "unknown";
+    const limiter = env.RATE_LIMITER.get(env.RATE_LIMITER.idFromName(clientIp));
+    if (!(await limiter.take(action))) {
+      return new Response("Too many attempts", { status: 429 });
     }
 
     const id = env.PARTY_ROOM.idFromName(roomCode);

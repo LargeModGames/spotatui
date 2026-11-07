@@ -3,7 +3,8 @@ import type { ClientMessage } from "./bindings/ClientMessage";
 import type { OnboardingView } from "./bindings/OnboardingView";
 import type { ServerMessage } from "./bindings/ServerMessage";
 import type { WelcomePayload } from "./bindings/WelcomePayload";
-import { applyChannel, type Channels } from "./store";
+import { applyChannel, type ChannelMessage, type Channels } from "./store";
+import { sourceOf } from "./format";
 import type { ScreenFrame } from "./bindings/ScreenFrame";
 import type { ScreenFeed } from "./screenModel";
 import type { Frame } from "./visualizerModel";
@@ -305,7 +306,10 @@ export class Connection {
         });
       }
       default: {
-        const channels = applyChannel(this.state.channels, message);
+        const channels = applyChannel(
+          this.state.channels,
+          this.withServerCover(message),
+        );
         const before = {
           uri: this.lastUri,
           playing: playingOf(this.state.channels).playing,
@@ -324,6 +328,19 @@ export class Connection {
         });
       }
     }
+  }
+
+  /** A Subsonic cover URL carries the login, so the server leaves it out and the page asks `/cover`. */
+  private withServerCover(message: ChannelMessage): ChannelMessage {
+    if (message.kind !== "playback") return message;
+    const item = message.payload.item;
+    if (!item?.uri || item.image_url || sourceOf(item.uri) !== "Subsonic")
+      return message;
+    const image_url = this.coverSrc(item.uri);
+    return {
+      ...message,
+      payload: { ...message.payload, item: { ...item, image_url } },
+    };
   }
 
   /** A drop after hello retries; a close before hello (refused, or spotatui has exited) ends the page. */
