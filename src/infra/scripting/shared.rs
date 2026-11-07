@@ -138,6 +138,15 @@ impl ScriptShared {
     }
   }
 
+  /// The error message once the running entry is past its time limit.
+  pub(super) fn time_up(&self) -> Option<String> {
+    let past = self
+      .deadline
+      .get()
+      .is_some_and(|at| std::time::Instant::now() > at);
+    past.then(|| format!("stopped after running for {}s", PLUGIN_TIME_LIMIT.as_secs()))
+  }
+
   /// Runs one entry into `plugin`'s code, with the caller named and the time limit armed.
   pub(super) fn run<R>(&self, plugin: &str, call: impl FnOnce() -> R) -> std::thread::Result<R> {
     *self.current_plugin.borrow_mut() = plugin.to_string();

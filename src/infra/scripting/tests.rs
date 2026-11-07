@@ -3418,3 +3418,22 @@ fn a_plugin_that_loops_forever_is_stopped() {
     .load_source("fine", "local x = 0 for i = 1, 1000 do x = x + i end")
     .unwrap();
 }
+
+#[test]
+fn a_protected_call_cannot_catch_the_time_limit() {
+  let mut engine = ScriptEngine::new().unwrap();
+  for source in [
+    "while true do pcall(function() while true do end end) end",
+    "while true do xpcall(function() while true do end end, function() end) end",
+    "while true do coroutine.resume(coroutine.create(function() while true do end end)) end",
+  ] {
+    let err = engine.load_source("spin", source).unwrap_err().to_string();
+    assert!(err.contains("stopped after running"), "{source}: {err}");
+  }
+  engine
+    .load_source(
+      "fine",
+      "assert(not pcall(error, 'x')); assert(select('#', pcall(print)) == 1)",
+    )
+    .unwrap();
+}

@@ -69,6 +69,21 @@ pub struct ScriptEngine {
   http_tx: UnboundedSender<HttpResult>,
 }
 
+/// Wraps the protected calls so that, past the time limit, they raise the caught error again.
+const PROTECTED_CALL_GUARD: &str = r#"
+local expired = ...
+local pcall, xpcall, resume, error = pcall, xpcall, coroutine.resume, error
+local pack, unpack = table.pack, table.unpack
+local function pass(r)
+  local stopped = not r[1] and expired()
+  if stopped then error(stopped, 0) end
+  return unpack(r, 1, r.n)
+end
+_G.pcall = function(...) return pass(pack(pcall(...))) end
+_G.xpcall = function(...) return pass(pack(xpcall(...))) end
+coroutine.resume = function(...) return pass(pack(resume(...))) end
+"#;
+
 impl ScriptEngine {
   /// Build the Lua state and install the `spotatui` global table.
   pub fn new() -> mlua::Result<Self> {
@@ -78,20 +93,20 @@ impl ScriptEngine {
     let watched = Rc::clone(&shared);
     lua.set_global_hook(
       mlua::HookTriggers::new().every_nth_instruction(100_000),
-      move |_, _| {
-        if watched
-          .deadline
-          .get()
-          .is_some_and(|at| std::time::Instant::now() > at)
-        {
-          return Err(mlua::Error::RuntimeError(format!(
-            "stopped after running for {}s",
-            super::shared::PLUGIN_TIME_LIMIT.as_secs()
-          )));
-        }
-        Ok(mlua::VmState::Continue)
+      move |_, _| match watched.time_up() {
+        Some(message) => Err(mlua::Error::RuntimeError(message)),
+        None => Ok(mlua::VmState::Continue),
       },
     )?;
+    // Without this, `pcall` would catch the hook's error and the loop would go on.
+    let expired = {
+      let watched = Rc::clone(&shared);
+      lua.create_function(move |_, ()| Ok(watched.time_up()))?
+    };
+    lua
+      .load(PROTECTED_CALL_GUARD)
+      .set_name("spotatui")
+      .call::<()>(expired)?;
     let (http_tx, http_rx) = unbounded_channel();
     let http_client = reqwest::Client::builder()
       .timeout(std::time::Duration::from_secs(30))
