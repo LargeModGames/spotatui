@@ -101,7 +101,44 @@ pub(crate) fn visualizer_config_path() -> Option<PathBuf> {
 /// drive-relative there and left Windows users looking for a path the app
 /// reported but their shell could not find.
 pub(crate) fn app_log_dir() -> PathBuf {
-  std::env::temp_dir().join("spotatui_logs")
+  static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+  DIR
+    .get_or_init(|| log_dir_in(&std::env::temp_dir()))
+    .clone()
+}
+
+/// `spotatui_logs` in `temp` when this user owns it as a real directory, else a
+/// fresh owner-only directory. Another account can create that name first, and
+/// startup must not stop on it.
+fn log_dir_in(temp: &Path) -> PathBuf {
+  let shared = temp.join("spotatui_logs");
+  let owned = ensure_private_dir(&shared).is_ok()
+    && shared
+      .symlink_metadata()
+      .is_ok_and(|meta| meta.file_type().is_dir());
+  if owned {
+    return shared;
+  }
+  #[cfg(unix)]
+  let builder = {
+    use std::os::unix::fs::DirBuilderExt;
+    let mut builder = std::fs::DirBuilder::new();
+    builder.mode(0o700);
+    builder
+  };
+  #[cfg(not(unix))]
+  let builder = std::fs::DirBuilder::new();
+  let pid = std::process::id();
+  (0..8)
+    .find_map(|attempt| {
+      let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.subsec_nanos())
+        .unwrap_or(0);
+      let dir = temp.join(format!("spotatui_logs-{pid}-{nanos}-{attempt}"));
+      builder.create(&dir).ok().map(|()| dir)
+    })
+    .unwrap_or(shared)
 }
 
 /// Path of this process's log file. Callers on both the writing side
@@ -159,6 +196,21 @@ fn valid_xdg_home(value: OsString) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn an_owned_log_dir_keeps_the_shared_name() {
+    let temp = tempfile::tempdir().unwrap();
+    assert_eq!(log_dir_in(temp.path()), temp.path().join("spotatui_logs"));
+  }
+
+  #[test]
+  fn a_log_dir_name_that_is_taken_falls_back_to_a_fresh_dir() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(temp.path().join("spotatui_logs"), b"").unwrap();
+    let dir = log_dir_in(temp.path());
+    assert_ne!(dir, temp.path().join("spotatui_logs"));
+    assert!(dir.is_dir());
+  }
 
   fn test_home() -> PathBuf {
     std::env::temp_dir().join("spotatui-home-alice")
