@@ -50,7 +50,7 @@ chrono = "0.4.45"
 log = "0.4.32"
 fern = "0.7.1"
 open = "5.3"
-self_update = { version = "1.3.3", features = ["archive-tar", "archive-zip", "compression-tar-gz", "compression-zip-deflate"], optional = true }
+self_update = { version = "1.3.3", features = ["archive-tar", "archive-zip", "compression-tar-gz", "compression-zip-deflate", "checksums"], optional = true }
 sha2 = { version = "0.11", optional = true }
 hex = { version = "0.4", optional = true }
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "blocking"], default-features = false }
@@ -184,7 +184,7 @@ tui = ["dep:unicode-segmentation", "dep:ratatui", "dep:crossterm", "dep:tui-bar-
 # `spotatui-gui` bin shim (which claims the binary name and the Windows
 # console-attach plumbing).
 gui = ["dep:httparse"]
-self-update = ["dep:self_update", "dep:sha2", "dep:hex"]
+self-update = ["dep:self_update"]
 # The librespot session without playback: browse, library, search and remote
 # control over Spotify's internal API. `streaming` adds native playback on top.
 spotify-session = ["librespot-core", "librespot-oauth", "librespot-metadata", "librespot-protocol", "protobuf", "dep:mdns-sd", "dep:rustls", "dep:tokio-rustls", "dep:md-5", "dep:base64"]
