@@ -143,11 +143,11 @@ async fn fetch(app: &Arc<Mutex<App>>, url: &str, to: &Path) -> Result<(), Failur
   let mut received = 0;
   let mut shown = 0;
   while let Some(chunk) = response.chunk().await.map_err(failed)? {
-    file.write_all(&chunk).await.map_err(failed)?;
     received += chunk.len() as u64;
     if received > MAX_ARCHIVE_BYTES {
       return Err(too_large());
     }
+    file.write_all(&chunk).await.map_err(failed)?;
     if let Some(now) = percent(received, total).filter(|now| *now >= shown + 10) {
       shown = now;
       app.lock().await.soloist_download_progress(now);
