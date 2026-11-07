@@ -312,7 +312,9 @@ the agent: `claude` gets `--tools "" --strict-mcp-config`, which turns its built
 tools and your configured MCP servers off, and `codex exec` gets
 `--sandbox read-only`, which stops writes but still lets it read files and run
 read-only commands. Neither is added when your `dj_agent_command` already names a tool,
-MCP or sandbox flag. `copilot -p` denies a tool request that needs approval, but its
+MCP or sandbox flag. The Codex flag goes in only when the command starts with
+`codex exec`: with options between the two (`codex --profile work exec`), your Codex
+config decides the sandbox. `copilot -p` denies a tool request that needs approval, but its
 policy can still let read-only operations through. `opencode`, `agy` and `gemini`
 have no such flag, so they run with whatever permissions you gave them.
 
@@ -430,6 +432,7 @@ batch rather than per track is what keeps latency and quota sane.
 | Symptom | Fix |
 |---|---|
 | "could not run `claude`. Is it installed and on PATH?" | Install the CLI, or point `dj_agent_command` at the right binary. |
+| `claude` exits at once on a machine with a managed MCP config | A managed `managed-mcp.json` refuses `--strict-mcp-config`. Set `dj_agent_command: ["claude", "--tools", "", "-p"]`: it names its own tool flag, so spotatui adds nothing, and the built-in tools stay off. |
 | "did not answer within 90s" | Raise `dj_agent_timeout_secs`. If you go much above ~180, also revisit auto-queue: the refill watermark assumes a round trip well under the queue's runway. |
 | "could not read a decision out of … output" | The CLI answered with prose and no JSON. Check it is logged in by running the same command by hand. |
 | "There's an issue with the selected model (…)" | `dj_agent_model` names something that CLI does not accept. It fails locally in milliseconds without calling anything, so nothing was spent: pick another model with <kbd>Ctrl</kbd>+<kbd>G</kbd>, or clear the key. |
