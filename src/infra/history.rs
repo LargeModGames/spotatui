@@ -2882,8 +2882,7 @@ async fn sync_history_to_cloud_with_client(
   Ok(())
 }
 
-/// `record` without the URI of a local file, which is its absolute path with the
-/// user name and the folders. The cloud keeps the title, artists and album.
+/// `record` without a `file:` URI, which is an absolute path with the user name in it.
 fn without_local_paths(mut record: ListenRecord) -> ListenRecord {
   let local = |uri: &Option<String>| uri.as_deref().is_some_and(|uri| uri.starts_with("file:"));
   if local(&record.item_uri) {

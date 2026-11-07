@@ -109,9 +109,7 @@ fn resolve_speaker(service: &ResolvedService) -> Option<Entry> {
   )?)
 }
 
-/// The zeroconf URL of a speaker, or `None` when the announced `CPath` is not a
-/// plain path: a value such as `@evil.example/` would move the host, and the
-/// login token goes to that URL.
+/// The zeroconf URL of a speaker, or `None` when `CPath` is not a plain path that keeps the host.
 fn speaker_url(ip: IpAddr, port: u16, cpath: Option<&str>) -> Option<String> {
   let cpath = cpath.unwrap_or("/");
   let plain = cpath.starts_with('/')

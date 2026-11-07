@@ -115,9 +115,7 @@ fn launch_url(port: u16, code: &str) -> String {
   format!("http://127.0.0.1:{port}/#code={code}")
 }
 
-/// Opens the launch URL in the default browser. Every local account can list
-/// the argv of `/usr/bin/open`, so macOS gives `osascript` the URL on stdin, and
-/// the browser gets it as an Apple Event. Linux checks the peer's uid instead.
+/// Opens the launch URL; on macOS through `osascript` stdin, since any account can list argv.
 #[cfg(target_os = "macos")]
 fn open_browser(url: &str) -> std::io::Result<()> {
   use std::io::Write;
