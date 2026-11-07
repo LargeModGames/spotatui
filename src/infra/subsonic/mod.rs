@@ -251,16 +251,21 @@ impl SubsonicSource {
   /// Returns an error if the HTTP request fails, the JSON cannot be parsed,
   /// or the `subsonic-response.status` field is `"failed"`.
   async fn fetch(&self, url: &str) -> Result<SubsonicResponse> {
+    // `without_url`: the URL carries the login (`u`, `t`, `s`), and an error's
+    // chain reaches the log.
     let body = self
       .http
       .get(url)
       .send()
       .await
+      .map_err(reqwest::Error::without_url)
       .context("HTTP request to Subsonic failed")?
       .error_for_status()
+      .map_err(reqwest::Error::without_url)
       .context("Subsonic server returned an HTTP error")?
       .text()
       .await
+      .map_err(reqwest::Error::without_url)
       .context("Failed to read Subsonic response body")?;
 
     let envelope: SubsonicEnvelope =
@@ -324,8 +329,10 @@ impl SubsonicSource {
       .get(&url)
       .send()
       .await
+      .map_err(reqwest::Error::without_url)
       .context("HTTP request to Subsonic stream failed")?
       .error_for_status()
+      .map_err(reqwest::Error::without_url)
       .context("Subsonic stream returned an HTTP error")?;
 
     // Write to a synchronous file inside the streaming loop: each chunk is a
@@ -336,7 +343,9 @@ impl SubsonicSource {
       .with_context(|| format!("creating stream file {}", dest.display()))?;
     let mut stream = response.bytes_stream();
     while let Some(chunk) = stream.next().await {
-      let chunk = chunk.context("Failed to read Subsonic stream body")?;
+      let chunk = chunk
+        .map_err(reqwest::Error::without_url)
+        .context("Failed to read Subsonic stream body")?;
       file
         .write_all(&chunk)
         .with_context(|| format!("writing stream to {}", dest.display()))?;
@@ -1419,5 +1428,36 @@ mod tests {
       .unwrap_err();
     server.await.unwrap();
     assert!(err.to_string().contains("Song not found"), "{err:#}");
+  }
+
+  fn assert_no_login(err: &anyhow::Error) {
+    let line = format!("{err:#}");
+    for param in ["u=alice", "t=", "s="] {
+      assert!(!line.contains(param), "{line}");
+    }
+  }
+
+  #[tokio::test]
+  async fn an_unreachable_server_keeps_the_login_out_of_the_error() {
+    let refused = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", refused.local_addr().unwrap());
+    drop(refused);
+    let err = SubsonicSource::new(base, "alice", "hunter2")
+      .song_info("42")
+      .await
+      .unwrap_err();
+    assert_no_login(&err);
+  }
+
+  #[tokio::test]
+  async fn an_http_error_keeps_the_login_out_of_the_error() {
+    let (base, server) = serve(vec![("500 Internal Server Error", "")]).await;
+    let err = SubsonicSource::new(base, "alice", "hunter2")
+      .song_info("42")
+      .await
+      .unwrap_err();
+    server.await.unwrap();
+    assert!(format!("{err:#}").contains("500"), "{err:#}");
+    assert_no_login(&err);
   }
 }
