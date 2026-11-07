@@ -32,11 +32,12 @@ pub async fn redirect_uri_web_server_on(
   run_accept_loop(listener, accept, CALLBACK_READ_TIMEOUT).await
 }
 
-/// A connection that sends nothing must not hold the one-at-a-time loop.
+/// How long one connection may stay silent before it is dropped.
 const CALLBACK_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Accept-loop extracted so tests can inject a pre-bound listener (port 0) and
 /// avoid races caused by hard-coding a port that might already be in use.
+/// Connections are read in parallel, so a silent one cannot delay the callback.
 async fn run_accept_loop(
   listener: tokio::net::TcpListener,
   accept: fn(&str) -> bool,
@@ -44,38 +45,51 @@ async fn run_accept_loop(
 ) -> Result<String, ()> {
   const MAX_CONSECUTIVE_ACCEPT_ERRORS: u8 = 20;
   let mut consecutive_accept_errors = 0u8;
+  let mut reads = tokio::task::JoinSet::new();
   loop {
-    let mut stream = match listener.accept().await {
-      Ok((stream, _)) => {
-        consecutive_accept_errors = 0;
-        stream
-      }
-      Err(e) => {
-        consecutive_accept_errors = consecutive_accept_errors.saturating_add(1);
-        log::warn!("[login] callback accept error: {e}");
-        if consecutive_accept_errors >= MAX_CONSECUTIVE_ACCEPT_ERRORS {
-          return Err(());
+    tokio::select! {
+      accepted = listener.accept() => match accepted {
+        Ok((stream, _)) => {
+          consecutive_accept_errors = 0;
+          reads.spawn(read_callback(stream, accept, read_timeout));
         }
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        continue;
+        Err(e) => {
+          consecutive_accept_errors = consecutive_accept_errors.saturating_add(1);
+          log::warn!("[login] callback accept error: {e}");
+          if consecutive_accept_errors >= MAX_CONSECUTIVE_ACCEPT_ERRORS {
+            return Err(());
+          }
+          tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+      },
+      Some(read) = reads.join_next() => {
+        if let Ok(Some(url)) = read {
+          return Ok(url);
+        }
       }
-    };
-
-    let mut buffer = vec![0u8; 1000];
-    let n = match tokio::time::timeout(read_timeout, stream.read(&mut buffer)).await {
-      Ok(Ok(0) | Err(_)) | Err(_) => continue,
-      Ok(Ok(n)) => n,
-    };
-    let request = String::from_utf8_lossy(&buffer[..n]);
-
-    if let Some(url) = extract_callback_url(&request, accept) {
-      let _ = write_async_response(&mut stream, "200 OK", include_str!("redirect_uri.html")).await;
-      return Ok(url);
     }
-
-    // Browser noise (favicon, pre-flight): 400 and keep waiting for the callback.
-    let _ = write_async_response(&mut stream, "400 Bad Request", "400 - Bad Request").await;
   }
+}
+
+/// Reads one connection: the callback URL, or `None` after a 400 for browser noise.
+async fn read_callback(
+  mut stream: tokio::net::TcpStream,
+  accept: fn(&str) -> bool,
+  read_timeout: std::time::Duration,
+) -> Option<String> {
+  let mut buffer = vec![0u8; 1000];
+  let n = match tokio::time::timeout(read_timeout, stream.read(&mut buffer)).await {
+    Ok(Ok(n)) if n > 0 => n,
+    _ => return None,
+  };
+  let request = String::from_utf8_lossy(&buffer[..n]);
+  if let Some(url) = extract_callback_url(&request, accept) {
+    let _ = write_async_response(&mut stream, "200 OK", include_str!("redirect_uri.html")).await;
+    return Some(url);
+  }
+  // Browser noise (favicon, pre-flight): 400 and keep waiting for the callback.
+  let _ = write_async_response(&mut stream, "400 Bad Request", "400 - Bad Request").await;
+  None
 }
 
 async fn write_async_response(
@@ -242,12 +256,17 @@ mod tests {
       drop(silent);
     });
 
-    let result = run_accept_loop(
-      listener,
-      spotify_callback,
-      std::time::Duration::from_millis(100),
+    // A read timeout far past the deadline: only a parallel read meets it.
+    let result = tokio::time::timeout(
+      std::time::Duration::from_secs(2),
+      run_accept_loop(
+        listener,
+        spotify_callback,
+        std::time::Duration::from_secs(60),
+      ),
     )
-    .await;
+    .await
+    .expect("the silent connection held the callback");
     client.await.unwrap();
 
     assert!(result.unwrap().contains("code=late"));
