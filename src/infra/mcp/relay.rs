@@ -669,10 +669,10 @@ mod tests {
     });
   }
 
-  /// A stand-in that takes the token line and then answers the replayed
-  /// handshake with `reply`, whatever that is. Holds the socket open afterwards,
+  /// A stand-in that passes the handshake for the token "tok" and then answers the
+  /// replayed handshake with `reply`, whatever that is. Holds the socket open afterwards,
   /// so a rejection has to come from validating the line rather than a hang-up.
-  fn fake_tui_answering_with(listener: TcpListener, token: &'static str, reply: String) {
+  fn fake_tui_answering_with(listener: TcpListener, reply: String) {
     tokio::spawn(async move {
       loop {
         let Ok((stream, _)) = listener.accept().await else {
@@ -682,7 +682,7 @@ mod tests {
         tokio::spawn(async move {
           let (read_half, mut write_half) = stream.into_split();
           let mut lines = BufReader::new(read_half).lines();
-          if control::prove(&mut lines, &mut write_half, token)
+          if control::prove(&mut lines, &mut write_half, "tok")
             .await
             .is_none()
             || !matches!(lines.next_line().await, Ok(Some(_)))
@@ -941,7 +941,7 @@ mod tests {
     ] {
       let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
       let port = listener.local_addr().unwrap().port();
-      fake_tui_answering_with(listener, "tok", reply.clone());
+      fake_tui_answering_with(listener, reply.clone());
       let mut relay = relay_for(port, "tok");
       relay.handshake = Some(
         json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
