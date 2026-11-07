@@ -599,7 +599,9 @@ fn ensure_git() -> Result<()> {
 
 fn git_clone(url: &str, dest: &Path) -> Result<()> {
   // `--` separates options from positionals so a URL is never mistaken for a flag.
+  // An `ext::` URL runs a command; git blocks it by default, but a user config can permit it.
   let status = ProcessCommand::new("git")
+    .args(["-c", "protocol.ext.allow=never"])
     .args(["clone", "--depth", "1", "--"])
     .arg(url)
     .arg(dest)
@@ -633,6 +635,7 @@ fn git_update(dir: &Path) -> Result<()> {
 
 fn run_git(dir: &Path, args: &[&str]) -> Result<()> {
   let out = ProcessCommand::new("git")
+    .args(["-c", "protocol.ext.allow=never"])
     .arg("-C")
     .arg(dir)
     .args(args)
