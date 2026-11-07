@@ -37,18 +37,6 @@ struct PendingDataRequest {
   deadline: std::time::Instant,
 }
 
-/// How long one entry into plugin code can run before the hook stops it.
-const PLUGIN_TIME_LIMIT: std::time::Duration = std::time::Duration::from_secs(1);
-
-/// Keeps the time limit armed for one entry into plugin code.
-struct TimeLimit(Rc<std::cell::Cell<Option<std::time::Instant>>>);
-
-impl Drop for TimeLimit {
-  fn drop(&mut self) {
-    self.0.set(None);
-  }
-}
-
 /// An armed plugin timer. `interval` is `Some` for `set_interval`.
 struct ActiveTimer {
   token: u64,
@@ -59,8 +47,6 @@ struct ActiveTimer {
 pub struct ScriptEngine {
   pub(super) lua: Lua,
   pub(crate) shared: Rc<ScriptShared>,
-  /// When the running entry into plugin code must stop; `None` outside one.
-  deadline: Rc<std::cell::Cell<Option<std::time::Instant>>>,
   /// Previous playback snapshot, for diffing on tick.
   last_playback: Option<crate::core::plugin_api::PlaybackState>,
   /// Previous queue item uris, for diffing on tick.
@@ -88,25 +74,25 @@ impl ScriptEngine {
   /// Build the Lua state and install the `spotatui` global table.
   pub fn new() -> mlua::Result<Self> {
     let lua = Lua::new();
+    let shared = Rc::new(ScriptShared::new());
     // A loop in a plugin would otherwise freeze the frontend.
-    let deadline = Rc::new(std::cell::Cell::new(None));
-    let watched = Rc::clone(&deadline);
+    let watched = Rc::clone(&shared);
     lua.set_global_hook(
       mlua::HookTriggers::new().every_nth_instruction(100_000),
       move |_, _| {
         if watched
+          .deadline
           .get()
-          .is_some_and(|at: std::time::Instant| std::time::Instant::now() > at)
+          .is_some_and(|at| std::time::Instant::now() > at)
         {
           return Err(mlua::Error::RuntimeError(format!(
             "stopped after running for {}s",
-            PLUGIN_TIME_LIMIT.as_secs()
+            super::shared::PLUGIN_TIME_LIMIT.as_secs()
           )));
         }
         Ok(mlua::VmState::Continue)
       },
     )?;
-    let shared = Rc::new(ScriptShared::new());
     let (http_tx, http_rx) = unbounded_channel();
     let http_client = reqwest::Client::builder()
       .timeout(std::time::Duration::from_secs(30))
@@ -144,7 +130,6 @@ impl ScriptEngine {
     Ok(ScriptEngine {
       lua,
       shared,
-      deadline,
       last_playback: None,
       last_queue: None,
       last_route: String::new(),
@@ -245,22 +230,14 @@ impl ScriptEngine {
   /// Execute a Lua chunk under the given plugin name (used as the chunk name for tracebacks).
   /// Public for tests.
   pub fn load_source(&mut self, plugin_name: &str, source: &str) -> mlua::Result<()> {
-    *self.shared.current_plugin.borrow_mut() = plugin_name.to_string();
-    let _limit = self.time_limit();
+    self.shared.enter(plugin_name);
     let result = self
       .lua
       .load(source)
       .set_name(plugin_name.to_string())
       .exec();
-    self.shared.current_plugin.borrow_mut().clear();
+    self.shared.leave();
     result
-  }
-
-  fn time_limit(&self) -> TimeLimit {
-    self
-      .deadline
-      .set(Some(std::time::Instant::now() + PLUGIN_TIME_LIMIT));
-    TimeLimit(Rc::clone(&self.deadline))
   }
 
   /// Refresh caches, emit Start, drain effects.
@@ -411,13 +388,12 @@ impl ScriptEngine {
     };
     drop(screens);
 
-    *self.shared.current_plugin.borrow_mut() = plugin.clone();
-    let _limit = self.time_limit();
+    self.shared.enter(&plugin);
     let call_result = catch_unwind(AssertUnwindSafe(|| match key {
       Some(key) => callback.call::<()>(key),
       None => callback.call::<()>(()),
     }));
-    self.shared.current_plugin.borrow_mut().clear();
+    self.shared.leave();
 
     let err_msg = match call_result {
       Ok(Ok(())) => return,
@@ -487,10 +463,9 @@ impl ScriptEngine {
       };
 
       let arg = arg.clone();
-      *self.shared.current_plugin.borrow_mut() = plugin.clone();
-      let _limit = self.time_limit();
+      self.shared.enter(&plugin);
       let call_result = catch_unwind(AssertUnwindSafe(|| callback.call::<()>(arg)));
-      self.shared.current_plugin.borrow_mut().clear();
+      self.shared.leave();
 
       let err_msg = match call_result {
         Ok(Ok(())) => None,
@@ -564,10 +539,9 @@ impl ScriptEngine {
         Ok(f) => f,
         Err(_) => continue,
       };
-      *self.shared.current_plugin.borrow_mut() = plugin.clone();
-      let _limit = self.time_limit();
+      self.shared.enter(&plugin);
       let call_result = catch_unwind(AssertUnwindSafe(|| callback.call::<()>(())));
-      self.shared.current_plugin.borrow_mut().clear();
+      self.shared.leave();
       match call_result {
         Ok(Ok(())) => {}
         Ok(Err(e)) => {
@@ -775,10 +749,9 @@ impl ScriptEngine {
     drop(entry);
     drop(callbacks);
 
-    *self.shared.current_plugin.borrow_mut() = plugin.clone();
-    let _limit = self.time_limit();
+    self.shared.enter(&plugin);
     let call_result = catch_unwind(AssertUnwindSafe(|| callback.call::<()>(())));
-    self.shared.current_plugin.borrow_mut().clear();
+    self.shared.leave();
 
     let err_msg = match call_result {
       Ok(Ok(())) => return true,
@@ -881,10 +854,9 @@ impl ScriptEngine {
       },
     };
 
-    *self.shared.current_plugin.borrow_mut() = plugin.clone();
-    let _limit = self.time_limit();
+    self.shared.enter(&plugin);
     let call_result = catch_unwind(AssertUnwindSafe(|| callback.call::<()>(args)));
-    self.shared.current_plugin.borrow_mut().clear();
+    self.shared.leave();
 
     match call_result {
       Ok(Ok(())) => {}
@@ -997,10 +969,9 @@ impl ScriptEngine {
       }
     };
 
-    *self.shared.current_plugin.borrow_mut() = plugin.clone();
-    let _limit = self.time_limit();
+    self.shared.enter(&plugin);
     let call_result = catch_unwind(AssertUnwindSafe(|| callback.call::<()>(args)));
-    self.shared.current_plugin.borrow_mut().clear();
+    self.shared.leave();
 
     match call_result {
       Ok(Ok(())) => {}
