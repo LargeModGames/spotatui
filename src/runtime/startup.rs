@@ -256,6 +256,7 @@ pub(super) async fn prepare_frontend(boot: Boot) -> FrontendHandles {
         app_ref.io_tx_clone(),
       )
     };
+    crate::infra::mcp::remove_stale_handshake();
     if enabled {
       match io_tx {
         Some(io_tx) => match crate::infra::mcp::spawn_listener(Arc::clone(&app), io_tx).await {
@@ -279,8 +280,6 @@ pub(super) async fn prepare_frontend(boot: Boot) -> FrontendHandles {
         },
         None => log::warn!("MCP: no IoEvent sender available; control socket not started"),
       }
-    } else {
-      crate::infra::mcp::remove_stale_handshake();
     }
   }
   // Native streaming needs a Spotify session; when it will be attempted, the
