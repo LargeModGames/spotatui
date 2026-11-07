@@ -367,6 +367,40 @@ fn source_playback_snapshot(
   None
 }
 
+#[cfg(any(feature = "audio-decode", feature = "art-decode", feature = "gui"))]
+fn is_subsonic_uri(uri: &str) -> bool {
+  uri.starts_with("subsonic:")
+}
+
+/// The cover URL for a fetch in this process. Only for Subsonic is it not the
+/// snapshot's `image_url`, because that URL carries the login.
+#[cfg(any(feature = "art-decode", feature = "gui"))]
+pub fn cover_fetch_url(app: &App, snapshot: &PlaybackSnapshot) -> Option<String> {
+  if snapshot.metadata.image_url.is_some() {
+    return snapshot.metadata.image_url.clone();
+  }
+  let uri = snapshot
+    .item_uri
+    .as_deref()
+    .filter(|uri| is_subsonic_uri(uri))?;
+  #[cfg(feature = "audio-decode-queue")]
+  if let Some(crate::infra::queue::QueueNowPlaying::Decoded(d)) = app.queue_now.as_ref() {
+    if d.track.uri.as_deref() == Some(uri) {
+      return d.track.image_url.clone();
+    }
+  }
+  #[cfg(feature = "subsonic")]
+  if let Some(subsonic) = app.subsonic_playback.as_ref() {
+    let track = subsonic.tracks.get(subsonic.index)?;
+    if track.uri.as_deref() == Some(uri) {
+      return track.image_url.clone();
+    }
+  }
+  #[cfg(not(any(feature = "audio-decode-queue", feature = "subsonic")))]
+  let _ = (app, uri);
+  None
+}
+
 /// Assemble a [`PlaybackSnapshot`] from a decoded source's fields. `image_url`
 /// is a directly-fetchable cover-art URL when the source provides one (Subsonic
 /// getCoverArt, YouTube thumbnail) and `None` otherwise (local files carry
@@ -394,6 +428,9 @@ fn source_snapshot(
     RepeatMode::Context => RepeatState::Context,
     RepeatMode::Track => RepeatState::Track,
   };
+  // Discord, MPRIS, Now Playing, the desktop host and the cloud feed publish
+  // this field, and a Subsonic URL carries the login (`u`, `t`, `s`).
+  let image_url = image_url.filter(|_| !item_uri.as_deref().is_some_and(is_subsonic_uri));
   PlaybackSnapshot {
     metadata: PlaybackMetadata {
       title,
@@ -573,6 +610,53 @@ pub(crate) mod tests {
       crate::core::user_config::UserConfig::new(),
       Some(SystemTime::now()),
     )
+  }
+
+  /// A playing Subsonic track whose stored cover URL is the real authenticated one.
+  #[cfg(feature = "subsonic")]
+  pub(crate) fn subsonic_snapshot() -> PlaybackSnapshot {
+    let source =
+      crate::infra::subsonic::SubsonicSource::new("http://music.example.com", "alice", "hunter2");
+    source_snapshot(
+      "Track".to_string(),
+      vec!["Artist".to_string()],
+      "Album".to_string(),
+      180_000,
+      Some("subsonic:track:7".to_string()),
+      Some(source.cover_art_url("al-7")),
+      0,
+      true,
+      &app(),
+    )
+  }
+
+  #[cfg(feature = "subsonic")]
+  #[test]
+  fn subsonic_snapshot_publishes_no_cover_url_with_the_login() {
+    let url = subsonic_snapshot().metadata.image_url.unwrap_or_default();
+    for param in ["u=", "t=", "s="] {
+      assert!(!url.contains(param), "{url}");
+    }
+  }
+
+  #[cfg(feature = "audio-decode")]
+  #[test]
+  fn decoded_snapshot_of_another_source_keeps_its_cover_url() {
+    let snapshot = source_snapshot(
+      "Video".to_string(),
+      vec![],
+      String::new(),
+      0,
+      Some("youtube:video:abc".to_string()),
+      Some("https://i.ytimg.com/vi/abc/hq.jpg".to_string()),
+      0,
+      true,
+      &app(),
+    );
+    assert_eq!(
+      snapshot.metadata.image_url.as_deref(),
+      Some("https://i.ytimg.com/vi/abc/hq.jpg")
+    );
   }
 
   #[allow(deprecated)]

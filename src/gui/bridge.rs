@@ -55,8 +55,8 @@ impl Link {
     if snapshot.item_uri.as_deref() != Some(uri) {
       return None;
     }
-    if let Some(url) = &snapshot.metadata.image_url {
-      return Some(CoverSource::Url(url.clone()));
+    if let Some(url) = crate::infra::media_metadata::cover_fetch_url(&app, snapshot) {
+      return Some(CoverSource::Url(url));
     }
     #[cfg(feature = "local-files")]
     if uri.starts_with("file:") {
