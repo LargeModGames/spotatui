@@ -669,7 +669,7 @@ mod tests {
     });
   }
 
-  /// A stand-in that passes the handshake for the token "tok" and then answers the
+  /// A stand-in that passes the handshake for the test token and then answers the
   /// replayed handshake with `reply`, whatever that is. Holds the socket open afterwards,
   /// so a rejection has to come from validating the line rather than a hang-up.
   fn fake_tui_answering_with(listener: TcpListener, reply: String) {
@@ -682,7 +682,7 @@ mod tests {
         tokio::spawn(async move {
           let (read_half, mut write_half) = stream.into_split();
           let mut lines = BufReader::new(read_half).lines();
-          if control::prove(&mut lines, &mut write_half, "tok")
+          if control::prove(&mut lines, &mut write_half, &control::test_token())
             .await
             .is_none()
             || !matches!(lines.next_line().await, Ok(Some(_)))
@@ -774,11 +774,11 @@ mod tests {
     // The player starts. The very next call must reach it, with no restart.
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    let seen = fake_tui(listener, "tok".to_string());
+    let seen = fake_tui(listener, control::test_token());
     relay.locate = Box::new(move || {
       Ok(Handshake {
         port,
-        token: "tok".to_string(),
+        token: control::test_token(),
         pid: 1,
       })
     });
@@ -800,8 +800,8 @@ mod tests {
     // on the *first* connection would instead send initialize twice.
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    let seen = fake_tui(listener, "tok".to_string());
-    let mut relay = relay_for(port, "tok");
+    let seen = fake_tui(listener, control::test_token());
+    let mut relay = relay_for(port, &control::test_token());
 
     let init = json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
                       "params": {"protocolVersion": "2025-06-18"}})
@@ -835,8 +835,8 @@ mod tests {
     // know whether it was applied, so it has to say exactly that.
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    let seen = fake_tui_that_dies_after_reading(listener, "tok".to_string());
-    let mut relay = relay_for(port, "tok");
+    let seen = fake_tui_that_dies_after_reading(listener, control::test_token());
+    let mut relay = relay_for(port, &control::test_token());
 
     let response: serde_json::Value =
       serde_json::from_str(&relay.handle(&modern_call()).await.unwrap()).unwrap();
@@ -862,7 +862,8 @@ mod tests {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let seen = impostor(listener);
-    let mut relay = relay_for(port, "secret-token");
+    let token = control::test_token();
+    let mut relay = relay_for(port, &token);
 
     let response: serde_json::Value =
       serde_json::from_str(&relay.handle(&modern_call()).await.unwrap()).unwrap();
@@ -870,10 +871,7 @@ mod tests {
     assert_eq!(response["result"]["isError"], json!(true), "{response}");
     assert!(response.to_string().contains("control token"), "{response}");
     let lines = wait_for_lines(&seen, 1).await;
-    assert!(
-      lines.iter().all(|line| !line.contains("secret-token")),
-      "{lines:?}"
-    );
+    assert!(lines.iter().all(|line| !line.contains(&token)), "{lines:?}");
   }
 
   #[tokio::test]
@@ -884,7 +882,7 @@ mod tests {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let port = listener.local_addr().unwrap().port();
     fake_tui_that_rejects_the_token(listener);
-    let mut relay = relay_for(port, "stale-token");
+    let mut relay = relay_for(port, &control::test_token());
 
     let response: serde_json::Value =
       serde_json::from_str(&relay.handle(&modern_call()).await.unwrap()).unwrap();
@@ -912,7 +910,7 @@ mod tests {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let port = listener.local_addr().unwrap().port();
     fake_tui_that_rejects_the_token(listener);
-    let mut relay = relay_for(port, "stale-token");
+    let mut relay = relay_for(port, &control::test_token());
     relay.handshake = Some(
       json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
              "params": {"protocolVersion": "2025-06-18"}})
@@ -942,7 +940,7 @@ mod tests {
       let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
       let port = listener.local_addr().unwrap().port();
       fake_tui_answering_with(listener, reply.clone());
-      let mut relay = relay_for(port, "tok");
+      let mut relay = relay_for(port, &control::test_token());
       relay.handshake = Some(
         json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
                "params": {"protocolVersion": "2025-06-18"}})
@@ -970,10 +968,10 @@ mod tests {
     // agent must not be told nothing happened.
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    fake_tui_that_never_answers(listener, "tok".to_string());
+    fake_tui_that_never_answers(listener, control::test_token());
     let mut relay = Relay {
       response_timeout: std::time::Duration::from_millis(100),
-      ..relay_for(port, "tok")
+      ..relay_for(port, &control::test_token())
     };
 
     let response: serde_json::Value = serde_json::from_str(
@@ -1003,8 +1001,8 @@ mod tests {
   async fn a_player_that_restarts_mid_session_costs_one_line_not_the_session() {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    let seen = fake_tui(listener, "tok".to_string());
-    let mut relay = relay_for(port, "tok");
+    let seen = fake_tui(listener, control::test_token());
+    let mut relay = relay_for(port, &control::test_token());
 
     relay.handle(&modern_call()).await.unwrap();
     // Kill the socket underneath, exactly as a restart does.
@@ -1028,8 +1026,8 @@ mod tests {
     // that never recovers.
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    let _seen = fake_tui(listener, "tok".to_string());
-    let mut relay = relay_for(port, "tok");
+    let _seen = fake_tui(listener, control::test_token());
+    let mut relay = relay_for(port, &control::test_token());
 
     for line in ["[]", "\"a string\"", "5", "{not json", "{\"id\": 7}"] {
       relay.handle(line).await;
@@ -1054,8 +1052,8 @@ mod tests {
     // fields the handshake exists to make unnecessary.
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    let _seen = fake_tui(listener, "tok".to_string());
-    let mut relay = relay_for(port, "tok");
+    let _seen = fake_tui(listener, control::test_token());
+    let mut relay = relay_for(port, &control::test_token());
 
     let init = json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
                       "params": {"protocolVersion": "2025-06-18"}})
@@ -1088,8 +1086,8 @@ mod tests {
     // request/response loop that waited on one would hang the whole session.
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    let seen = fake_tui(listener, "tok".to_string());
-    let mut relay = relay_for(port, "tok");
+    let seen = fake_tui(listener, control::test_token());
+    let mut relay = relay_for(port, &control::test_token());
 
     let notification = json!({"jsonrpc": "2.0", "method": "notifications/initialized"}).to_string();
     let answered = tokio::time::timeout(

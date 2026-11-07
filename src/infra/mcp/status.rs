@@ -252,13 +252,14 @@ mod tests {
     assert_eq!(value["checks"][0]["detail"], "missing");
   }
 
-  /// The listener's half of the handshake for the token "t".
+  /// The listener's half of the handshake for the test token.
   async fn handshake(
     lines: &mut tokio::io::Lines<BufReader<tokio::net::tcp::OwnedReadHalf>>,
     write_half: &mut tokio::net::tcp::OwnedWriteHalf,
   ) {
-    let token = super::super::control::prove(lines, write_half, "t").await;
-    assert_eq!(token.as_deref(), Some(r#"{"token":"t"}"#));
+    let token = super::super::control::test_token();
+    let line = super::super::control::prove(lines, write_half, &token).await;
+    assert_eq!(line, Some(format!(r#"{{"token":"{token}"}}"#)));
   }
 
   #[tokio::test]
@@ -285,7 +286,7 @@ mod tests {
 
     let handshake = Handshake {
       port,
-      token: "t".into(),
+      token: super::super::control::test_token(),
       pid: 1,
     };
     assert_eq!(probe(&handshake).await.unwrap(), proto::PROTOCOL_MODERN);
@@ -319,7 +320,7 @@ mod tests {
 
     let handshake = Handshake {
       port,
-      token: "t".into(),
+      token: super::super::control::test_token(),
       pid: 1,
     };
     let err = probe(&handshake).await.unwrap_err();
@@ -348,7 +349,7 @@ mod tests {
 
     let handshake = Handshake {
       port,
-      token: "t".into(),
+      token: super::super::control::test_token(),
       pid: 1,
     };
     let err = probe(&handshake).await.unwrap_err();

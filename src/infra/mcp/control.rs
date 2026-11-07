@@ -331,6 +331,15 @@ async fn read_proof_line(stream: &mut TcpStream) -> std::io::Result<String> {
   Ok(String::from_utf8_lossy(&line).into_owned())
 }
 
+/// One generated token per test process: CodeQL reads a literal HMAC key as a hard-coded secret.
+#[cfg(test)]
+pub(super) fn test_token() -> String {
+  static TOKEN: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+  TOKEN
+    .get_or_init(|| generate_token().expect("system random source"))
+    .clone()
+}
+
 /// The listener's half of the handshake under `token`, for test stand-ins: returns the token line.
 #[cfg(test)]
 pub(super) async fn prove(
@@ -388,14 +397,7 @@ mod tests {
 
     let server = tokio::spawn(async move {
       let (stream, _) = listener.accept().await.unwrap();
-      serve_connection(
-        stream,
-        app,
-        io_tx,
-        "correct-token".to_string(),
-        HANDSHAKE_TIMEOUT,
-      )
-      .await
+      serve_connection(stream, app, io_tx, test_token(), HANDSHAKE_TIMEOUT).await
     });
 
     let mut client = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
@@ -420,14 +422,7 @@ mod tests {
 
     tokio::spawn(async move {
       let (stream, _) = listener.accept().await.unwrap();
-      let _ = serve_connection(
-        stream,
-        app,
-        io_tx,
-        "correct-token".to_string(),
-        HANDSHAKE_TIMEOUT,
-      )
-      .await;
+      let _ = serve_connection(stream, app, io_tx, test_token(), HANDSHAKE_TIMEOUT).await;
     });
 
     let stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
@@ -435,7 +430,7 @@ mod tests {
     let mut reader = BufReader::new(read_half).lines();
 
     write_half
-      .write_all(b"{\"token\":\"correct-token\"}\n")
+      .write_all(format!("{{\"token\":\"{}\"}}\n", test_token()).as_bytes())
       .await
       .unwrap();
     let request = serde_json::json!({
@@ -515,7 +510,7 @@ mod tests {
         stream,
         app,
         io_tx,
-        "t".to_string(),
+        test_token(),
         std::time::Duration::from_millis(50),
       )
       .await
@@ -545,7 +540,7 @@ mod tests {
 
     let server = tokio::spawn(async move {
       let (stream, _) = listener.accept().await.unwrap();
-      serve_connection(stream, app, io_tx, "t".to_string(), HANDSHAKE_TIMEOUT).await
+      serve_connection(stream, app, io_tx, test_token(), HANDSHAKE_TIMEOUT).await
     });
 
     let mut client = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
