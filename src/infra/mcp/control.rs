@@ -303,6 +303,12 @@ pub(super) async fn authenticate(
     .await
     .map_err(|_| stale())?
     .map_err(|e| format!("could not read the control handshake: {e}"))?;
+  if line.is_empty() {
+    return Err(format!(
+      "the listener on 127.0.0.1:{} closed the connection before it proved it holds the control token",
+      handshake.port
+    ));
+  }
   let proven = line_field(&line, "proof")
     .is_some_and(|proof| tokens_match(&proof, &server_proof(&handshake.token, &nonce)));
   if !proven {
