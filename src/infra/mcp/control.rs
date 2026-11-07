@@ -332,8 +332,8 @@ pub(super) async fn prove(
   write_half: &mut tokio::net::tcp::OwnedWriteHalf,
   token: &str,
 ) -> Option<String> {
-  let hello: serde_json::Value = serde_json::from_str(&lines.next_line().await.ok()??).ok()?;
-  let proof = serde_json::json!({ "proof": server_proof(token, hello["nonce"].as_str()?) });
+  let nonce = line_field(&lines.next_line().await.ok()??, "nonce")?;
+  let proof = serde_json::json!({ "proof": server_proof(token, &nonce) });
   write_half
     .write_all(format!("{proof}\n").as_bytes())
     .await
