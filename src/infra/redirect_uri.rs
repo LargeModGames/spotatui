@@ -29,13 +29,18 @@ pub async fn redirect_uri_web_server_on(
   listener: tokio::net::TcpListener,
   accept: fn(&str) -> bool,
 ) -> Result<String, ()> {
-  run_accept_loop(listener, accept).await
+  run_accept_loop(listener, accept, CALLBACK_READ_TIMEOUT).await
 }
+
+/// A connection that sends nothing must not hold the one-at-a-time loop.
+const CALLBACK_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Accept-loop extracted so tests can inject a pre-bound listener (port 0) and
 /// avoid races caused by hard-coding a port that might already be in use.
 async fn run_accept_loop(
   listener: tokio::net::TcpListener,
   accept: fn(&str) -> bool,
+  read_timeout: std::time::Duration,
 ) -> Result<String, ()> {
   const MAX_CONSECUTIVE_ACCEPT_ERRORS: u8 = 20;
   let mut consecutive_accept_errors = 0u8;
@@ -57,9 +62,9 @@ async fn run_accept_loop(
     };
 
     let mut buffer = vec![0u8; 1000];
-    let n = match stream.read(&mut buffer).await {
-      Ok(0) | Err(_) => continue,
-      Ok(n) => n,
+    let n = match tokio::time::timeout(read_timeout, stream.read(&mut buffer)).await {
+      Ok(Ok(0) | Err(_)) | Err(_) => continue,
+      Ok(Ok(n)) => n,
     };
     let request = String::from_utf8_lossy(&buffer[..n]);
 
@@ -165,7 +170,7 @@ mod tests {
       let _ = stream.read(&mut buf).await;
     });
 
-    let result = run_accept_loop(listener, spotify_callback).await;
+    let result = run_accept_loop(listener, spotify_callback, CALLBACK_READ_TIMEOUT).await;
     client.await.unwrap();
 
     let url = result.expect("server should return Ok(url)");
@@ -208,10 +213,43 @@ mod tests {
       let _ = real.read(&mut vec![0u8; 4096]).await;
     });
 
-    let result = run_accept_loop(listener, spotify_callback).await;
+    let result = run_accept_loop(listener, spotify_callback, CALLBACK_READ_TIMEOUT).await;
     client.await.unwrap();
 
     let url = result.expect("server should return Ok(url)");
     assert!(url.contains("code=realcode456"), "unexpected url: {url}");
+  }
+  #[tokio::test]
+  async fn a_silent_connection_does_not_block_the_callback() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+
+    let client = tokio::spawn(async move {
+      use tokio::io::{AsyncReadExt, AsyncWriteExt};
+      let silent = tokio::net::TcpStream::connect(format!("127.0.0.1:{port}"))
+        .await
+        .unwrap();
+      let mut real = tokio::net::TcpStream::connect(format!("127.0.0.1:{port}"))
+        .await
+        .unwrap();
+      real
+        .write_all(
+          format!("GET /callback?code=late HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n").as_bytes(),
+        )
+        .await
+        .unwrap();
+      let _ = real.read(&mut vec![0u8; 4096]).await;
+      drop(silent);
+    });
+
+    let result = run_accept_loop(
+      listener,
+      spotify_callback,
+      std::time::Duration::from_millis(100),
+    )
+    .await;
+    client.await.unwrap();
+
+    assert!(result.unwrap().contains("code=late"));
   }
 }
