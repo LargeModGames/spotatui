@@ -175,9 +175,17 @@ export class PartyRoom extends DurableObject {
   }
 
   // A guest may not pass for the host in the guest list.
-  private guestName(name: string): string {
+  private guestName(name: string, self?: Session): string {
     const taken = [this.hostName, "Host"].some((n) => n.toLowerCase() === name.toLowerCase());
-    return taken ? "Guest" : name;
+    if (!taken) return name;
+    // A replacement that no other guest already has, so join and leave events stay apart.
+    const used = new Set(
+      [...this.sessions.values()].filter((s) => s !== self).map((s) => s.name.toLowerCase()),
+    );
+    for (let i = 1; ; i++) {
+      const candidate = i === 1 ? "Guest" : `Guest ${i}`;
+      if (!used.has(candidate.toLowerCase())) return candidate;
+    }
   }
 
   private sendJson(ws: WebSocket, obj: object): void {
@@ -210,7 +218,7 @@ export class PartyRoom extends DurableObject {
         let name = session.name;
         if (typeof msg.name === "string") {
           name = normalizeDisplayName(msg.name, session.isHost ? "Host" : "Guest");
-          if (!session.isHost) name = this.guestName(name);
+          if (!session.isHost) name = this.guestName(name, session);
         }
         const prevName = session.name;
         session.name = name;
