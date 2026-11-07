@@ -209,10 +209,7 @@ async fn serve_connection(
   // so a non-MCP line is fine here; the stdio channel the relay presents to the
   // agent stays pure MCP.
   let first_line = read_handshake_line(&mut reader, handshake_timeout).await?;
-  let nonce = serde_json::from_str::<serde_json::Value>(&first_line)
-    .ok()
-    .and_then(|value| value.get("nonce")?.as_str().map(str::to_string))
-    .filter(|nonce| (16..=128).contains(&nonce.len()));
+  let nonce = line_field(&first_line, "nonce").filter(|nonce| (16..=128).contains(&nonce.len()));
   let token_line = match nonce {
     Some(nonce) => {
       let proof = serde_json::json!({ "proof": server_proof(&expected_token, &nonce) });
@@ -225,14 +222,7 @@ async fn serve_connection(
     None => first_line,
   };
 
-  let presented = serde_json::from_str::<serde_json::Value>(&token_line)
-    .ok()
-    .and_then(|value| {
-      value
-        .get("token")
-        .and_then(|token| token.as_str())
-        .map(str::to_string)
-    });
+  let presented = line_field(&token_line, "token");
 
   let authorised = presented
     .as_deref()
@@ -248,6 +238,15 @@ async fn serve_connection(
   let executor = AppExecutor::new(app, io_tx);
   server::serve(reader, write_half, &executor).await?;
   Ok(())
+}
+
+/// The string at `key` in a one-line JSON handshake object.
+fn line_field(line: &str, key: &str) -> Option<String> {
+  serde_json::from_str::<serde_json::Value>(line)
+    .ok()?
+    .get(key)?
+    .as_str()
+    .map(str::to_string)
 }
 
 /// One handshake line, capped because it is read before the token check.
@@ -304,9 +303,7 @@ pub(super) async fn authenticate(
     .await
     .map_err(|_| stale())?
     .map_err(|e| format!("could not read the control handshake: {e}"))?;
-  let proven = serde_json::from_str::<serde_json::Value>(&line)
-    .ok()
-    .and_then(|reply| reply.get("proof")?.as_str().map(str::to_string))
+  let proven = line_field(&line, "proof")
     .is_some_and(|proof| tokens_match(&proof, &server_proof(&handshake.token, &nonce)));
   if !proven {
     return Err(stale());

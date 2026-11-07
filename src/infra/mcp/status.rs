@@ -252,6 +252,15 @@ mod tests {
     assert_eq!(value["checks"][0]["detail"], "missing");
   }
 
+  /// The listener's half of the handshake for the token "t".
+  async fn handshake(
+    lines: &mut tokio::io::Lines<BufReader<tokio::net::tcp::OwnedReadHalf>>,
+    write_half: &mut tokio::net::tcp::OwnedWriteHalf,
+  ) {
+    let token = super::super::control::prove(lines, write_half, "t").await;
+    assert_eq!(token.as_deref(), Some(r#"{"token":"t"}"#));
+  }
+
   #[tokio::test]
   async fn probe_reports_the_protocol_when_the_server_answers() {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
@@ -262,8 +271,7 @@ mod tests {
       let (read_half, mut write_half) = stream.into_split();
       let mut lines = BufReader::new(read_half).lines();
       // Handshake, then the discover request.
-      let token = super::super::control::prove(&mut lines, &mut write_half, "t").await;
-      assert_eq!(token.as_deref(), Some(r#"{"token":"t"}"#));
+      handshake(&mut lines, &mut write_half).await;
       let _request = lines.next_line().await.unwrap();
       let response = json!({
         "jsonrpc": "2.0", "id": "status-probe",
@@ -326,8 +334,7 @@ mod tests {
       let (stream, _) = listener.accept().await.unwrap();
       let (read_half, mut write_half) = stream.into_split();
       let mut lines = BufReader::new(read_half).lines();
-      let token = super::super::control::prove(&mut lines, &mut write_half, "t").await;
-      assert_eq!(token.as_deref(), Some(r#"{"token":"t"}"#));
+      handshake(&mut lines, &mut write_half).await;
       let _ = lines.next_line().await;
       let response = json!({
         "jsonrpc": "2.0", "id": "status-probe",
