@@ -18,7 +18,8 @@ export function sourceOf(uri: string | null): Source | null {
 
 /** A cover that only the server's `/cover` gives: in a file's tags, or behind a Subsonic login. */
 export function coverOnlyFromServer(uri: string): boolean {
-  return uri.startsWith("file:") || uri.startsWith("subsonic:");
+  const source = sourceOf(uri);
+  return source === "Local" || source === "Subsonic";
 }
 
 /** A duration as `m:ss`, or `h:mm:ss` from one hour. */
