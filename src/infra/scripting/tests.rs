@@ -3405,3 +3405,16 @@ mod config_tests {
     }
   }
 }
+
+#[test]
+fn a_plugin_that_loops_forever_is_stopped() {
+  let mut engine = ScriptEngine::new().unwrap();
+  let err = engine
+    .load_source("spin", "while true do end")
+    .unwrap_err()
+    .to_string();
+  assert!(err.contains("stopped after running"), "{err}");
+  engine
+    .load_source("fine", "local x = 0 for i = 1, 1000 do x = x + i end")
+    .unwrap();
+}
