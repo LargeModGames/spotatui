@@ -156,6 +156,52 @@ pub const PRESETS: &[AgentPreset] = &[
   },
 ];
 
+/// `command` with the flags that stop the CLI from acting on its prompt. The
+/// prompt carries track titles that anyone can write. A command that names its
+/// own tool or sandbox flag keeps it. The other CLIs have no such flag, or
+/// already deny tools in prompt mode (`copilot -p`).
+fn without_agent_tools(mut command: Vec<String>) -> Vec<String> {
+  let program = command
+    .first()
+    .and_then(|program| std::path::Path::new(program).file_stem())
+    .map(|stem| stem.to_string_lossy().to_ascii_lowercase());
+  let names_one_of = |flags: &[&str]| {
+    command.iter().any(|arg| {
+      flags
+        .iter()
+        .any(|flag| arg == flag || arg.starts_with(&format!("{flag}=")))
+    })
+  };
+  match program.as_deref() {
+    Some("claude")
+      if !names_one_of(&[
+        "--tools",
+        "--allowedTools",
+        "--allowed-tools",
+        "--disallowedTools",
+        "--disallowed-tools",
+        "--permission-mode",
+        "--dangerously-skip-permissions",
+      ]) =>
+    {
+      command.splice(1..1, ["--tools".to_string(), String::new()]);
+    }
+    Some("codex")
+      if command.get(1).map(String::as_str) == Some("exec")
+        && !names_one_of(&[
+          "-s",
+          "--sandbox",
+          "--full-auto",
+          "--dangerously-bypass-approvals-and-sandbox",
+        ]) =>
+    {
+      command.splice(2..2, ["--sandbox".to_string(), "read-only".to_string()]);
+    }
+    _ => {}
+  }
+  command
+}
+
 /// Look up a preset by the binary name, for config convenience.
 pub fn preset(name: &str) -> Option<&'static AgentPreset> {
   PRESETS.iter().find(|preset| preset.key == name)
@@ -187,7 +233,7 @@ impl AgentCliBrain {
       ));
     }
     Ok(Self {
-      command,
+      command: without_agent_tools(command),
       prompt_via,
       timeout,
       cwd,
@@ -625,6 +671,46 @@ esac"#,
       vec!["codex", "exec", "-"]
     );
     assert_eq!(preset("gemini").unwrap().argv(None), vec!["gemini", "-p"]);
+  }
+
+  fn spawned(argv: &[&str]) -> Vec<String> {
+    brain(
+      argv.iter().map(|part| part.to_string()).collect(),
+      PromptDelivery::Stdin,
+    )
+    .command
+  }
+
+  #[test]
+  fn the_claude_preset_runs_with_its_tools_off() {
+    let argv = preset("claude").unwrap().argv(Some("haiku"));
+    let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
+    assert_eq!(
+      spawned(&argv),
+      vec!["claude", "--tools", "", "--model", "haiku", "-p"]
+    );
+  }
+
+  #[test]
+  fn the_codex_preset_runs_in_a_read_only_sandbox() {
+    assert_eq!(
+      spawned(&["codex", "exec", "-"]),
+      vec!["codex", "exec", "--sandbox", "read-only", "-"]
+    );
+  }
+
+  #[test]
+  fn a_command_that_names_its_own_tool_flag_keeps_it() {
+    let argv = ["claude", "--allowedTools", "Read", "-p"];
+    assert_eq!(spawned(&argv), argv);
+    let argv = ["codex", "exec", "-s", "workspace-write", "-"];
+    assert_eq!(spawned(&argv), argv);
+  }
+
+  #[test]
+  fn a_cli_without_a_tools_flag_runs_as_written() {
+    let argv = ["copilot", "--no-color", "-p"];
+    assert_eq!(spawned(&argv), argv);
   }
 
   #[test]

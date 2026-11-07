@@ -298,9 +298,15 @@ several seconds of startup latency, so a multi-step turn is several of those.
 That is what the four-step cap bounds. The API backends below keep one HTTP
 connection per step instead and are correspondingly quicker.
 
-The agent runs in a scratch directory (`~/.config/spotatui/dj-scratch`), *not* your
+The agent runs in a scratch directory (`~/.local/state/spotatui/dj-scratch`), *not* your
 current directory — otherwise it reads the `CLAUDE.md` and source files of whatever
 project you happen to be in and starts recommending music about Rust.
+
+The prompt carries track titles, and anyone can write a title. So spotatui turns the
+agent's own tools off: `claude` gets `--tools ""` and `codex exec` gets
+`--sandbox read-only`, unless your `dj_agent_command` already names a tool or sandbox
+flag. `copilot -p` denies tools in prompt mode by itself. `opencode`, `agy` and `gemini`
+have no such flag, so they run with whatever permissions you gave them.
 
 ### `anthropic` — API key
 
@@ -419,7 +425,7 @@ batch rather than per track is what keeps latency and quota sane.
 | "did not answer within 90s" | Raise `dj_agent_timeout_secs`. If you go much above ~180, also revisit auto-queue: the refill watermark assumes a round trip well under the queue's runway. |
 | "could not read a decision out of … output" | The CLI answered with prose and no JSON. Check it is logged in by running the same command by hand. |
 | "There's an issue with the selected model (…)" | `dj_agent_model` names something that CLI does not accept. It fails locally in milliseconds without calling anything, so nothing was spent: pick another model with <kbd>Ctrl</kbd>+<kbd>G</kbd>, or clear the key. |
-| `codex`: "Not inside a trusted directory and --skip-git-repo-check was not specified" | `codex exec` refuses to run in the DJ's scratch directory. Known limitation: use another agent (`claude`, `agy`) or an API backend, or trust `~/.config/spotatui/dj-scratch` in your codex config. |
+| `codex`: "Not inside a trusted directory and --skip-git-repo-check was not specified" | `codex exec` refuses to run in the DJ's scratch directory. Known limitation: use another agent (`claude`, `agy`) or an API backend, or trust `~/.local/state/spotatui/dj-scratch` in your codex config. |
 | The DJ answers a question you did not ask | `agy` ignores stdin, so a config carrying `dj_agent_prompt_via: stdin` delivers the prompt nowhere. Remove that key so the preset decides, or set it to `arg`. |
 | It never asked which AI to use | Something in your config already counts as a deliberate choice. See [It never asked me](#it-never-asked-me), or just press <kbd>Ctrl</kbd>+<kbd>G</kbd>. |
 | "no API key for the Anthropic DJ backend" | `export SPOTATUI_DJ_API_KEY=…`. |

@@ -41,7 +41,8 @@ pub const API_KEY_ENV: &str = "SPOTATUI_DJ_API_KEY";
 /// launched inside a repository answers with that repository on its mind.
 ///
 /// Resolved once per process, so every step of every turn runs from the same
-/// directory and the fallback is reported once. The config dir is preferred; a
+/// directory and the fallback is reported once. The state dir is preferred, not
+/// the config dir beside the passwords in `config.yml`; a
 /// private subdirectory of the OS temp dir is the fallback (#478: a build
 /// sandbox sets `HOME` to a path that cannot be created, and `spawn` with a
 /// missing cwd fails with an ENOENT that looks like a missing binary).
@@ -50,7 +51,7 @@ fn agent_scratch_dir() -> PathBuf {
   DIR
     .get_or_init(|| {
       scratch_dir_from(
-        crate::core::user_config::default_app_config_dir().map(|dir| dir.join("dj-scratch")),
+        crate::core::paths::app_state_dir().map(|dir| dir.join("dj-scratch")),
         &std::env::temp_dir(),
       )
     })
@@ -702,9 +703,9 @@ mod tests {
   }
 
   #[test]
-  fn the_config_scratch_dir_is_used_when_it_can_be_created() {
+  fn the_state_scratch_dir_is_used_when_it_can_be_created() {
     let temp = tempfile::tempdir().unwrap();
-    let preferred = temp.path().join("config").join("dj-scratch");
+    let preferred = temp.path().join("state").join("dj-scratch");
     let chosen = scratch_dir_from(Some(preferred.clone()), temp.path());
     assert_eq!(chosen, preferred);
     assert!(chosen.is_dir(), "it is created, not only named");
