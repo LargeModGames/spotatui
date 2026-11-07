@@ -1,4 +1,3 @@
-use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -230,14 +229,13 @@ impl ScriptEngine {
   /// Execute a Lua chunk under the given plugin name (used as the chunk name for tracebacks).
   /// Public for tests.
   pub fn load_source(&mut self, plugin_name: &str, source: &str) -> mlua::Result<()> {
-    self.shared.enter(plugin_name);
-    let result = self
-      .lua
-      .load(source)
-      .set_name(plugin_name.to_string())
-      .exec();
-    self.shared.leave();
-    result
+    let lua = &self.lua;
+    self
+      .shared
+      .run(plugin_name, || {
+        lua.load(source).set_name(plugin_name.to_string()).exec()
+      })
+      .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
   }
 
   /// Refresh caches, emit Start, drain effects.
@@ -388,12 +386,10 @@ impl ScriptEngine {
     };
     drop(screens);
 
-    self.shared.enter(&plugin);
-    let call_result = catch_unwind(AssertUnwindSafe(|| match key {
+    let call_result = self.shared.run(&plugin, || match key {
       Some(key) => callback.call::<()>(key),
       None => callback.call::<()>(()),
-    }));
-    self.shared.leave();
+    });
 
     let err_msg = match call_result {
       Ok(Ok(())) => return,
@@ -463,9 +459,7 @@ impl ScriptEngine {
       };
 
       let arg = arg.clone();
-      self.shared.enter(&plugin);
-      let call_result = catch_unwind(AssertUnwindSafe(|| callback.call::<()>(arg)));
-      self.shared.leave();
+      let call_result = self.shared.run(&plugin, || callback.call::<()>(arg));
 
       let err_msg = match call_result {
         Ok(Ok(())) => None,
@@ -539,9 +533,7 @@ impl ScriptEngine {
         Ok(f) => f,
         Err(_) => continue,
       };
-      self.shared.enter(&plugin);
-      let call_result = catch_unwind(AssertUnwindSafe(|| callback.call::<()>(())));
-      self.shared.leave();
+      let call_result = self.shared.run(&plugin, || callback.call::<()>(()));
       match call_result {
         Ok(Ok(())) => {}
         Ok(Err(e)) => {
@@ -749,9 +741,7 @@ impl ScriptEngine {
     drop(entry);
     drop(callbacks);
 
-    self.shared.enter(&plugin);
-    let call_result = catch_unwind(AssertUnwindSafe(|| callback.call::<()>(())));
-    self.shared.leave();
+    let call_result = self.shared.run(&plugin, || callback.call::<()>(()));
 
     let err_msg = match call_result {
       Ok(Ok(())) => return true,
@@ -854,9 +844,7 @@ impl ScriptEngine {
       },
     };
 
-    self.shared.enter(&plugin);
-    let call_result = catch_unwind(AssertUnwindSafe(|| callback.call::<()>(args)));
-    self.shared.leave();
+    let call_result = self.shared.run(&plugin, || callback.call::<()>(args));
 
     match call_result {
       Ok(Ok(())) => {}
@@ -969,9 +957,7 @@ impl ScriptEngine {
       }
     };
 
-    self.shared.enter(&plugin);
-    let call_result = catch_unwind(AssertUnwindSafe(|| callback.call::<()>(args)));
-    self.shared.leave();
+    let call_result = self.shared.run(&plugin, || callback.call::<()>(args));
 
     match call_result {
       Ok(Ok(())) => {}

@@ -138,17 +138,16 @@ impl ScriptShared {
     }
   }
 
-  /// Starts one entry into `plugin`'s code: names the caller and arms the time limit.
-  pub(super) fn enter(&self, plugin: &str) {
+  /// Runs one entry into `plugin`'s code, with the caller named and the time limit armed.
+  pub(super) fn run<R>(&self, plugin: &str, call: impl FnOnce() -> R) -> std::thread::Result<R> {
     *self.current_plugin.borrow_mut() = plugin.to_string();
     self
       .deadline
       .set(Some(std::time::Instant::now() + PLUGIN_TIME_LIMIT));
-  }
-
-  pub(super) fn leave(&self) {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(call));
     self.current_plugin.borrow_mut().clear();
     self.deadline.set(None);
+    result
   }
 
   /// Path of a plugin's storage file, when a config dir is known.
