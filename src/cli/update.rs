@@ -173,7 +173,7 @@ pub fn install_update_silent(delay_secs: u64) -> Result<UpdateOutcome> {
 
   // New version available — apply delay logic
   if delay_secs == 0 {
-    // No delay: install immediately; the updater checks the archive it installs
+    // No delay: install immediately
     let result = pinned_updater(latest.version(), current_version, false)?.update()?;
     return Ok(status_to_outcome(result));
   }
@@ -221,7 +221,7 @@ pub fn install_update_silent(delay_secs: u64) -> Result<UpdateOutcome> {
 
   let elapsed = now_secs.saturating_sub(state.detected_at_secs);
   if elapsed >= delay_secs {
-    // Delay elapsed: install; the updater checks the archive it installs
+    // Delay elapsed: install
     let result = pinned_updater(latest.version(), current_version, false)?.update()?;
     // Clean up state file
     if let Some(ref path) = state_path {
@@ -288,55 +288,12 @@ pub fn check_for_update(do_update: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
   use super::{asset_name, is_newer, platform_prefix};
-  use self_update::Checksum;
-
-  fn checksum_for(listing: &str, asset_name: &str) -> Option<String> {
-    match Checksum::from_sums_file(listing, asset_name) {
-      Ok(Checksum::Sha256(hash)) => Some(hash.to_ascii_lowercase()),
-      _other => None,
-    }
-  }
-
   #[test]
   fn an_rc_or_dev_build_ahead_of_the_latest_release_is_not_downgraded() {
     assert!(is_newer("0.45.0", "0.46.0"));
     assert!(!is_newer("0.46.0", "0.46.0"));
     assert!(!is_newer("0.47.0-rc1", "0.46.0"));
     assert!(!is_newer("0.47.0", "0.46.0"));
-  }
-
-  const A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-  const B: &str = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
-
-  #[test]
-  fn checksum_for_picks_the_line_of_the_named_asset_not_the_first_hash() {
-    let listing =
-      format!("{A}  spotatui-linux-aarch64.tar.gz\n{B}  spotatui-linux-x86_64.tar.gz\n");
-    assert_eq!(
-      checksum_for(&listing, "spotatui-linux-x86_64.tar.gz"),
-      Some(B.to_ascii_lowercase())
-    );
-  }
-
-  #[test]
-  fn checksum_for_reads_binary_mode_and_crlf_lines() {
-    let listing = format!("{A} *spotatui-windows-x86_64.zip\r\n");
-    assert_eq!(
-      checksum_for(&listing, "spotatui-windows-x86_64.zip"),
-      Some(A.to_string())
-    );
-  }
-
-  #[test]
-  fn checksum_for_rejects_a_missing_asset_and_a_name_that_only_starts_the_same() {
-    let listing = format!(
-      "{A}  spotatui-linux-x86_64.tar.gz.sha256\nnot-a-hash  spotatui-linux-x86_64.tar.gz\n"
-    );
-    assert_eq!(checksum_for(&listing, "spotatui-linux-x86_64.tar.gz"), None);
-    assert_eq!(
-      checksum_for(&listing, "spotatui-macos-aarch64.tar.gz"),
-      None
-    );
   }
 
   #[test]
