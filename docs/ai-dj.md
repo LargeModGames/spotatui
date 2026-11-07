@@ -293,10 +293,10 @@ suggestion costs you one error message and nothing else.
 Any other headless command works too, since spotatui writes the prompt and reads
 stdout and nothing is hardcoded about these six. **A multi-part command you wrote
 yourself never gains a model flag**, so your own argv keeps ownership of its own flags.
-It can gain the tools-off flag of its CLI, unless it already names a tool or sandbox
-flag (see below). The single exception is the shipped
-`["claude", "-p"]`: it is byte-identical to what the preset produces, so it still
-counts as the preset shape and can still take a model.
+It can gain the restricting flag of its CLI, unless it already names a tool or sandbox
+flag (see below). The exception is a command byte-identical to what a preset produces
+with no model, such as the shipped `["claude", "-p"]` or `["codex", "exec", "-"]`: it
+still counts as the preset shape and takes `dj_agent_model`.
 
 **Be clear about the cost of this mode:** every step is a fresh subprocess with
 several seconds of startup latency, so a multi-step turn is several of those.
@@ -307,10 +307,11 @@ The agent runs in a scratch directory (`~/.local/state/spotatui/dj-scratch`), *n
 current directory — otherwise it reads the `CLAUDE.md` and source files of whatever
 project you happen to be in and starts recommending music about Rust.
 
-The prompt carries track titles, and anyone can write a title. So spotatui turns the
-agent's own tools off: `claude` gets `--tools ""` and `codex exec` gets
-`--sandbox read-only`, unless your `dj_agent_command` already names a tool or sandbox
-flag. `copilot -p` denies tools in prompt mode by itself. `opencode`, `agy` and `gemini`
+The prompt carries track titles, and anyone can write a title. So spotatui restricts
+the agent: `claude` gets `--tools ""`, which turns its tools off, and `codex exec` gets
+`--sandbox read-only`, which stops writes but still lets it read files and run
+read-only commands. Neither is added when your `dj_agent_command` already names a tool
+or sandbox flag. `copilot -p` denies tools in prompt mode by itself. `opencode`, `agy` and `gemini`
 have no such flag, so they run with whatever permissions you gave them.
 
 ### `anthropic` — API key
