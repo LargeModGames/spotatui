@@ -383,11 +383,7 @@ mod tests {
 
   #[test]
   fn a_catalogue_name_loses_its_control_characters() {
-    let track = Format::Track(
-      "Song]0;owned
-Next"
-        .to_string(),
-    );
+    let track = Format::Track("Song\x1b]0;owned\x07\nNext".to_string());
     assert_eq!(track.inner(UserConfig::new()), "Song]0;ownedNext");
   }
 
