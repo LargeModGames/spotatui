@@ -119,6 +119,15 @@ pub fn clear_handshake() {
   }
 }
 
+/// Remove the control file of an earlier run. A UI launch holds the
+/// single-instance lock, so a file there while MCP is off is stale, and a relay
+/// would trust whatever listens on its port.
+pub fn remove_stale_handshake() {
+  if let Ok(path) = handshake_path() {
+    let _ = std::fs::remove_file(path);
+  }
+}
+
 fn clear_handshake_at(path: &Path, pid: u32) {
   let ours = std::fs::read_to_string(path)
     .ok()

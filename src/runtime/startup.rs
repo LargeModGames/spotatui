@@ -279,6 +279,8 @@ pub(super) async fn prepare_frontend(boot: Boot) -> FrontendHandles {
         },
         None => log::warn!("MCP: no IoEvent sender available; control socket not started"),
       }
+    } else {
+      crate::infra::mcp::remove_stale_handshake();
     }
   }
   // Native streaming needs a Spotify session; when it will be attempted, the
