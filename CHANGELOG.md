@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [v0.48.0] 2026-11-07
 
 ### Added
 
@@ -9,6 +9,12 @@
 - **Panes in the desktop app and the browser GUI**: the lyrics, the visualizer, the cover art, the Now Playing panel and the queue are panes you drag by their header. While you drag, a box shows where the pane will dock: along an edge of the window or of another pane, or in place of another pane. Release away from those places and the pane floats over the page. A button in the top bar hides the main view and gives its room to the panes. The line between two panes resizes them and snaps to thirds, quarters and halves. The top bar and the player bar move to any edge of the window: on the left or the right they become columns. The layout is saved as `gui_pane_layout` in `state.yml`, apart from the terminal's, and `Alt+0` resets it.
 - **Search the add-to-playlist picker**: press `/` (the `search` key) in the picker that `w` and `W` open and type part of a playlist name. The list narrows to the matching playlists you can add to, including the ones inside folders. `Enter` keeps the search and a second `Enter` adds the track, `Esc` clears the search, and a second `Esc` closes the picker ([#924](https://github.com/LargeModGames/spotatui/issues/924)).
 - **List a playlist's tracks from the CLI**: `spotatui list --playlist-tracks <URI>` prints every track of a playlist, given its `spotify:playlist:` URI or an `open.spotify.com/playlist/` link, in the `--format` you choose (`%t - %a (%u)` by default). `--limit N` stops after N tracks and asks Spotify only for those. Playlists the Web API refuses are read through the native session, and a playlist that cannot be read exits non-zero instead of printing nothing ([#908](https://github.com/LargeModGames/spotatui/issues/908)).
+- **A Visualizer page in the desktop app and the browser GUI**: key `7` or the new top bar button opens a page with the nine terminal visualizer styles: Cava, Bar Graph, Head Unit, Analog VU, Winamp, Phosphor Scope, Outrun, Rack EQ and Cassette Deck. A dropdown, the Next style button or `V` picks the style, and the page remembers its own choice apart from the terminal's `behavior.visualizer_style`. Like the player bar visualizer, it shows sound only while spotatui plays on this computer, on Windows and Linux.
+- **Jump to a lyric line in the terminal**: browse the synced lyrics and press `Enter` (the `submit` key) on a line to seek there. The lyrics then follow playback again from that position. When the lyrics are not synced, `Enter` does nothing.
+
+### Changed
+
+- **The Chinese translation is complete**: the GUI navigation, playback and onboarding, the search and library actions, the statistics and social views, the Soloist rows and the remaining key rows and help lines are translated in Simplified and Traditional Chinese. Only product names stay in English ([#726](https://github.com/LargeModGames/spotatui/issues/726)).
 
 ### Security
 
@@ -28,6 +34,19 @@
 - **The AI DJ prompt's caret follows the cursor**: after Left, Home or a Backspace in the middle of the text, the caret stayed painted at the end of the prompt. It now sits where the next character goes ([#945](https://github.com/LargeModGames/spotatui/issues/945)).
 - **The log's startup line lists every compiled feature**: `features:` left out `soloist`, `gui`, `apple-music`, `spotify-session`, the playback backends and the shared decode features, so a release build with Soloist looked like it had none. A test now fails when a feature in `Cargo.toml` is missing from the list ([#949](https://github.com/LargeModGames/spotatui/issues/949)).
 - **Long names and queries stay inside the Create Playlist inputs**: typing a playlist name or an Add Tracks search longer than the box ran the text past the right border and carried the cursor out of it. The text now scrolls and the cursor stays at the right edge ([#829](https://github.com/LargeModGames/spotatui/issues/829)).
+- **Recently Played no longer lists a track two or three times**: the listening history wrote a stub listen of about a second after each real one, on a Soloist track change and when a new track still reported the old track's position for a moment. The stubs are gone, and Recently Played lists only listens of 30 seconds or more, which also hides the stubs already saved ([#981](https://github.com/LargeModGames/spotatui/issues/981)).
+- **Cover art shows in iTerm2**: iTerm2 answers the Kitty graphics query but cannot draw Kitty images, so the cover stayed blank. spotatui now picks the iTerm2 protocol there, also inside tmux ([#978](https://github.com/LargeModGames/spotatui/issues/978)).
+- **Native queue playback no longer stops after 10 to 20 minutes**: the librespot fork is at 0.8.7, where a cluster update with an empty active device id no longer counts as a handoff to another device ([#676](https://github.com/LargeModGames/spotatui/issues/676)).
+- **Ten open bug reports repaired**:
+  - The macOS release binary links portaudio statically, so the `install.sh`, binstall and self-update builds start without Homebrew portaudio ([#890](https://github.com/LargeModGames/spotatui/issues/890)).
+  - A screen-saver service that stops answering no longer freezes the UI: the keep-awake inhibitor runs on its own thread, and a failed inhibitor is tried once per play instead of on every tick ([#944](https://github.com/LargeModGames/spotatui/issues/944)).
+  - A pause right after a native skip stays a pause: it cancels the delayed play the skip sends 300 ms later ([#448](https://github.com/LargeModGames/spotatui/issues/448)).
+  - After three unavailable tracks in a row the native player stops instead of pausing, so Spotify Connect no longer advances through the whole queue over silence, and a failed preload does not count toward the three ([#537](https://github.com/LargeModGames/spotatui/issues/537)).
+  - Without a Spotify login, the Playlists panel names the key that logs in ([#803](https://github.com/LargeModGames/spotatui/issues/803)).
+  - Qobuz replays a track from its downloaded file only when the download finished; a partial file is fetched again ([#490](https://github.com/LargeModGames/spotatui/issues/490)).
+  - In the GUI, a show or radio page whose load failed asks again when you open it again, and the Library pages through the followed artists ([#793](https://github.com/LargeModGames/spotatui/issues/793), [#792](https://github.com/LargeModGames/spotatui/issues/792)).
+  - The song counter question reads the same in the terminal and the GUI, with Yes as the main button ([#764](https://github.com/LargeModGames/spotatui/issues/764)).
+  - A guest with shared control in a listening party plays, pauses and skips for the room, from the keys, the GUI and the OS media keys ([#442](https://github.com/LargeModGames/spotatui/issues/442)).
 
 ## [v0.47.0] 2026-10-25
 
