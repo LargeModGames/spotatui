@@ -262,6 +262,10 @@ A **bare binary name expands to a known preset**, so this is enough:
 | `opencode` | `opencode run` | `opencode run -m openai/gpt-5.4` | argv (trailing positional) |
 | `gemini` (legacy) | `gemini -p` | `gemini -m MODEL -p` | argv |
 
+At run time `claude` also gets `--tools ""` right after the program name, and `codex exec`
+gets `--sandbox read-only` after `exec` (see below), so `claude -p` runs as
+`claude --tools "" -p`.
+
 `agy` is Google's current CLI. The Gemini CLI it superseded is kept as a preset only
 so an existing config keeps working, and it is not offered in the picker unless the
 binary is installed.
@@ -288,8 +292,9 @@ suggestion costs you one error message and nothing else.
 
 Any other headless command works too, since spotatui writes the prompt and reads
 stdout and nothing is hardcoded about these six. **A multi-part command you wrote
-yourself is used exactly as written and never gains a model flag**, so your own argv
-keeps ownership of its own flags. The single exception is the shipped
+yourself never gains a model flag**, so your own argv keeps ownership of its own flags.
+It can gain the tools-off flag of its CLI, unless it already names a tool or sandbox
+flag (see below). The single exception is the shipped
 `["claude", "-p"]`: it is byte-identical to what the preset produces, so it still
 counts as the preset shape and can still take a model.
 
