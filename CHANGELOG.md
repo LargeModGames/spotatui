@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **A free Qobuz account gets a clear message instead of a parse error**: playing a track with a free account showed the raw error `missing field url_template`, because Qobuz answers `file/url` without a stream for an account that may not play the full track. spotatui now says that streaming needs a paid Qobuz subscription, and it no longer opens a second stream session to retry ([#984](https://github.com/LargeModGames/spotatui/issues/984)).
+
 ## [v0.48.0] 2026-11-07
 
 ### Added
