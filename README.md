@@ -255,6 +255,7 @@ Everyone who helped, with code or without. To get on this list, see [Recognition
       <td align="center" valign="top" width="14.28%"><a href="http://www.anuragx.in"><img src="https://avatars.githubusercontent.com/u/62888566?v=4?s=100" width="100px;" alt="anurag verma"/><br /><sub><b>anurag verma</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=deauthe" title="Code">💻</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/IDLinares"><img src="https://avatars.githubusercontent.com/u/32106028?v=4?s=100" width="100px;" alt="Isaiah Linares"/><br /><sub><b>Isaiah Linares</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=IDLinares" title="Code">💻</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/everyoneexe"><img src="https://avatars.githubusercontent.com/u/198324830?v=4?s=100" width="100px;" alt="everyoneexe"/><br /><sub><b>everyoneexe</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=everyoneexe" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/Radhik-Amp"><img src="https://avatars.githubusercontent.com/u/158242842?v=4?s=100" width="100px;" alt="Radhik"/><br /><sub><b>Radhik</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=Radhik-Amp" title="Code">💻</a></td>
     </tr>
   </tbody>
 </table>
