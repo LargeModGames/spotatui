@@ -33,7 +33,8 @@ use tokio::sync::Mutex;
 use super::auth::{self, QobuzBundleCache};
 use super::stream::progressive;
 use super::{
-  track_id_from_uri, QobuzPlaybackState, QobuzSource, ResumePoint, StreamQuality, Unauthorized,
+  track_id_from_uri, NoFullStream, QobuzPlaybackState, QobuzSource, ResumePoint, StreamQuality,
+  Unauthorized,
 };
 use crate::core::app::{App, TrackTableContext};
 use crate::core::source::{MediaSource, Searcher, Source};
@@ -270,6 +271,9 @@ fn report_locked(app: &mut App, step: QobuzStep, err: anyhow::Error) {
     auth::set_token(None);
     let strings = app.strings();
     app.set_error_status_message(strings.status.infra.qobuz_login_expired, 8);
+  } else if err.downcast_ref::<NoFullStream>().is_some() {
+    let strings = app.strings();
+    app.set_error_status_message(strings.status.infra.qobuz_no_full_stream, 8);
   } else {
     log::warn!("[qobuz] {step}: {err:#}");
     let strings = app.strings();
@@ -992,6 +996,18 @@ mod tests {
       stream_cause(&failure, decoder()).to_string(),
       "segment 1 returned HTTP 403 Forbidden"
     );
+  }
+
+  #[test]
+  fn a_track_without_a_full_stream_names_the_subscription() {
+    let mut app = App::default();
+    let err = anyhow::Error::new(NoFullStream).context("file url");
+    report_locked(&mut app, QobuzStep::Stream, err);
+    assert_eq!(
+      app.status_message(),
+      Some(crate::core::i18n::EN.status.infra.qobuz_no_full_stream)
+    );
+    assert!(app.status_message_is_error());
   }
 
   #[test]
