@@ -2851,10 +2851,11 @@ async fn sync_history_to_cloud_with_client(
     return Ok(());
   }
 
+  let upload: Vec<ListenRecord> = new_listens.into_iter().map(without_local_paths).collect();
   let response = client
     .post(resolve_sync_url(CLOUD_SYNC_PATH))
     .header("Authorization", format!("Bearer {}", sync_token))
-    .json(&new_listens)
+    .json(&upload)
     .send()
     .await?;
 
@@ -2865,7 +2866,7 @@ async fn sync_history_to_cloud_with_client(
     tokio::task::spawn_blocking(move || write_sync_offset(&path, next_offset)).await??;
     log::info!(
       "successfully synchronized listening history to cloud ({} tracks)",
-      new_listens.len()
+      upload.len()
     );
   } else {
     let status = response.status();
@@ -2879,6 +2880,23 @@ async fn sync_history_to_cloud_with_client(
   }
 
   Ok(())
+}
+
+/// `record` without a `file:` URI, which is an absolute path with the user name in it.
+fn without_local_paths(mut record: ListenRecord) -> ListenRecord {
+  use crate::core::queue::{queue_item_source, QueueItemSource};
+  let local = |uri: &Option<String>| {
+    uri
+      .as_deref()
+      .is_some_and(|uri| queue_item_source(uri) == QueueItemSource::LocalFile)
+  };
+  if local(&record.item_uri) {
+    record.item_uri = None;
+  }
+  if local(&record.context_uri) {
+    record.context_uri = None;
+  }
+  record
 }
 
 pub async fn sync_history_to_cloud(sync_token: &str) -> Result<()> {
@@ -3585,6 +3603,22 @@ mod tests {
     assert_eq!(plays[4], 3);
     assert_eq!(stats.week_tracks.len(), 1);
     assert!(stats.movements.is_empty());
+  }
+
+  #[test]
+  fn a_local_file_path_stays_out_of_the_cloud_upload() {
+    let mut record = record_at(3, 60_000, true);
+    record.item_uri = Some("file:///home/alice/Music/a.flac".to_string());
+    record.context_uri = Some("file:///home/alice/Music".to_string());
+    let line = serde_json::to_string(&without_local_paths(record)).unwrap();
+    assert!(!line.contains("alice"), "{line}");
+
+    let mut record = record_at(3, 60_000, true);
+    record.item_uri = Some("spotify:track:abc".to_string());
+    assert_eq!(
+      without_local_paths(record).item_uri.as_deref(),
+      Some("spotify:track:abc")
+    );
   }
 
   #[test]

@@ -248,6 +248,30 @@ describe("Connection", () => {
     expect(connection.getState().position).toEqual({ ms: 0, at: 42 });
   });
 
+  it("a Subsonic item gets its cover from the server's /cover", () => {
+    const { connection, sockets } = harness("abc");
+    const playback = (uri: string, image_url: string | null) =>
+      JSON.stringify({
+        kind: "playback",
+        rev: 1,
+        payload: {
+          item: { uri, image_url, is_playing: true },
+          volume: 50,
+          device: null,
+          liked: false,
+        },
+      });
+    sockets[0].handlers.message(hello("t1"));
+    sockets[0].handlers.message(playback("subsonic:track:7", null));
+    expect(
+      connection.getState().channels.playback?.payload.item?.image_url,
+    ).toBe("/cover?uri=subsonic%3Atrack%3A7&t=t1");
+    sockets[0].handlers.message(playback("spotify:track:a", null));
+    expect(
+      connection.getState().channels.playback?.payload.item?.image_url,
+    ).toBeNull();
+  });
+
   it("an action goes out as a typed client message", () => {
     const { connection, sockets } = harness("abc");
     sockets[0].handlers.message(hello("t1"));

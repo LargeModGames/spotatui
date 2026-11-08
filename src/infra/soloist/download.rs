@@ -12,6 +12,8 @@ use tokio::sync::Mutex;
 use crate::core::app::App;
 
 const CDN: &str = "https://soloist-builds.spotifycdn.com/";
+/// A cap on the archive, far above a real build, so a bad response cannot fill the disk.
+const MAX_ARCHIVE_BYTES: u64 = 512 * 1024 * 1024;
 const BINARY: &str = if cfg!(windows) {
   "soloist.exe"
 } else {
@@ -129,12 +131,23 @@ async fn fetch(app: &Arc<Mutex<App>>, url: &str, to: &Path) -> Result<(), Failur
     .and_then(reqwest::Response::error_for_status)
     .map_err(failed)?;
   let total = response.content_length();
+  let too_large = || {
+    Failure::Failed(format!(
+      "the archive is larger than {MAX_ARCHIVE_BYTES} bytes"
+    ))
+  };
+  if total.is_some_and(|total| total > MAX_ARCHIVE_BYTES) {
+    return Err(too_large());
+  }
   let mut file = tokio::fs::File::create(to).await.map_err(failed)?;
   let mut received = 0;
   let mut shown = 0;
   while let Some(chunk) = response.chunk().await.map_err(failed)? {
-    file.write_all(&chunk).await.map_err(failed)?;
     received += chunk.len() as u64;
+    if received > MAX_ARCHIVE_BYTES {
+      return Err(too_large());
+    }
+    file.write_all(&chunk).await.map_err(failed)?;
     if let Some(now) = percent(received, total).filter(|now| *now >= shown + 10) {
       shown = now;
       app.lock().await.soloist_download_progress(now);
@@ -150,8 +163,13 @@ async fn extract(archive: &Path, into: &Path) -> Result<(), Failure> {
   let program = std::env::var_os("SystemRoot")
     .map(|root| Path::new(&root).join("System32").join("tar.exe"))
     .unwrap_or_else(|| PathBuf::from("tar"));
+  // The system tar first, so a `tar` earlier on PATH does not see the archive; NixOS has none there.
   #[cfg(not(windows))]
-  let program = PathBuf::from("tar");
+  let program = ["/usr/bin/tar", "/bin/tar"]
+    .iter()
+    .map(PathBuf::from)
+    .find(|path| path.is_file())
+    .unwrap_or_else(|| PathBuf::from("tar"));
   let mut command = tokio::process::Command::new(program);
   command
     .arg("-xf")

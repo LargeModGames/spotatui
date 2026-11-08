@@ -89,6 +89,7 @@ pub struct AppStatusStrings {
   pub radio_already_favorited: &'static str,
   pub radio_favorite_failed: &'static str,
   pub radio_configured: &'static str,
+  pub setting_locked_from_page: &'static str,
   pub radio_removed: &'static str,
   pub radio_not_favorited: &'static str,
   pub radio_remove_failed: &'static str,
@@ -219,6 +220,7 @@ pub const EN: AppStatusStrings = AppStatusStrings {
   radio_already_favorited: "Radio station already favorited: {name}",
   radio_favorite_failed: "Could not favorite radio station: {error}",
   radio_configured: "Radio station is configured in config.yml: {name}",
+  setting_locked_from_page: "The browser page cannot set a program to run. Change this path in config.yml or in the terminal Settings.",
   radio_removed: "Removed saved radio station: {name}",
   radio_not_favorited: "Radio station is not favorited: {name}",
   radio_remove_failed: "Could not remove radio station: {error}",
@@ -352,6 +354,8 @@ pub const ZH_HANS: AppStatusStrings = AppStatusStrings {
   radio_already_favorited: "电台已收藏：{name}",
   radio_favorite_failed: "无法收藏电台：{error}",
   radio_configured: "电台已在 config.yml 中配置：{name}",
+  setting_locked_from_page:
+    "浏览器页面不能设置要运行的程序。请在 config.yml 或终端的设置中修改此路径。",
   radio_removed: "已移除已保存电台：{name}",
   radio_not_favorited: "电台尚未收藏：{name}",
   radio_remove_failed: "无法移除电台：{error}",
@@ -485,6 +489,8 @@ pub const ZH_HANT: AppStatusStrings = AppStatusStrings {
   radio_already_favorited: "電台已收藏：{name}",
   radio_favorite_failed: "無法收藏電台：{error}",
   radio_configured: "電台已在 config.yml 中設定：{name}",
+  setting_locked_from_page:
+    "瀏覽器頁面不能設定要執行的程式。請在 config.yml 或終端機的設定中修改此路徑。",
   radio_removed: "已移除已儲存電台：{name}",
   radio_not_favorited: "電台尚未收藏：{name}",
   radio_remove_failed: "無法移除電台：{error}",

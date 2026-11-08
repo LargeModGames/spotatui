@@ -37,11 +37,24 @@ pub struct SessionStart {
 }
 
 /// `file/url` with `intent=stream`; the segment count comes from the init table.
+/// An account that may not stream the track (a free one) gets a reply without
+/// `url_template` and `key`, so both are optional here.
 #[derive(Debug, Deserialize)]
 pub struct FileUrl {
-  pub url_template: String,
+  #[serde(default)]
+  pub url_template: Option<String>,
   /// `"<prefix>.<wrapped>.<iv>"`, base64url.
-  pub key: String,
+  #[serde(default)]
+  pub key: Option<String>,
+  /// Why Qobuz withheld the stream, when it says; only logged.
+  #[serde(default)]
+  pub restrictions: Vec<Restriction>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Restriction {
+  #[serde(default)]
+  pub code: String,
 }
 
 /// `oauth/callback`.

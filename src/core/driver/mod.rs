@@ -97,7 +97,7 @@ fn request_track_lyrics(
 /// Local files carry embedded artwork read straight from the file (no URL), so
 /// they take a dedicated `LocalFile` request. Every other source that can supply
 /// art (Spotify album art, YouTube thumbnail, Subsonic getCoverArt) surfaces it
-/// as `snapshot.metadata.image_url`. `None` means the current track has no art
+/// through `cover_fetch_url`. `None` means the current track has no art
 /// to show (e.g. internet radio, or a Spotify item without images).
 #[cfg(feature = "art-decode")]
 fn cover_art_request_for(
@@ -115,14 +115,7 @@ fn cover_art_request_for(
       path,
     });
   }
-  #[cfg(not(feature = "local-files"))]
-  let _ = app;
-
-  snapshot
-    .metadata
-    .image_url
-    .clone()
-    .map(CoverArtRequest::Url)
+  crate::infra::media_metadata::cover_fetch_url(app, snapshot).map(CoverArtRequest::Url)
 }
 
 /// Per-tick inputs only the frontend can supply.

@@ -115,6 +115,40 @@ fn launch_url(port: u16, code: &str) -> String {
   format!("http://127.0.0.1:{port}/#code={code}")
 }
 
+/// Opens the launch URL; on macOS through `osascript` stdin, since any account can list argv.
+#[cfg(target_os = "macos")]
+fn open_browser(url: &str) -> std::io::Result<()> {
+  use std::io::Write;
+  use std::process::{Command, Stdio};
+  let mut child = Command::new("/usr/bin/osascript")
+    .stdin(Stdio::piped())
+    .stdout(Stdio::null())
+    .stderr(Stdio::null())
+    .spawn()?;
+  if let Some(mut stdin) = child.stdin.take() {
+    stdin.write_all(open_location_script(url).as_bytes())?;
+  }
+  let status = child.wait()?;
+  if status.success() {
+    Ok(())
+  } else {
+    Err(std::io::Error::other(format!(
+      "osascript exited with {status}"
+    )))
+  }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn open_browser(url: &str) -> std::io::Result<()> {
+  open::that_detached(url)
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn open_location_script(url: &str) -> String {
+  let quoted = url.replace('\\', "\\\\").replace('"', "\\\"");
+  format!("open location \"{quoted}\"\n")
+}
+
 /// Only the language is deserialized here; boot remains the owner of full config
 /// validation and reports errors. This never creates paths or logs config data.
 fn preload_language(path: Option<&Path>, system: Language) -> Language {
@@ -176,7 +210,7 @@ async fn launch_gui(host: Option<GuiHost>) -> Result<()> {
   match show {
     Some(show) => show(&url)?,
     None => {
-      if let Err(e) = open::that_detached(&url) {
+      if let Err(e) = open_browser(&url) {
         log::warn!("could not open the browser: {e}");
         eprintln!("{}", language.strings().gui.open_browser(&url));
       }
@@ -438,7 +472,7 @@ async fn serve_until_quit(
       message = inbox.recv() => match message {
         Some(ClientMessage::Action { action }) => {
           let mut app = app.lock().await;
-          app.apply(*action);
+          crate::gui::protocol::apply_page_action(&mut app, *action);
           driver.run_pending_script_commands(&mut app);
           publisher.publish(&app);
           // A click on the bar changes the visualizer's mode at once.
@@ -663,6 +697,14 @@ mod tests {
   #[test]
   fn the_launch_url_carries_the_code_in_the_fragment() {
     assert_eq!(launch_url(40513, "abc"), "http://127.0.0.1:40513/#code=abc");
+  }
+
+  #[test]
+  fn the_open_location_script_quotes_the_url() {
+    assert_eq!(
+      open_location_script("http://127.0.0.1:1/#code=a\"b\\c"),
+      "open location \"http://127.0.0.1:1/#code=a\\\"b\\\\c\"\n"
+    );
   }
 
   fn media(position_ms: u64, playing: bool) -> MediaState {

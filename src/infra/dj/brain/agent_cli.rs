@@ -83,6 +83,10 @@ pub struct AgentPreset {
   /// How this CLI names a model. `None` means it cannot be told.
   pub model_flag: Option<&'static str>,
   pub delivery: PromptDelivery,
+  /// Inserted after `base` to turn the CLI's own tools off; empty when it has none.
+  pub no_tools: &'static [&'static str],
+  /// Flags by which a hand-written command already chose its tools; `no_tools` then stays out.
+  pub tool_flags: &'static [&'static str],
 }
 
 impl AgentPreset {
@@ -110,6 +114,18 @@ pub const PRESETS: &[AgentPreset] = &[
     delivery_argv: &["-p"],
     model_flag: Some("--model"),
     delivery: PromptDelivery::Stdin,
+    no_tools: &["--tools", "", "--disallowedTools", "mcp__*"],
+    tool_flags: &[
+      "--tools",
+      "--mcp-config",
+      "--strict-mcp-config",
+      "--allowedTools",
+      "--allowed-tools",
+      "--disallowedTools",
+      "--disallowed-tools",
+      "--permission-mode",
+      "--dangerously-skip-permissions",
+    ],
   },
   AgentPreset {
     key: "codex",
@@ -117,6 +133,13 @@ pub const PRESETS: &[AgentPreset] = &[
     delivery_argv: &["-"],
     model_flag: Some("--model"),
     delivery: PromptDelivery::Stdin,
+    no_tools: &["--sandbox", "read-only"],
+    tool_flags: &[
+      "-s",
+      "--sandbox",
+      "--full-auto",
+      "--dangerously-bypass-approvals-and-sandbox",
+    ],
   },
   // Antigravity, which replaced the Gemini CLI. `agy` IGNORES stdin: the prompt
   // has to be the value of `-p`, so `Arg` here is load-bearing, not a preference.
@@ -126,6 +149,8 @@ pub const PRESETS: &[AgentPreset] = &[
     delivery_argv: &["-p"],
     model_flag: Some("--model"),
     delivery: PromptDelivery::Arg,
+    no_tools: &[],
+    tool_flags: &[],
   },
   // `--no-color` keeps ANSI escapes out of the JSON. A plain completion needs no
   // `--allow-all-tools`, despite what the non-interactive help implies.
@@ -135,6 +160,8 @@ pub const PRESETS: &[AgentPreset] = &[
     delivery_argv: &["-p"],
     model_flag: Some("--model"),
     delivery: PromptDelivery::Arg,
+    no_tools: &[],
+    tool_flags: &[],
   },
   // The prompt is a trailing positional here, not a flag value, so nothing
   // carries it and `delivery_argv` is empty.
@@ -144,6 +171,8 @@ pub const PRESETS: &[AgentPreset] = &[
     delivery_argv: &[],
     model_flag: Some("-m"),
     delivery: PromptDelivery::Arg,
+    no_tools: &[],
+    tool_flags: &[],
   },
   // Legacy. Google superseded it with `agy`; kept so an existing config that
   // names it keeps working.
@@ -153,8 +182,33 @@ pub const PRESETS: &[AgentPreset] = &[
     delivery_argv: &["-p"],
     model_flag: Some("-m"),
     delivery: PromptDelivery::Arg,
+    no_tools: &[],
+    tool_flags: &[],
   },
 ];
+
+/// `command` with its preset's `no_tools` flags, unless it names one of the `tool_flags`.
+fn without_agent_tools(mut command: Vec<String>) -> Vec<String> {
+  let stem = command
+    .first()
+    .and_then(|program| std::path::Path::new(program).file_stem())
+    .map(|stem| stem.to_string_lossy().to_ascii_lowercase());
+  let Some(preset) = stem.as_deref().and_then(preset) else {
+    return command;
+  };
+  let at = preset.base.len();
+  let runs_base = command.len() >= at && command[1..at] == preset.base[1..];
+  let chose = command.iter().any(|arg| {
+    preset
+      .tool_flags
+      .iter()
+      .any(|flag| arg == flag || arg.starts_with(&format!("{flag}=")))
+  });
+  if runs_base && !chose {
+    command.splice(at..at, preset.no_tools.iter().map(|flag| flag.to_string()));
+  }
+  command
+}
 
 /// Look up a preset by the binary name, for config convenience.
 pub fn preset(name: &str) -> Option<&'static AgentPreset> {
@@ -187,7 +241,7 @@ impl AgentCliBrain {
       ));
     }
     Ok(Self {
-      command,
+      command: without_agent_tools(command),
       prompt_via,
       timeout,
       cwd,
@@ -625,6 +679,55 @@ esac"#,
       vec!["codex", "exec", "-"]
     );
     assert_eq!(preset("gemini").unwrap().argv(None), vec!["gemini", "-p"]);
+  }
+
+  fn spawned(argv: &[&str]) -> Vec<String> {
+    brain(
+      argv.iter().map(|part| part.to_string()).collect(),
+      PromptDelivery::Stdin,
+    )
+    .command
+  }
+
+  #[test]
+  fn the_claude_preset_runs_with_its_tools_off() {
+    let argv = preset("claude").unwrap().argv(Some("haiku"));
+    let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
+    assert_eq!(
+      spawned(&argv),
+      vec![
+        "claude",
+        "--tools",
+        "",
+        "--disallowedTools",
+        "mcp__*",
+        "--model",
+        "haiku",
+        "-p"
+      ]
+    );
+  }
+
+  #[test]
+  fn the_codex_preset_runs_in_a_read_only_sandbox() {
+    assert_eq!(
+      spawned(&["codex", "exec", "-"]),
+      vec!["codex", "exec", "--sandbox", "read-only", "-"]
+    );
+  }
+
+  #[test]
+  fn a_command_that_names_its_own_tool_flag_keeps_it() {
+    let argv = ["claude", "--allowedTools", "Read", "-p"];
+    assert_eq!(spawned(&argv), argv);
+    let argv = ["codex", "exec", "-s", "workspace-write", "-"];
+    assert_eq!(spawned(&argv), argv);
+  }
+
+  #[test]
+  fn a_cli_without_a_tools_flag_runs_as_written() {
+    let argv = ["copilot", "--no-color", "-p"];
+    assert_eq!(spawned(&argv), argv);
   }
 
   #[test]

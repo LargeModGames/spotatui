@@ -142,3 +142,28 @@ fn build_activity(playback: &DiscordPlayback) -> activity::Activity<'_> {
 
   activity
 }
+
+#[cfg(all(test, feature = "subsonic"))]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn subsonic_activity_carries_no_login_in_its_image() {
+    let snapshot = crate::infra::media_metadata::tests::subsonic_snapshot();
+    let playback = DiscordPlayback {
+      title: snapshot.metadata.title.clone(),
+      artist: snapshot.primary_artist(),
+      album: snapshot.metadata.album.clone(),
+      state: "Artist - Album".to_string(),
+      image_url: snapshot.metadata.image_url.clone(),
+      duration_ms: snapshot.metadata.duration_ms,
+      progress_ms: 0,
+      is_playing: true,
+    };
+    let json = serde_json::to_string(&build_activity(&playback)).unwrap();
+    assert!(json.contains("Track"), "{json}");
+    for param in ["u=alice", "t=", "s="] {
+      assert!(!json.contains(param), "{json}");
+    }
+  }
+}

@@ -58,11 +58,12 @@ jobs:
 
     steps:
       - name: Checkout sources
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
+          toolchain: stable
           targets: ${{ matrix.target }}
 
       - name: Install Linux dependencies
@@ -137,7 +138,7 @@ jobs:
 
       - name: Upload artifact (Unix)
         if: runner.os != 'Windows'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ env.BINARY_NAME }}-${{ matrix.artifact_prefix }}
           path: |
@@ -146,14 +147,14 @@ jobs:
 
       - name: Upload artifact (Linux .deb)
         if: runner.os == 'Linux'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ env.BINARY_NAME }}-${{ matrix.artifact_prefix }}-deb
           path: "*.deb"
 
       - name: Upload artifact (Windows)
         if: runner.os == 'Windows'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ env.BINARY_NAME }}-${{ matrix.artifact_prefix }}
           path: |
@@ -174,10 +175,10 @@ jobs:
 
     steps:
       - name: Checkout sources
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: artifacts
           pattern: spotatui-*
@@ -211,7 +212,7 @@ jobs:
         run: echo "tag=$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases --limit 1 --json tagName --jq '.[0].tagName // ""')" >> "$GITHUB_OUTPUT"
 
       - name: Create Release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
           files: artifacts/*
           draft: true
@@ -304,12 +305,14 @@ jobs:
     steps:
       # The build runs dependency code; `gh` reads GH_TOKEN, so no token stays in .git/config.
       - name: Checkout sources
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
 
       - name: Install Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -414,7 +417,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
     steps:
       - name: Checkout sources
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Download the update signatures
         run: gh release download "$GITHUB_REF_NAME" --pattern '*.sig' --dir sigs --repo "$GITHUB_REPOSITORY"
@@ -520,7 +523,7 @@ jobs:
     if: ${{ startsWith(github.ref, 'refs/tags/') && !contains(github.ref_name, '-') }}
     steps:
       - name: Checkout sources
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Post the release and ping Release Pings
         env:
@@ -546,10 +549,12 @@ jobs:
     if: ${{ !contains(github.ref_name, '-') }}
     steps:
       - name: Checkout sources
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
 
       - name: Install Linux dependencies
         run: |
@@ -566,7 +571,7 @@ jobs:
     if: ${{ !contains(github.ref_name, '-') }}
     steps:
       - name: Checkout sources
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Extract version
         id: version
@@ -633,7 +638,7 @@ jobs:
     if: ${{ !contains(github.ref_name, '-') }}
     steps:
       - name: Checkout sources
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Extract version
         id: version
@@ -730,7 +735,7 @@ jobs:
     if: ${{ !contains(github.ref_name, '-') }}
     steps:
       - name: Install cargo-binstall
-        uses: cargo-bins/cargo-binstall@main
+        uses: cargo-bins/cargo-binstall@851112458b5f28a29e5bc14a690c3f283d9dcc6f # v1.26.2
         env:
           GITHUB_TOKEN: ${{ github.token }}
 
@@ -769,7 +774,7 @@ jobs:
     if: ${{ !contains(github.ref_name, '-') }}
     steps:
       - name: Checkout sources
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Extract version
         id: version

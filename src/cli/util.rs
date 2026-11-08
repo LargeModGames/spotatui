@@ -279,13 +279,14 @@ impl Format {
   // Is there a better way?
   pub fn inner(&self, conf: UserConfig) -> String {
     match self {
-      Self::Album(s) => s.clone(),
-      Self::Artist(s) => s.clone(),
-      Self::Playlist(s) => s.clone(),
-      Self::Track(s) => s.clone(),
-      Self::Show(s) => s.clone(),
-      Self::Uri(s) => s.clone(),
-      Self::Device(s) => s.clone(),
+      // Catalogue names reach the terminal, where an escape sequence would act.
+      Self::Album(s)
+      | Self::Artist(s)
+      | Self::Playlist(s)
+      | Self::Track(s)
+      | Self::Show(s)
+      | Self::Uri(s)
+      | Self::Device(s) => s.chars().filter(|c| !c.is_control()).collect(),
       // Because this match statements
       // needs to return a &String, I have to do it this way
       Self::Volume(s) => s.to_string(),
@@ -379,6 +380,12 @@ pub fn render_format(format: &str, values: &[Format], conf: &UserConfig) -> Stri
 mod tests {
   use super::*;
   use crate::core::plugin_api::ShowInfo;
+
+  #[test]
+  fn a_catalogue_name_loses_its_control_characters() {
+    let track = Format::Track("Song\x1b]0;owned\x07\nNext".to_string());
+    assert_eq!(track.inner(UserConfig::new()), "Song]0;ownedNext");
+  }
 
   #[test]
   fn a_playlist_name_containing_a_placeholder_is_printed_verbatim() {

@@ -256,6 +256,7 @@ pub(super) async fn prepare_frontend(boot: Boot) -> FrontendHandles {
         app_ref.io_tx_clone(),
       )
     };
+    crate::infra::mcp::remove_stale_handshake();
     if enabled {
       match io_tx {
         Some(io_tx) => match crate::infra::mcp::spawn_listener(Arc::clone(&app), io_tx).await {

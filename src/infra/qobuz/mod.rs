@@ -141,6 +141,19 @@ impl fmt::Display for Unauthorized {
 
 impl std::error::Error for Unauthorized {}
 
+/// `file/url` answered without a stream: the account may not play the full
+/// track, which is what a free Qobuz account gets.
+#[derive(Debug)]
+pub struct NoFullStream;
+
+impl fmt::Display for NoFullStream {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    f.write_str("no full stream for this account")
+  }
+}
+
+impl std::error::Error for NoFullStream {}
+
 /// A `session/start` session with its derived key.
 #[derive(Clone)]
 pub struct StreamSession {
@@ -363,7 +376,12 @@ impl QobuzSource {
       )
       .await
       .context("file url")?;
-    let parts: Vec<&str> = file.key.split('.').collect();
+    let (Some(url_template), Some(key)) = (file.url_template, file.key) else {
+      let codes: Vec<&str> = file.restrictions.iter().map(|r| r.code.as_str()).collect();
+      log::warn!("[qobuz] file/url for track {track_id} has no stream; restrictions: {codes:?}");
+      return Err(NoFullStream.into());
+    };
+    let parts: Vec<&str> = key.split('.').collect();
     if parts.len() < 3 {
       return Err(anyhow!(
         "file url key has {} parts, expected 3",
@@ -376,7 +394,7 @@ impl QobuzSource {
       &auth::decode_base64(parts[2])?,
     )?;
     Ok(TrackStream {
-      url_template: file.url_template,
+      url_template,
       content_key,
     })
   }
@@ -387,6 +405,8 @@ impl QobuzSource {
     match self.file_url(&session, track_id, format_id).await {
       Ok(stream) => Ok(stream),
       Err(e) if e.downcast_ref::<Unauthorized>().is_some() => Err(e),
+      // A new session does not change what the account may stream.
+      Err(e) if e.downcast_ref::<NoFullStream>().is_some() => Err(e),
       Err(_) => {
         *shared_session().lock().await = None;
         let session = self.stream_session().await?;
@@ -1006,6 +1026,9 @@ mod tests {
   const FILE_URL: &str = r#"{ "url_template": "https://cdn/$SEGMENT$.m4s", "n_segments": 3,
     "key": "p.d3JhcHBlZA.aXY", "mime_type": "audio/flac", "format_id": 27 }"#;
 
+  const FILE_URL_NO_STREAM: &str = r#"{ "track_id": 1, "format_id": 27, "sample": true,
+    "restrictions": [{ "code": "UserUncredentialed" }] }"#;
+
   const PLAYLIST_ITEMS: &str = r#"{
     "id": 111, "name": "Morning",
     "tracks": {
@@ -1122,8 +1145,19 @@ mod tests {
     assert_eq!(auth::decode_base64(salt).unwrap(), b"salt");
     assert_eq!(auth::decode_base64(info).unwrap(), b"info");
     let file: types::FileUrl = serde_json::from_str(FILE_URL).unwrap();
-    assert_eq!(file.url_template, "https://cdn/$SEGMENT$.m4s");
-    assert_eq!(file.key.split('.').count(), 3);
+    assert_eq!(
+      file.url_template.as_deref(),
+      Some("https://cdn/$SEGMENT$.m4s")
+    );
+    assert_eq!(file.key.unwrap().split('.').count(), 3);
+  }
+
+  #[test]
+  fn a_file_url_reply_without_a_stream_still_parses() {
+    let file: types::FileUrl = serde_json::from_str(FILE_URL_NO_STREAM).unwrap();
+    assert!(file.url_template.is_none());
+    assert!(file.key.is_none());
+    assert_eq!(file.restrictions[0].code, "UserUncredentialed");
   }
 
   #[test]
