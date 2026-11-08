@@ -15,8 +15,10 @@ use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
 /// Generous: each lookup behind a dead first nameserver waits the resolver's
-/// 5 s timeout, and the connect makes several of them.
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(45);
+/// 5 s timeout, and the connect makes several of them. Stays below the 40 s
+/// `SPOTIFY_REQUEST_DEADLINE` in `infra/network/requests.rs`, which drops a
+/// connect that a routed call started.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(35);
 const RETRY_AFTER_FAILURE: Duration = Duration::from_secs(30);
 /// The account type arrives in a packet right after the login.
 const PRODUCT_INFO_WAIT: Duration = Duration::from_secs(3);
@@ -75,7 +77,9 @@ impl Unavailable {
 #[derive(Default)]
 struct Slot {
   current: Option<Arc<SpotifySession>>,
-  last_failure: Option<Instant>,
+  /// When the last connect failed, and why; the reason answers every call
+  /// in the retry gap.
+  last_failure: Option<(Instant, Unavailable)>,
   not_premium: bool,
 }
 
@@ -118,8 +122,10 @@ pub async fn current() -> Result<Arc<SpotifySession>, Unavailable> {
   if slot.not_premium {
     return Err(Unavailable::NotPremium);
   }
-  if !may_connect(slot.last_failure, Instant::now()) {
-    return Err(Unavailable::Offline);
+  if let Some((at, reason)) = slot.last_failure {
+    if !may_connect(Some(at), Instant::now()) {
+      return Err(reason);
+    }
   }
   drop_refused_login(install(&mut slot, connect(None).await))
 }
@@ -166,12 +172,13 @@ fn install(
     }
     Err(e) => {
       warn!("Spotify session failed to connect: {e:#}");
-      slot.last_failure = Some(Instant::now());
-      if e.is::<ConnectTimedOut>() {
-        Err(Unavailable::TimedOut)
+      let reason = if e.is::<ConnectTimedOut>() {
+        Unavailable::TimedOut
       } else {
-        Err(Unavailable::Offline)
-      }
+        Unavailable::Offline
+      };
+      slot.last_failure = Some((Instant::now(), reason));
+      Err(reason)
     }
   }
 }
@@ -263,7 +270,7 @@ mod tests {
       install(&mut slot, Err(anyhow!("network down"))).err(),
       Some(Unavailable::Offline)
     );
-    assert!(slot.last_failure.is_some());
+    assert!(matches!(slot.last_failure, Some((_, Unavailable::Offline))));
     assert!(slot.current.is_none());
   }
 
@@ -274,7 +281,10 @@ mod tests {
       install(&mut slot, Err(anyhow::Error::new(ConnectTimedOut))).err(),
       Some(Unavailable::TimedOut)
     );
-    assert!(slot.last_failure.is_some());
+    assert!(matches!(
+      slot.last_failure,
+      Some((_, Unavailable::TimedOut))
+    ));
     assert!(Unavailable::TimedOut.message().contains("timed out"));
   }
 

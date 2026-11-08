@@ -5,7 +5,7 @@
 ### Fixed
 
 - **A free Qobuz account gets a clear message instead of a parse error**: playing a track with a free account showed the raw error `missing field url_template`, because Qobuz answers `file/url` without a stream for an account that may not play the full track. spotatui now says that streaming needs a paid Qobuz subscription, and it no longer opens a second stream session to retry ([#984](https://github.com/LargeModGames/spotatui/issues/984)).
-- **A slow DNS resolver no longer fails the Spotify login**: the session connect had 15 s, and behind a dead first nameserver every lookup waits the resolver's 5 s timeout, so the login failed while the network worked. It now has 45 s, and a connect that still runs out says that it timed out and points at the network and DNS settings instead of a generic "Could not connect to Spotify" ([#977](https://github.com/LargeModGames/spotatui/issues/977)).
+- **A slow DNS resolver no longer fails the Spotify login**: the session connect had 15 s, and behind a dead first nameserver every lookup waits the resolver's 5 s timeout, so the login failed while the network worked. It now has 35 s, and a connect that still runs out says that it timed out and points at the network and DNS settings instead of a generic "Could not connect to Spotify" ([#977](https://github.com/LargeModGames/spotatui/issues/977)).
 
 ## [v0.48.0] 2026-11-07
 
