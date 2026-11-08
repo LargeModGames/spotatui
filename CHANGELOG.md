@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- **A free Qobuz account gets a clear message instead of a parse error**: playing a track with a free account showed the raw error `missing field url_template`, because Qobuz answers `file/url` without a stream for an account that may not play the full track. spotatui now says that streaming needs a paid Qobuz subscription, and it no longer opens a second stream session to retry ([#984](https://github.com/LargeModGames/spotatui/issues/984)).
+- **A free Qobuz account gets a clear message instead of a parse error**: playing a track with a free account showed the raw error `missing field url_template`, because Qobuz answers `file/url` without a stream for an account that may not play the full track. spotatui now says that streaming needs a paid Qobuz subscription, and it no longer opens a second stream session to retry. A Qobuz track played from the queue gets the same message ([#984](https://github.com/LargeModGames/spotatui/issues/984)).
 - **Pausing from playerctl, media keys or a desktop widget updates spotatui at once**: an MPRIS Pause, Play, PlayPause or Stop drove the native player directly and waited for librespot's event to update the playbar and the MPRIS status. When that event did not come, spotatui kept showing Playing after a pause, and a second PlayPause paused again instead of resuming. These commands now take the same path as the TUI's play/pause, so the state changes as soon as the command is sent ([#985](https://github.com/LargeModGames/spotatui/issues/985)).
 
 ## [v0.48.0] 2026-11-07
