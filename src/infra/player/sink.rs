@@ -15,7 +15,7 @@ use librespot_playback::{
 };
 use log::{debug, info, warn};
 use rodio::cpal::traits::HostTrait;
-use rodio::cpal::{SampleFormat, StreamError};
+use rodio::cpal::{Device, SampleFormat, StreamError, SupportedStreamConfig};
 use rodio::{ChannelCount, DeviceSinkBuilder, DeviceTrait, Player};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
@@ -130,42 +130,49 @@ fn sample_format(format: AudioFormat) -> SampleFormat {
   }
 }
 
+/// Picks the output device and the config to open it with. Called on the audio
+/// thread so the lookups are bounded by `OPEN_TIMEOUT` too.
+fn select_device_and_config(
+  requested: Option<&str>,
+) -> Result<(Device, SupportedStreamConfig), String> {
+  let host = rodio::cpal::default_host();
+  let device = match requested {
+    Some(name) => host
+      .output_devices()
+      .map_err(|e| format!("cannot list audio devices: {e}"))?
+      .find(|d| d.description().is_ok_and(|desc| desc.name() == name))
+      .ok_or_else(|| format!("audio device \"{name}\" is not available"))?,
+    None => host
+      .default_output_device()
+      .ok_or_else(|| "no audio output device available".to_string())?,
+  };
+  info!(
+    "Using audio device: {}",
+    device
+      .description()
+      .map(|d| d.name().to_string())
+      .unwrap_or_else(|_| "[unknown name]".into())
+  );
+
+  // Native stereo 44.1 kHz first, then the device's default rate (rodio
+  // resamples), then whatever the default config is.
+  let default_config = device
+    .default_output_config()
+    .map_err(|e| format!("no default output config: {e}"))?;
+  let config = device
+    .supported_output_configs()
+    .map_err(|e| format!("cannot read output configs: {e}"))?
+    .find(|c| c.channels() == u16::from(NUM_CHANNELS))
+    .and_then(|c| {
+      c.try_with_sample_rate(SAMPLE_RATE)
+        .or_else(|| c.try_with_sample_rate(default_config.sample_rate()))
+    })
+    .unwrap_or(default_config);
+  Ok((device, config))
+}
+
 impl SpotatuiSink {
   fn open(requested: Option<String>, format: AudioFormat) -> Result<Self, String> {
-    let host = rodio::cpal::default_host();
-    let device = match requested.as_deref() {
-      Some(name) => host
-        .output_devices()
-        .map_err(|e| format!("cannot list audio devices: {e}"))?
-        .find(|d| d.description().is_ok_and(|desc| desc.name() == name))
-        .ok_or_else(|| format!("audio device \"{name}\" is not available"))?,
-      None => host
-        .default_output_device()
-        .ok_or_else(|| "no audio output device available".to_string())?,
-    };
-    info!(
-      "Using audio device: {}",
-      device
-        .description()
-        .map(|d| d.name().to_string())
-        .unwrap_or_else(|_| "[unknown name]".into())
-    );
-
-    // Native stereo 44.1 kHz first, then the device's default rate (rodio
-    // resamples), then whatever the default config is.
-    let default_config = device
-      .default_output_config()
-      .map_err(|e| format!("no default output config: {e}"))?;
-    let config = device
-      .supported_output_configs()
-      .map_err(|e| format!("cannot read output configs: {e}"))?
-      .find(|c| c.channels() == u16::from(NUM_CHANNELS))
-      .and_then(|c| {
-        c.try_with_sample_rate(SAMPLE_RATE)
-          .or_else(|| c.try_with_sample_rate(default_config.sample_rate()))
-      })
-      .unwrap_or(default_config);
-
     let lost = Arc::new(AtomicBool::new(false));
     let on_error = {
       let lost = Arc::clone(&lost);
@@ -182,10 +189,19 @@ impl SpotatuiSink {
 
     let (init_tx, init_rx) = mpsc::channel::<Result<Player, String>>();
     let (keepalive_tx, keepalive_rx) = mpsc::channel::<()>();
-    // cpal streams are not `Send` on WASAPI: open and own it on its own thread.
+    // The device lookup and config queries also run on this thread, so
+    // OPEN_TIMEOUT bounds the entire open. cpal streams are not `Send` on
+    // WASAPI: open and own it on its own thread.
     std::thread::Builder::new()
       .name("spotatui-stream-audio".to_string())
       .spawn(move || {
+        let (device, config) = match select_device_and_config(requested.as_deref()) {
+          Ok(selected) => selected,
+          Err(e) => {
+            let _ = init_tx.send(Err(e));
+            return;
+          }
+        };
         let opened = DeviceSinkBuilder::from_device(device)
           .map(|b| {
             b.with_config(&config.config())
