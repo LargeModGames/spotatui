@@ -93,6 +93,11 @@ lofty = { version = "0.25", optional = true }
 # on all three platforms; the macOS gate in `LocalPlayer` is gone since rodio
 # 0.22 / cpal 0.17 were measured on CoreAudio. Unrelated to librespot's own
 # rodio-backend, which is why librespot keeps portaudio-backend on macOS.
+# Build cost: this entry keeps rodio's default features on purpose (cpal `playback`, which links
+# ALSA on Linux and CoreAudio on macOS, plus the symphonia flac/mp3/mp4/vorbis/wav codecs; YouTube
+# needs `mp4` for M4A). It is gated by `audio-decode` (the sources), not `streaming`, so it cannot
+# be tied to `streaming`, and it cannot be `default-features = false` without dropping those
+# codecs. Slim and streaming-only builds do not compile it.
 rodio = { version = "0.22", optional = true }
 
 # Streaming dependencies: our maintained librespot fork, published on crates.io
