@@ -98,17 +98,22 @@ fn iterm2_device_cell_size() -> Option<FontSize> {
   std::thread::spawn(move || {
     let mut reply = Vec::new();
     let mut chunk = [0_u8; 64];
-    while !reply.windows(4).any(|window| window == b"\x1b[0n") {
-      match std::io::stdin().read(&mut chunk) {
-        Ok(read) if read > 0 => reply.extend_from_slice(&chunk[..read]),
-        _ => break,
+    while let Ok(read @ 1..) = std::io::stdin().read(&mut chunk) {
+      reply.extend_from_slice(&chunk[..read]);
+      let done = reply.windows(4).any(|window| window == b"\x1b[0n");
+      // A failed send means the wait timed out: stop before more keys are read.
+      if sender.send(done.then(|| reply.clone())).is_err() || done {
+        break;
       }
     }
-    let _ = sender.send(reply);
   });
-  let reply = receiver
-    .recv_timeout(std::time::Duration::from_secs(2))
-    .ok()?;
+  let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+  let reply = loop {
+    let left = deadline.checked_duration_since(std::time::Instant::now())?;
+    if let Some(reply) = receiver.recv_timeout(left).ok()? {
+      break reply;
+    }
+  };
   parse_report_cell_size(&String::from_utf8_lossy(&reply))
 }
 
