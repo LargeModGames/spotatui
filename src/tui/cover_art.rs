@@ -98,7 +98,7 @@ fn iterm2_device_cell_size() -> Option<FontSize> {
   std::thread::spawn(move || {
     let mut reply = Vec::new();
     let mut chunk = [0_u8; 64];
-    while !reply.ends_with(b"\x1b[0n") {
+    while !reply.windows(4).any(|window| window == b"\x1b[0n") {
       match std::io::stdin().read(&mut chunk) {
         Ok(read) if read > 0 => reply.extend_from_slice(&chunk[..read]),
         _ => break,
