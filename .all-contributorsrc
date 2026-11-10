@@ -731,6 +731,15 @@
       "contributions": [
         "code"
       ]
+    },
+    {
+      "login": "mattmars3",
+      "name": "Matt Marsico",
+      "avatar_url": "https://avatars.githubusercontent.com/u/60232670?v=4",
+      "profile": "http://mattmarsico.com",
+      "contributions": [
+        "doc"
+      ]
     }
   ],
   "contributorsPerLine": 7,
