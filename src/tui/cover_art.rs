@@ -56,10 +56,7 @@ pub fn init_renderer() {
           .capabilities()
           .iter()
           .any(|cap| matches!(cap, Capability::CellSize(Some(_))));
-        // A fallback picker has no capabilities: the terminal did not answer, so a
-        // second query would leave its reader blocked on stdin.
-        let answered = !picker.capabilities().is_empty();
-        let device_cell = (iterm2 && answered && !picker.tmux_detected())
+        let device_cell = (iterm2 && !picker.tmux_detected())
           .then(iterm2_device_cell_size)
           .flatten();
         if let Some(cell) = device_cell {
