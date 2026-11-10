@@ -34,7 +34,7 @@ Copy the key. OpenAI shows it only once. The key can do nothing but run your tun
 ### 3. Get tunnel-client
 
 - **Windows:** download `tunnel-client-runtime-<version>-windows-<arch>.zip` from [the releases](https://github.com/openai/tunnel-client/releases), check it against `SHA256SUMS.txt`, and unzip it. The program is `tunnel-client-runtime.exe` in that folder.
-- **Linux:** download `tunnel-client-runtime-<version>-linux-<arch>.zip` the same way, unzip it, and put the program on your `PATH`: `mkdir -p ~/.local/bin && install -m 755 tunnel-client-runtime ~/.local/bin/`.
+- **Linux:** download `tunnel-client-runtime-<version>-linux-<arch>.zip` the same way, unzip it, and install it: `mkdir -p ~/.local/bin && install -m 755 tunnel-client-runtime ~/.local/bin/`.
 - **macOS:** `brew install openai/tools/tunnel-client`. The program is `tunnel-client`.
 
 ### 4. Start it
@@ -48,14 +48,14 @@ $env:CONTROL_PLANE_API_KEY = Read-Host -MaskInput 'Tunnel key'
 .\tunnel-client-runtime.exe run --mcp.command "spotatui mcp" --control-plane.tunnel-id tunnel_<your id>
 ```
 
-bash or zsh (on macOS, use `tunnel-client` in place of `tunnel-client-runtime`):
+bash or zsh (on macOS, use `tunnel-client` in place of `~/.local/bin/tunnel-client-runtime`):
 
 ```bash
 printf 'Tunnel key: '; read -rs CONTROL_PLANE_API_KEY; echo; export CONTROL_PLANE_API_KEY
-tunnel-client-runtime run --mcp.command "spotatui mcp" --control-plane.tunnel-id tunnel_<your id>
+~/.local/bin/tunnel-client-runtime run --mcp.command "spotatui mcp" --control-plane.tunnel-id tunnel_<your id>
 ```
 
-The client is ready when `http://127.0.0.1:8080/readyz` answers `ready`. Keep it running.
+The client is up when `http://127.0.0.1:8080/readyz` answers `ready`. That does not prove the key works: give it a minute, then open `http://127.0.0.1:8080/health/control-plane`. It must show `"state":"polling"`, a `last_success` time and `"consecutive_failures":0`. Keep the client running.
 
 ### 5. Add the plugin to ChatGPT
 
@@ -147,7 +147,7 @@ mcp:
       command: /absolute/path/to/spotatui mcp
 ```
 
-Check it with `env -u CONTROL_PLANE_API_KEY tunnel-client doctor --profile-file ~/.config/tunnel-client/spotatui.yaml` (the `env -u` makes it read the key file, not a key left in your shell from step 4), then follow [Start at macOS login](https://github.com/openai/tunnel-client#start-at-macos-login) in the tunnel-client README with this file as your profile.
+Check it with `env -u CONTROL_PLANE_API_KEY tunnel-client doctor --profile-file ~/.config/tunnel-client/spotatui.yaml` (the `env -u` makes it read the key file, not a key left in your shell from step 4), then follow [Start at macOS login](https://github.com/openai/tunnel-client#start-at-macos-login) in the tunnel-client README with this file as your profile. `doctor` checks the key's format, not whether OpenAI accepts it, so after the service starts, check `/health/control-plane` as in step 4.
 
 ### Linux
 
@@ -183,5 +183,5 @@ WantedBy=default.target
 |---|---|
 | No **Add custom MCP server** in the **Add** menu | Your ChatGPT plan does not allow custom MCP servers. |
 | The log says `control plane API key is malformed` | The key is wrong or the key file holds something else. Save the key again. |
-| ChatGPT says the plugin is not available | `tunnel-client` is not running. Check `http://127.0.0.1:8080/readyz` and the log. |
+| ChatGPT says the plugin is not available | `tunnel-client` is not running, or its polls fail. Check `http://127.0.0.1:8080/health/control-plane` and the log. Failed polls with a correct tunnel ID mean the key is revoked or lacks Tunnels Read and Use. |
 | Calls return "spotatui is not available" | spotatui is not running, or `mcp_enabled` is off. Start spotatui and check `spotatui mcp status`. |
