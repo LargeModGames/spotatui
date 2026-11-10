@@ -178,6 +178,10 @@ If `spotatui` is not on `PATH` for the client's environment, use the absolute
 path: `command -v spotatui` on Linux and macOS, `Get-Command spotatui` in
 PowerShell.
 
+ChatGPT chats run on OpenAI's servers and cannot start `spotatui mcp`. To use
+spotatui from ChatGPT, on the web, the desktop or a phone, see
+[`docs/mcp-chatgpt.md`](mcp-chatgpt.md).
+
 ### Step 6 — Confirm the tools are visible
 
 Reload or restart your client so it picks up the new server, then list your tools.
@@ -237,7 +241,8 @@ To undo everything: remove the server from your client
 ## Notes for the agent, once it is working
 
 * **Call `get_listening_history` first** when choosing music. It returns aggregate
-  names only — no identifiers, no timestamps.
+  names, the play count, the current track and the stored DJ vibe, with no
+  identifiers and no timestamps.
 * **`queue_tracks` can partially fail.** It reports which tracks it could not
   find. Read the result rather than assuming everything was queued.
 * **Prefer `queue_tracks` over `play_now`** unless the user asked to hear
@@ -269,7 +274,9 @@ To undo everything: remove the server from your client
   process that can read that file can control your player and read your listening
   history — the same trust level as the existing Spotify token cache.
 * **Data sent to your agent's model provider:** whatever the agent chooses to
-  send. `get_listening_history` returns track, artist, and album *names* only.
+  send. `get_listening_history` returns top artists, tracks and albums, recent
+  plays, the play count, the current track, and the DJ vibe you set, which is
+  your own text. It returns *names*, no IDs or timestamps.
 * Turning it off is one line: `mcp_enabled: false`, then restart.
 
 See also [`docs/ai-dj.md`](ai-dj.md) for the DJ that runs **inside** spotatui
