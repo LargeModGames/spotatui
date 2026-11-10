@@ -241,7 +241,8 @@ To undo everything: remove the server from your client
 ## Notes for the agent, once it is working
 
 * **Call `get_listening_history` first** when choosing music. It returns aggregate
-  names only — no identifiers, no timestamps.
+  names, the play count, the current track and the stored DJ vibe, with no
+  identifiers and no timestamps.
 * **`queue_tracks` can partially fail.** It reports which tracks it could not
   find. Read the result rather than assuming everything was queued.
 * **Prefer `queue_tracks` over `play_now`** unless the user asked to hear
