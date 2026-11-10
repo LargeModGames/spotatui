@@ -34,7 +34,7 @@ Copy the key. OpenAI shows it only once. The key can do nothing but run your tun
 ### 3. Get tunnel-client
 
 - **Windows:** download `tunnel-client-runtime-<version>-windows-<arch>.zip` from [the releases](https://github.com/openai/tunnel-client/releases), check it against `SHA256SUMS.txt`, and unzip it. The program is `tunnel-client-runtime.exe` in that folder.
-- **Linux:** download `tunnel-client-runtime-<version>-linux-<arch>.zip` the same way, unzip it, and put the program on your `PATH`: `install -m 755 tunnel-client-runtime ~/.local/bin/`.
+- **Linux:** download `tunnel-client-runtime-<version>-linux-<arch>.zip` the same way, unzip it, and put the program on your `PATH`: `mkdir -p ~/.local/bin && install -m 755 tunnel-client-runtime ~/.local/bin/`.
 - **macOS:** `brew install openai/tools/tunnel-client`. The program is `tunnel-client`.
 
 ### 4. Start it
@@ -147,7 +147,7 @@ mcp:
       command: /absolute/path/to/spotatui mcp
 ```
 
-Check it with `tunnel-client doctor --profile-file ~/.config/tunnel-client/spotatui.yaml`, then follow [Start at macOS login](https://github.com/openai/tunnel-client#start-at-macos-login) in the tunnel-client README with this file as your profile.
+Check it with `env -u CONTROL_PLANE_API_KEY tunnel-client doctor --profile-file ~/.config/tunnel-client/spotatui.yaml` (the `env -u` makes it read the key file, not a key left in your shell from step 4), then follow [Start at macOS login](https://github.com/openai/tunnel-client#start-at-macos-login) in the tunnel-client README with this file as your profile.
 
 ### Linux
 
