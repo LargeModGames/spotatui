@@ -273,7 +273,9 @@ To undo everything: remove the server from your client
   process that can read that file can control your player and read your listening
   history — the same trust level as the existing Spotify token cache.
 * **Data sent to your agent's model provider:** whatever the agent chooses to
-  send. `get_listening_history` returns track, artist, and album *names* only.
+  send. `get_listening_history` returns top artists, tracks and albums, recent
+  plays, the play count, the current track, and the DJ vibe you set, which is
+  your own text. It returns *names*, no IDs or timestamps.
 * Turning it off is one line: `mcp_enabled: false`, then restart.
 
 See also [`docs/ai-dj.md`](ai-dj.md) for the DJ that runs **inside** spotatui
