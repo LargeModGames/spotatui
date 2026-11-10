@@ -14,6 +14,7 @@ ChatGPT ──> Secure MCP Tunnel (OpenAI) ──> tunnel-client ──stdio─�
 - **A ChatGPT plan with custom MCP servers.** On chatgpt.com, open **Plugins**, then **Add**. If the menu has **Add custom MCP server**, your plan can do this. It works on Plus.
 - **An OpenAI Platform login** at [platform.openai.com](https://platform.openai.com), with the same account. The tunnel and its key worked on an account with no API credits.
 - **Your computer on**, with `tunnel-client` and spotatui running, when you want to use it.
+- **On Windows, PowerShell 7.1 or later** (`pwsh`) for the commands on this page. Windows PowerShell 5.1 has no `Read-Host -MaskInput`.
 
 ## Set it up
 
@@ -32,7 +33,8 @@ Copy the key. OpenAI shows it only once. The key can do nothing but run your tun
 
 ### 3. Get tunnel-client
 
-- **Windows and Linux:** download `tunnel-client-runtime-<version>-<os>-<arch>.zip` from [the releases](https://github.com/openai/tunnel-client/releases), check it against `SHA256SUMS.txt`, and unzip it. The program is `tunnel-client-runtime`.
+- **Windows:** download `tunnel-client-runtime-<version>-windows-<arch>.zip` from [the releases](https://github.com/openai/tunnel-client/releases), check it against `SHA256SUMS.txt`, and unzip it. The program is `tunnel-client-runtime.exe` in that folder.
+- **Linux:** download `tunnel-client-runtime-<version>-linux-<arch>.zip` the same way, unzip it, and put the program on your `PATH`: `install -m 755 tunnel-client-runtime ~/.local/bin/`.
 - **macOS:** `brew install openai/tools/tunnel-client`. The program is `tunnel-client`.
 
 ### 4. Start it
@@ -46,10 +48,10 @@ $env:CONTROL_PLANE_API_KEY = Read-Host -MaskInput 'Tunnel key'
 .\tunnel-client-runtime.exe run --mcp.command "spotatui mcp" --control-plane.tunnel-id tunnel_<your id>
 ```
 
-bash or zsh:
+bash or zsh (on macOS, use `tunnel-client` in place of `tunnel-client-runtime`):
 
 ```bash
-read -rsp 'Tunnel key: ' CONTROL_PLANE_API_KEY && export CONTROL_PLANE_API_KEY
+printf 'Tunnel key: '; read -rs CONTROL_PLANE_API_KEY; echo; export CONTROL_PLANE_API_KEY
 tunnel-client-runtime run --mcp.command "spotatui mcp" --control-plane.tunnel-id tunnel_<your id>
 ```
 
@@ -124,7 +126,28 @@ The log is `%LOCALAPPDATA%\tunnel-client\tunnel-client.log`. `Stop-ScheduledTask
 
 ### macOS
 
-Homebrew can run the client at login with `brew services`. Follow [Start at macOS login](https://github.com/openai/tunnel-client#start-at-macos-login) in the tunnel-client README: it reads a profile with your tunnel ID and `api_key: file:` pointing at a key file.
+Not tested. Homebrew can run the client at login with `brew services`, which reads a profile file. Save your key in a file that only you can read:
+
+```bash
+mkdir -p ~/.config/tunnel-client && chmod 700 ~/.config/tunnel-client
+printf 'Tunnel key: '; read -rs key; echo
+printf '%s' "$key" > ~/.config/tunnel-client/runtime.key && chmod 600 ~/.config/tunnel-client/runtime.key; unset key
+```
+
+Then save this as `~/.config/tunnel-client/spotatui.yaml`, with your tunnel ID, your home folder and the absolute path of `spotatui` (`command -v spotatui`):
+
+```yaml
+config_version: 1
+control_plane:
+  tunnel_id: tunnel_<your id>
+  api_key: file:/Users/<you>/.config/tunnel-client/runtime.key
+mcp:
+  commands:
+    - channel: main
+      command: /absolute/path/to/spotatui mcp
+```
+
+Check it with `tunnel-client doctor --profile-file ~/.config/tunnel-client/spotatui.yaml`, then follow [Start at macOS login](https://github.com/openai/tunnel-client#start-at-macos-login) in the tunnel-client README with this file as your profile.
 
 ### Linux
 
@@ -145,13 +168,13 @@ RestartSec=15
 WantedBy=default.target
 ```
 
-Use absolute paths: a user service does not read your shell profile, so `spotatui` may not be on its `PATH`. Then `systemctl --user enable --now spotatui-tunnel`.
+`ExecStart` uses the `~/.local/bin` install from step 3. Give `spotatui` as an absolute path: a user service does not read your shell profile, so `spotatui` may not be on its `PATH`. Then `systemctl --user enable --now spotatui-tunnel`.
 
 ## Good to know
 
 - **Run one client per tunnel.** A stdio tunnel takes one client at a time. Stop the one in your terminal before you start the background one.
 - **spotatui can start later.** The tools stay visible in ChatGPT while spotatui is closed. A call then returns "spotatui is not available" until you start spotatui.
-- **Your data passes through OpenAI.** Tool calls and their results go through the tunnel and ChatGPT, like everything else in the chat. `get_listening_history` sends track, artist and album names only.
+- **Your data passes through OpenAI.** Tool calls and their results go through the tunnel and ChatGPT, like everything else in the chat. `get_listening_history` sends your top artists, tracks and albums, your recent plays and your play count, the current track, and the DJ vibe you set, which is your own text. It sends names, no IDs or timestamps.
 - **The key only runs the tunnel.** Anyone who can use your ChatGPT account can control your player through the plugin.
 
 ## Troubleshooting
