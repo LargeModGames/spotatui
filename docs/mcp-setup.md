@@ -178,6 +178,10 @@ If `spotatui` is not on `PATH` for the client's environment, use the absolute
 path: `command -v spotatui` on Linux and macOS, `Get-Command spotatui` in
 PowerShell.
 
+ChatGPT chats run on OpenAI's servers and cannot start `spotatui mcp`. To use
+spotatui from ChatGPT, on the web, the desktop or a phone, see
+[`docs/mcp-chatgpt.md`](mcp-chatgpt.md).
+
 ### Step 6 — Confirm the tools are visible
 
 Reload or restart your client so it picks up the new server, then list your tools.

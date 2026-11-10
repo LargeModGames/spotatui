@@ -19,6 +19,7 @@
 - **[Friends](friends.md):** see what your friends play.
 - **[AI DJ](ai-dj.md):** let a model pick the music inside spotatui.
 - **[MCP setup](mcp-setup.md):** make your coding agent the DJ.
+- **[ChatGPT](mcp-chatgpt.md):** control spotatui from ChatGPT, on the web, the desktop or your phone.
 - **[Scripting](scripting.md):** the Lua plugin API. [PLUGINS.md](../PLUGINS.md) lists plugins to install.
 
 ## Community setups
