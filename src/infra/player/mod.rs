@@ -7,6 +7,8 @@
 pub mod backend;
 #[cfg(feature = "streaming")]
 mod events;
+#[cfg(all(feature = "streaming", target_os = "windows"))]
+mod sink;
 #[cfg(feature = "streaming")]
 mod streaming;
 
