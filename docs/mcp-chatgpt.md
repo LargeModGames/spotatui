@@ -183,5 +183,5 @@ WantedBy=default.target
 |---|---|
 | No **Add custom MCP server** in the **Add** menu | Your ChatGPT plan does not allow custom MCP servers. |
 | The log says `control plane API key is malformed` | The key is wrong or the key file holds something else. Save the key again. |
-| ChatGPT says the plugin is not available | `tunnel-client` is not running, or its polls fail. Check `http://127.0.0.1:8080/health/control-plane` and the log. Failed polls with a correct tunnel ID mean the key is revoked or lacks Tunnels Read and Use. |
+| ChatGPT says the plugin is not available | `tunnel-client` is not running, or its polls fail. Check `http://127.0.0.1:8080/health/control-plane`, then read the log before you change the key. A polling `401` or `403` means a wrong tunnel ID, a revoked key, or a key without Tunnels Read and Use. A DNS or network error is a connection problem, and a new key does not help. |
 | Calls return "spotatui is not available" | spotatui is not running, or `mcp_enabled` is off. Start spotatui and check `spotatui mcp status`. |
