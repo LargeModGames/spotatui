@@ -4,7 +4,7 @@
 //! - rodio's default error callback `eprintln!`s into the TUI
 //! - `write` spins on `Sink::len() > 26` forever (a dead device never drains
 //! - `stop` calls `sleep_until_end()`. This sink stays silent, notices `DeviceNotAvailable`
-//!  and bounds every wait, so `RecoveringSink` sees an `Err` and recovers.
+//!   and bounds every wait, so `RecoveringSink` sees an `Err` and recovers.
 
 use librespot_playback::{
   audio_backend::{Sink, SinkError, SinkResult},
