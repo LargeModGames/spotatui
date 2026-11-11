@@ -1497,8 +1497,8 @@ async fn handle_macos_media_events(
     }
 
     // The local player takes the same paths as the TUI's play/pause, so the App
-    // state, the playbar and Now Playing follow at once (#985). Checked under
-    // the lock that runs the action: recovery can remove the player in between.
+    // state and the playbar follow at once (#985). Checked under the lock that
+    // runs the action: recovery can remove the player in between.
     let local_key = match event {
       MacMediaEvent::PlayPause => Some(None),
       MacMediaEvent::Play => Some(Some(true)),
@@ -1636,7 +1636,7 @@ fn local_player_is_playing(shared_is_playing: bool, native_is_playing: Option<bo
 
 /// A play key (`None` toggles, `Some(true)` plays, `Some(false)` pauses or
 /// stops) on the local player, through the same App paths as the TUI's
-/// play/pause, so the play state follows at once (#985).
+/// play/pause, so the App's play state follows at once (#985).
 #[cfg(all(
   feature = "streaming",
   any(
@@ -1773,8 +1773,8 @@ async fn handle_windows_media_events(
     }
 
     // The local player takes the same paths as the TUI's play/pause, so the App
-    // state, the playbar and SMTC follow at once (#985). Checked under the lock
-    // that runs the action: recovery can remove the player in between.
+    // state and the playbar follow at once (#985). Checked under the lock that
+    // runs the action: recovery can remove the player in between.
     let play = match event {
       WindowsMediaEvent::Play => Some(true),
       WindowsMediaEvent::Pause | WindowsMediaEvent::Stop => Some(false),
