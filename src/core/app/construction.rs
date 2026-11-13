@@ -120,6 +120,7 @@ impl Default for App {
       clipboard: Clipboard::new().ok(),
       is_loading: false,
       io_tx: None,
+      playback_intent_generation: 0,
       is_fetching_current_playback: false,
       spotify_connected: false,
       pending_keybinding_persist: None,

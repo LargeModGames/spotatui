@@ -265,6 +265,14 @@ fn token_slot() -> &'static std::sync::Mutex<Option<String>> {
   TOKEN.get_or_init(|| std::sync::Mutex::new(load_token()))
 }
 
+static TOKEN_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Invalidates work waiting on constants when the login changes, even if its
+/// token is later restored to the same value.
+pub(super) fn token_epoch() -> u64 {
+  TOKEN_EPOCH.load(std::sync::atomic::Ordering::SeqCst)
+}
+
 /// The token in use: loaded once from env or file, replaced by [`set_token`].
 pub fn current_token() -> Option<String> {
   token_slot().lock().map(|t| t.clone()).unwrap_or(None)
@@ -274,6 +282,7 @@ pub fn current_token() -> Option<String> {
 pub fn set_token(token: Option<String>) {
   if let Ok(mut slot) = token_slot().lock() {
     *slot = token;
+    TOKEN_EPOCH.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
   }
 }
 

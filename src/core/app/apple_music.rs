@@ -69,6 +69,7 @@ impl App {
   /// media key's play or pause, a plugin's `Play`): unlike a toggle, the
   /// answer must not depend on a snapshot that may not have arrived yet.
   pub(crate) fn set_apple_music_playing(&mut self, playing: bool) {
+    self.bump_playback_intent();
     if self.apple_music.switching {
       self.set_status_message(self.strings().status.app.music_wait_pause, 4);
       return;

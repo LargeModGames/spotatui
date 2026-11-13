@@ -399,6 +399,8 @@ pub struct App {
   pub clipboard: Option<Clipboard>,
   pub is_loading: bool,
   io_tx: Option<Sender<IoEvent>>,
+  /// Invalidates deferred starts when a newer playback request arrives.
+  playback_intent_generation: u64,
   pub is_fetching_current_playback: bool,
   /// Whether a Spotify login is available (cached at startup or added by the
   /// in-app login). Gates the Spotify-only startup dispatches so a
@@ -745,6 +747,7 @@ impl App {
   }
 
   pub fn dispatch(&mut self, action: IoEvent) {
+    self.note_playback_intent(&action);
     // `is_loading` will be set to false again after the async action has finished in network.rs
     self.is_loading = true;
     if let Some(io_tx) = &self.io_tx {

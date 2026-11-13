@@ -96,6 +96,37 @@ fn resolve_playing_item<'a>(
 }
 
 impl App {
+  /// Record decisions about what plays or stops, including direct pump requests.
+  /// Volume, position, playback modes and device maintenance keep the same intent.
+  /// Replaying a deferred request must not record a new intent.
+  pub(crate) fn note_playback_intent(&mut self, event: &IoEvent) {
+    if matches!(
+      event,
+      IoEvent::StartPlayback(..)
+        | IoEvent::PausePlayback
+        | IoEvent::NextTrack
+        | IoEvent::PreviousTrack
+        | IoEvent::ForcePreviousTrack
+        | IoEvent::AdvanceNativeQueue
+        | IoEvent::FinishNativeQueue
+        | IoEvent::ReplayCurrentTrack
+        | IoEvent::ResumeSpotifyContext(..)
+        | IoEvent::ResumeNativeShuffleSession(..)
+        | IoEvent::ReshuffleNativeShuffleLap
+    ) {
+      self.bump_playback_intent();
+    }
+  }
+
+  pub(super) fn bump_playback_intent(&mut self) {
+    self.playback_intent_generation = self.playback_intent_generation.wrapping_add(1);
+  }
+
+  #[cfg(feature = "qobuz")]
+  pub(crate) fn playback_intent_generation(&self) -> u64 {
+    self.playback_intent_generation
+  }
+
   /// Resolve the item playing now through the ownership order.
   pub(super) fn playing_item(&self) -> PlayingItem<'_> {
     resolve_playing_item(
@@ -1037,6 +1068,54 @@ fn overlay_soloist(
 mod tests {
   use super::*;
   use crate::core::app::test_support::*;
+
+  #[test]
+  fn playback_adjustments_preserve_the_current_playback_intent() {
+    let controls: &[fn(&mut App)] = &[
+      App::increase_volume,
+      App::decrease_volume,
+      |app| app.set_volume_percent(75),
+      App::seek_forwards,
+      App::seek_backwards,
+      |app| app.seek_to(500),
+      App::shuffle,
+      App::repeat,
+    ];
+    for control in controls {
+      let (mut app, rx) = session_free_app();
+      app.spotify_connected = true;
+      app.current_playback_context = Some(CurrentPlaybackContext {
+        item: Some(PlayableItem::Track(crate::core::test_helpers::full_track(
+          "current", "Current",
+        ))),
+        ..make_external_context()
+      });
+      app.song_progress_ms = 60_000;
+      let generation = app.playback_intent_generation;
+      control(&mut app);
+      assert!(
+        rx.try_recv().is_ok(),
+        "the adjustment must reach the player"
+      );
+      assert_eq!(app.playback_intent_generation, generation);
+    }
+  }
+
+  #[test]
+  fn seeking_past_the_track_end_records_a_new_playback_decision() {
+    let (mut app, rx) = session_free_app();
+    app.spotify_connected = true;
+    app.current_playback_context = Some(CurrentPlaybackContext {
+      item: Some(PlayableItem::Track(crate::core::test_helpers::full_track(
+        "current", "Current",
+      ))),
+      ..make_external_context()
+    });
+    let generation = app.playback_intent_generation;
+    app.seek_to(180_000);
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::NextTrack)));
+    assert_ne!(app.playback_intent_generation, generation);
+  }
 
   #[test]
   fn playback_status_fixtures_match_the_english_catalog() {
