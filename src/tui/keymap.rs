@@ -634,8 +634,9 @@ pub fn help_entries_for(strings: &crate::core::i18n::Strings) -> Vec<HelpEntry> 
       Binding(|k| k.dj_pick_model),
       help.context_ai_dj,
     ),
-    // Last, so the pinned English table keeps its indices.
+    // Append new rows here so the pinned English table keeps its indices.
     row(help.settings_button, Literal("o"), help.context_settings),
+    row(help.sort_open, Literal(","), help.context_sidebar_playlists).needs(SPOTIFY),
   ]
 }
 
@@ -800,7 +801,7 @@ pub fn default_binding(action: &Action) -> Exposure<TuiSurface> {
     ),
     Action::LoadMore(_) => binding(|k| k.next_page),
     Action::Sort {
-      context: SortContext::PlaylistTracks | SortContext::SavedAlbums | SortContext::SavedArtists,
+      context: SortContext::SidebarPlaylists | SortContext::PlaylistTracks | SortContext::SavedAlbums | SortContext::SavedArtists,
       ..
     } => literal(ENTER, "Sort menu"),
     Action::Sort {
@@ -808,7 +809,7 @@ pub fn default_binding(action: &Action) -> Exposure<TuiSurface> {
       ..
     } => Unbound("no sort menu opens on Recently Played"),
     Action::ToggleSortOrder(
-      SortContext::PlaylistTracks | SortContext::SavedAlbums | SortContext::SavedArtists,
+      SortContext::SidebarPlaylists | SortContext::PlaylistTracks | SortContext::SavedAlbums | SortContext::SavedArtists,
     ) => literal("uppercase field shortcut", "Sort menu"),
     Action::ToggleSortOrder(SortContext::RecentlyPlayed) => {
       Unbound("no sort menu opens on Recently Played")
@@ -1005,6 +1006,13 @@ mod tests {
     for row in entries.iter_mut().filter(|row| row[0] == "Open settings") {
       row[1] = open_settings.clone();
     }
+    // New rows append to the historical table so its indexed views stay valid.
+    let sidebar_sort = vec![
+      "Open sort menu".to_string(),
+      ",".to_string(),
+      "Spotify playlists sidebar".to_string(),
+    ];
+    entries.push(sidebar_sort.clone());
     let enabled = |row: &Vec<String>| {
       (cfg!(feature = "cover-art") || row[0] != "Go to cover art view")
         && (cfg!(feature = "ai-dj") || row[2] != "AI DJ")
@@ -1040,7 +1048,7 @@ mod tests {
         App::default()
       };
       app.active_source = serde_json::from_value(view[0].clone()).unwrap();
-      let expected = view[2]
+      let mut expected = view[2]
         .as_array()
         .unwrap()
         .iter()
@@ -1056,6 +1064,9 @@ mod tests {
           Some(row)
         })
         .collect::<Vec<_>>();
+      if app.availability(SPOTIFY).is_available() {
+        expected.push(sidebar_sort.clone());
+      }
       assert_eq!(
         help_rows(&app),
         expected,
@@ -1091,6 +1102,32 @@ mod tests {
           cell_text(3 + description_width + 2, event_width).trim_end(),
           row[1],
           "rendered Event {index}"
+        );
+      }
+    }
+  }
+
+  #[test]
+  fn sidebar_playlist_sort_help_uses_the_same_source_and_session_requirement_as_its_key() {
+    let context = crate::core::i18n::EN.help.context_sidebar_playlists;
+    let entries = help_entries_for(&crate::core::i18n::EN);
+    let entry = entries
+      .iter()
+      .find(|entry| entry.context == context)
+      .unwrap();
+    assert_eq!(entry.needs, Requirement::Source(Source::Spotify));
+    assert!(matches!(entry.key, HelpKey::Literal(",")));
+    for source in Source::ALL {
+      for connected in [false, true] {
+        let mut app = if connected {
+          App::default_connected()
+        } else {
+          App::default()
+        };
+        app.active_source = source;
+        assert_eq!(
+          help_rows(&app).iter().any(|row| row[2] == context),
+          source == Source::Spotify && connected
         );
       }
     }

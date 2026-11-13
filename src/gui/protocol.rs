@@ -520,7 +520,7 @@ pub(crate) struct TrackTablePayload {
 }
 
 /// A playlist folder of the Spotify rootlist, or a playlist inside one.
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(crate) enum LibraryNode {
@@ -568,6 +568,8 @@ pub(crate) struct SourcePlaylists {
   editable: Vec<String>,
   /// The Spotify playlists in their folders; `null` without the rootlist, so the flat list stands.
   folders: Option<Vec<LibraryNode>>,
+  // The persisted order of Spotify playlists at every folder level.
+  playlist_sidebar_order: crate::core::sort::SidebarPlaylistOrder,
 }
 
 #[derive(Serialize)]
@@ -1565,8 +1567,11 @@ fn liked(app: &App) -> LikedSongs {
 }
 
 fn playlists(app: &App) -> SourcePlaylists {
+  let mut spotify: Vec<_> = app.all_playlists().iter().collect();
+  app.sort_sidebar_playlist_slots(&mut spotify, |playlist| Some(*playlist));
   SourcePlaylists {
-    spotify: app.all_playlists().clone(),
+    spotify: spotify.into_iter().cloned().collect(),
+    playlist_sidebar_order: app.runtime_state.playlist_sidebar_order,
     local: app
       .local_playlists()
       .iter()
@@ -1628,36 +1633,67 @@ fn playlists(app: &App) -> SourcePlaylists {
       .collect(),
     folders: app.playlist_folder_nodes().as_ref().map(|nodes| {
       fn convert(
-        node: &crate::core::app::PlaylistFolderNode,
-        strings: &crate::core::i18n::Strings,
-        language: crate::core::i18n::Language,
-      ) -> LibraryNode {
-        match node.node_type {
-          crate::core::app::PlaylistFolderNodeType::Folder => LibraryNode::Folder {
-            name: node.name.clone().unwrap_or_else(|| {
-              // English preserves the original protocol's blank missing-name label.
-              if language == crate::core::i18n::Language::En {
-                String::new()
-              } else {
-                strings.status.infra.unnamed_folder.to_string()
-              }
-            }),
-            uri: node.uri.clone(),
-            children: node
-              .children
-              .iter()
-              .map(|node| convert(node, strings, language))
-              .collect(),
-          },
-          crate::core::app::PlaylistFolderNodeType::Playlist => LibraryNode::Playlist {
-            uri: node.uri.clone(),
-          },
+        nodes: &[crate::core::app::PlaylistFolderNode],
+        app: &App,
+        by_uri: &BTreeMap<&str, &PlaylistInfo>,
+      ) -> Vec<LibraryNode> {
+        let mut converted: Vec<_> = nodes
+          .iter()
+          .map(|node| match node.node_type {
+            crate::core::app::PlaylistFolderNodeType::Folder => LibraryNode::Folder {
+              name: node.name.clone().unwrap_or_else(|| {
+                if app.language() == Language::En {
+                  String::new()
+                } else {
+                  app.strings().status.infra.unnamed_folder.to_string()
+                }
+              }),
+              uri: node.uri.clone(),
+              children: convert(&node.children, app, by_uri),
+            },
+            crate::core::app::PlaylistFolderNodeType::Playlist => LibraryNode::Playlist {
+              uri: node.uri.clone(),
+            },
+          })
+          .collect();
+        app.sort_sidebar_playlist_slots(&mut converted, |node| match node {
+          LibraryNode::Playlist { uri } => by_uri.get(uri.as_str()).copied(),
+          LibraryNode::Folder { .. } => None,
+        });
+        converted
+      }
+      // Rootlist omissions already appear as trailing root rows in the page.
+      // Include them before sorting, so they share the top-level playlist slots.
+      fn placed_uris<'a>(
+        nodes: &'a [crate::core::app::PlaylistFolderNode],
+        placed: &mut std::collections::BTreeSet<&'a str>,
+      ) {
+        for node in nodes {
+          placed.insert(node.uri.as_str());
+          placed_uris(&node.children, placed);
         }
       }
-      nodes
+      let by_uri = app
+        .all_playlists()
         .iter()
-        .map(|node| convert(node, app.strings(), app.language()))
-        .collect()
+        .map(|p| (p.uri.as_str(), p))
+        .collect();
+      let mut placed = std::collections::BTreeSet::new();
+      placed_uris(nodes, &mut placed);
+      let mut complete = nodes.clone();
+      complete.extend(
+        app
+          .all_playlists()
+          .iter()
+          .filter(|p| !placed.contains(p.uri.as_str()))
+          .map(|p| crate::core::app::PlaylistFolderNode {
+            name: Some(p.name.clone()),
+            node_type: crate::core::app::PlaylistFolderNodeType::Playlist,
+            uri: p.uri.clone(),
+            children: Vec::new(),
+          }),
+      );
+      convert(&complete, app, &by_uri)
     }),
   }
 }
@@ -1749,6 +1785,103 @@ pub(crate) fn pushed(messages: &[ServerMessage], kind: &str) -> serde_json::Valu
 
 #[cfg(test)]
 mod tests {
+
+  #[test]
+  fn sidebar_playlist_order_updates_the_gui_library_tree_without_moving_folders() {
+    use crate::core::app::{PlaylistFolderNode, PlaylistFolderNodeType};
+    use crate::core::sort::{SortContext, SortField};
+    let (mut app, _rx) = app();
+    *app.all_playlists_mut() = ["Zulu", "Alpha", "Inner Zulu", "Inner Alpha", "beta"]
+      .iter()
+      .enumerate()
+      .map(|(i, name)| {
+        crate::core::test_helpers::playlist_info(&format!("p{i}"), name, "me", false)
+      })
+      .collect();
+    let node = |index: usize| PlaylistFolderNode {
+      node_type: PlaylistFolderNodeType::Playlist,
+      name: None,
+      uri: format!("spotify:playlist:p{index}"),
+      children: vec![],
+    };
+    *app.playlist_folder_nodes_mut() = Some(vec![
+      node(0),
+      PlaylistFolderNode {
+        node_type: PlaylistFolderNodeType::Folder,
+        name: Some("Folder".to_string()),
+        uri: "folder:1".to_string(),
+        children: vec![
+          node(2),
+          PlaylistFolderNode {
+            node_type: PlaylistFolderNodeType::Folder,
+            name: Some("Nested".to_string()),
+            uri: "folder:2".to_string(),
+            children: vec![],
+          },
+          node(3),
+        ],
+      },
+      node(1),
+    ]);
+    // p4 is omitted by the rootlist; it still participates in top-level sorting.
+    let before = app.display_revisions();
+    app.apply(Action::Sort {
+      context: SortContext::SidebarPlaylists,
+      field: SortField::Name,
+    });
+    let message = pushed(&diff(&before, &app, Language::En), "library");
+    let payload = &message["payload"];
+    assert_eq!(payload["playlist_sidebar_order"], "name");
+    let tree = &payload["folders"];
+    assert_eq!(tree[0]["uri"], "spotify:playlist:p1");
+    assert_eq!(tree[1]["uri"], "folder:1");
+    assert_eq!(tree[2]["uri"], "spotify:playlist:p4");
+    assert_eq!(tree[3]["uri"], "spotify:playlist:p0");
+    assert_eq!(tree[1]["children"][0]["uri"], "spotify:playlist:p3");
+    assert_eq!(tree[1]["children"][1]["uri"], "folder:2");
+    assert_eq!(tree[1]["children"][2]["uri"], "spotify:playlist:p2");
+
+    app.apply(Action::Sort {
+      context: SortContext::SidebarPlaylists,
+      field: SortField::RecentlyPlayed,
+    });
+    let before = app.display_revisions();
+    app.set_playlist_last_listens(
+      [(
+        "spotify:playlist:p4".to_string(),
+        chrono::DateTime::from_timestamp(1, 0).unwrap(),
+      )]
+      .into(),
+    );
+    let recent = pushed(&diff(&before, &app, Language::En), "library");
+    assert_eq!(
+      recent["payload"]["playlist_sidebar_order"],
+      "recently_played"
+    );
+    assert_eq!(
+      recent["payload"]["folders"][0]["uri"],
+      "spotify:playlist:p4"
+    );
+    assert_eq!(recent["payload"]["folders"][1]["uri"], "folder:1");
+    assert_eq!(
+      recent["payload"]["folders"][2]["uri"],
+      "spotify:playlist:p0"
+    );
+    assert_eq!(
+      recent["payload"]["folders"][3]["uri"],
+      "spotify:playlist:p1"
+    );
+    app.apply(Action::Sort {
+      context: SortContext::SidebarPlaylists,
+      field: SortField::Default,
+    });
+    let restored = serde_json::to_value(playlists(&app)).unwrap();
+    assert_eq!(restored["folders"][0]["uri"], "spotify:playlist:p0");
+    assert_eq!(
+      restored["folders"][1]["children"][0]["uri"],
+      "spotify:playlist:p2"
+    );
+  }
 
   #[test]
   fn cached_generated_track_titles_follow_language_in_track_and_queue_payloads() {

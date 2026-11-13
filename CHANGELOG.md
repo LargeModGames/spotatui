@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Sort the playlists sidebar**: order the Spotify playlists by Spotify's own order, by what you played last in spotatui, or by name. Press `,` in the playlists sidebar or choose the order in Your Library in the GUI. The choice is saved in `state.yml`; folders keep their positions and the community playlist stays pinned first ([#657](https://github.com/LargeModGames/spotatui/issues/657)).
+
 ### Fixed
 
 - **Quitting with Soloist leaves playback on another device running**: after handing playback to a phone or another Spotify device, quitting spotatui no longer sends pause or deactivate commands through the inactive Soloist device. Quitting while Soloist plays locally keeps the same behavior ([#994](https://github.com/LargeModGames/spotatui/issues/994)).
