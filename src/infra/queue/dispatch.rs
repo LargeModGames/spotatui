@@ -696,15 +696,6 @@ async fn publish_pending_decoded(
   fetch_id
 }
 
-/// Complete a background queue fetch: if the slot still carries `fetch_id`,
-/// stage the downloaded file and finalize the slot (with the delivered format
-/// label, when the source reports one); otherwise (skipped, torn down, or
-/// replaced meanwhile) drop the result silently. On a download or decode
-/// failure the queue advances past the item, exactly like the old inline
-/// path. The stage runs off the `App` lock (its clear waits on the audio
-/// thread, and the runner takes the lock on every frame); the slot is
-/// re-checked before the finalize, and a stage that a newer fetch superseded
-/// is left paused in the sink for that fetch's own stage to clear.
 /// Says why a queued item could not be fetched. A Qobuz track the account
 /// may not stream in full gets the subscription message as an error, so the
 /// advance that follows does not replace it with the next item's status.
@@ -728,6 +719,15 @@ fn report_fetch_failure(app: &mut App, track_name: &str, err: &anyhow::Error) {
   );
 }
 
+/// Complete a background queue fetch: if the slot still carries `fetch_id`,
+/// stage the downloaded file and finalize the slot (with the delivered format
+/// label, when the source reports one); otherwise (skipped, torn down, or
+/// replaced meanwhile) drop the result silently. On a download or decode
+/// failure the queue advances past the item, exactly like the old inline
+/// path. The stage runs off the `App` lock (its clear waits on the audio
+/// thread, and the runner takes the lock on every frame); the slot is
+/// re-checked before the finalize, and a stage that a newer fetch superseded
+/// is left paused in the sink for that fetch's own stage to clear.
 #[cfg(feature = "queue-download")]
 async fn finish_decoded_fetch(
   app: &Arc<Mutex<App>>,
