@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Sort the playlists sidebar**: order the Spotify playlists by Spotify's own order, by what you played last in spotatui, or by name. Press `,` in the playlists sidebar or choose the order in Your Library in the GUI. The choice is saved in `state.yml`; folders keep their positions and the community playlist stays pinned first ([#657](https://github.com/LargeModGames/spotatui/issues/657)).
+
 ### Fixed
 
 - **A free Qobuz account gets a clear message instead of a parse error**: playing a track with a free account showed the raw error `missing field url_template`, because Qobuz answers `file/url` without a stream for an account that may not play the full track. spotatui now says that streaming needs a paid Qobuz subscription, and it no longer opens a second stream session to retry ([#984](https://github.com/LargeModGames/spotatui/issues/984)).

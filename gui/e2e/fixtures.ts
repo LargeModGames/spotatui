@@ -286,6 +286,7 @@ export const library: ServerMessage[] = [
     kind: "library",
     rev: 1,
     payload: {
+      playlist_sidebar_order: "spotify",
       spotify: [
         playlist("Film scores", "spotify:playlist:1", 142),
         playlist("Kygo & friends", "spotify:playlist:2", 87),
@@ -343,6 +344,7 @@ export const libraryUnavailable: ServerMessage[] = [
     kind: "library",
     rev: 1,
     payload: {
+      playlist_sidebar_order: "spotify",
       spotify: [],
       local: [],
       subsonic: [],

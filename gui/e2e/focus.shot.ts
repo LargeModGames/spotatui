@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import type { ServerMessage } from "../src/bindings/ServerMessage";
 import type { TrackInfo } from "../src/bindings/TrackInfo";
-import { hello, library, playing } from "./fixtures";
+import { hello, library, libraryFolders, playing } from "./fixtures";
 
 /** Opens the page and keeps the socket, so a test can deliver messages later. */
 async function openLive(
@@ -120,4 +120,34 @@ test("a list that lands after focus moved elsewhere never steals the keyboard", 
   send([likedArrived]);
   await page.getByRole("listbox").waitFor();
   await expect(page.getByRole("listbox")).not.toBeFocused();
+});
+
+test("sidebar playlist sorting keeps keyboard focus on the same playlist", async ({
+  page,
+}) => {
+  const source = libraryFolders.find((message) => message.kind === "library");
+  if (!source || source.kind !== "library" || !source.payload.folders)
+    throw new Error("folder fixture");
+  const send = await openLive(page, [...playing, ...libraryFolders]);
+  const playlist = page.locator("button.library-row", {
+    hasText: "Kygo & friends",
+  });
+  await playlist.focus();
+  await expect(playlist).toBeFocused();
+  const [folder, first, second, third] = source.payload.folders;
+  send([
+    {
+      ...source,
+      rev: 2,
+      payload: {
+        ...source.payload,
+        playlist_sidebar_order: "recently_played",
+        folders: [folder, third, second, first],
+      },
+    },
+  ]);
+  await expect(
+    page.getByRole("combobox", { name: "Sort playlists" }),
+  ).toHaveValue("recently_played");
+  await expect(playlist).toBeFocused();
 });
