@@ -26,7 +26,7 @@ exclude = [
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-rspotify = { version = "0.16", default-features = false, features = ["cli", "env-file", "client-reqwest", "reqwest-rustls-tls"] }
+rspotify = { version = "0.16", default-features = false, features = ["cli", "env-file", "client-reqwest"] }
 ratatui = { version = "0.30", features = ["crossterm", "layout-cache"], default-features = false, optional = true }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -53,7 +53,7 @@ open = "5.3"
 self_update = { version = "1.3.3", features = ["archive-tar", "archive-zip", "compression-tar-gz", "compression-zip-deflate", "checksums"], optional = true }
 sha2 = { version = "0.11", optional = true }
 hex = { version = "0.4", optional = true }
-reqwest = { version = "0.12", features = ["json", "rustls-tls", "blocking"], default-features = false }
+reqwest = { version = "0.12", features = ["json", "rustls-tls-native-roots", "blocking"], default-features = false }
 openssl = { version = "0.10", optional = true }
 cpal = { version = "0.17", optional = true }
 realfft = { version = "3.4", optional = true }
@@ -117,7 +117,7 @@ mdns-sd = { version = "0.21", optional = true }
 rustls = { version = "0.23", optional = true, default-features = false, features = ["ring", "std", "tls12"] }
 tokio-rustls = { version = "0.26", optional = true, default-features = false, features = ["ring", "tls12"] }
 futures = "0.3.32"
-tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
+tokio-tungstenite = { version = "0.30", features = ["rustls-tls-native-roots"] }
 # The GUI page server's request-head parser.
 httparse = { version = "1.10", optional = true }
 url = "2.5"
@@ -130,7 +130,7 @@ keepawake = "0.6"
 librespot-core = { version = "=0.8.7", package = "spotatui-librespot-core", optional = true, default-features = false, features = ["native-tls"] }
 
 [target.'cfg(target_os = "android")'.dependencies]
-librespot-core = { version = "=0.8.7", package = "spotatui-librespot-core", optional = true, default-features = false, features = ["rustls-tls-webpki-roots"] }
+librespot-core = { version = "=0.8.7", package = "spotatui-librespot-core", optional = true, default-features = false, features = ["rustls-tls-native-roots"] }
 librespot-playback = { version = "=0.8.7", package = "spotatui-librespot-playback", optional = true, default-features = false, features = ["rodio-backend"] }
 # The phone model, for the default Connect name.
 libc = "0.2"
