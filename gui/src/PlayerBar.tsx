@@ -275,6 +275,7 @@ export function PlayerBar({
           disabled={!connected}
           onPick={(ratio) => send({ SetVolume: Math.round(ratio * 100) })}
           onStep={(up) => send(up ? "VolumeUp" : "VolumeDown")}
+          onWheelStep={(up) => send(up ? "VolumeUp" : "VolumeDown")}
         />
         <button
           type="button"

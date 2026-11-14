@@ -576,8 +576,19 @@ contain your display name, and a `trace` log can contain your country, because
 Spotify returns it from `GET /v1/me`. Skim the file before you attach it to a
 public issue.
 
-If spotatui panics it writes `spotatui_panic.log` to the state directory
-(`~/.local/state/spotatui/` on Linux) with the panic message, a backtrace, and
-up to the last 200 log lines from the last 64 KiB, and prints that path. That
-single file is usually
-enough for a bug report.
+If spotatui panics it writes `spotatui_panic.log` to the state directory (by
+default `~/.local/state/spotatui/` on Linux,
+`%USERPROFILE%\.local\state\spotatui\` on Windows) with the panic message, a
+backtrace, and up to the last 200 log lines from the last 64 KiB, and prints
+that path. That single file is usually enough for a bug report.
+
+On Windows, starting the console executable `spotatui.exe` by double-clicking or
+from a shortcut closes the window immediately when a panic occurs. To keep the
+console open to read the crash message and log path, set
+`SPOTATUI_PAUSE_ON_PANIC` to print `Press Enter to close...` and wait for input
+(any set value enables it). This only helps console `spotatui.exe` (not GUI
+builds or the desktop app) and has no effect on Linux or macOS:
+
+```powershell
+$env:SPOTATUI_PAUSE_ON_PANIC = '1'; spotatui
+```
