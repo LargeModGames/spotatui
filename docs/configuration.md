@@ -576,23 +576,19 @@ contain your display name, and a `trace` log can contain your country, because
 Spotify returns it from `GET /v1/me`. Skim the file before you attach it to a
 public issue.
 
-If spotatui panics it writes `spotatui_panic.log` to the state directory
-(`~/.local/state/spotatui/` on Linux, `%USERPROFILE%\.local\state\spotatui\` on
-Windows) with the panic message, a backtrace, and up to the last 200 log lines
-from the last 64 KiB, and prints that path. That single file is usually
-enough for a bug report.
+If spotatui panics it writes `spotatui_panic.log` to the state directory (by
+default `~/.local/state/spotatui/` on Linux,
+`%USERPROFILE%\.local\state\spotatui\` on Windows) with the panic message, a
+backtrace, and up to the last 200 log lines from the last 64 KiB, and prints
+that path. That single file is usually enough for a bug report.
 
 On Windows, starting the console executable `spotatui.exe` by double-clicking or
-from a shortcut closes the console window immediately when a panic occurs. To
-keep the console window open after a panic, set the `SPOTATUI_PAUSE_ON_PANIC`
-environment variable. Spotatui prints `Press Enter to close...` and waits for
-input before exiting so you can read the crash message and log location. Any
-value turns it on (the check only looks for the variable being set, so even `0`
-enables it). This only works on Windows and only helps the console executable
-`spotatui.exe`; it has no effect on Linux or macOS, nor on GUI builds
-(`spotatui-gui.exe`) or the desktop app where no console window is attached:
+from a shortcut closes the window immediately when a panic occurs. To keep the
+console open to read the crash message and log path, set
+`SPOTATUI_PAUSE_ON_PANIC` to print `Press Enter to close...` and wait for input
+(any set value enables it). This only helps console `spotatui.exe` (not GUI
+builds or the desktop app) and has no effect on Linux or macOS:
 
 ```powershell
 $env:SPOTATUI_PAUSE_ON_PANIC = '1'; spotatui
 ```
-
