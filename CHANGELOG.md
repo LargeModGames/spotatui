@@ -9,6 +9,7 @@
 
 ### Fixed
 
+- **The player bar visualizer key is documented**: `docs/configuration.md` now lists `behavior.player_bar_visualizer` (`off`, `spectrum` or `waveform`) ([#1064](https://github.com/LargeModGames/spotatui/issues/1064)).
 - **Keybindings docs**: the submit key row now says it seeks to the selected lyric line in the lyrics view instead of "not wired yet" ([#1066](https://github.com/LargeModGames/spotatui/issues/1066)).
 - **Quitting with Soloist leaves playback on another device running**: after handing playback to a phone or another Spotify device, quitting spotatui no longer sends pause or deactivate commands through the inactive Soloist device. Quitting while Soloist plays locally keeps the same behavior ([#994](https://github.com/LargeModGames/spotatui/issues/994)).
 - **MCP `play_now` no longer claims playback it cannot confirm**: the tool answered "Sent … to the player" (or "Playing …") before anything had started. A source that is missing or not set up, a malformed URI or a missing login now comes back as an error and nothing is sent; an accepted request says playback was requested and points to `get_now_playing`. The in-app AI DJ gets the same replies ([#716](https://github.com/LargeModGames/spotatui/issues/716)).

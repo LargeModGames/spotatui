@@ -70,7 +70,7 @@ text: "205, 214, 244"    # RGB format: "red, green, blue" (0-255)
 
 ## Player Bar Visualizer (desktop app and browser GUI)
 
-The spectrum or waveform behind the player bar of the desktop app and the browser GUI takes its colors from the cover of the song that plays. Every part of its look can be changed in `visualizer.yml`, in the same directory as `config.yml` (see [Custom Themes](#custom-themes)). The player bar visualizer is on Linux and Windows only, so other systems do not read this file.
+The spectrum or waveform behind the player bar of the desktop app and the browser GUI takes its colors from the cover of the song that plays. To turn it off or switch to the waveform, set `player_bar_visualizer` under `behavior:` in `config.yml` (see the [configuration guide](configuration.md)). Every part of its look can be changed in `visualizer.yml`, in the same directory as `config.yml` (see [Custom Themes](#custom-themes)). The player bar visualizer is on Linux and Windows only, so other systems do not read this file.
 
 spotatui never writes this file, so your comments stay. The app reads it again within a second of each save, so you can tune the look while music plays. A key that is missing keeps its default. A value of the wrong type keeps its default, a number out of range is moved to the nearest end of its range, and the status line shows each problem.
 
