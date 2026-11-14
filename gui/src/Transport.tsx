@@ -1,4 +1,4 @@
-import type { PointerEvent } from "react";
+import type { PointerEvent, WheelEvent } from "react";
 import { EN, type GuiStrings, fmt } from "./i18n";
 import type { Action } from "./bindings/Action";
 import type { NowPlaying } from "./bindings/NowPlaying";
@@ -113,7 +113,10 @@ const STEP_KEYS: Record<string, boolean> = {
   ArrowDown: false,
 };
 
-/** A thin slider: a press or a drag picks the fraction of its width left of the pointer on release, an arrow key steps. */
+const WHEEL_NOTCH = 100;
+const WHEEL_PAUSE_MS = 200;
+
+/** A thin slider: a press or a drag picks the fraction of its width left of the pointer on release, an arrow key steps, and so does the wheel when `onWheelStep` is set. */
 export function Meter({
   label,
   ratio,
@@ -121,6 +124,7 @@ export function Meter({
   disabled,
   onPick,
   onStep,
+  onWheelStep,
 }: {
   label: string;
   ratio: number;
@@ -128,6 +132,7 @@ export function Meter({
   disabled: boolean;
   onPick: (ratio: number) => void;
   onStep: (up: boolean) => void;
+  onWheelStep?: (up: boolean) => void;
 }) {
   return (
     <div
@@ -162,6 +167,9 @@ export function Meter({
         event.preventDefault();
         onStep(up);
       }}
+      onWheel={(event) => {
+        if (!disabled && onWheelStep) wheel(event, onWheelStep);
+      }}
     >
       <div style={{ width: `${clamp(ratio) * 100}%` }} />
     </div>
@@ -171,6 +179,26 @@ export function Meter({
 function pointerRatio(event: PointerEvent<HTMLDivElement>): number {
   const box = event.currentTarget.getBoundingClientRect();
   return clamp((event.clientX - box.left) / box.width);
+}
+
+/** Adds the wheel delta to a total kept on the meter and steps once per notch of it, so a trackpad burst is not a step per event; a pause starts a new total. */
+function wheel(
+  event: WheelEvent<HTMLDivElement>,
+  onStep: (up: boolean) => void,
+) {
+  const data = event.currentTarget.dataset;
+  const paused =
+    data.wheelAt === undefined ||
+    event.timeStamp - Number(data.wheelAt) > WHEEL_PAUSE_MS;
+  let total =
+    (paused ? 0 : Number(data.wheel)) +
+    event.deltaY * (event.deltaMode === 1 ? WHEEL_NOTCH : 1);
+  while (Math.abs(total) >= WHEEL_NOTCH) {
+    onStep(total < 0);
+    total -= Math.sign(total) * WHEEL_NOTCH;
+  }
+  data.wheel = String(total);
+  data.wheelAt = String(event.timeStamp);
 }
 
 /** The event comes from the pointer whose press the meter took; a touch the browser captured on its own does not. */
