@@ -279,6 +279,7 @@ Everyone who helped, with code or without. To get on this list, see [Recognition
       <td align="center" valign="top" width="14.28%"><a href="https://www.abdulkarimmia.in/"><img src="https://avatars.githubusercontent.com/u/97598943?v=4&size=100" width="100px" height="100px" alt="Abdul karim mia"/><br /><sub><b>Abdul karim mia</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=abdul-karim-mia" title="Documentation">📖</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://tejeshvaish.com"><img src="https://avatars.githubusercontent.com/u/188414140?v=4&size=100" width="100px" height="100px" alt="Tejesh"/><br /><sub><b>Tejesh</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=tridev-tej" title="Code">💻</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/bfs2021"><img src="https://avatars.githubusercontent.com/u/101915083?v=4&size=100" width="100px" height="100px" alt="zgy"/><br /><sub><b>zgy</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=bfs2021" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="http://tree.jaopd.dev"><img src="https://avatars.githubusercontent.com/u/177440418?v=4&size=100" width="100px" height="100px" alt="João Pedro"/><br /><sub><b>João Pedro</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=jaopdc11" title="Code">💻</a></td>
     </tr>
   </tbody>
 </table>
