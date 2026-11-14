@@ -151,11 +151,114 @@ impl App {
     if self.user_config.behavior.group_folders_first {
       items.sort_by_key(|item| !matches!(item, PlaylistFolderItem::Folder(_)));
     }
+    self.sort_sidebar_playlist_slots(&mut items, |item| match item {
+      PlaylistFolderItem::Playlist { index, .. } => self.all_playlists.get(*index),
+      PlaylistFolderItem::Folder(_) | PlaylistFolderItem::CommunityPin => None,
+    });
     // Injected after sorting so the pin is always row 0, regardless of grouping.
     if self.community_pin_visible() {
       items.insert(0, &self.community_pin_item);
     }
     items
+  }
+
+  /// Shared ordering for one level of the TUI or GUI playlist tree.
+  pub(crate) fn sort_sidebar_playlist_slots<'a, T: Clone>(
+    &self,
+    items: &mut [T],
+    playlist: impl Fn(&T) -> Option<&'a PlaylistInfo>,
+  ) {
+    sort_playlist_slots(
+      items,
+      self.runtime_state.playlist_sidebar_order,
+      &self.playlist_last_listens,
+      playlist,
+    );
+  }
+
+  pub(super) fn set_playlist_sidebar_order(&mut self, order: SidebarPlaylistOrder) {
+    if self.runtime_state.playlist_sidebar_order == order {
+      return;
+    }
+    let selected = self.selected_sidebar_item();
+    self.runtime_state.playlist_sidebar_order = order;
+    self.restore_sidebar_item(selected);
+    self.schedule_state_save(PersistedRuntimeState::playlist_sidebar_order(order));
+    self.display_revisions.bump(DisplayDomain::Library);
+  }
+
+  /// Only the collector writes this cache. Its startup load lands before its
+  /// incremental records, and display order is always read from current state,
+  /// so changing the sort or refreshing the rootlist cannot make a load stale.
+  pub(crate) fn set_playlist_last_listens(&mut self, listens: PlaylistLastListens) {
+    if self.playlist_last_listens == listens {
+      return;
+    }
+    let selected = self.selected_sidebar_item();
+    self.playlist_last_listens = listens;
+    self.restore_sidebar_item(selected);
+    if self.runtime_state.playlist_sidebar_order == SidebarPlaylistOrder::RecentlyPlayed {
+      self.display_revisions.bump(DisplayDomain::Library);
+    }
+  }
+
+  pub(crate) fn record_playlist_listen(&mut self, record: &crate::infra::history::ListenRecord) {
+    let Some(uri) = record
+      .context_uri
+      .as_deref()
+      .filter(|uri| uri.starts_with("spotify:playlist:"))
+    else {
+      return;
+    };
+    if self
+      .playlist_last_listens
+      .get(uri)
+      .is_some_and(|last| *last >= record.ended_at)
+    {
+      return;
+    }
+    let selected = self.selected_sidebar_item();
+    self
+      .playlist_last_listens
+      .insert(uri.to_string(), record.ended_at);
+    self.restore_sidebar_item(selected);
+    if self.runtime_state.playlist_sidebar_order == SidebarPlaylistOrder::RecentlyPlayed {
+      self.display_revisions.bump(DisplayDomain::Library);
+    }
+  }
+
+  fn selected_sidebar_item(&self) -> Option<PlaylistFolderItem> {
+    if self.active_source != Source::Spotify {
+      return None;
+    }
+    self
+      .view
+      .selected_playlist_index
+      .and_then(|index| index.checked_sub(1))
+      .and_then(|index| self.get_playlist_display_item_at(index))
+      .cloned()
+  }
+
+  fn restore_sidebar_item(&mut self, selected: Option<PlaylistFolderItem>) {
+    let Some(selected) = selected else { return };
+    if let Some(index) =
+      self
+        .get_playlist_display_items()
+        .iter()
+        .position(|item| match (&selected, item) {
+          (
+            PlaylistFolderItem::Playlist { index: a, .. },
+            PlaylistFolderItem::Playlist { index: b, .. },
+          ) => a == b,
+          (PlaylistFolderItem::Folder(a), PlaylistFolderItem::Folder(b)) => {
+            a.target_id == b.target_id
+          }
+          (PlaylistFolderItem::CommunityPin, PlaylistFolderItem::CommunityPin) => true,
+          _ => false,
+        })
+    {
+      self.view.selected_playlist_index = Some(index + 1);
+    }
   }
 
   /// Changes current playlist and resets playlist scroll offset
@@ -208,6 +311,170 @@ impl App {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  fn sidebar_app() -> App {
+    fn playlist(index: usize, current_id: usize) -> PlaylistFolderItem {
+      PlaylistFolderItem::Playlist { index, current_id }
+    }
+    fn folder(name: &str, current_id: usize, target_id: usize) -> PlaylistFolderItem {
+      PlaylistFolderItem::Folder(PlaylistFolder {
+        generated_name: false,
+        name: name.to_string(),
+        current_id,
+        target_id,
+      })
+    }
+    App {
+      all_playlists: [
+        "Zulu",
+        "beta",
+        "Alpha",
+        "ALPHA",
+        "Inner Zulu",
+        "inner alpha",
+      ]
+      .iter()
+      .enumerate()
+      .map(|(i, name)| playlist_info(&format!("p{i}"), name, "me", false))
+      .collect(),
+      playlist_folder_items: vec![
+        playlist(0, 0),
+        folder("Folder", 0, 1),
+        playlist(1, 0),
+        playlist(2, 0),
+        playlist(3, 0),
+        folder("← Back", 1, 0),
+        playlist(4, 1),
+        folder("Nested", 1, 2),
+        playlist(5, 1),
+      ],
+      ..App::default()
+    }
+  }
+
+  fn sidebar_names(app: &App) -> Vec<String> {
+    app
+      .get_playlist_display_items()
+      .into_iter()
+      .map(|item| match item {
+        PlaylistFolderItem::CommunityPin => "pin".to_string(),
+        PlaylistFolderItem::Folder(folder) => folder.name.clone(),
+        PlaylistFolderItem::Playlist { index, .. } => app.all_playlists[*index].name.clone(),
+      })
+      .collect()
+  }
+
+  #[test]
+  fn sidebar_playlist_name_sort_keeps_folder_slots_pin_and_stable_ties() {
+    let mut app = sidebar_app();
+    app.apply_sort_field(SortContext::SidebarPlaylists, SortField::Name);
+    assert_eq!(
+      sidebar_names(&app),
+      ["pin", "Alpha", "Folder", "ALPHA", "beta", "Zulu"]
+    );
+    // Repeated selection cannot reverse the fixed Name order or its ties.
+    app.apply_sort_field(SortContext::SidebarPlaylists, SortField::Name);
+    app.toggle_sort_order(SortContext::SidebarPlaylists);
+    assert_eq!(
+      sidebar_names(&app),
+      ["pin", "Alpha", "Folder", "ALPHA", "beta", "Zulu"]
+    );
+    app.open_playlist_folder(1);
+    assert_eq!(
+      sidebar_names(&app),
+      ["← Back", "inner alpha", "Nested", "Inner Zulu"]
+    );
+    app.open_playlist_folder(2);
+    assert!(sidebar_names(&app).is_empty());
+  }
+
+  #[test]
+  fn sidebar_playlist_recent_order_keeps_never_played_tail_and_folder_scope() {
+    let mut app = sidebar_app();
+    let older = chrono::DateTime::from_timestamp(1, 0).unwrap();
+    let newer = chrono::DateTime::from_timestamp(2, 0).unwrap();
+    app.set_playlist_last_listens(
+      [
+        (app.all_playlists[2].uri.clone(), newer),
+        (app.all_playlists[1].uri.clone(), older),
+        (app.all_playlists[5].uri.clone(), newer),
+      ]
+      .into(),
+    );
+    app.apply_sort_field(SortContext::SidebarPlaylists, SortField::RecentlyPlayed);
+    assert_eq!(
+      sidebar_names(&app),
+      ["pin", "Alpha", "Folder", "beta", "Zulu", "ALPHA"]
+    );
+    app.open_playlist_folder(1);
+    assert_eq!(
+      sidebar_names(&app),
+      ["← Back", "inner alpha", "Nested", "Inner Zulu"]
+    );
+    // The Spotify order is recovered from rootlist data, never a previously sorted list.
+    app.apply_sort_field(SortContext::SidebarPlaylists, SortField::Default);
+    assert_eq!(
+      sidebar_names(&app),
+      ["← Back", "Inner Zulu", "Nested", "inner alpha"]
+    );
+    app.open_playlist_folder(0);
+    assert_eq!(
+      sidebar_names(&app),
+      ["pin", "Zulu", "Folder", "beta", "Alpha", "ALPHA"]
+    );
+  }
+
+  #[test]
+  fn sidebar_playlist_order_changes_keep_selected_playlist_and_sparse_state_patch() {
+    let mut app = sidebar_app();
+    app.view.selected_playlist_index = Some(2); // Zulu, after Add and pin.
+    app.apply_sort_field(SortContext::SidebarPlaylists, SortField::Name);
+    assert_eq!(app.view.selected_playlist_index, Some(6));
+    assert_eq!(app.get_selected_playlist_id().as_deref(), Some("p0"));
+    assert!(matches!(
+      app.get_playlist_display_item_at(5),
+      Some(PlaylistFolderItem::Playlist { index: 0, .. })
+    ));
+    assert_eq!(
+      app.pending_state_save_patch,
+      PersistedRuntimeState::playlist_sidebar_order(SidebarPlaylistOrder::Name)
+    );
+    app.set_playlist_last_listens(
+      [(
+        app.all_playlists[3].uri.clone(),
+        chrono::DateTime::from_timestamp(3, 0).unwrap(),
+      )]
+      .into(),
+    );
+    app.apply_sort_field(SortContext::SidebarPlaylists, SortField::RecentlyPlayed);
+    assert_eq!(app.get_selected_playlist_id().as_deref(), Some("p0"));
+    assert_eq!(app.view.selected_playlist_index, Some(4));
+    app.apply_sort_field(SortContext::SidebarPlaylists, SortField::Default);
+    assert_eq!(app.view.selected_playlist_index, Some(2));
+  }
+
+  #[test]
+  fn sidebar_playlist_cache_updates_preserve_folder_and_pin_selections() {
+    let mut app = sidebar_app();
+    app.apply_sort_field(SortContext::SidebarPlaylists, SortField::RecentlyPlayed);
+    for (row, name) in [(1, "pin"), (3, "Folder")] {
+      app.view.selected_playlist_index = Some(row);
+      app.set_playlist_last_listens(
+        [(
+          app.all_playlists[2].uri.clone(),
+          chrono::DateTime::from_timestamp(row as i64, 0).unwrap(),
+        )]
+        .into(),
+      );
+      assert_eq!(app.view.selected_playlist_index, Some(row));
+      assert_eq!(sidebar_names(&app)[row - 1], name);
+    }
+    // A source switch must not move that source's playlist cursor.
+    app.active_source = Source::Local;
+    app.view.selected_playlist_index = Some(7);
+    app.set_playlist_last_listens(PlaylistLastListens::new());
+    assert_eq!(app.view.selected_playlist_index, Some(7));
+  }
 
   #[test]
   fn group_folders_first_hoists_folders_stably_and_only_when_enabled() {

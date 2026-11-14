@@ -126,6 +126,13 @@ fn remove_radio_station(app: &mut App) {
 
 pub fn handler(key: Key, app: &mut App) {
   match key {
+    Key::Char(',')
+      if app
+        .availability(Requirement::Source(Source::Spotify))
+        .is_available() =>
+    {
+      super::sort_menu::open_sort_menu(app, crate::core::sort::SortContext::SidebarPlaylists);
+    }
     k if common_key_events::toward_content_event(k, &app.user_config) => {
       common_key_events::focus_content(app)
     }

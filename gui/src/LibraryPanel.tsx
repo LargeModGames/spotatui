@@ -18,6 +18,7 @@ import type { ShowInfo } from "./bindings/ShowInfo";
 import type { Source } from "./bindings/Source";
 import type { SourcePayload } from "./bindings/SourcePayload";
 import type { SourcePlaylists } from "./bindings/SourcePlaylists";
+import type { SidebarPlaylistOrder } from "./bindings/SidebarPlaylistOrder";
 import { pageStorage } from "./commandModel";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { unmatchedTotal } from "./healthModel";
@@ -50,6 +51,7 @@ import {
   removalTarget,
   removalText,
   type SidebarRow,
+  type TreeRow,
 } from "./libraryModel";
 import "./LibraryPanel.css";
 import type { OpenView, View } from "./nav";
@@ -262,6 +264,13 @@ export const LibraryPanel = memo(function LibraryPanel({
           onChange={setAlbumPick}
         />
       )}
+      {filter === "Playlists" && spotify && !loggedOut && (
+        <PlaylistSortSelect
+          s={s}
+          order={playlists?.playlist_sidebar_order ?? "spotify"}
+          send={send}
+        />
+      )}
       {filter === "Artists" && (
         <SortSelect
           label={s.sort_artists}
@@ -437,7 +446,42 @@ export function SpotifyLogin({
   );
 }
 
-/** The sort picker above the Albums or Artists rows. */
+/** The sort picker above the library rows. */
+export function PlaylistSortSelect({
+  s = EN,
+  order,
+  send,
+}: {
+  s?: GuiStrings;
+  order: SidebarPlaylistOrder;
+  send: (action: Action) => void;
+}) {
+  return (
+    <SortSelect
+      label={s.sort_playlists}
+      options={[
+        { value: "spotify", label: s.sort_spotify },
+        { value: "recently_played", label: s.sort_recently_played },
+        { value: "name", label: s.sort_name },
+      ]}
+      value={order}
+      onChange={(value) =>
+        send({
+          Sort: {
+            context: "SidebarPlaylists",
+            field:
+              value === "spotify"
+                ? "Default"
+                : value === "recently_played"
+                  ? "RecentlyPlayed"
+                  : "Name",
+          },
+        })
+      }
+    />
+  );
+}
+
 export function SortSelect({
   label,
   options,
@@ -560,6 +604,19 @@ export const PlaylistRows = memo(function PlaylistRows({
     return <NoMatches s={s} needle={needle} />;
   }
   const menus = source === "Spotify" || source === "YouTube";
+  // Sorting moves playlist slots. Keys follow the folder path and URI so a
+  // focused row survives, including repeated playlists in different folders.
+  const parents: string[] = [];
+  const occurrences = new Map<string, number>();
+  const treeKey = (item: TreeRow) => {
+    parents.length = item.depth;
+    const uri = item.kind === "folder" ? item.uri : item.row.uri;
+    const path = JSON.stringify([...parents, uri]);
+    if (item.kind === "folder") parents.push(uri);
+    const occurrence = occurrences.get(path) ?? 0;
+    occurrences.set(path, occurrence + 1);
+    return `${path}:${occurrence}`;
+  };
   const pick = (row: SidebarRow) => {
     if (!source) return;
     if (source === "Radio") {
@@ -626,20 +683,21 @@ export const PlaylistRows = memo(function PlaylistRows({
         />
       )}
       {tree
-        ? tree.map((item, index) =>
-            item.kind === "folder" ? (
+        ? tree.map((item) => {
+            const key = treeKey(item);
+            return item.kind === "folder" ? (
               <FolderRow
                 s={s}
-                key={`${index}-${item.uri}`}
+                key={key}
                 name={item.name}
                 depth={item.depth}
                 expanded={item.expanded}
                 onToggle={() => onToggle(item.uri)}
               />
             ) : (
-              playlistRow(item.row, `${index}-${item.row.uri}`, item.depth)
-            ),
-          )
+              playlistRow(item.row, key, item.depth)
+            );
+          })
         : rows.map((row) => playlistRow(row, row.uri))}
       {showHealth && (
         <Row

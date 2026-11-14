@@ -95,9 +95,17 @@ pub fn open_sort_menu(app: &mut App, context: SortContext) {
 }
 
 fn close_sort_menu(app: &mut App) {
+  let sidebar = app.view.sort_context == Some(SortContext::SidebarPlaylists);
   app.view.sort_menu_visible = false;
   app.view.sort_context = None;
-  app.set_current_route_state(Some(ActiveBlock::Empty), None);
+  app.set_current_route_state(
+    Some(if sidebar {
+      ActiveBlock::MyPlaylists
+    } else {
+      ActiveBlock::Empty
+    }),
+    None,
+  );
 }
 
 #[cfg(test)]
