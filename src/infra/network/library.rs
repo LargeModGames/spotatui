@@ -35,6 +35,7 @@ use librespot_core::SpotifyUri;
 use librespot_metadata::{
   Episode as LibrespotEpisode, Metadata, Playlist as LibrespotPlaylist, Track as LibrespotTrack,
 };
+#[cfg(feature = "streaming")]
 use percent_encoding::percent_decode_str;
 
 
