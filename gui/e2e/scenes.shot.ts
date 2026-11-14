@@ -188,6 +188,7 @@ test("status error", async ({ page }) => {
         api_error: "Spotify refused the request: 403 Forbidden",
         soloist_pairing: null,
         soloist_offer: null,
+        recap_prompt: null,
       },
     },
   ]);
@@ -216,6 +217,7 @@ test("soloist pairing", async ({ page }) => {
           close: "Close",
         },
         soloist_offer: null,
+        recap_prompt: null,
       },
     },
   ]);
@@ -246,6 +248,7 @@ test("soloist offer", async ({ page }) => {
           set_up: "Set up Soloist",
           not_now: "Not now",
         },
+        recap_prompt: null,
       },
     },
   ]);
