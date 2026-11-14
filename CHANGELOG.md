@@ -5,13 +5,20 @@
 ### Added
 
 - **Sort the playlists sidebar**: order the Spotify playlists by Spotify's own order, by what you played last in spotatui, or by name. Press `,` in the playlists sidebar or choose the order in Your Library in the GUI. The choice is saved in `state.yml`; folders keep their positions and the community playlist stays pinned first ([#657](https://github.com/LargeModGames/spotatui/issues/657)).
+- **Scroll to change the volume in the GUI**: the mouse wheel over the volume bar in the desktop app and the browser GUI steps the volume up or down by the same step as the arrow keys. A trackpad swipe adds up its small scroll events instead of stepping on each one, and the seek bar still ignores the wheel ([#1059](https://github.com/LargeModGames/spotatui/issues/1059)).
 
 ### Fixed
 
+- **Keybindings docs**: the submit key row now says it seeks to the selected lyric line in the lyrics view instead of "not wired yet" ([#1066](https://github.com/LargeModGames/spotatui/issues/1066)).
 - **Quitting with Soloist leaves playback on another device running**: after handing playback to a phone or another Spotify device, quitting spotatui no longer sends pause or deactivate commands through the inactive Soloist device. Quitting while Soloist plays locally keeps the same behavior ([#994](https://github.com/LargeModGames/spotatui/issues/994)).
+- **MCP `play_now` no longer claims playback it cannot confirm**: the tool answered "Sent … to the player" (or "Playing …") before anything had started. A source that is missing or not set up, a malformed URI or a missing login now comes back as an error and nothing is sent; an accepted request says playback was requested and points to `get_now_playing`. The in-app AI DJ gets the same replies ([#716](https://github.com/LargeModGames/spotatui/issues/716)).
 - **A free Qobuz account gets a clear message instead of a parse error**: playing a track with a free account showed the raw error `missing field url_template`, because Qobuz answers `file/url` without a stream for an account that may not play the full track. spotatui now says that streaming needs a paid Qobuz subscription, and it no longer opens a second stream session to retry. A Qobuz track played from the queue gets the same message ([#984](https://github.com/LargeModGames/spotatui/issues/984)).
 - **Pausing from playerctl, media keys or a desktop widget updates spotatui at once**: an MPRIS Pause, Play, PlayPause or Stop drove the native player directly and waited for librespot's event to update the playbar and the MPRIS status. When that event did not come, spotatui kept showing Playing after a pause, and a second PlayPause paused again instead of resuming. These commands now take the same path as the TUI's play/pause, so the state changes as soon as the command is sent. The media keys, Now Playing on macOS and the Windows media controls take that path too, so the playbar follows at once ([#985](https://github.com/LargeModGames/spotatui/issues/985)).
 - **A slow DNS resolver no longer fails the Spotify login**: the session connect had 15 s, and behind a dead first nameserver every lookup waits the resolver's 5 s timeout, so the login failed while the network worked. It now has 35 s, and a connect that still runs out says that it timed out and points at the network and DNS settings instead of a generic "Could not connect to Spotify" ([#977](https://github.com/LargeModGames/spotatui/issues/977)).
+
+### Documentation
+
+- **Document `SPOTATUI_PAUSE_ON_PANIC`**: explain how setting `SPOTATUI_PAUSE_ON_PANIC` keeps the Windows console window open after a panic to read the crash message and log path ([#1065](https://github.com/LargeModGames/spotatui/issues/1065)).
 
 ## [v0.48.0] 2026-11-07
 
