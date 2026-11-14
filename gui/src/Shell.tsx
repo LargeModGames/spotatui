@@ -770,9 +770,10 @@ export function Shell({
   useEffect(() => {
     const before = shown.current;
     shown.current = { page, covered };
-    if (covered || (before.page === page && !before.covered)) return;
+    // A cover that closes over an open Room leaves the focus in the Room.
+    if (covered || room || (before.page === page && !before.covered)) return;
     focusScreen(page);
-  }, [page, covered]);
+  }, [page, covered, room]);
 
   // A closed Room also hands the keyboard back to the page.
   const roomShown = useRef(room);
