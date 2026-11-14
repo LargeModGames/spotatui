@@ -1,6 +1,6 @@
 use crate::core::app::{ActiveBlock, App, ArtistBlock, SearchResultBlock};
 use crate::core::user_config::Theme;
-use crate::tui::theme::ThemeExt;
+use crate::tui::theme::{EmphasisExt, ThemeExt};
 use ratatui::{
   layout::Rect,
   style::{Modifier, Style},
@@ -108,7 +108,7 @@ pub fn draw_selectable_list<S>(
     .style(app.user_config.theme.base_style())
     .highlight_style(
       get_color(highlight_state, app.user_config.theme)
-        .add_modifier(Modifier::BOLD | Modifier::REVERSED),
+        .add_modifier(Modifier::REVERSED | app.user_config.behavior.emphasis(Modifier::BOLD)),
     )
     .highlight_symbol(
       Line::from(format!("{} ", app.user_config.behavior.list_highlight_icon))
