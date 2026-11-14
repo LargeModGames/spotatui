@@ -16,6 +16,7 @@ license = "MIT"
 default-run = "spotatui"
 exclude = [
     ".github/demo.gif",
+    ".github/demo-desktop.gif",
     ".github/workflows",
     ".github/ISSUE_TEMPLATE",
     "target/",

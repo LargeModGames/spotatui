@@ -7,7 +7,7 @@
   Spotify through its own built-in client, plus local files, Subsonic/Navidrome, internet radio, YouTube and Qobuz, and Apple Music on macOS.
 </p>
 <p align="center">
-  <a href="#installation">Install</a> · <a href="docs/README.md">Docs</a> · <a href="docs/installation.md#desktop-app">Desktop app</a> · <a href="CONTRIBUTING.md">Contributing</a> · <a href="https://spotatui.com/discord">Discord</a>
+  <a href="https://spotatui.com/download"><strong>Download</strong></a> · <a href="#installation">Install</a> · <a href="docs/README.md">Docs</a> · <a href="CONTRIBUTING.md">Contributing</a> · <a href="https://spotatui.com/discord">Discord</a>
 </p>
 
 [![Crates.io](https://img.shields.io/crates/v/spotatui.svg)](https://crates.io/crates/spotatui)
@@ -15,7 +15,13 @@
 [![Songs played using spotatui](https://img.shields.io/badge/dynamic/json?url=https://spotatui-counter.spotatui.workers.dev&query=count&label=Songs%20played%20using%20spotatui&labelColor=0b0f14&color=1ed760&style=flat-square&cacheSeconds=600)](#song-history)
 [![spotatui Contributors](https://img.shields.io/badge/dynamic/json?url=https://raw.githubusercontent.com/LargeModGames/spotatui/main/.all-contributorsrc&query=%24.contributors.length&label=spotatui%20contributors&color=1ed760&style=flat-square)](#spotatui-contributors)
 
-![Demo](.github/demo.gif)
+**Desktop app**
+
+![The spotatui desktop app: an album page, then the visualizer, the synced lyrics and the cover art in panes](.github/demo-desktop.gif)
+
+**Terminal app**
+
+![spotatui in the terminal: an album, cover art, synced lyrics and five visualizer styles](.github/demo.gif)
 
 <!-- START doctoc generated TOC please keep comment here to allow auto update -->
 <!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
@@ -37,7 +43,7 @@
 
 ## About
 
-spotatui is a music player for the terminal, with a desktop app in preview. Spotify is optional: it is one of seven sources.
+spotatui is a music player with two frontends: a desktop app and a terminal app. They share one login, one configuration and one listening history. Spotify is optional: it is one of seven sources.
 
 - Synced lyrics, and a real-time audio visualizer.
 - A play queue that mixes tracks from different sources.
@@ -55,6 +61,18 @@ spotatui started as a fork of [spotify-tui](https://github.com/Rigellute/spotify
 
 Spotify is optional: every other source works without an account.
 
+**Desktop app**
+
+| System | Download |
+|---|---|
+| Windows 10/11 | [Installer](https://spotatui.com/download/windows) |
+| macOS | [Apple Silicon](https://spotatui.com/download/macos) · [Intel](https://spotatui.com/download/macos-intel) |
+| Linux | [.deb](https://spotatui.com/download/linux-deb) · [.rpm](https://spotatui.com/download/linux-rpm) · [AppImage](https://spotatui.com/download/linux-appimage) |
+
+The installers are not signed yet, so Windows and macOS warn on the first start. [Desktop app](docs/installation.md#desktop-app) shows how to open it, and lists the arm64 files for Linux.
+
+**Terminal app**
+
 | System | Command |
 |---|---|
 | macOS, Linux, WSL | `curl -fsSL https://spotatui.com/install.sh \| bash` |
@@ -64,7 +82,6 @@ Spotify is optional: every other source works without an account.
 
 Homebrew, Nix, Void, `.deb` packages and building from source are in the [installation guide](docs/installation.md).
 
-- **Desktop app:** download the installer for your system from the [latest release](https://github.com/LargeModGames/spotatui/releases/latest). See [Desktop app](docs/installation.md#desktop-app).
 - **Features per build:** the prebuilt terminal binaries include every source, the MCP server and the AI DJ. `cargo install` builds Spotify only unless you add [the features](docs/installation.md#which-build-has-which-features), and the Nix flake builds Spotify only.
 - **Updates:** the terminal app updates itself. If a package manager installed it, set `behavior.disable_auto_update: true`. See [Updating](docs/installation.md#updating).
 
