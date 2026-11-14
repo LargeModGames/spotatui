@@ -868,7 +868,18 @@ pub fn export_history_recap_with(
     RecapPeriod::All
   };
   let alt_filtered = filter_listens_for_period(&listens, alt_period);
-  let html = render_history_recap_html_with(period, &filtered, alt_period, &alt_filtered, strings);
+  let covers = [
+    top_track_cover(&filtered, strings, COVER_SEARCH_URL),
+    top_track_cover(&alt_filtered, strings, COVER_SEARCH_URL),
+  ];
+  let html = render_history_recap_html_with(
+    period,
+    &filtered,
+    alt_period,
+    &alt_filtered,
+    covers,
+    strings,
+  );
 
   if let Some(parent) = output_path.parent() {
     fs::create_dir_all(parent)?;
@@ -1272,9 +1283,9 @@ impl CardData {
   }
 
   /// Render as a JS object literal for the recap page's inline script.
-  fn to_js_object(&self, strings: &crate::core::i18n::Strings) -> String {
+  fn to_js_object(&self, cover: Option<&str>, strings: &crate::core::i18n::Strings) -> String {
     format!(
-      "{{ period: {}, track: {}, artist: {}, topArtist: {}, topAlbum: {}, plays: {}, time: {} }}",
+      "{{ period: {}, track: {}, artist: {}, topArtist: {}, topAlbum: {}, plays: {}, time: {}, cover: {} }}",
       js_string(period_label_with(self.period, strings)),
       js_string(&self.track_title),
       js_string(&self.track_artist),
@@ -1282,8 +1293,69 @@ impl CardData {
       js_string(&self.top_album),
       self.plays,
       js_string(&self.time),
+      cover.map_or_else(|| "null".to_string(), js_string),
     )
   }
+}
+
+const COVER_SEARCH_URL: &str = "https://itunes.apple.com/search";
+const COVER_LOOKUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(4);
+
+/// The search term for a cover: the title without its bracketed notes, then the artist.
+fn cover_search_term(title: &str, artist: &str) -> String {
+  let mut clean = String::with_capacity(title.len());
+  let mut closer = None;
+  for c in title.chars() {
+    match (closer, c) {
+      (Some(end), c) if c == end => closer = None,
+      (Some(_), _) => {}
+      (None, '(') => closer = Some(')'),
+      (None, '[') => closer = Some(']'),
+      (None, c) => clean.push(c),
+    }
+  }
+  format!("{} {}", clean.trim(), artist.trim())
+    .trim()
+    .to_string()
+}
+
+/// The cover of the most played track of `listens`, from the song search at `search_url`.
+/// The browser cannot ask for it: the search sends no CORS header to a page.
+fn top_track_cover(
+  listens: &[ListenRecord],
+  strings: &crate::core::i18n::Strings,
+  search_url: &str,
+) -> Option<String> {
+  let top = aggregate_top_tracks_with(listens, 1, strings);
+  let (title, artist) = split_track_display(&top.first()?.display);
+  let term = cover_search_term(title, artist);
+  let search_url = search_url.to_string();
+  // Its own thread: the blocking client cannot run on an async runtime thread.
+  std::thread::spawn(move || lookup_cover_url(&search_url, &term))
+    .join()
+    .ok()
+    .flatten()
+}
+
+fn lookup_cover_url(search_url: &str, term: &str) -> Option<String> {
+  let found: serde_json::Value = reqwest::blocking::Client::builder()
+    .timeout(COVER_LOOKUP_TIMEOUT)
+    .build()
+    .ok()?
+    .get(search_url)
+    .query(&[("term", term), ("limit", "1"), ("entity", "song")])
+    .send()
+    .ok()?
+    .json()
+    .ok()?;
+  let url = found
+    .get("results")?
+    .get(0)?
+    .get("artworkUrl100")?
+    .as_str()?;
+  url
+    .starts_with("https://")
+    .then(|| url.replace("100x100bb", "600x600bb"))
 }
 
 #[cfg(test)]
@@ -1298,6 +1370,7 @@ fn render_history_recap_html(
     listens,
     alt_period,
     alt_listens,
+    [None, None],
     &crate::core::i18n::EN,
   )
 }
@@ -1307,6 +1380,7 @@ fn render_history_recap_html_with(
   listens: &[ListenRecord],
   alt_period: RecapPeriod,
   alt_listens: &[ListenRecord],
+  covers: [Option<String>; 2],
   strings: &crate::core::i18n::Strings,
 ) -> String {
   let top_tracks = aggregate_top_tracks_with(listens, 5, strings);
@@ -1956,8 +2030,8 @@ fn render_history_recap_html_with(
     // requested period first, the toggle alternative second.
     const CARDS = [{card_js}, {alt_card_js}];
     let activeCard = 0;
-    // Cover-art URL per card: undefined = not fetched yet, null = none found.
-    const coverUrls = [undefined, undefined];
+    // Cover-art URL per card, found by spotatui when it made the recap; null = none found.
+    const coverUrls = [CARDS[0].cover, CARDS[1].cover];
 
     function showCoverPlaceholder() {{
       document.getElementById('cover-art-img').style.display = 'none';
@@ -1986,37 +2060,6 @@ fn render_history_recap_html_with(
       }}
     }}
 
-    function loadCoverFor(index) {{
-      if (coverUrls[index] !== undefined) {{
-        applyCover(index);
-        return;
-      }}
-      const card = CARDS[index];
-      if (!card.track || card.track === {no_data_js}) {{
-        coverUrls[index] = null;
-        applyCover(index);
-        return;
-      }}
-      // Clean parentheses or bracket noise for high search precision
-      const cleanTitle = card.track.replace(/\([^)]*\)/g, '').replace(/\[[^\]]*\]/g, '').trim();
-      const query = encodeURIComponent(`${{cleanTitle}} ${{card.artist}}`);
-      const url = `https://itunes.apple.com/search?term=${{query}}&limit=1&entity=song`;
-
-      fetch(url)
-        .then(res => res.json())
-        .then(data => {{
-          coverUrls[index] = (data.results && data.results.length > 0)
-            ? data.results[0].artworkUrl100.replace('100x100bb', '600x600bb')
-            : null;
-          if (activeCard === index) applyCover(index);
-        }})
-        .catch(err => {{
-          console.error('Error fetching cover art:', err);
-          coverUrls[index] = null;
-          if (activeCard === index) applyCover(index);
-        }});
-    }}
-
     function setActiveCard(index) {{
       activeCard = index;
       const card = CARDS[index];
@@ -2029,11 +2072,11 @@ fn render_history_recap_html_with(
       document.getElementById('card-time').textContent = card.time;
       document.getElementById('card-top-artist').textContent = card.topArtist;
       document.getElementById('card-top-album').textContent = card.topAlbum;
-      loadCoverFor(index);
+      applyCover(index);
     }}
 
     document.addEventListener('DOMContentLoaded', () => {{
-      loadCoverFor(0);
+      applyCover(0);
     }});
 
     // ── Share-card renderer ────────────────────────────────────────────────
@@ -2280,7 +2323,6 @@ fn render_history_recap_html_with(
     top_album_js = js_single_string(strings.recap.top_album),
     generated_by_product_js = js_single_string(strings.recap.generated_by_product),
     render_failed_js = js_single_string(strings.recap.render_failed),
-    no_data_js = js_single_string(strings.recap.no_data),
     language = escape_html(strings.recap.language),
     title = escape_html(period_label_with(period, strings)),
     summary = escape_html(if listens.is_empty() {
@@ -2295,8 +2337,8 @@ fn render_history_recap_html_with(
     top_track_artist = escape_html(&card.track_artist),
     top_artist_name = escape_html(&card.top_artist),
     top_album_title = escape_html(&card.top_album),
-    card_js = card.to_js_object(strings),
-    alt_card_js = alt_card.to_js_object(strings),
+    card_js = card.to_js_object(covers[0].as_deref(), strings),
+    alt_card_js = alt_card.to_js_object(covers[1].as_deref(), strings),
     top_tracks_html = render_ranked_entries(&top_tracks, strings.recap.no_tracks, true),
     top_artists_html = render_ranked_entries(&top_artists, strings.recap.no_artists, false),
     top_albums_html = render_ranked_entries(&top_albums, strings.recap.no_albums, false),
@@ -3734,11 +3776,11 @@ mod tests {
   #[test]
   fn english_recap_html_keeps_the_original_bytes() {
     let html = render_history_recap_html(RecapPeriod::All, &[], RecapPeriod::ThirtyDays, &[]);
-    // FNV-1a of the complete pre-localization empty export, including JS and CSS.
+    // FNV-1a of the complete empty English export, including JS and CSS.
     let hash = html.bytes().fold(0xcbf29ce484222325u64, |hash, byte| {
       (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
     });
-    assert_eq!(hash, 0x1b2a30a5f7841662);
+    assert_eq!(hash, 0x82441e166ac7a822);
   }
 
   #[test]
@@ -3760,6 +3802,7 @@ mod tests {
       &[],
       RecapPeriod::ThirtyDays,
       &[],
+      [None, None],
       &strings,
     );
     assert!(html.contains("<p>回顾</p>"));
@@ -3849,6 +3892,89 @@ mod tests {
   }
 
   #[test]
+  fn the_cover_search_term_drops_bracketed_notes() {
+    assert_eq!(
+      cover_search_term("Firestone (feat. Conrad Sewell) [Live]", "Kygo"),
+      "Firestone Kygo"
+    );
+    assert_eq!(cover_search_term("Plain", ""), "Plain");
+  }
+
+  /// Answers one HTTP request with `body` and returns the request line it got.
+  fn serve_once(body: &'static str) -> (String, std::thread::JoinHandle<String>) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/search", listener.local_addr().unwrap());
+    let server = std::thread::spawn(move || {
+      let (mut stream, _) = listener.accept().unwrap();
+      let mut request = [0u8; 2048];
+      let read = stream.read(&mut request).unwrap();
+      write!(
+        stream,
+        "HTTP/1.1 200 OK\r\nContent-Type: text/javascript\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(),
+        body
+      )
+      .unwrap();
+      String::from_utf8_lossy(&request[..read])
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .to_string()
+    });
+    (url, server)
+  }
+
+  #[test]
+  fn the_recap_card_gets_the_cover_of_the_top_track_from_the_search() {
+    let (url, server) = serve_once(
+      r#"{"resultCount":1,"results":[{"artworkUrl100":"https://img.test/a/100x100bb.jpg"}]}"#,
+    );
+    let mut record = record_at(20, 120_000, true);
+    record.title = "Song (Radio Edit)".to_string();
+
+    let cover = top_track_cover(&[record], &crate::core::i18n::EN, &url);
+
+    assert_eq!(cover.as_deref(), Some("https://img.test/a/600x600bb.jpg"));
+    assert_eq!(
+      server.join().unwrap(),
+      "GET /search?term=Song+Artist&limit=1&entity=song HTTP/1.1"
+    );
+  }
+
+  #[test]
+  fn the_recap_card_has_no_cover_when_the_search_finds_nothing() {
+    let (url, server) = serve_once(r#"{"resultCount":0,"results":[]}"#);
+
+    let cover = top_track_cover(
+      &[record_at(20, 120_000, true)],
+      &crate::core::i18n::EN,
+      &url,
+    );
+
+    assert_eq!(cover, None);
+    server.join().unwrap();
+    assert_eq!(top_track_cover(&[], &crate::core::i18n::EN, &url), None);
+  }
+
+  #[test]
+  fn the_recap_page_takes_the_cover_from_the_card_data() {
+    let records = [record_at(20, 120_000, true)];
+    let html = render_history_recap_html_with(
+      RecapPeriod::All,
+      &records,
+      RecapPeriod::ThirtyDays,
+      &[],
+      [Some("https://img.test/a/600x600bb.jpg".to_string()), None],
+      &crate::core::i18n::EN,
+    );
+
+    assert!(html.contains(r#"cover: "https://img.test/a/600x600bb.jpg" }"#));
+    assert!(html.contains("cover: null }"));
+    assert!(html.contains("const coverUrls = [CARDS[0].cover, CARDS[1].cover];"));
+    assert!(!html.contains("fetch("));
+  }
+
+  #[test]
   fn js_string_round_trips_special_characters() {
     assert_eq!(js_string("plain"), r#""plain""#);
     assert_eq!(js_string(r#"a "b" & c"#), r#""a \"b\" & c""#);
@@ -3877,7 +4003,14 @@ mod tests {
           assert_eq!(period, RecapPeriod::ThirtyDays);
           fs::write(
             path,
-            render_history_recap_html_with(period, &[], RecapPeriod::All, &[], active),
+            render_history_recap_html_with(
+              period,
+              &[],
+              RecapPeriod::All,
+              &[],
+              [None, None],
+              active,
+            ),
           )?;
           Ok(1)
         },
