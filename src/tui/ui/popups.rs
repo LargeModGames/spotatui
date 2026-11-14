@@ -1379,18 +1379,7 @@ pub fn draw_recap_prompt(f: &mut Frame<'_>, app: &App) {
   f.render_widget(Clear, rect);
 
   let popups = &app.strings().popups;
-  let (ready, listens, title) = match prompt.year {
-    Some(year) => (
-      popups.recap_year_ready(year),
-      popups.recap_year_listens(year, prompt.listens),
-      popups.recap_year_title(year),
-    ),
-    None => (
-      popups.recap_ready.to_string(),
-      popups.recap_listens(prompt.listens),
-      popups.recap_title.to_string(),
-    ),
-  };
+  let (title, ready, listens) = popups.recap_lines(prompt.year, prompt.listens);
   let text = vec![
     Line::from(Span::styled(
       ready,

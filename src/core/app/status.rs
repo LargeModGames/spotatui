@@ -162,10 +162,8 @@ impl App {
       }
     }
 
-    if self.active_announcement.is_none()
-      && self.get_current_route().active_block == ActiveBlock::AnnouncementPrompt
-    {
-      self.pop_navigation_stack();
+    if self.active_announcement.is_none() {
+      self.drop_routes(RouteId::AnnouncementPrompt, ActiveBlock::AnnouncementPrompt);
     }
   }
 

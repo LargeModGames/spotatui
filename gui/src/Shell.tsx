@@ -88,6 +88,7 @@ import { PlayerBar, type CoverSrc } from "./PlayerBar";
 import type { WatchVisualizer } from "./PlayerBarVisualizer";
 import { QueueDrawer } from "./QueueDrawer";
 import { RadioPage } from "./RadioPage";
+import { RecapDialog } from "./RecapDialog";
 import { RecentlyPlayed } from "./RecentlyPlayed";
 import { Room } from "./Room";
 import { Search } from "./Search";
@@ -746,17 +747,33 @@ export function Shell({
     paneCommand,
   ]);
 
+  // One modal at a time: the recap waits for the announcement channel, an announcement,
+  // the Soloist dialogs and the command palette.
+  const recapPending = channels.status?.payload.recap_prompt ?? null;
+  const recapPrompt =
+    overlay !== null ||
+    !channels.announcement ||
+    channels.announcement.payload.active ||
+    channels.status?.payload.soloist_offer ||
+    channels.status?.payload.soloist_pairing
+      ? null
+      : recapPending;
+
   // A switch or a closed overlay hands the keyboard to the page; the first render leaves focus alone.
   // The Soloist offer opens Settings under itself, so it holds the focus until it closes.
+  // A recap that waits holds it too: it opens when the dialog before it closes.
   const covered =
-    overlay !== null || channels.status?.payload.soloist_offer != null;
+    overlay !== null ||
+    channels.status?.payload.soloist_offer != null ||
+    recapPending !== null;
   const shown = useRef({ page, covered });
   useEffect(() => {
     const before = shown.current;
     shown.current = { page, covered };
-    if (covered || (before.page === page && !before.covered)) return;
+    // A cover that closes over an open Room leaves the focus in the Room.
+    if (covered || room || (before.page === page && !before.covered)) return;
     focusScreen(page);
-  }, [page, covered]);
+  }, [page, covered, room]);
 
   // A closed Room also hands the keyboard back to the page.
   const roomShown = useRef(room);
@@ -1121,6 +1138,7 @@ export function Shell({
         send={send}
         onSetUp={() => open({ page: "settings" })}
       />
+      <RecapDialog prompt={recapPrompt} send={send} />
     </TrackActionsContext.Provider>
   );
 }
