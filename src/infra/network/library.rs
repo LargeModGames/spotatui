@@ -35,6 +35,8 @@ use librespot_core::SpotifyUri;
 use librespot_metadata::{
   Episode as LibrespotEpisode, Metadata, Playlist as LibrespotPlaylist, Track as LibrespotTrack,
 };
+use percent_encoding::percent_decode_str;
+
 
 // Spotify's `me/library` endpoints (contains, save, remove) accept at most 40
 // uris per request; anything larger fails with a 400 "Too many uris".
@@ -3410,7 +3412,12 @@ fn parse_rootlist_items(
 
     if let Some(rest) = uri.strip_prefix("spotify:start-group:") {
       let (group_id, name) = match rest.find(':') {
-        Some(pos) => (rest[..pos].to_string(), rest[pos + 1..].to_string()),
+        Some(pos) => (
+          rest[..pos].to_string(),
+          percent_decode_str(&rest[pos + 1..])
+            .decode_utf8_lossy()
+            .into_owned(),
+        ),
         None => (rest.to_string(), String::new()),
       };
       name_stack.push((group_id, name));
