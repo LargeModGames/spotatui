@@ -1617,20 +1617,20 @@ fn render_history_recap_html_with(
     @media (max-width: 480px) {{
       .card-wrapper {{
         transform: scale(0.8);
-        height: 528px;
+        height: 581px;
         margin-bottom: -40px;
       }}
     }}
     @media (max-width: 380px) {{
       .card-wrapper {{
         transform: scale(0.68);
-        height: 448px;
+        height: 494px;
         margin-bottom: -80px;
       }}
     }}
     .share-card {{
       width: 440px;
-      height: 660px;
+      height: 726px;
       background: var(--card-gradient);
       border: 1px solid rgba(29, 185, 84, 0.22);
       border-radius: 28px;
@@ -3899,7 +3899,7 @@ mod tests {
     let hash = html.bytes().fold(0xcbf29ce484222325u64, |hash, byte| {
       (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
     });
-    assert_eq!(hash, 0x2a9c4f7a1cf928bf);
+    assert_eq!(hash, 0x7de5edea84d0cf66);
   }
 
   #[test]
@@ -4067,6 +4067,10 @@ mod tests {
     assert!(html.contains(r#"period: "2026", track:"#));
     assert!(html.contains(r#"<span class="card-footer-right">spotatui.com</span>"#));
     assert!(html.contains("ctx.fillText('spotatui.com', CARD_W - 32, 708);"));
+    // The page card, its wrapper and the canvas share one height.
+    assert_eq!(html.matches("height: 726px;").count(), 2);
+    assert!(html.contains("const CARD_H = 726;"));
+    assert!(!html.contains("660"));
     assert!(!html.contains("github.com/LargeModGames"));
   }
 

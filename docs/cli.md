@@ -120,7 +120,7 @@ spotatui history recap --period 30d --output recap.html
 | `--period <PERIOD>` | `7d`, `30d` (default), `month`, `year` or `all` |
 | `-o, --output <PATH>` | Output file (default `spotatui-recap.html`) |
 
-For the cover on the share card, spotatui sends the title and the artist of your top track to Apple's iTunes search when it makes the recap. Without a network, the card keeps a placeholder.
+For the covers on the share card, spotatui sends the title and the artist of two top tracks to Apple's iTunes search when it makes the recap: the top track of the period you asked for, and the top track of the other period on the card (All Time, or Last 30 Days for an All Time recap). Without a network, the card keeps a placeholder.
 
 ## `mcp`
 
