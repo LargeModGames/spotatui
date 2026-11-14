@@ -348,6 +348,7 @@ const GUI_SETTINGS: &[(&str, &str)] = &[
   ("behavior.streaming_device_name", "streaming"),
   ("behavior.streaming_bitrate", "streaming"),
   ("behavior.streaming_audio_cache", "streaming"),
+  ("behavior.streaming_audio_cache_limit", "streaming"),
   ("behavior.streaming_autoplay", "streaming"),
   #[cfg(feature = "soloist")]
   ("behavior.playback_engine", "streaming"),

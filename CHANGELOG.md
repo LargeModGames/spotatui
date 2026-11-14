@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- **Streaming audio cache limit**: cap the native streaming audio cache with `behavior.streaming_audio_cache_limit` (`1G` or `512M`; empty or `0` for unlimited) ([#957](https://github.com/LargeModGames/spotatui/issues/957)).
 
 ### Added
 

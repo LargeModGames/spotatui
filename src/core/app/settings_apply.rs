@@ -43,10 +43,12 @@ impl App {
     item.value = match (item.value, input) {
       (SettingValue::Bool(_), SettingInput::Bool(v)) => SettingValue::Bool(v),
       (SettingValue::Number(_), SettingInput::Number(v)) => SettingValue::Number(v),
-      // The check the terminal field makes: a bad delay in config.yml stops the next launch.
+      // Match the settings editors' validation before accepting either value.
       (SettingValue::String(_), SettingInput::Text(v))
-        if id == "behavior.auto_update_delay"
-          && crate::core::user_config::parse_update_delay_secs(&v).is_err() =>
+        if (id == "behavior.auto_update_delay"
+          && crate::core::user_config::parse_update_delay_secs(&v).is_err())
+          || (id == "behavior.streaming_audio_cache_limit"
+            && crate::core::user_config::parse_audio_cache_limit(&v).is_err()) =>
       {
         return false;
       }
@@ -322,6 +324,11 @@ impl App {
         "behavior.streaming_audio_cache" => {
           if let SettingValue::Bool(v) = &setting.value {
             self.user_config.behavior.streaming_audio_cache = *v;
+          }
+        }
+        "behavior.streaming_audio_cache_limit" => {
+          if let SettingValue::String(v) = &setting.value {
+            self.user_config.behavior.streaming_audio_cache_limit = v.clone();
           }
         }
         "behavior.streaming_autoplay" => {
