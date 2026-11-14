@@ -748,9 +748,20 @@ export function Shell({
   ]);
 
   // A switch or a closed overlay hands the keyboard to the page; the first render leaves focus alone.
+  // One modal at a time: the recap waits for the announcement channel, an announcement and the Soloist dialogs.
+  const recapPrompt =
+    !channels.announcement ||
+    channels.announcement.payload.active ||
+    channels.status?.payload.soloist_offer ||
+    channels.status?.payload.soloist_pairing
+      ? null
+      : (channels.status?.payload.recap_prompt ?? null);
   // The Soloist offer opens Settings under itself, so it holds the focus until it closes.
+  // The recap can open as the offer closes, so it holds the focus too.
   const covered =
-    overlay !== null || channels.status?.payload.soloist_offer != null;
+    overlay !== null ||
+    channels.status?.payload.soloist_offer != null ||
+    recapPrompt !== null;
   const shown = useRef({ page, covered });
   useEffect(() => {
     const before = shown.current;
@@ -1122,17 +1133,7 @@ export function Shell({
         send={send}
         onSetUp={() => open({ page: "settings" })}
       />
-      {/* One modal at a time: the recap waits for an announcement and the Soloist dialogs. */}
-      <RecapDialog
-        prompt={
-          channels.announcement?.payload.active ||
-          channels.status?.payload.soloist_offer ||
-          channels.status?.payload.soloist_pairing
-            ? null
-            : (channels.status?.payload.recap_prompt ?? null)
-        }
-        send={send}
-      />
+      <RecapDialog prompt={recapPrompt} send={send} />
     </TrackActionsContext.Provider>
   );
 }

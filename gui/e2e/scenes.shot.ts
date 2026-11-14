@@ -281,6 +281,7 @@ test("year recap prompt", async ({ page }) => {
         },
       },
     },
+    { kind: "announcement", rev: 1, payload: { active: null, history: [] } },
   ]);
   await page.getByRole("dialog").waitFor();
   await shot(page, "recap-prompt");
