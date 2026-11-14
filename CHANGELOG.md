@@ -9,6 +9,7 @@
 
 ### Fixed
 
+- **The player bar visualizer key is documented**: `docs/configuration.md` now lists `behavior.player_bar_visualizer` (`off`, `spectrum` or `waveform`) ([#1064](https://github.com/LargeModGames/spotatui/issues/1064)).
 - **Keybindings docs**: the submit key row now says it seeks to the selected lyric line in the lyrics view instead of "not wired yet" ([#1066](https://github.com/LargeModGames/spotatui/issues/1066)).
 - **Quitting with Soloist leaves playback on another device running**: after handing playback to a phone or another Spotify device, quitting spotatui no longer sends pause or deactivate commands through the inactive Soloist device. Quitting while Soloist plays locally keeps the same behavior ([#994](https://github.com/LargeModGames/spotatui/issues/994)).
 - **A free Qobuz account gets a clear message instead of a parse error**: playing a track with a free account showed the raw error `missing field url_template`, because Qobuz answers `file/url` without a stream for an account that may not play the full track. spotatui now says that streaming needs a paid Qobuz subscription, and it no longer opens a second stream session to retry ([#984](https://github.com/LargeModGames/spotatui/issues/984)).
