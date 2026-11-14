@@ -30,35 +30,7 @@ const STOP_STALL_LIMIT: Duration = Duration::from_millis(500);
 const POLL: Duration = Duration::from_millis(10);
 const OPEN_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// What a bounded wait on the queue should do next.
-#[derive(Debug, PartialEq, Eq)]
-enum WaitDecision {
-  /// The queue is at or under the threshold.
-  Done,
-  KeepWaiting,
-  /// The device was removed.
-  Lost,
-  /// No progress for the whole stall limit.
-  Stalled,
-}
-
-fn wait_decision(
-  queued: usize,
-  threshold: usize,
-  lost: bool,
-  stalled_for: Duration,
-  stall_limit: Duration,
-) -> WaitDecision {
-  if lost {
-    WaitDecision::Lost
-  } else if queued <= threshold {
-    WaitDecision::Done
-  } else if stalled_for >= stall_limit {
-    WaitDecision::Stalled
-  } else {
-    WaitDecision::KeepWaiting
-  }
-}
+use super::sink_wait::{wait_decision, WaitDecision};
 
 /// Wait until at most `threshold` buffers are queued. Never blocks for longer
 /// than `stall_limit` without the queue shrinking.
@@ -292,48 +264,6 @@ impl Sink for SpotatuiSink {
 #[cfg(test)]
 mod tests {
   use super::*;
-
-  const LIMIT: Duration = Duration::from_secs(2);
-
-  #[test]
-  fn a_queue_under_the_threshold_is_done() {
-    assert_eq!(
-      wait_decision(5, 26, false, Duration::ZERO, LIMIT),
-      WaitDecision::Done
-    );
-  }
-
-  #[test]
-  fn a_full_queue_keeps_waiting_while_progress_is_recent() {
-    assert_eq!(
-      wait_decision(30, 26, false, Duration::from_millis(500), LIMIT),
-      WaitDecision::KeepWaiting
-    );
-  }
-
-  #[test]
-  fn a_removed_device_errors_at_once_even_with_a_full_queue() {
-    assert_eq!(
-      wait_decision(30, 26, true, Duration::ZERO, LIMIT),
-      WaitDecision::Lost
-    );
-  }
-
-  #[test]
-  fn a_full_queue_with_no_progress_for_the_limit_stalls() {
-    assert_eq!(
-      wait_decision(30, 26, false, LIMIT, LIMIT),
-      WaitDecision::Stalled
-    );
-  }
-
-  #[test]
-  fn an_empty_queue_is_done_for_the_stop_drain() {
-    assert_eq!(
-      wait_decision(0, 0, false, Duration::from_secs(9), LIMIT),
-      WaitDecision::Done
-    );
-  }
 
   #[test]
   fn an_unopenable_device_sink_fails_start_instead_of_panicking() {
