@@ -148,7 +148,7 @@ Valid fields per screen:
 | `default_sort_saved_artists` | `default`, `name` |
 | `default_sort_recently_played` | `default`, `name`, `artist`, `album` |
 
-`default` keeps the order the API returns (playlist order, date saved, play order). A field that is not valid for that screen falls back to `default` with a warning.
+`default` keeps the order the API returns (playlist order, date saved, play order). A field that is not valid for that screen falls back to `default` with a warning. So does a direction other than `asc` or `desc`, such as `name:dsc` or `name:DESC`.
 
 ## Local Files
 
