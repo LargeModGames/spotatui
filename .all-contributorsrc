@@ -767,6 +767,15 @@
       "contributions": [
         "code"
       ]
+    },
+    {
+      "login": "jaopdc11",
+      "name": "João Pedro",
+      "avatar_url": "https://avatars.githubusercontent.com/u/177440418?v=4",
+      "profile": "http://tree.jaopd.dev",
+      "contributions": [
+        "code"
+      ]
     }
   ],
   "contributorsPerLine": 7,
