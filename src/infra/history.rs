@@ -1,4 +1,5 @@
 use crate::core::app::{ActiveBlock, App, RecapPromptState, SessionPlay};
+use crate::core::source::Source;
 use crate::infra::media_metadata::{
   tracking_playback_snapshot, PlaybackItemKind, PlaybackSnapshot, PlaybackSource,
 };
@@ -1216,11 +1217,12 @@ fn in_period<Tz: TimeZone>(record: &ListenRecord, period: RecapPeriod, now: &Dat
 
 /// The raw (unescaped) values the share card shows for one period.
 struct CardData {
-  period: RecapPeriod,
+  badge: String,
   track_title: String,
   track_artist: String,
   top_artist: String,
   top_album: String,
+  sources: String,
   plays: usize,
   time: String,
 }
@@ -1236,8 +1238,7 @@ impl CardData {
       aggregate_top_tracks_with(listens, 1, strings).first(),
       aggregate_top_artists_with(listens, 1, strings).first(),
       aggregate_top_albums_with(listens, 1, strings).first(),
-      listens.len(),
-      listens.iter().map(|record| record.listened_ms).sum(),
+      listens,
       strings,
     )
   }
@@ -1248,10 +1249,11 @@ impl CardData {
     top_track: Option<&RankedEntry>,
     top_artist: Option<&RankedEntry>,
     top_album: Option<&RankedEntry>,
-    plays: usize,
-    total_ms: u64,
+    listens: &[ListenRecord],
     strings: &crate::core::i18n::Strings,
   ) -> Self {
+    let plays = listens.len();
+    let total_ms: u64 = listens.iter().map(|record| record.listened_ms).sum();
     let top_track_raw = top_track
       .map(|entry| entry.display.as_str())
       .unwrap_or(strings.recap.no_data);
@@ -1266,7 +1268,7 @@ impl CardData {
     };
 
     Self {
-      period,
+      badge: card_badge(period, listens, strings),
       track_title,
       track_artist,
       top_artist: top_artist
@@ -1277,25 +1279,86 @@ impl CardData {
         .map(|entry| entry.display.as_str())
         .unwrap_or(strings.recap.no_data)
         .to_string(),
+      sources: source_shares(listens, strings),
       plays,
       time: format_duration_with(total_ms, strings),
     }
   }
 
   /// Render as a JS object literal for the recap page's inline script.
-  fn to_js_object(&self, cover: Option<&str>, strings: &crate::core::i18n::Strings) -> String {
+  fn to_js_object(&self, cover: Option<&str>) -> String {
     format!(
-      "{{ period: {}, track: {}, artist: {}, topArtist: {}, topAlbum: {}, plays: {}, time: {}, cover: {} }}",
-      js_string(period_label_with(self.period, strings)),
+      "{{ period: {}, track: {}, artist: {}, topArtist: {}, topAlbum: {}, sources: {}, plays: {}, time: {}, cover: {} }}",
+      js_string(&self.badge),
       js_string(&self.track_title),
       js_string(&self.track_artist),
       js_string(&self.top_artist),
       js_string(&self.top_album),
+      js_string(&self.sources),
       self.plays,
       js_string(&self.time),
       cover.map_or_else(|| "null".to_string(), js_string),
     )
   }
+}
+
+/// The badge of a card: the year for the year recap, the period name for the others.
+fn card_badge(
+  period: RecapPeriod,
+  listens: &[ListenRecord],
+  strings: &crate::core::i18n::Strings,
+) -> String {
+  let year = listens
+    .iter()
+    .map(|record| record.ended_at.with_timezone(&Local).year())
+    .max();
+  match (period, year) {
+    (RecapPeriod::Year, Some(year)) => year.to_string(),
+    _ => period_label_with(period, strings).to_string(),
+  }
+}
+
+/// The service a listen came from, by the scheme of its URI.
+fn listen_source(record: &ListenRecord) -> Option<Source> {
+  let (scheme, _) = record.item_uri.as_deref()?.split_once(':')?;
+  Some(match scheme {
+    "spotify" => Source::Spotify,
+    "file" => Source::Local,
+    "subsonic" => Source::Subsonic,
+    "radio" => Source::Radio,
+    "youtube" => Source::YouTube,
+    "qobuz" => Source::Qobuz,
+    "applemusic" => Source::AppleMusic,
+    _ => return None,
+  })
+}
+
+/// The three services with the most listens and their share, such as "Spotify 79% · Qobuz 21%".
+fn source_shares(listens: &[ListenRecord], strings: &crate::core::i18n::Strings) -> String {
+  let mut counts: Vec<(Source, usize)> = Vec::new();
+  for source in listens.iter().filter_map(listen_source) {
+    match counts.iter_mut().find(|(known, _)| *known == source) {
+      Some((_, count)) => *count += 1,
+      None => counts.push((source, 1)),
+    }
+  }
+  let total: usize = counts.iter().map(|(_, count)| count).sum();
+  if total == 0 {
+    return strings.recap.no_data.to_string();
+  }
+  counts.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
+  counts
+    .iter()
+    .take(3)
+    .map(|(source, count)| {
+      let label = strings.sidebar.source_label(*source);
+      match count * 100 / total {
+        0 => format!("{label} <1%"),
+        percent => format!("{label} {percent}%"),
+      }
+    })
+    .collect::<Vec<_>>()
+    .join(" · ")
 }
 
 const COVER_SEARCH_URL: &str = "https://itunes.apple.com/search";
@@ -1396,8 +1459,7 @@ fn render_history_recap_html_with(
     top_tracks.first(),
     top_artists.first(),
     top_albums.first(),
-    listens.len(),
-    listens.iter().map(|record| record.listened_ms).sum(),
+    listens,
     strings,
   );
   let alt_card = CardData::from_listens(alt_period, alt_listens, strings);
@@ -1499,7 +1561,7 @@ fn render_history_recap_html_with(
     }}
     .card-wrapper {{
       width: 440px;
-      height: 660px;
+      height: 726px;
       display: flex;
       justify-content: center;
       align-items: center;
@@ -1932,7 +1994,7 @@ fn render_history_recap_html_with(
 
             <div class="card-header">
               <span class="card-brand">spota<span style="color:var(--accent)">tui</span></span>
-              <span id="card-period" class="period-badge">{title}</span>
+              <span id="card-period" class="period-badge">{card_badge}</span>
             </div>
             
             <div class="cover-container">
@@ -1967,11 +2029,15 @@ fn render_history_recap_html_with(
                 <span class="stat-label">{top_album}</span>
                 <span id="card-top-album" class="stat-value">{top_album_title}</span>
               </div>
+              <div class="stat-pill full-width">
+                <span class="stat-label">{sources}</span>
+                <span id="card-sources" class="stat-value">{sources_value}</span>
+              </div>
             </div>
             
             <div class="card-footer">
               <span class="card-footer-left">{generated_by}<strong>spotatui</strong></span>
-              <span class="card-footer-right">github.com/LargeModGames/spotatui</span>
+              <span class="card-footer-right">spotatui.com</span>
             </div>
           </div>
         </div>
@@ -2072,6 +2138,7 @@ fn render_history_recap_html_with(
       document.getElementById('card-time').textContent = card.time;
       document.getElementById('card-top-artist').textContent = card.topArtist;
       document.getElementById('card-top-album').textContent = card.topAlbum;
+      document.getElementById('card-sources').textContent = card.sources;
       applyCover(index);
     }}
 
@@ -2084,7 +2151,7 @@ fn render_history_recap_html_with(
     // deterministic output, works offline.
     const CANVAS_SCALE = 3;
     const CARD_W = 440;
-    const CARD_H = 660;
+    const CARD_H = 726;
     const ACCENT = '#1db954';
     const TEXT = '#f1f5f9';
     const MUTED = '#94a3b8';
@@ -2235,21 +2302,22 @@ fn render_history_recap_html_with(
       drawStatPill(ctx, 32 + pillW + 12, 424, pillW, 54, {listening_time_js}, card.time);
       drawStatPill(ctx, 32, 490, CARD_W - 64, 54, {top_artist_js}, card.topArtist);
       drawStatPill(ctx, 32, 556, CARD_W - 64, 54, {top_album_js}, card.topAlbum);
+      drawStatPill(ctx, 32, 622, CARD_W - 64, 54, {sources_js}, card.sources);
 
       // Footer
       ctx.strokeStyle = 'rgba(255, 255, 255, 0.04)';
       ctx.beginPath();
-      ctx.moveTo(32, 622);
-      ctx.lineTo(CARD_W - 32, 622);
+      ctx.moveTo(32, 688);
+      ctx.lineTo(CARD_W - 32, 688);
       ctx.stroke();
       ctx.textAlign = 'left';
       ctx.fillStyle = MUTED;
       ctx.font = '400 11px "Plus Jakarta Sans", sans-serif';
-      ctx.fillText({generated_by_product_js}, 32, 642);
+      ctx.fillText({generated_by_product_js}, 32, 708);
       ctx.textAlign = 'right';
       ctx.fillStyle = ACCENT;
       ctx.font = '400 11px "JetBrains Mono", monospace';
-      ctx.fillText('github.com/LargeModGames/spotatui', CARD_W - 32, 642);
+      ctx.fillText('spotatui.com', CARD_W - 32, 708);
       ctx.restore();
 
       // Card border on top of everything
@@ -2321,6 +2389,7 @@ fn render_history_recap_html_with(
     listening_time_js = js_single_string(strings.recap.listening_time),
     top_artist_js = js_single_string(strings.recap.top_artist),
     top_album_js = js_single_string(strings.recap.top_album),
+    sources_js = js_single_string(strings.recap.sources),
     generated_by_product_js = js_single_string(strings.recap.generated_by_product),
     render_failed_js = js_single_string(strings.recap.render_failed),
     language = escape_html(strings.recap.language),
@@ -2337,8 +2406,11 @@ fn render_history_recap_html_with(
     top_track_artist = escape_html(&card.track_artist),
     top_artist_name = escape_html(&card.top_artist),
     top_album_title = escape_html(&card.top_album),
-    card_js = card.to_js_object(covers[0].as_deref(), strings),
-    alt_card_js = alt_card.to_js_object(covers[1].as_deref(), strings),
+    sources = escape_html(strings.recap.sources),
+    sources_value = escape_html(&card.sources),
+    card_badge = escape_html(&card.badge),
+    card_js = card.to_js_object(covers[0].as_deref()),
+    alt_card_js = alt_card.to_js_object(covers[1].as_deref()),
     top_tracks_html = render_ranked_entries(&top_tracks, strings.recap.no_tracks, true),
     top_artists_html = render_ranked_entries(&top_artists, strings.recap.no_artists, false),
     top_albums_html = render_ranked_entries(&top_albums, strings.recap.no_albums, false),
@@ -3780,7 +3852,7 @@ mod tests {
     let hash = html.bytes().fold(0xcbf29ce484222325u64, |hash, byte| {
       (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
     });
-    assert_eq!(hash, 0x82441e166ac7a822);
+    assert_eq!(hash, 0x2a9c4f7a1cf928bf);
   }
 
   #[test]
@@ -3889,6 +3961,66 @@ mod tests {
     assert!(html.contains(r#"period: "All Time", track:"#));
     assert!(html.contains("plays: 1,"));
     assert!(html.contains("plays: 2,"));
+  }
+
+  fn record_from(uri: Option<&str>) -> ListenRecord {
+    let mut record = record_at(3, 60_000, true);
+    record.item_uri = uri.map(str::to_string);
+    record
+  }
+
+  #[test]
+  fn the_card_names_the_three_services_with_the_most_listens() {
+    let mut listens: Vec<ListenRecord> = (0..150)
+      .map(|_| record_from(Some("spotify:track:a")))
+      .collect();
+    listens.extend((0..48).map(|_| record_from(Some("qobuz:track:1"))));
+    listens.extend((0..2).map(|_| record_from(Some("youtube:video:x"))));
+    listens.push(record_from(Some("file:///music/a.flac")));
+    listens.push(record_from(Some("dlna:item:9")));
+    listens.push(record_from(None));
+
+    assert_eq!(
+      source_shares(&listens, &crate::core::i18n::EN),
+      "Spotify 74% · Qobuz 23% · YouTube <1%"
+    );
+  }
+
+  #[test]
+  fn the_card_shows_no_data_for_listens_without_a_known_service() {
+    assert_eq!(source_shares(&[], &crate::core::i18n::EN), "No data");
+    assert_eq!(
+      source_shares(&[record_from(None)], &crate::core::i18n::EN),
+      "No data"
+    );
+  }
+
+  #[test]
+  fn the_year_card_shows_the_year_and_the_others_the_period_name() {
+    let listens = [record_at(3, 60_000, true)];
+    let strings = &crate::core::i18n::EN;
+
+    assert_eq!(card_badge(RecapPeriod::Year, &listens, strings), "2026");
+    assert_eq!(card_badge(RecapPeriod::Year, &[], strings), "This Year");
+    assert_eq!(
+      card_badge(RecapPeriod::ThirtyDays, &listens, strings),
+      "Last 30 Days"
+    );
+  }
+
+  #[test]
+  fn the_share_card_has_the_sources_and_the_site_in_the_page_and_on_the_canvas() {
+    let listens = [record_at(3, 60_000, true)];
+    let html = render_history_recap_html(RecapPeriod::Year, &listens, RecapPeriod::All, &listens);
+
+    assert!(html.contains(r#"<span id="card-sources" class="stat-value">Spotify 100%</span>"#));
+    assert!(html.contains(r#"sources: "Spotify 100%""#));
+    assert!(html.contains("54, 'Sources', card.sources);"));
+    assert!(html.contains(r#"<span id="card-period" class="period-badge">2026</span>"#));
+    assert!(html.contains(r#"period: "2026", track:"#));
+    assert!(html.contains(r#"<span class="card-footer-right">spotatui.com</span>"#));
+    assert!(html.contains("ctx.fillText('spotatui.com', CARD_W - 32, 708);"));
+    assert!(!html.contains("github.com/LargeModGames"));
   }
 
   #[test]
