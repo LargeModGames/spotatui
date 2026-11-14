@@ -97,7 +97,8 @@ lofty = { version = "0.25", optional = true }
 # ALSA on Linux and CoreAudio on macOS, plus the symphonia flac/mp3/mp4/vorbis/wav codecs; YouTube
 # needs `mp4` for M4A). It is gated by `audio-decode` (the sources), not `streaming`, so it cannot
 # be tied to `streaming`, and it cannot be `default-features = false` without dropping those
-# codecs. Slim and streaming-only builds do not compile it.
+# codecs. Slim, headless and streaming-only builds do not compile it, except on Windows.
+# The non-optional target entry below pulls rodio + cpal into every Windows build.
 rodio = { version = "0.22", optional = true }
 
 # Streaming dependencies: our maintained librespot fork, published on crates.io
