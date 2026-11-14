@@ -493,12 +493,22 @@ fn video_summary(view_count: Option<u64>) -> String {
 /// `1234` -> `"1.2K"`, `863781229` -> `"863.8M"` — coarse is fine for a
 /// subtitle column.
 fn humanize_count(n: u64) -> String {
-  match n {
-    0..=999 => n.to_string(),
-    1_000..=999_999 => format!("{:.1}K", n as f64 / 1_000.0),
-    1_000_000..=999_999_999 => format!("{:.1}M", n as f64 / 1_000_000.0),
-    _ => format!("{:.1}B", n as f64 / 1_000_000_000.0),
+  const UNITS: [(f64, &str); 3] = [(1_000.0, "K"), (1_000_000.0, "M"), (1_000_000_000.0, "B")];
+  let mut tier = match n {
+    0..=999 => return n.to_string(),
+    1_000..=999_999 => 0,
+    1_000_000..=999_999_999 => 1,
+    _ => 2,
+  };
+  let mut text = format!("{:.1}", n as f64 / UNITS[tier].0);
+  // Rounding to one decimal can carry a count just below the next unit up to
+  // `1000.0` (999,999 -> "1000.0K"). Show it in the next unit instead. B has no
+  // unit above it.
+  if text == "1000.0" && tier + 1 < UNITS.len() {
+    tier += 1;
+    text = format!("{:.1}", n as f64 / UNITS[tier].0);
   }
+  format!("{text}{}", UNITS[tier].1)
 }
 
 // ---------------------------------------------------------------------------
@@ -581,6 +591,19 @@ mod tests {
     assert_eq!(
       video_summary(Some(1_200_000_000)),
       "YouTube \u{2022} 1.2B views"
+    );
+  }
+
+  #[test]
+  fn view_counts_just_below_a_unit_boundary_round_up_to_the_next_unit() {
+    assert_eq!(video_summary(Some(999_999)), "YouTube \u{2022} 1.0M views");
+    assert_eq!(
+      video_summary(Some(999_949)),
+      "YouTube \u{2022} 999.9K views"
+    );
+    assert_eq!(
+      video_summary(Some(999_999_999)),
+      "YouTube \u{2022} 1.0B views"
     );
   }
 
