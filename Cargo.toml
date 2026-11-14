@@ -128,6 +128,7 @@ tokio-tungstenite = { version = "0.30", features = ["rustls-tls-native-roots"] }
 # The GUI page server's request-head parser.
 httparse = { version = "1.10", optional = true }
 url = "2.5"
+percent-encoding = "2.3.2"
 
 # librespot's TLS: native-tls on desktops, rustls on Android, where native-tls
 # would mean an OpenSSL build with the NDK. The two are mutually exclusive.
