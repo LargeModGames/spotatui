@@ -1122,10 +1122,12 @@ export function Shell({
         send={send}
         onSetUp={() => open({ page: "settings" })}
       />
-      {/* An announcement shows first; the recap waits under it. */}
+      {/* One modal at a time: the recap waits for an announcement and the Soloist dialogs. */}
       <RecapDialog
         prompt={
-          channels.announcement?.payload.active
+          channels.announcement?.payload.active ||
+          channels.status?.payload.soloist_offer ||
+          channels.status?.payload.soloist_pairing
             ? null
             : (channels.status?.payload.recap_prompt ?? null)
         }
