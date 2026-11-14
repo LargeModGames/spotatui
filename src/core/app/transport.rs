@@ -101,6 +101,7 @@ impl App {
   }
 
   pub fn toggle_playback(&mut self) {
+    self.bump_playback_intent();
     if self.relay_party_toggle() {
       return;
     }
@@ -265,6 +266,7 @@ impl App {
   }
 
   pub fn previous_track(&mut self) {
+    self.bump_playback_intent();
     if self.relay_party_transport(PlaybackAction::PrevTrack) {
       return;
     }
@@ -345,6 +347,7 @@ impl App {
   }
 
   pub fn force_previous_track(&mut self) {
+    self.bump_playback_intent();
     if self.relay_party_transport(PlaybackAction::ForcePrevTrack) {
       return;
     }
@@ -400,6 +403,7 @@ impl App {
   }
 
   pub fn next_track(&mut self) {
+    self.bump_playback_intent();
     if self.relay_party_transport(PlaybackAction::NextTrack) {
       return;
     }

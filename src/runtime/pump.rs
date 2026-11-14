@@ -112,21 +112,43 @@ pub(super) async fn start_tokio(io_rx: std::sync::mpsc::Receiver<IoEvent>, netwo
   tokio::spawn(run_spotify_lane(lane_rx));
 
   loop {
+    // Read arrivals already in the channel before replay: their playback
+    // intent may supersede a parked start. Qobuz arrivals join the pending
+    // batch until it drains, even when constants are already available.
+    #[cfg(feature = "qobuz")]
+    let pending_event = if bridge_rx.is_empty() {
+      crate::infra::qobuz::dispatch::next_pending_constants_event().await
+    } else {
+      None
+    };
+    #[cfg(not(feature = "qobuz"))]
+    let pending_event: Option<IoEvent> = None;
+    let replayed = pending_event.is_some();
     let deferred_deadline = network.deferred_deadline().await;
-    let io_event = tokio::select! {
-      maybe_event = bridge_rx.recv() => match maybe_event {
-        Some(io_event) => io_event,
-        None => break,
-      },
-      _ = party_poll.tick(), if network.party_incoming_rx.is_some() => {
-        network.process_party_messages().await;
-        continue;
-      }
-      _ = tokio::time::sleep_until(tokio::time::Instant::from_std(
-        deferred_deadline.unwrap_or_else(std::time::Instant::now)
-      )), if deferred_deadline.is_some() => {
-        network.flush_deferred().await;
-        continue;
+    let io_event = if let Some(event) = pending_event {
+      event
+    } else {
+      tokio::select! {
+        maybe_event = bridge_rx.recv() => match maybe_event {
+          Some(io_event) => io_event,
+          None => break,
+        },
+        _ = async {
+          #[cfg(feature = "qobuz")]
+          crate::infra::qobuz::dispatch::constants_ready().notified().await;
+          #[cfg(not(feature = "qobuz"))]
+          std::future::pending::<()>().await;
+        } => continue,
+        _ = party_poll.tick(), if network.party_incoming_rx.is_some() => {
+          network.process_party_messages().await;
+          continue;
+        }
+        _ = tokio::time::sleep_until(tokio::time::Instant::from_std(
+          deferred_deadline.unwrap_or_else(std::time::Instant::now)
+        )), if deferred_deadline.is_some() => {
+          network.flush_deferred().await;
+          continue;
+        }
       }
     };
 
@@ -157,6 +179,16 @@ pub(super) async fn start_tokio(io_rx: std::sync::mpsc::Receiver<IoEvent>, netwo
     }
 
     {
+      if !replayed {
+        let mut app = network.app.lock().await;
+        app.note_playback_intent(&io_event);
+        #[cfg(feature = "qobuz")]
+        if crate::infra::qobuz::dispatch::defer_constants(&network.app, &mut app, &io_event) {
+          app.is_loading = false;
+          app.note_display_changes();
+          continue;
+        }
+      }
       if !start_playback_has_taker(&io_event, network.spotify.is_some()) {
         let mut app = network.app.lock().await;
         let message = dropped_start_status(&io_event, app.strings());
@@ -190,8 +222,11 @@ pub(super) async fn start_tokio(io_rx: std::sync::mpsc::Receiver<IoEvent>, netwo
       // the queue slot's transport controls, and relinquishes the slot on an
       // unrelated `StartPlayback` (returning false so the per-source
       // teardowns/starts still run). Compiled unconditionally.
-      let handled_queue =
-        crate::infra::queue::dispatch::route_queue_event(&network.app, &io_event).await;
+      let handled_queue = if replayed {
+        crate::infra::queue::dispatch::route_queue_replay(&network.app, &io_event).await
+      } else {
+        crate::infra::queue::dispatch::route_queue_event(&network.app, &io_event).await
+      };
       // Local-file playback is intercepted before the Spotify network so the
       // network stays Spotify-only (see infra::local::dispatch).
       let handled_locally = !handled_queue && {

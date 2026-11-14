@@ -37,6 +37,15 @@ use std::time::Duration;
 /// return `false` (the per-source teardowns/starts still run) but first clear
 /// the queue slot so a new play cleanly takes over.
 pub async fn route_queue_event(app: &Arc<Mutex<App>>, event: &IoEvent) -> bool {
+  route_queue_event_inner(app, event, false).await
+}
+
+/// A constants replay already holds its place ahead of newer Qobuz events.
+pub(crate) async fn route_queue_replay(app: &Arc<Mutex<App>>, event: &IoEvent) -> bool {
+  route_queue_event_inner(app, event, true).await
+}
+
+async fn route_queue_event_inner(app: &Arc<Mutex<App>>, event: &IoEvent, replayed: bool) -> bool {
   // Music owns playback: the queue slot was cleared by the claim, and an
   // advance must not start a second player under it.
   if app.lock().await.apple_music_owns_playback() {
@@ -54,7 +63,7 @@ pub async fn route_queue_event(app: &Arc<Mutex<App>>, event: &IoEvent) -> bool {
     return false;
   }
   if let IoEvent::AdvanceNativeQueue = event {
-    advance_native_queue(app).await;
+    advance_native_queue(app, replayed).await;
     return true;
   }
 
@@ -166,7 +175,7 @@ async fn route_queue_transport(app: &Arc<Mutex<App>>, event: &IoEvent) -> Option
     IoEvent::NextTrack => {
       drop(player);
       app.lock().await.queue_slot_desired_playing = true;
-      advance_native_queue(app).await;
+      advance_native_queue(app, false).await;
       Some(true)
     }
     // A forward-only queue has no "previous"; restart the current queued track.
@@ -215,7 +224,7 @@ async fn route_spotify_queue_transport(app: &Arc<Mutex<App>>, event: &IoEvent) -
     // A skip while paused plays the next item, decoded or not.
     IoEvent::NextTrack => {
       app.lock().await.queue_slot_desired_playing = true;
-      advance_native_queue(app).await;
+      advance_native_queue(app, false).await;
       Some(true)
     }
     IoEvent::PreviousTrack | IoEvent::ForcePreviousTrack => {
@@ -266,10 +275,23 @@ async fn clear_queue_playback(app: &Arc<Mutex<App>>) {
 /// Pop the head of the native queue and play it, skipping unplayable items with
 /// a status message (bounded by the queue length — never unbounded recursion).
 /// When the queue drains, resume the suspended context (or finish).
-async fn advance_native_queue(app: &Arc<Mutex<App>>) {
+async fn advance_native_queue(app: &Arc<Mutex<App>>, replayed: bool) {
+  #[cfg(not(feature = "qobuz"))]
+  let _ = replayed;
   loop {
     let track = {
       let mut guard = app.lock().await;
+      // A skipped head can expose a Qobuz item after the pump's initial gate.
+      #[cfg(feature = "qobuz")]
+      if !replayed
+        && crate::infra::qobuz::dispatch::defer_constants(
+          app,
+          &mut guard,
+          &IoEvent::AdvanceNativeQueue,
+        )
+      {
+        return;
+      }
       if guard.native_queue.is_empty() {
         None
       } else {
