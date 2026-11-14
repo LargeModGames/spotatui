@@ -8,7 +8,9 @@ use crate::core::plugin_api::{
   ArtistInfo, EpisodeInfo, PlayableInfo, PlaylistInfo, SavedAlbumInfo, ShowInfo, TrackInfo,
 };
 use crate::core::requirement::{availability, Availability, Capability, Requirement};
-use crate::core::sort::{SortContext, SortField, SortState};
+use crate::core::sort::{
+  sort_playlist_slots, PlaylistLastListens, SidebarPlaylistOrder, SortContext, SortField, SortState,
+};
 use crate::core::source::Source;
 use crate::core::state::{
   PersistedRuntimeState, RadioStationAddOutcome, RadioStationConfig, RuntimeState,
@@ -534,6 +536,8 @@ pub struct App {
   _playlist_folder_nodes: Option<Vec<PlaylistFolderNode>>,
   /// Flattened folder+playlist items for display navigation
   playlist_folder_items: Vec<PlaylistFolderItem>,
+  /// Latest local listen per playlist context, maintained by the history collector.
+  playlist_last_listens: PlaylistLastListens,
   /// Backing storage for the injected community-playlist pin so display methods
   /// can hand out a `&PlaylistFolderItem`. Never stored in
   /// `playlist_folder_items`.

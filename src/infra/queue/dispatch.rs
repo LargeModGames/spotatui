@@ -696,6 +696,29 @@ async fn publish_pending_decoded(
   fetch_id
 }
 
+/// Says why a queued item could not be fetched. A Qobuz track the account
+/// may not stream in full gets the subscription message as an error, so the
+/// advance that follows does not replace it with the next item's status.
+#[cfg(feature = "queue-download")]
+fn report_fetch_failure(app: &mut App, track_name: &str, err: &anyhow::Error) {
+  let strings = app.strings();
+  #[cfg(feature = "qobuz")]
+  if err
+    .downcast_ref::<crate::infra::qobuz::NoFullStream>()
+    .is_some()
+  {
+    app.set_error_status_message(strings.status.infra.qobuz_no_full_stream, 8);
+    return;
+  }
+  app.set_status_message(
+    strings
+      .status
+      .infra
+      .queue_play_failed(track_name, &err.to_string()),
+    4,
+  );
+}
+
 /// Complete a background queue fetch: if the slot still carries `fetch_id`,
 /// stage the downloaded file and finalize the slot (with the delivered format
 /// label, when the source reports one); otherwise (skipped, torn down, or
@@ -721,16 +744,7 @@ async fn finish_decoded_fetch(
   let (tmp, quality) = match result {
     Ok(fetched) => fetched,
     Err(e) => {
-      {
-        let strings = guard.strings();
-        guard.set_status_message(
-          strings
-            .status
-            .infra
-            .queue_play_failed(track_name, &e.to_string()),
-          4,
-        )
-      };
+      report_fetch_failure(&mut guard, track_name, &e);
       guard.dispatch(IoEvent::AdvanceNativeQueue);
       return;
     }
@@ -1428,6 +1442,30 @@ mod tests {
       image_url: None,
       release_date: None,
     }
+  }
+
+  #[cfg(feature = "qobuz")]
+  #[test]
+  fn a_queued_qobuz_track_without_a_full_stream_names_the_subscription() {
+    let mut app = App::default();
+    let err = anyhow::Error::new(crate::infra::qobuz::NoFullStream).context("file url");
+    report_fetch_failure(&mut app, "Song", &err);
+    let strings = app.strings();
+    assert_eq!(
+      app.status_message(),
+      Some(strings.status.infra.qobuz_no_full_stream)
+    );
+    assert!(app.status_message_is_error());
+  }
+
+  #[cfg(feature = "queue-download")]
+  #[test]
+  fn any_other_fetch_failure_names_the_track() {
+    let mut app = App::default();
+    report_fetch_failure(&mut app, "Song", &anyhow::anyhow!("download failed"));
+    let message = app.status_message().unwrap_or_default().to_string();
+    assert!(message.contains("Song"), "{message}");
+    assert!(!app.status_message_is_error());
   }
 
   fn test_app() -> Arc<Mutex<App>> {

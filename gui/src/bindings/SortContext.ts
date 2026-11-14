@@ -3,4 +3,4 @@
 /**
  * Context that supports sorting
  */
-export type SortContext = "PlaylistTracks" | "SavedAlbums" | "SavedArtists" | "RecentlyPlayed";
+export type SortContext = "SidebarPlaylists" | "PlaylistTracks" | "SavedAlbums" | "SavedArtists" | "RecentlyPlayed";

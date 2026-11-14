@@ -24,6 +24,7 @@ fn native_streaming_refusal(
     Unavailable::NoLogin => None,
     Unavailable::NotPremium => Some(strings.status.runtime.premium_required),
     Unavailable::Offline => Some(strings.status.runtime.native_offline),
+    Unavailable::TimedOut => Some(strings.status.runtime.native_timed_out),
   }
 }
 impl StartupDeviceEvent {
@@ -238,5 +239,9 @@ mod tests {
         .is_some_and(|message| message.contains("Premium"))
     );
     assert!(native_streaming_refusal(Unavailable::Offline, &crate::core::i18n::EN).is_some());
+    assert!(
+      native_streaming_refusal(Unavailable::TimedOut, &crate::core::i18n::EN)
+        .is_some_and(|message| message.contains("timed out"))
+    );
   }
 }

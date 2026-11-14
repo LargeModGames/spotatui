@@ -12,6 +12,7 @@ import {
   PlaylistRows,
   ShowRows,
   SortSelect,
+  PlaylistSortSelect,
 } from "./LibraryPanel";
 import { EN, deviceKind } from "./i18n";
 import { removalTarget, playlistRemoval } from "./libraryModel";
@@ -36,6 +37,7 @@ const playlist = (
 });
 
 const payload: SourcePlaylists = {
+  playlist_sidebar_order: "spotify",
   spotify: [
     playlist("spotify:playlist:mine", "Road trip"),
     playlist("spotify:playlist:theirs", "Their mix"),
@@ -150,6 +152,39 @@ const rightClick = (tree: ReactNode, title: string) => {
 };
 
 describe("LibraryPanel header and filters", () => {
+  it("offers the persisted playlist order only for the Spotify sidebar", () => {
+    const html = panel("Spotify", {
+      ...payload,
+      playlist_sidebar_order: "recently_played",
+    });
+    expect(html).toContain('aria-label="Sort playlists"');
+    expect(html).toContain(
+      '<option value="recently_played" selected="">Recently played</option>',
+    );
+    for (const source of ["Local", "Radio", "YouTube"] as const)
+      expect(panel(source)).not.toContain('aria-label="Sort playlists"');
+  });
+
+  it("sends the three playlist orders through the shared sort action", () => {
+    const send = vi.fn<(action: Action) => void>();
+    const tree = <PlaylistSortSelect order="name" send={send} />;
+    const select = hostElements(tree).find(
+      (element) => element.type === "select",
+    );
+    expect(select?.props.value).toBe("name");
+    const change = select?.props.onChange as (event: unknown) => void;
+    for (const [value, field] of [
+      ["spotify", "Default"],
+      ["recently_played", "RecentlyPlayed"],
+      ["name", "Name"],
+    ]) {
+      change({ target: { value } });
+      expect(send).toHaveBeenLastCalledWith({
+        Sort: { context: "SidebarPlaylists", field },
+      });
+    }
+  });
+
   it("offers Create playlist for Spotify and YouTube only", () => {
     expect(panel("Spotify")).toContain('aria-label="Create playlist"');
     expect(panel("YouTube")).toContain('aria-label="Create playlist"');

@@ -202,7 +202,7 @@ export class Connection {
 
   getState = (): State => this.state;
 
-  /** The same-origin URL of the playing item's cover; null before the server gave a token. */
+  /** The same-origin URL of a cover reference or playing item; null before hello. */
   coverSrc = (uri: string): string | null => {
     const token = this.storage.getItem(TOKEN_KEY);
     return token
@@ -330,8 +330,22 @@ export class Connection {
     }
   }
 
-  /** A Subsonic cover URL carries the login, so the server leaves it out and the page asks `/cover`. */
+  /** Attach the session token to private cover references, including nested list rows. */
   private withServerCover(message: ChannelMessage): ChannelMessage {
+    const replace = (value: unknown): void => {
+      if (Array.isArray(value)) {
+        value.forEach(replace);
+      } else if (value !== null && typeof value === "object") {
+        const fields = value as Record<string, unknown>;
+        if (
+          typeof fields.image_url === "string" &&
+          /^subsonic-cover:[0-9]+$/.test(fields.image_url)
+        )
+          fields.image_url = this.coverSrc(fields.image_url);
+        Object.values(fields).forEach(replace);
+      }
+    };
+    replace(message);
     if (message.kind !== "playback") return message;
     const item = message.payload.item;
     if (!item?.uri || item.image_url || sourceOf(item.uri) !== "Subsonic")

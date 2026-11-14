@@ -2,8 +2,10 @@
 //!
 //! Provides sorting functionality for playlists, albums, artists, etc.
 
-use crate::core::plugin_api::TrackInfo;
+use crate::core::plugin_api::{PlaylistInfo, TrackInfo};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// Fields that can be used for sorting
 ///
@@ -27,6 +29,8 @@ pub enum SortField {
   Album,
   /// By release date (for albums)
   ReleaseDate,
+  /// Latest local listen in a playlist context
+  RecentlyPlayed,
 }
 
 impl SortField {
@@ -40,6 +44,7 @@ impl SortField {
       SortField::Duration => Some('t'),
       SortField::Album => Some('l'),
       SortField::ReleaseDate => Some('y'),
+      SortField::RecentlyPlayed => Some('r'),
     }
   }
 
@@ -53,6 +58,7 @@ impl SortField {
       SortField::Duration => "duration",
       SortField::Album => "album",
       SortField::ReleaseDate => "release_date",
+      SortField::RecentlyPlayed => "recently_played",
     }
   }
 
@@ -67,6 +73,7 @@ impl SortField {
       "duration" => Some(SortField::Duration),
       "album" => Some(SortField::Album),
       "release_date" => Some(SortField::ReleaseDate),
+      "recently_played" => Some(SortField::RecentlyPlayed),
       _ => None,
     }
   }
@@ -115,12 +122,14 @@ impl SortOrder {
     }
   }
 
-  /// Parse a `:desc` direction suffix. Only `desc` flips to descending;
-  /// everything else (including `asc` or empty) is ascending.
-  pub fn parse_suffix(s: &str) -> Self {
+  /// Parse a direction suffix. `desc` is descending and `asc` or an empty
+  /// string is ascending; any other spelling is `None`, so a config typo is
+  /// reported instead of silently sorting ascending.
+  pub fn parse_suffix(s: &str) -> Option<Self> {
     match s.trim() {
-      "desc" => SortOrder::Descending,
-      _ => SortOrder::Ascending,
+      "desc" => Some(SortOrder::Descending),
+      "" | "asc" => Some(SortOrder::Ascending),
+      _ => None,
     }
   }
 }
@@ -129,6 +138,8 @@ impl SortOrder {
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub enum SortContext {
+  /// Spotify playlists in the library sidebar
+  SidebarPlaylists,
   /// Tracks in a playlist
   PlaylistTracks,
   /// User's saved albums
@@ -144,6 +155,11 @@ impl SortContext {
   /// Get the available sort fields for this context
   pub fn available_fields(&self) -> &'static [SortField] {
     match self {
+      SortContext::SidebarPlaylists => &[
+        SortField::Default,
+        SortField::RecentlyPlayed,
+        SortField::Name,
+      ],
       SortContext::PlaylistTracks => &[
         SortField::Default,
         SortField::Name,
@@ -168,6 +184,74 @@ impl SortContext {
         SortField::Album,
       ],
     }
+  }
+}
+
+/// The three orders for Spotify's playlists sidebar. Folder slots stay fixed.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
+#[serde(rename_all = "snake_case")]
+pub enum SidebarPlaylistOrder {
+  #[default]
+  Spotify,
+  RecentlyPlayed,
+  Name,
+}
+
+impl SidebarPlaylistOrder {
+  pub fn field(self) -> SortField {
+    match self {
+      Self::Spotify => SortField::Default,
+      Self::RecentlyPlayed => SortField::RecentlyPlayed,
+      Self::Name => SortField::Name,
+    }
+  }
+
+  pub fn from_field(field: SortField) -> Option<Self> {
+    match field {
+      SortField::Default => Some(Self::Spotify),
+      SortField::RecentlyPlayed => Some(Self::RecentlyPlayed),
+      SortField::Name => Some(Self::Name),
+      _ => None,
+    }
+  }
+}
+
+/// Latest local listen by playlist context URI; read once off the UI thread and
+/// maintained as the history collector appends records.
+pub type PlaylistLastListens = BTreeMap<String, DateTime<Utc>>;
+
+/// Reorder only playlist slots at one folder level. Folders, back rows and pins
+/// keep their positions. Stable ties (including never-played playlists) keep the
+/// rootlist order supplied by the caller, in either frontend.
+pub fn sort_playlist_slots<'a, T: Clone>(
+  items: &mut [T],
+  order: SidebarPlaylistOrder,
+  last_listens: &PlaylistLastListens,
+  playlist: impl Fn(&T) -> Option<&'a PlaylistInfo>,
+) {
+  if order == SidebarPlaylistOrder::Spotify {
+    return;
+  }
+  let slots: Vec<usize> = items
+    .iter()
+    .enumerate()
+    .filter_map(|(index, item)| playlist(item).map(|_| index))
+    .collect();
+  let mut sorted: Vec<T> = slots.iter().map(|index| items[*index].clone()).collect();
+  match order {
+    SidebarPlaylistOrder::Spotify => {}
+    SidebarPlaylistOrder::Name => {
+      sorted.sort_by_cached_key(|item| playlist(item).unwrap().name.to_lowercase());
+    }
+    SidebarPlaylistOrder::RecentlyPlayed => {
+      sorted.sort_by_cached_key(|item| {
+        std::cmp::Reverse(last_listens.get(&playlist(item).unwrap().uri).copied())
+      });
+    }
+  }
+  for (index, item) in slots.into_iter().zip(sorted) {
+    items[index] = item;
   }
 }
 
@@ -212,7 +296,8 @@ impl SortState {
 
   /// Parse a `"<field>"` / `"<field>:desc"` spec, validating that the field is
   /// available in `ctx`. Hard error (with the context's valid fields) if the
-  /// field is unknown or unavailable in this context.
+  /// field is unknown or unavailable in this context, or if the direction is
+  /// not `asc` / `desc` / empty.
   pub fn parse(spec: &str, ctx: SortContext) -> Result<Self, String> {
     let (field_str, order_str) = match spec.split_once(':') {
       Some((f, o)) => (f, o),
@@ -242,10 +327,13 @@ impl SortState {
           .join(", ")
       ));
     }
-    Ok(Self {
-      field,
-      order: SortOrder::parse_suffix(order_str),
-    })
+    let order = SortOrder::parse_suffix(order_str).ok_or_else(|| {
+      format!(
+        "unknown sort direction '{}' (expected asc or desc)",
+        order_str.trim()
+      )
+    })?;
+    Ok(Self { field, order })
   }
 }
 
@@ -357,6 +445,31 @@ mod tests {
       SortState::parse("artist", SortContext::SavedArtists).unwrap_err(),
       "sort field 'artist' is not available in this context (valid: default, name)"
     );
+  }
+
+  #[test]
+  fn unknown_sort_direction_is_rejected_instead_of_sorting_ascending() {
+    for spec in ["name:dsc", "name:DESC", "name:descending"] {
+      let direction = spec.split_once(':').unwrap().1;
+      assert_eq!(
+        SortState::parse(spec, SortContext::SavedArtists).unwrap_err(),
+        format!("unknown sort direction '{direction}' (expected asc or desc)")
+      );
+    }
+    // The valid spellings keep working; the suffix stays trimmed.
+    for (spec, order) in [
+      ("name", SortOrder::Ascending),
+      ("name:asc", SortOrder::Ascending),
+      ("name:desc", SortOrder::Descending),
+      ("name: desc", SortOrder::Descending),
+    ] {
+      assert_eq!(
+        SortState::parse(spec, SortContext::SavedArtists)
+          .unwrap()
+          .order,
+        order
+      );
+    }
   }
 
   #[test]

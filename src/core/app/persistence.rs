@@ -243,10 +243,13 @@ impl App {
       }
     }
     #[cfg(feature = "internet-radio")]
-    if self.radio_playback.is_some() {
-      return true;
+    {
+      self.radio_playback.is_some()
     }
-    false
+    #[cfg(not(feature = "internet-radio"))]
+    {
+      false
+    }
   }
 
   /// Schedule a debounced state save. Hot paths (volume, shuffle) call this

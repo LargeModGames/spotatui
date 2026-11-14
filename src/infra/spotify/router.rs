@@ -165,6 +165,7 @@ fn unavailable_error(reason: session::Unavailable) -> anyhow::Error {
     session::Unavailable::NoLogin => StatusCode::UNAUTHORIZED,
     session::Unavailable::NotPremium => StatusCode::FORBIDDEN,
     session::Unavailable::Offline => StatusCode::SERVICE_UNAVAILABLE,
+    session::Unavailable::TimedOut => StatusCode::GATEWAY_TIMEOUT,
   };
   api_error(status, reason.message())
 }
@@ -352,6 +353,10 @@ mod tests {
     assert_eq!(
       status(session::Unavailable::Offline),
       StatusCode::SERVICE_UNAVAILABLE
+    );
+    assert_eq!(
+      status(session::Unavailable::TimedOut),
+      StatusCode::GATEWAY_TIMEOUT
     );
   }
 

@@ -2,6 +2,7 @@
 
 use crate::core::app::{App, DisplayRevisions};
 use crate::core::i18n::Language;
+use crate::gui::covers::{CoverLinks, COVER_PREFIX};
 use crate::gui::onboarding::BrowserOnboarding;
 use crate::gui::protocol::{self, ClientMessage, ServerMessage};
 use futures::{SinkExt, StreamExt};
@@ -35,6 +36,7 @@ pub(crate) struct Link {
   screen_frames: watch::Receiver<Option<Arc<str>>>,
   screen_watchers: Arc<AtomicUsize>,
   screen_bars: Arc<AtomicUsize>,
+  covers: Arc<CoverLinks>,
 }
 
 impl Link {
@@ -47,8 +49,11 @@ impl Link {
     }
   }
 
-  /// Where the cover of `uri` is, only while `uri` is the item the page shows playing.
+  /// A cover reference handed to the page, or the item it shows playing.
   pub(crate) async fn cover_source(&self, uri: &str) -> Option<CoverSource> {
+    if uri.starts_with(COVER_PREFIX) {
+      return self.covers.resolve(uri).map(CoverSource::Url);
+    }
     let app = self.app.borrow().clone()?;
     let app = app.lock().await;
     let snapshot = app.playback_view().0.as_ref()?;
@@ -94,6 +99,7 @@ pub(crate) struct Publisher {
   screen_bars: Arc<AtomicUsize>,
   /// The Home page's lines as last pushed: they have no revision of their own.
   welcome: Option<protocol::WelcomePayload>,
+  covers: Arc<CoverLinks>,
 }
 
 /// Counts its socket among the visualizer's watchers while it lives.
@@ -125,6 +131,7 @@ pub(crate) fn channel(
   let screen_watchers = Arc::new(AtomicUsize::new(0));
   let screen_bars = Arc::new(AtomicUsize::new(0));
   let now = Instant::now();
+  let covers = Arc::new(CoverLinks::default());
   let publisher = Publisher {
     pushes: pushes.clone(),
     sent: DisplayRevisions::default(),
@@ -137,6 +144,7 @@ pub(crate) fn channel(
     screen_watchers: Arc::clone(&screen_watchers),
     screen_bars: Arc::clone(&screen_bars),
     welcome: None,
+    covers: Arc::clone(&covers),
   };
   (
     Link {
@@ -150,6 +158,7 @@ pub(crate) fn channel(
       screen_frames: screen_frame,
       screen_watchers,
       screen_bars,
+      covers,
     },
     publisher,
     messages,
@@ -160,15 +169,16 @@ impl Publisher {
   /// Broadcast every channel that changed since the last call.
   pub(crate) fn publish(&mut self, app: &App) {
     for message in protocol::diff(&self.sent, app, self.language) {
-      let _ = self.pushes.send(protocol::encode(&message));
+      let _ = self.pushes.send(protocol::encode(&message, &self.covers));
     }
     self.sent = app.display_revisions();
     self.language = app.language();
     let welcome = protocol::welcome_payload(app);
     if self.welcome.as_ref() != Some(&welcome) {
-      let _ = self
-        .pushes
-        .send(protocol::encode(&protocol::welcome(welcome.clone())));
+      let _ = self.pushes.send(protocol::encode(
+        &protocol::welcome(welcome.clone()),
+        &self.covers,
+      ));
       self.welcome = Some(welcome);
     }
   }
@@ -177,7 +187,9 @@ impl Publisher {
   pub(crate) fn tick(&mut self, app: &App, now: Instant) {
     if now.saturating_duration_since(self.last_tick) + TICK_SLACK >= TICK_EVERY {
       self.last_tick = now;
-      let _ = self.pushes.send(protocol::encode(&protocol::tick(app)));
+      let _ = self
+        .pushes
+        .send(protocol::encode(&protocol::tick(app), &self.covers));
     }
   }
 
@@ -199,7 +211,7 @@ impl Publisher {
   pub(crate) fn frame(&self, message: &ServerMessage) {
     self
       .frames
-      .send_replace(Some(protocol::encode(message).into()));
+      .send_replace(Some(protocol::encode(message, &self.covers).into()));
   }
 
   /// The bands the visualizer screen wants, while a page shows it.
@@ -212,7 +224,7 @@ impl Publisher {
   pub(crate) fn screen_frame(&self, message: &ServerMessage) {
     self
       .screen_frames
-      .send_replace(Some(protocol::encode(message).into()));
+      .send_replace(Some(protocol::encode(message, &self.covers).into()));
   }
 }
 
@@ -255,7 +267,7 @@ where
   loop {
     for message in outgoing.drain(..) {
       if sink
-        .send(WsMessage::text(protocol::encode(&message)))
+        .send(WsMessage::text(protocol::encode(&message, &link.covers)))
         .await
         .is_err()
       {
@@ -300,7 +312,7 @@ where
         }
       }
       incoming = stream.next() => match incoming {
-        Some(Ok(WsMessage::Text(text))) => match serde_json::from_str::<ClientMessage>(&text) {
+        Some(Ok(WsMessage::Text(text))) => match protocol::decode(&text, &link.covers) {
           // Answered here: boot waits on it before the tick loop exists.
           Ok(ClientMessage::Onboarding { reply }) => link.onboarding.answer(reply),
           // Per socket: the inbox does not know which page asked.
@@ -491,7 +503,10 @@ pub(crate) mod tests {
 
     assert_eq!(
       shown,
-      [protocol::encode(&protocol::visualizer(&[1.0], &[]))]
+      [protocol::encode(
+        &protocol::visualizer(&[1.0], &[]),
+        &CoverLinks::default()
+      )]
     );
     assert!(hidden.is_empty(), "{hidden:?}");
   }
@@ -530,7 +545,10 @@ pub(crate) mod tests {
 
     assert_eq!(
       shown,
-      [protocol::encode(&protocol::visualizer_screen(&[1.0], &[]))]
+      [protocol::encode(
+        &protocol::visualizer_screen(&[1.0], &[]),
+        &CoverLinks::default()
+      )]
     );
     assert!(hidden.is_empty(), "{hidden:?}");
     assert!(!publisher.visualizer_watched());

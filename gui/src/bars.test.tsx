@@ -259,6 +259,60 @@ describe("Meter", () => {
     expect(picks).toEqual([]);
     expect(dataset.drag).toBeUndefined();
   });
+
+  it("steps the volume once per wheel notch and not once per trackpad event", () => {
+    const wheel = ({ disabled = false, wheelStep = true } = {}) => {
+      const steps: boolean[] = [];
+      const dataset: Record<string, string> = {};
+      const fire = (deltaY: number, timeStamp: number, deltaMode = 0) =>
+        (
+          byName(
+            <Meter
+              label="Volume"
+              ratio={0.5}
+              text="50%"
+              disabled={disabled}
+              onPick={() => {}}
+              onStep={(up) => steps.push(up)}
+              onWheelStep={wheelStep ? (up) => steps.push(up) : undefined}
+            />,
+            "Volume",
+          ).props.onWheel as Handler
+        )({ deltaY, deltaMode, timeStamp, currentTarget: { dataset } });
+      return { steps, fire };
+    };
+
+    const notch = wheel();
+    notch.fire(-100, 0);
+    expect(notch.steps).toEqual([true]);
+    notch.fire(100, 1000);
+    expect(notch.steps).toEqual([true, false]);
+
+    const trackpad = wheel();
+    for (let i = 0; i < 10; i++) trackpad.fire(-10, i * 8);
+    expect(trackpad.steps).toEqual([true]);
+
+    const pause = wheel();
+    pause.fire(-60, 0);
+    pause.fire(-60, 500);
+    expect(pause.steps).toEqual([]);
+    pause.fire(-60, 550);
+    expect(pause.steps).toEqual([true]);
+
+    const lines = wheel();
+    lines.fire(-3, 0, 1);
+    expect(lines.steps.length).toBeGreaterThan(0);
+    expect(lines.steps.every((up) => up)).toBe(true);
+
+    for (const options of [{ disabled: true }, { wheelStep: false }]) {
+      const idle = wheel(options);
+      idle.fire(-100, 0);
+      idle.fire(100, 1000);
+      for (let i = 0; i < 10; i++) idle.fire(-10, 2000 + i * 8);
+      idle.fire(-3, 3000, 1);
+      expect(idle.steps).toEqual([]);
+    }
+  });
 });
 
 describe("TopBar", () => {

@@ -4,6 +4,7 @@ import type { ArtistInfo } from "./ArtistInfo";
 import type { LibraryNode } from "./LibraryNode";
 import type { PlaylistInfo } from "./PlaylistInfo";
 import type { ShowInfo } from "./ShowInfo";
+import type { SidebarPlaylistOrder } from "./SidebarPlaylistOrder";
 import type { TrackInfo } from "./TrackInfo";
 
 /**
@@ -58,4 +59,4 @@ editable: Array<string>,
 /**
  * The Spotify playlists in their folders; `null` without the rootlist, so the flat list stands.
  */
-folders: Array<LibraryNode> | null, };
+folders: Array<LibraryNode> | null, playlist_sidebar_order: SidebarPlaylistOrder, };

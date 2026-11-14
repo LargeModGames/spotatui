@@ -19,7 +19,7 @@ use super::auth::ApiKey;
 use super::link::{SoloistLink, StreamQuality, VolumeGate};
 use super::logline::{self, LogEvent};
 use super::process::{self, Exit, SpawnFailure, SpawnPlan};
-use super::protocol::{self, Command, Event};
+use super::protocol::{self, Command, Event, Status};
 use super::{prefs, Notice};
 use crate::core::app::App;
 use crate::core::user_config::StartupBehavior;
@@ -86,14 +86,28 @@ pub fn running() -> bool {
   shared().running.load(Ordering::SeqCst)
 }
 
-/// Pause, give up the Connect device, and stop the child, waiting at most `timeout`.
+fn shutdown_commands(is_active: bool, status: Status) -> Vec<Command> {
+  // Soloist's transports can control another device after a handoff.
+  if !is_active {
+    return Vec::new();
+  }
+  if status.is_playing() {
+    vec![Command::Pause, Command::Deactivate]
+  } else {
+    vec![Command::Deactivate]
+  }
+}
+
+/// Release playback if Soloist owns it, and stop the child, waiting at most `timeout`.
 pub async fn stop(timeout: Duration) {
   let shared = shared();
   shared.shutting_down.store(true, Ordering::SeqCst);
   let link = shared.link.lock().ok().and_then(|link| link.clone());
   if let Some(link) = link {
-    link.pause();
-    link.send(Command::Deactivate);
+    let snapshot = link.snapshot();
+    for command in shutdown_commands(snapshot.is_active, snapshot.status) {
+      link.send(command);
+    }
     tokio::time::sleep(Duration::from_millis(300)).await;
   }
   shared.stop.notify_one();
@@ -684,6 +698,35 @@ mod job {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn shutdown_leaves_playback_on_another_device_untouched() {
+    for status in [
+      Status::Playing,
+      Status::Buffering,
+      Status::Paused,
+      Status::Idle,
+    ] {
+      assert!(shutdown_commands(false, status).is_empty(), "{status:?}");
+    }
+  }
+
+  #[test]
+  fn shutdown_pauses_active_soloist_before_deactivating_it() {
+    for status in [Status::Playing, Status::Buffering] {
+      assert_eq!(
+        shutdown_commands(true, status),
+        vec![Command::Pause, Command::Deactivate]
+      );
+    }
+  }
+
+  #[test]
+  fn shutdown_deactivates_paused_or_idle_soloist_without_pausing_it() {
+    for status in [Status::Idle, Status::Paused] {
+      assert_eq!(shutdown_commands(true, status), vec![Command::Deactivate]);
+    }
+  }
 
   #[test]
   fn a_stop_with_no_supervisor_does_not_stop_the_next_one() {

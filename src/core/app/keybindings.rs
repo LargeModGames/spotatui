@@ -58,6 +58,13 @@ impl App {
 
   #[cfg(target_os = "macos")]
   fn allow_plain_comma_open_settings_fallback(&self) -> bool {
+    if self.get_current_route().active_block == ActiveBlock::MyPlaylists
+      && self
+        .availability(Requirement::Source(Source::Spotify))
+        .is_available()
+    {
+      return false;
+    }
     !matches!(
       self.get_current_route().active_block,
       ActiveBlock::Input

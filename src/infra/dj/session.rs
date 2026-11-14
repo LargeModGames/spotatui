@@ -675,7 +675,14 @@ mod tests {
     let scratch = agent_scratch_dir();
     let cwd = std::env::current_dir().unwrap();
     assert_ne!(scratch, cwd);
-    assert!(scratch.ends_with("dj-scratch"));
+    assert!(scratch.is_absolute(), "{scratch:?}");
+    // `dj-scratch` under the state dir, or the private `spotatui-dj-scratch-…`
+    // fallback when a build sandbox's HOME cannot be created (#1011).
+    let name = scratch.file_name().and_then(|name| name.to_str());
+    assert!(
+      name.is_some_and(|name| name.contains("dj-scratch")),
+      "{scratch:?}"
+    );
   }
 
   #[test]

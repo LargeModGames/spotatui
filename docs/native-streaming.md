@@ -66,11 +66,38 @@ Audio backend start error: Audio Sink Error Connection Refused: <AlsaSink> Devic
 
 Run `aplay -L` to list the ALSA devices; if `default` is missing, that's the problem.
 
-On PipeWire this usually means the ALSA bridge isn't installed. Install `pipewire-alsa` (same package name on Arch, Debian/Ubuntu and Fedora) and restart spotatui. On NixOS, see the PipeWire block in [installation.md](installation.md#nixos-flake).
+On PipeWire this usually means the ALSA bridge isn't installed. Install `pipewire-alsa` (same package name on Arch, Debian/Ubuntu and Fedora) and restart spotatui. On NixOS, see the PipeWire block in [installation.md](installation.md#nixos-flake). On Gentoo, rebuild PipeWire with the `pipewire-alsa` use flag enabled.
 
 To use a different ALSA device, set `SPOTATUI_STREAMING_AUDIO_DEVICE` to a name from `aplay -L`, for example `SPOTATUI_STREAMING_AUDIO_DEVICE=pipewire spotatui` or `plughw:0,0`. This only applies to Spotify playback; the other sources use the system default output.
 
 ---
+
+## Audio Backends
+spotatui supports a variety of audio backends for Spotify which can be installed through Cargo features and enabled through environment variables. On Linux (non-musl), the default backend is ALSA, which is supported in most setups through compatibility layers, though it may be preferable to choose a specific backend instead. A different backend can be specified via the `SPOTATUI_STREAMING_AUDIO_BACKEND` environment variable.
+
+Reference the following table to ensure spotatui is built with the proper Cargo features, and the associated `SPOTATUI_STREAMING_AUDIO_BACKEND` environment variable is set.
+| Cargo Feature      | `SPOTATUI_STREAMING_AUDIO_BACKEND` |
+|--------------------|-------------------------------------|
+| alsa-backend       | alsa                                |
+| pulseaudio-backend | pulseaudio                          |
+| rodio-backend      | rodio                               |
+| portaudio-backend  | portaudio                           |
+| jackaudio-backend  | jackaudio                           |
+| rodiojack-backend  | rodiojack                           |
+| sdl-backend        | sdl                                 |
+| gstreamer-backend  | gstreamer                           |
+| (built-in)         | pipe                                |
+| (built-in)         | subprocess                          |
+
+Note that using `pipe` backend will write raw PCM audio to stdout, breaking the TUI unless `SPOTATUI_STREAMING_AUDIO_DEVICE` names a file, which will be truncated and replaced with the audio output.
+The `subprocess` backend launches the command specified by `SPOTATUI_STREAMING_AUDIO_DEVICE` and writes raw PCM audio to its stdin.
+
+```
+# ALSA Subprocess Example on Little Endian Linux Build
+SPOTATUI_STREAMING_AUDIO_BACKEND=subprocess \
+SPOTATUI_STREAMING_AUDIO_DEVICE="aplay -f S16_LE -r 44100 -c 2" \
+spotatui
+```
 
 ## MPRIS D-Bus Integration (Linux)
 

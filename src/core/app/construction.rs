@@ -181,6 +181,7 @@ impl Default for App {
       all_playlists: Vec::new(),
       _playlist_folder_nodes: None,
       playlist_folder_items: Vec::new(),
+      playlist_last_listens: PlaylistLastListens::new(),
       current_playlist_folder_id: 0,
       playlist_refresh_generation: 0,
       saved_tracks_prefetch_generation: 0,

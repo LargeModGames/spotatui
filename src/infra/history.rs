@@ -576,18 +576,28 @@ pub fn spawn_history_collector(app: Arc<Mutex<App>>) -> HistoryCollectorHandle {
     // Streak cache: load the full history once, then keep per-day totals
     // updated incrementally from the records this collector appends (avoids
     // re-reading the ever-growing listens file after every track).
-    let mut day_totals: Option<BTreeMap<NaiveDate, u64>> =
-      match tokio::task::spawn_blocking(load_listens).await {
-        Ok(Ok(listens)) => Some(qualified_day_totals(&listens)),
-        Ok(Err(error)) => {
-          log::warn!("failed to load listens for streak cache: {}", error);
-          None
-        }
-        Err(error) => {
-          log::warn!("streak cache task failed: {}", error);
-          None
-        }
-      };
+    let mut day_totals: Option<BTreeMap<NaiveDate, u64>> = match tokio::task::spawn_blocking(|| {
+      let listens = load_listens()?;
+      Ok::<_, anyhow::Error>((
+        qualified_day_totals(&listens),
+        latest_playlist_listens(&listens),
+      ))
+    })
+    .await
+    {
+      Ok(Ok((totals, playlist_listens))) => {
+        app.lock().await.set_playlist_last_listens(playlist_listens);
+        Some(totals)
+      }
+      Ok(Err(error)) => {
+        log::warn!("failed to load listens for streak cache: {}", error);
+        None
+      }
+      Err(error) => {
+        log::warn!("streak cache task failed: {}", error);
+        None
+      }
+    };
     if let Some(totals) = &day_totals {
       app.lock().await.listening_streaks = Some(streaks_from_day_totals(totals));
     }
@@ -691,7 +701,11 @@ pub fn spawn_history_collector(app: Arc<Mutex<App>>) -> HistoryCollectorHandle {
 
       match collector.observe(snapshot) {
         Ok(Some(record)) => {
-          app.lock().await.record_session_play(session_play(&record));
+          {
+            let mut app = app.lock().await;
+            app.record_playlist_listen(&record);
+            app.record_session_play(session_play(&record));
+          }
           if record.qualified {
             if let Some(totals) = &mut day_totals {
               let date = record.ended_at.with_timezone(&Local).date_naive();
@@ -899,6 +913,21 @@ pub fn load_listens() -> Result<Vec<ListenRecord>> {
   }
 
   Ok(listens)
+}
+
+fn latest_playlist_listens(listens: &[ListenRecord]) -> crate::core::sort::PlaylistLastListens {
+  let mut latest = crate::core::sort::PlaylistLastListens::new();
+  for record in listens {
+    if let Some(uri) = record
+      .context_uri
+      .as_deref()
+      .filter(|uri| uri.starts_with("spotify:playlist:"))
+    {
+      let last = latest.entry(uri.to_string()).or_insert(record.ended_at);
+      *last = (*last).max(record.ended_at);
+    }
+  }
+  latest
 }
 
 impl HistoryCollector {
@@ -2930,6 +2959,65 @@ mod tests {
       source: HistoryPlaybackSource::NativeContext,
       image_url: None,
     }
+  }
+
+  #[test]
+  fn sidebar_playlist_order_uses_latest_listen_context_and_keeps_unplayed_rootlist_tail() {
+    use crate::core::sort::{sort_playlist_slots, SidebarPlaylistOrder};
+    use crate::core::test_helpers::playlist_info;
+    let record = |day, context: Option<&str>| ListenRecord {
+      context_uri: context.map(str::to_string),
+      ..record_at(day, 1_000, false)
+    };
+    // File order and track identity are irrelevant; only playlist contexts count.
+    let listens = vec![
+      record(23, Some("spotify:playlist:p2")),
+      record(21, Some("spotify:playlist:p1")),
+      record(20, Some("spotify:playlist:p2")),
+      record(29, Some("spotify:album:p0")),
+      record(30, None),
+    ];
+    let latest = latest_playlist_listens(&listens);
+    assert_eq!(latest.len(), 2);
+    assert_eq!(latest["spotify:playlist:p2"], listens[0].ended_at);
+    let playlists: Vec<_> = (0..5)
+      .map(|i| playlist_info(&format!("p{i}"), &format!("P{i}"), "me", false))
+      .collect();
+    let mut rootlist: Vec<_> = playlists.iter().collect();
+    sort_playlist_slots(
+      &mut rootlist,
+      SidebarPlaylistOrder::RecentlyPlayed,
+      &latest,
+      |playlist| Some(*playlist),
+    );
+    assert_eq!(
+      rootlist.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
+      ["P2", "P1", "P0", "P3", "P4"]
+    );
+
+    let mut app = App::default();
+    app.set_playlist_last_listens(latest);
+    let newest = record(28, Some("spotify:playlist:p1"));
+    app.record_playlist_listen(&newest);
+    // An older incremental record never replaces the latest timestamp.
+    app.record_playlist_listen(&listens[1]);
+    app.record_playlist_listen(&listens[3]);
+    // Exercise the collector-to-display path as well as the pure function.
+    *app.all_playlists_mut() = playlists;
+    *app.playlist_folder_items_mut() = (0..5)
+      .map(|index| crate::core::app::PlaylistFolderItem::Playlist {
+        index,
+        current_id: 0,
+      })
+      .collect();
+    app.apply(crate::core::action::Action::Sort {
+      context: crate::core::sort::SortContext::SidebarPlaylists,
+      field: crate::core::sort::SortField::RecentlyPlayed,
+    });
+    assert!(matches!(
+      app.get_playlist_display_item_at(1),
+      Some(crate::core::app::PlaylistFolderItem::Playlist { index: 1, .. })
+    ));
   }
 
   #[test]

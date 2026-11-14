@@ -588,10 +588,6 @@ fn playbar_controls_available(app: &App) -> bool {
 /// compile in the slim build (no source features) as well as any single- or
 /// all-sources build.
 fn non_spotify_source_playback_active(app: &App) -> bool {
-  if app.apple_music_owns_playback() {
-    return true;
-  }
-
   #[cfg(feature = "local-files")]
   if app.local_playback.is_some() {
     return true;
@@ -617,7 +613,7 @@ fn non_spotify_source_playback_active(app: &App) -> bool {
     return true;
   }
 
-  false
+  app.apple_music_owns_playback()
 }
 
 pub(crate) fn playbar_control_at(

@@ -130,18 +130,18 @@ The flake provides `x86_64-linux`, `aarch64-linux` and `aarch64-darwin`. nixpkgs
 
 ## Desktop app
 
-The desktop app is the same player in its own window, with a Spotify-style layout (Home, album and artist pages, Your Library, lyrics). It uses the same login, settings and history as the terminal app, and only one of the two runs at a time. Closing the window quits it. It is a preview.
+The desktop app is the same player in its own window, with a Spotify-style layout (Home, album and artist pages, Your Library, lyrics). It uses the same login, settings and history as the terminal app, and only one of the two runs at a time. Closing the window quits it. It plays the same sources as the terminal app.
 
-Download it from [GitHub Releases](https://github.com/LargeModGames/spotatui/releases/latest):
+Each link downloads the file of the latest release. The same files are on [GitHub Releases](https://github.com/LargeModGames/spotatui/releases/latest).
 
-| System | File |
-|---|---|
-| Windows 10/11 (64-bit) | `spotatui-desktop_<version>_x64-setup.exe` |
-| macOS, Apple Silicon | `spotatui_<version>_aarch64.dmg` |
-| macOS, Intel | `spotatui_<version>_x64.dmg` |
-| Debian/Ubuntu | `spotatui-desktop_<version>_amd64.deb` or `_arm64.deb` |
-| Fedora | `spotatui-desktop-<version>-1.x86_64.rpm` or `.aarch64.rpm` |
-| Other Linux | `spotatui-desktop_<version>_amd64.AppImage` or `_aarch64.AppImage` |
+| System | Download | File on the release page |
+|---|---|---|
+| Windows 10/11 (64-bit) | [Installer](https://spotatui.com/download/windows) | `spotatui-desktop_<version>_x64-setup.exe` |
+| macOS, Apple Silicon | [.dmg](https://spotatui.com/download/macos) | `spotatui_<version>_aarch64.dmg` |
+| macOS, Intel | [.dmg](https://spotatui.com/download/macos-intel) | `spotatui_<version>_x64.dmg` |
+| Debian/Ubuntu | [amd64](https://spotatui.com/download/linux-deb) · [arm64](https://spotatui.com/download/linux-deb-arm64) | `spotatui-desktop_<version>_amd64.deb` or `_arm64.deb` |
+| Fedora | [x86_64](https://spotatui.com/download/linux-rpm) · [aarch64](https://spotatui.com/download/linux-rpm-arm64) | `spotatui-desktop-<version>-1.x86_64.rpm` or `.aarch64.rpm` |
+| Other Linux | [x86_64](https://spotatui.com/download/linux-appimage) · [aarch64](https://spotatui.com/download/linux-appimage-arm64) | `spotatui-desktop_<version>_amd64.AppImage` or `_aarch64.AppImage` |
 
 The installers are not signed yet, so your system warns on the first start:
 

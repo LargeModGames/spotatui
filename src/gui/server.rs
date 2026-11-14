@@ -2,6 +2,7 @@
 //! socket once the Host, Origin and launch-code checks pass.
 
 use crate::gui::bridge::{self, CoverSource, Link};
+use crate::gui::covers::COVER_PREFIX;
 use crate::infra::loopback::{generate_token, tokens_match};
 use anyhow::{Context, Result};
 use std::io::Cursor;
@@ -9,11 +10,12 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::Semaphore;
 use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request, Response};
 use tokio_tungstenite::tungstenite::http::StatusCode;
 
 const MAX_HEAD_BYTES: usize = 16 * 1024;
-/// A plain request, or the head and handshake of a socket, must finish within this.
+/// A request head, plain response or socket handshake must finish within this.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const LAUNCH_CODE_TTL: Duration = Duration::from_secs(60);
 const CODE_PROTOCOL: &str = "spotatui.code.";
@@ -22,7 +24,10 @@ const PROTOCOL_HEADER: &str = "Sec-WebSocket-Protocol";
 const TEXT: &str = "text/plain; charset=utf-8";
 /// A cover fetch ends inside the request's own limit.
 const COVER_FETCH_TIMEOUT: Duration = Duration::from_secs(4);
+/// Queue waiting is bounded separately from an active cover request.
+const COVER_QUEUE_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_COVER_BYTES: usize = 16 * 1024 * 1024;
+const MAX_COVER_FETCHES: usize = 4;
 
 type Assets = &'static [(&'static str, &'static [u8])];
 
@@ -35,6 +40,8 @@ struct Server {
   assets: Assets,
   link: Link,
   covers: reqwest::Client,
+  registered_covers: reqwest::Client,
+  cover_fetches: Semaphore,
 }
 
 /// The launch code the browser URL carries, and the session token it is traded for.
@@ -82,6 +89,11 @@ struct Head {
   upgrade: bool,
 }
 
+enum PendingRequest {
+  Socket(Vec<u8>),
+  Cover(String),
+}
+
 impl Head {
   fn new(request: &httparse::Request<'_, '_>) -> Self {
     let header = |name: &str| {
@@ -121,6 +133,12 @@ pub(crate) async fn spawn_listener(assets: Assets, link: Link) -> Result<(u16, A
       .timeout(COVER_FETCH_TIMEOUT)
       .build()
       .context("could not build the cover client")?,
+    registered_covers: reqwest::Client::builder()
+      .redirect(reqwest::redirect::Policy::none())
+      .timeout(COVER_FETCH_TIMEOUT)
+      .build()
+      .context("could not build the registered cover client")?,
+    cover_fetches: Semaphore::new(MAX_COVER_FETCHES),
   });
   tokio::spawn(async move {
     loop {
@@ -154,17 +172,18 @@ pub(crate) async fn spawn_listener(assets: Assets, link: Link) -> Result<(u16, A
 }
 
 async fn serve_connection(mut stream: TcpStream, server: &Server) -> Result<()> {
-  let upgrade = tokio::time::timeout(REQUEST_TIMEOUT, answer(&mut stream, server))
+  let pending = tokio::time::timeout(REQUEST_TIMEOUT, answer(&mut stream, server))
     .await
     .context("request timed out")??;
-  match upgrade {
-    Some(raw) => open_socket(stream, raw, server).await,
+  match pending {
+    Some(PendingRequest::Socket(raw)) => open_socket(stream, raw, server).await,
+    Some(PendingRequest::Cover(target)) => cover(&mut stream, server, &target).await,
     None => Ok(()),
   }
 }
 
-/// Answers a plain request; returns the head read so far when it asks for the socket.
-async fn answer(stream: &mut TcpStream, server: &Server) -> Result<Option<Vec<u8>>> {
+/// Answers a plain request; defers socket upgrades and cover fetches.
+async fn answer(stream: &mut TcpStream, server: &Server) -> Result<Option<PendingRequest>> {
   let (head, raw) = read_head(stream).await?;
   let port = server.port;
   if !is_allowed(&head, port) {
@@ -183,12 +202,11 @@ async fn answer(stream: &mut TcpStream, server: &Server) -> Result<Option<Vec<u8
     return Ok(None);
   }
   if head.upgrade {
-    return Ok(Some(raw));
+    return Ok(Some(PendingRequest::Socket(raw)));
   }
   let path = head.path.split('?').next().unwrap_or_default();
   if path == "/cover" {
-    cover(stream, server, &head.path).await?;
-    return Ok(None);
+    return Ok(Some(PendingRequest::Cover(head.path)));
   }
   let name = if path == "/" {
     "index.html"
@@ -212,7 +230,7 @@ async fn answer(stream: &mut TcpStream, server: &Server) -> Result<Option<Vec<u8
   Ok(None)
 }
 
-/// The playing item's cover, so the page can read its colours; only with the session token.
+/// A registered list cover or the playing item's cover; only with the session token.
 async fn cover(stream: &mut TcpStream, server: &Server, target: &str) -> Result<()> {
   let port = server.port;
   let query = target
@@ -228,14 +246,34 @@ async fn cover(stream: &mut TcpStream, server: &Server, target: &str) -> Result<
     }
   }
   if !token.is_some_and(|token| tokens_match(&token, &server.access.token)) {
-    return respond(stream, port, "403 Forbidden", TEXT, b"forbidden\n").await;
+    return tokio::time::timeout(
+      REQUEST_TIMEOUT,
+      respond(stream, port, "403 Forbidden", TEXT, b"forbidden\n"),
+    )
+    .await
+    .context("request timed out")?;
   }
+  let _permit = tokio::time::timeout(COVER_QUEUE_TIMEOUT, server.cover_fetches.acquire())
+    .await
+    .context("cover queue timed out")??;
+  tokio::time::timeout(REQUEST_TIMEOUT, fetch_cover(stream, server, uri.as_deref()))
+    .await
+    .context("cover request timed out")?
+}
+
+async fn fetch_cover(stream: &mut TcpStream, server: &Server, uri: Option<&str>) -> Result<()> {
+  let port = server.port;
+  let client = if uri.is_some_and(|uri| uri.starts_with(COVER_PREFIX)) {
+    &server.registered_covers
+  } else {
+    &server.covers
+  };
   let source = match uri {
-    Some(uri) => server.link.cover_source(&uri).await,
+    Some(uri) => server.link.cover_source(uri).await,
     None => None,
   };
   let picture = match source {
-    Some(source) => cover_bytes(&server.covers, source).await,
+    Some(source) => cover_bytes(client, source, MAX_COVER_BYTES).await,
     None => None,
   };
   match picture
@@ -247,7 +285,11 @@ async fn cover(stream: &mut TcpStream, server: &Server, target: &str) -> Result<
   }
 }
 
-async fn cover_bytes(client: &reqwest::Client, source: CoverSource) -> Option<Vec<u8>> {
+async fn cover_bytes(
+  client: &reqwest::Client,
+  source: CoverSource,
+  limit: usize,
+) -> Option<Vec<u8>> {
   match source {
     CoverSource::Url(url) => {
       let mut response = client
@@ -257,9 +299,16 @@ async fn cover_bytes(client: &reqwest::Client, source: CoverSource) -> Option<Ve
         .ok()?
         .error_for_status()
         .ok()?;
+      if !response.status().is_success()
+        || response
+          .content_length()
+          .is_some_and(|len| len > limit as u64)
+      {
+        return None;
+      }
       let mut body = Vec::new();
       while let Some(chunk) = response.chunk().await.ok()? {
-        if chunk.len() > MAX_COVER_BYTES - body.len() {
+        if chunk.len() > limit - body.len() {
           return None;
         }
         body.extend_from_slice(&chunk);
@@ -267,12 +316,12 @@ async fn cover_bytes(client: &reqwest::Client, source: CoverSource) -> Option<Ve
       Some(body)
     }
     #[cfg(feature = "local-files")]
-    CoverSource::File(path) => tokio::task::spawn_blocking(move || {
-      crate::infra::local::embedded_cover_bytes(&path, MAX_COVER_BYTES)
-    })
-    .await
-    .ok()?
-    .ok(),
+    CoverSource::File(path) => {
+      tokio::task::spawn_blocking(move || crate::infra::local::embedded_cover_bytes(&path, limit))
+        .await
+        .ok()?
+        .ok()
+    }
   }
 }
 
@@ -545,6 +594,21 @@ mod tests {
     format!("http://127.0.0.1:{port}/cover.png")
   }
 
+  async fn redirect_to(location: &str) -> String {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let url = format!(
+      "http://{}/rest/getCoverArt.view?u=alice&t=secret&s=salt&id=art",
+      listener.local_addr().unwrap()
+    );
+    let location = location.to_string();
+    tokio::spawn(async move {
+      let (mut stream, _) = listener.accept().await.unwrap();
+      read_head(&mut stream).await.unwrap();
+      stream.write_all(format!("HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
+    });
+    url
+  }
+
   async fn get_cover(port: u16, query: &str) -> String {
     get(
       port,
@@ -599,6 +663,213 @@ mod tests {
     )
     .await;
     assert!(reply.starts_with("HTTP/1.1 403"), "{reply}");
+  }
+
+  #[tokio::test]
+  async fn a_list_cover_is_fetchable_only_after_it_was_handed_to_the_page() {
+    let url = upstream("image/png", PNG).await.replace(
+      "/cover.png",
+      "/rest/getCoverArt.view?u=alice&t=secret&s=salt&id=art",
+    );
+    let (tx, _rx) = std::sync::mpsc::channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    let mut track = crate::core::test_helpers::queued_track("subsonic:track:1", "One");
+    track.image_url = Some(url.clone());
+    app.apply(crate::core::action::Action::QueueTrack(track));
+    app.note_display_changes();
+    let (link, _publisher, _inbox) = bridge::tests::booted(Arc::new(tokio::sync::Mutex::new(app)));
+    let (port, access) = spawn_listener(PAGE, link).await.unwrap();
+    let token = &access.token;
+    let not_issued = get_cover(port, &format!("uri=subsonic-cover:1&t={token}")).await;
+    assert!(not_issued.starts_with("HTTP/1.1 404"));
+
+    let code = access.issue(Instant::now()).unwrap();
+    let mut socket = connect(
+      port,
+      &format!("http://127.0.0.1:{port}"),
+      Some(&format!("{CODE_PROTOCOL}{code}")),
+    )
+    .await
+    .unwrap();
+    let queue = loop {
+      let message = next_json(&mut socket).await;
+      assert!(!message.to_string().contains("t=secret"));
+      if message["kind"] == "queue" {
+        break message;
+      }
+    };
+    let reference = queue["payload"]["native"][0]["image_url"].as_str().unwrap();
+    assert!(reference.starts_with(crate::gui::covers::COVER_PREFIX));
+    for query in [
+      format!("uri={reference}"),
+      format!("uri={reference}&t=wrong"),
+    ] {
+      assert!(get_cover(port, &query).await.starts_with("HTTP/1.1 403"));
+    }
+    for uri in [
+      "subsonic-cover:999999",
+      "subsonic:track:unlisted",
+      &url,
+      "file:///etc/passwd",
+    ] {
+      let query: String = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("uri", uri)
+        .append_pair("t", token)
+        .finish();
+      assert!(get_cover(port, &query).await.starts_with("HTTP/1.1 404"));
+    }
+    let reply = get_cover(port, &format!("uri={reference}&t={token}")).await;
+    assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+    assert!(reply.contains("Content-Type: image/png\r\n"));
+    assert!(reply.ends_with(&*String::from_utf8_lossy(PNG)));
+  }
+
+  #[tokio::test]
+  async fn cover_redirects_do_not_contact_another_endpoint() {
+    let target = upstream("image/png", PNG).await;
+    let redirect = redirect_to(&target).await;
+    let (tx, _rx) = std::sync::mpsc::channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    let mut track = crate::core::test_helpers::queued_track("subsonic:track:1", "One");
+    track.image_url = Some(redirect);
+    app.apply(crate::core::action::Action::QueueTrack(track));
+    app.note_display_changes();
+    let (link, _publisher, _inbox) = bridge::tests::booted(Arc::new(tokio::sync::Mutex::new(app)));
+    let (port, access) = spawn_listener(PAGE, link).await.unwrap();
+    let code = access.issue(Instant::now()).unwrap();
+    let mut socket = connect(
+      port,
+      &format!("http://127.0.0.1:{port}"),
+      Some(&format!("{CODE_PROTOCOL}{code}")),
+    )
+    .await
+    .unwrap();
+    let queue = loop {
+      let message = next_json(&mut socket).await;
+      if message["kind"] == "queue" {
+        break message;
+      }
+    };
+    let reference = queue["payload"]["native"][0]["image_url"].as_str().unwrap();
+    assert!(reference.starts_with(COVER_PREFIX));
+    let token = &access.token;
+    assert!(get_cover(port, &format!("uri={reference}&t={token}"))
+      .await
+      .starts_with("HTTP/1.1 404"));
+    // The one-shot target is still waiting: the proxy never followed the redirect.
+    let response = reqwest::get(target).await.unwrap();
+    assert_eq!(response.bytes().await.unwrap().as_ref(), PNG);
+  }
+
+  #[tokio::test]
+  async fn playing_item_cover_redirects_are_followed() {
+    let target = upstream("image/png", PNG).await;
+    let redirect = redirect_to(&target).await;
+    let (port, token) = start_playing(&redirect).await;
+    let reply = get_cover(port, &format!("uri={PLAYING_URI}&t={token}")).await;
+    assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+    assert!(reply.contains("Content-Type: image/png\r\n"), "{reply}");
+    assert!(reply.ends_with(&*String::from_utf8_lossy(PNG)), "{reply}");
+  }
+
+  #[tokio::test]
+  async fn covers_with_or_without_a_declared_length_obey_the_byte_cap() {
+    let client = reqwest::Client::new();
+    let url = upstream("image/png", PNG).await;
+    assert!(cover_bytes(&client, CoverSource::Url(url), PNG.len() - 1)
+      .await
+      .is_none());
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let url = format!("http://{}/cover", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+      let (mut stream, _) = listener.accept().await.unwrap();
+      read_head(&mut stream).await.unwrap();
+      stream
+        .write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n")
+        .await
+        .unwrap();
+      stream.write_all(PNG).await.unwrap();
+    });
+    assert!(cover_bytes(&client, CoverSource::Url(url), PNG.len() - 1)
+      .await
+      .is_none());
+  }
+
+  #[tokio::test]
+  async fn a_cover_that_waits_too_long_for_a_permit_times_out() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (link, _inbox) = test_link();
+    let server = Server {
+      port,
+      access: Arc::new(Access {
+        code: Mutex::new(None),
+        token: "t".to_string(),
+      }),
+      assets: PAGE,
+      link,
+      covers: reqwest::Client::new(),
+      registered_covers: reqwest::Client::new(),
+      cover_fetches: Semaphore::new(0),
+    };
+    let client = tokio::spawn(async move { get_cover(port, "uri=subsonic-cover:1&t=t").await });
+    let (stream, _) = listener.accept().await.unwrap();
+    let result = tokio::time::timeout(
+      COVER_QUEUE_TIMEOUT + REQUEST_TIMEOUT,
+      serve_connection(stream, &server),
+    )
+    .await
+    .expect("the cover queue must have a deadline");
+    assert!(result
+      .unwrap_err()
+      .to_string()
+      .contains("cover queue timed out"));
+    assert!(client.await.unwrap().is_empty());
+  }
+
+  #[tokio::test]
+  async fn simultaneous_cover_downloads_are_bounded_and_waiting_rows_still_load() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    for delay in [Duration::from_millis(50), Duration::from_secs(3)] {
+      let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+      let url = format!("http://{}/cover", listener.local_addr().unwrap());
+      let active = Arc::new(AtomicUsize::new(0));
+      let peak = Arc::new(AtomicUsize::new(0));
+      let measured = Arc::clone(&peak);
+      tokio::spawn(async move {
+        for _ in 0..MAX_COVER_FETCHES * 2 {
+          let (mut stream, _) = listener.accept().await.unwrap();
+          let active = Arc::clone(&active);
+          let peak = Arc::clone(&measured);
+          tokio::spawn(async move {
+            read_head(&mut stream).await.unwrap();
+            peak.fetch_max(active.fetch_add(1, Ordering::SeqCst) + 1, Ordering::SeqCst);
+            tokio::time::sleep(delay).await;
+            active.fetch_sub(1, Ordering::SeqCst);
+            stream
+              .write_all(
+                format!(
+                  "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                  PNG.len()
+                )
+                .as_bytes(),
+              )
+              .await
+              .unwrap();
+            stream.write_all(PNG).await.unwrap();
+          });
+        }
+      });
+      let (port, token) = start_playing(&url).await;
+      let query = format!("uri={PLAYING_URI}&t={token}");
+      let replies =
+        futures::future::join_all((0..MAX_COVER_FETCHES * 2).map(|_| get_cover(port, &query)))
+          .await;
+      assert!(replies
+        .iter()
+        .all(|reply| reply.starts_with("HTTP/1.1 200")));
+      assert!(peak.load(Ordering::SeqCst) <= MAX_COVER_FETCHES);
+    }
   }
 
   #[test]
@@ -783,6 +1054,8 @@ mod tests {
       assets: PAGE,
       link,
       covers: reqwest::Client::new(),
+      registered_covers: reqwest::Client::new(),
+      cover_fetches: Semaphore::new(MAX_COVER_FETCHES),
     };
     let client = tokio::spawn(async move {
       let mut stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
@@ -877,6 +1150,8 @@ mod tests {
       assets: PAGE,
       link,
       covers: reqwest::Client::new(),
+      registered_covers: reqwest::Client::new(),
+      cover_fetches: Semaphore::new(MAX_COVER_FETCHES),
     };
     let client = tokio::spawn(async move {
       let mut stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();

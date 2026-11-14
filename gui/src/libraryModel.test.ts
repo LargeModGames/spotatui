@@ -52,6 +52,7 @@ const track = (name: string, uri: string | null): TrackInfo => ({
 });
 
 const empty: SourcePlaylists = {
+  playlist_sidebar_order: "spotify",
   spotify: [],
   local: [],
   subsonic: [],

@@ -280,6 +280,47 @@ describe("Connection", () => {
       '{"type":"action","action":"TogglePlayback"}',
     ]);
   });
+
+  it("resolves nested list cover references with the session token", () => {
+    const { connection, sockets } = harness("abc");
+    sockets[0].handlers.message(hello("session token"));
+    const row = { uri: "subsonic:track:1", image_url: "subsonic-cover:42" };
+    const publicRow = { image_url: "https://i.scdn.co/image/album" };
+    const payloads = {
+      search: { tracks: [row], albums: [{ tracks: [row] }] },
+      queue: { native: [row], now: row, spotify: { items: [{ track: row }] } },
+      album: { album: { tracks: [row] } },
+      track_table: { tracks: [row, publicRow] },
+      artist: { page: { top_tracks: [row], albums: [{ tracks: [row] }] } },
+      library: { subsonic: [row] },
+    };
+    for (const [kind, payload] of Object.entries(payloads)) {
+      sockets[0].handlers.message(JSON.stringify({ kind, rev: 1, payload }));
+    }
+    const text = JSON.stringify(connection.getState().channels);
+    expect(text).not.toContain('"image_url":"subsonic-cover:');
+    expect(text).toContain("/cover?uri=subsonic-cover%3A42&t=session%20token");
+    expect(
+      connection.getState().channels.track_table?.payload.tracks[1].image_url,
+    ).toBe(publicRow.image_url);
+    expect(connection.getState().channels.queue?.payload.now?.image_url).toBe(
+      "/cover?uri=subsonic-cover%3A42&t=session%20token",
+    );
+  });
+
+  it("does not load a private list cover before it has a session token", () => {
+    const { connection, sockets } = harness("abc");
+    sockets[0].handlers.message(
+      JSON.stringify({
+        kind: "search",
+        rev: 1,
+        payload: { tracks: [{ image_url: "subsonic-cover:1" }] },
+      }),
+    );
+    expect(
+      connection.getState().channels.search?.payload.tracks[0].image_url,
+    ).toBeNull();
+  });
 });
 
 describe("positionAfterTick", () => {

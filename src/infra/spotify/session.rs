@@ -5,7 +5,7 @@ use super::credentials::{
   clear_cached_streaming_credentials, get_default_cache_path, streaming_proxy_from_env,
 };
 use super::player::Observer;
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use librespot_core::{
   authentication::Credentials, cache::Cache, config::SessionConfig, session::Session,
 };
@@ -14,7 +14,11 @@ use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+/// Generous: each lookup behind a dead first nameserver waits the resolver's
+/// 5 s timeout, and the connect makes several of them. Stays below the 40 s
+/// `SPOTIFY_REQUEST_DEADLINE` in `infra/network/requests.rs`, which drops a
+/// connect that a routed call started.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(35);
 const RETRY_AFTER_FAILURE: Duration = Duration::from_secs(30);
 /// The account type arrives in a packet right after the login.
 const PRODUCT_INFO_WAIT: Duration = Duration::from_secs(3);
@@ -54,6 +58,9 @@ pub enum Unavailable {
   NotPremium,
   /// The connect failed; it is tried again after 30 s.
   Offline,
+  /// The connect did not finish within `CONNECT_TIMEOUT`, usually a slow
+  /// resolver or network; tried again after 30 s like `Offline`.
+  TimedOut,
 }
 
 impl Unavailable {
@@ -62,6 +69,7 @@ impl Unavailable {
       Self::NoLogin => "Not logged in to Spotify",
       Self::NotPremium => "Spotify Premium is required",
       Self::Offline => "Could not connect to Spotify",
+      Self::TimedOut => "Connecting to Spotify timed out; check your network and DNS settings",
     }
   }
 }
@@ -69,9 +77,23 @@ impl Unavailable {
 #[derive(Default)]
 struct Slot {
   current: Option<Arc<SpotifySession>>,
-  last_failure: Option<Instant>,
+  /// When the last connect failed, and why; the reason answers every call
+  /// in the retry gap.
+  last_failure: Option<(Instant, Unavailable)>,
   not_premium: bool,
 }
+
+/// The connect outlived `CONNECT_TIMEOUT`.
+#[derive(Debug)]
+struct ConnectTimedOut;
+
+impl std::fmt::Display for ConnectTimedOut {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    write!(f, "timed out after {}s", CONNECT_TIMEOUT.as_secs())
+  }
+}
+
+impl std::error::Error for ConnectTimedOut {}
 
 enum Connected {
   Session(SpotifySession),
@@ -100,8 +122,10 @@ pub async fn current() -> Result<Arc<SpotifySession>, Unavailable> {
   if slot.not_premium {
     return Err(Unavailable::NotPremium);
   }
-  if !may_connect(slot.last_failure, Instant::now()) {
-    return Err(Unavailable::Offline);
+  if let Some((at, reason)) = slot.last_failure {
+    if !may_connect(Some(at), Instant::now()) {
+      return Err(reason);
+    }
   }
   drop_refused_login(install(&mut slot, connect(None).await))
 }
@@ -148,8 +172,13 @@ fn install(
     }
     Err(e) => {
       warn!("Spotify session failed to connect: {e:#}");
-      slot.last_failure = Some(Instant::now());
-      Err(Unavailable::Offline)
+      let reason = if e.is::<ConnectTimedOut>() {
+        Unavailable::TimedOut
+      } else {
+        Unavailable::Offline
+      };
+      slot.last_failure = Some((Instant::now(), reason));
+      Err(reason)
     }
   }
 }
@@ -187,7 +216,7 @@ async fn connect(credentials: Option<Credentials>) -> Result<Connected> {
   let session = Session::new(config, Some(cache));
   tokio::time::timeout(CONNECT_TIMEOUT, session.connect(credentials, true))
     .await
-    .map_err(|_| anyhow!("timed out after {}s", CONNECT_TIMEOUT.as_secs()))??;
+    .map_err(|_| anyhow::Error::new(ConnectTimedOut))??;
 
   let started = Instant::now();
   while session.get_user_attribute("type").is_none() && started.elapsed() < PRODUCT_INFO_WAIT {
@@ -216,6 +245,7 @@ fn account_is_premium(account_type: Option<&str>) -> bool {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use anyhow::anyhow;
 
   #[test]
   fn a_recent_failure_blocks_a_new_connect() {
@@ -240,8 +270,22 @@ mod tests {
       install(&mut slot, Err(anyhow!("network down"))).err(),
       Some(Unavailable::Offline)
     );
-    assert!(slot.last_failure.is_some());
+    assert!(matches!(slot.last_failure, Some((_, Unavailable::Offline))));
     assert!(slot.current.is_none());
+  }
+
+  #[test]
+  fn a_connect_timeout_is_reported_as_timed_out() {
+    let mut slot = Slot::default();
+    assert_eq!(
+      install(&mut slot, Err(anyhow::Error::new(ConnectTimedOut))).err(),
+      Some(Unavailable::TimedOut)
+    );
+    assert!(matches!(
+      slot.last_failure,
+      Some((_, Unavailable::TimedOut))
+    ));
+    assert!(Unavailable::TimedOut.message().contains("timed out"));
   }
 
   #[test]
@@ -264,6 +308,7 @@ mod tests {
       Unavailable::NoLogin,
       Unavailable::NotPremium,
       Unavailable::Offline,
+      Unavailable::TimedOut,
     ] {
       assert!(!reason.message().is_empty());
     }

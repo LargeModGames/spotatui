@@ -172,3 +172,39 @@ test("a Settings push updates mounted memoized pages and keeps input and raw cho
   await shot(page, "settings-zh-Hant");
   expect(errors).toEqual([]);
 });
+
+for (const [language, table] of [
+  ["en", strings.EN],
+  ["zh-Hans", strings.ZH_HANS],
+  ["zh-Hant", strings.ZH_HANT],
+] as const) {
+  test(`sidebar playlist sort shows the saved choice in ${language}`, async ({
+    page,
+  }) => {
+    await openWith(page, [
+      ...playing,
+      ...library.map((message): ServerMessage =>
+        message.kind === "library"
+          ? {
+              ...message,
+              payload: {
+                ...message.payload,
+                playlist_sidebar_order: "recently_played",
+              },
+            }
+          : message,
+      ),
+      settingsFor(language, 2),
+    ]);
+    const select = page.getByRole("combobox", {
+      name: table.gui.sort_playlists,
+    });
+    await expect(select).toHaveValue("recently_played");
+    await expect(select.locator("option")).toHaveText([
+      table.gui.sort_spotify,
+      table.gui.sort_recently_played,
+      table.gui.sort_name,
+    ]);
+    await shot(page, `sidebar-playlist-sort-${language}`);
+  });
+}

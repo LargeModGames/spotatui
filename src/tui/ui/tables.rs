@@ -732,7 +732,7 @@ fn draw_table(
   highlight_state: (bool, bool),
 ) {
   let selected_style = get_color(highlight_state, app.user_config.theme)
-    .add_modifier(Modifier::BOLD | Modifier::REVERSED);
+    .add_modifier(Modifier::REVERSED | app.user_config.behavior.emphasis(Modifier::BOLD));
 
   let track_playing_index = app.current_playback_context.as_ref().and_then(|ctx| {
     ctx.item.as_ref().and_then(|item| match item {
@@ -1107,5 +1107,52 @@ mod tests {
       );
       assert_eq!(generated.name, "Unknown Track");
     }
+  }
+
+  /// The modifier of the first cell of `text` on row `y` once `draw` renders `app`.
+  fn modifier_at(app: &App, draw: fn(&mut Frame<'_>, &App, Rect), y: u16, text: &str) -> Modifier {
+    let area = Rect::new(0, 0, 60, 8);
+    let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+    terminal.draw(|f| draw(f, app, area)).unwrap();
+    let buffer = terminal.backend().buffer();
+    let row: String = (0..area.width)
+      .filter_map(|x| buffer.cell((x, y)).map(|c| c.symbol().to_string()))
+      .collect();
+    let x = row
+      .find(text)
+      .unwrap_or_else(|| panic!("{text} on row {y}: {row}"));
+    let x = row[..x].chars().count() as u16;
+    buffer.cell((x, y)).unwrap().modifier
+  }
+
+  fn song_table(text_emphasis: bool) -> App {
+    let mut app = App::default();
+    app.user_config.behavior.enable_text_emphasis = text_emphasis;
+    app.track_table.tracks = (0..3).map(track).collect();
+    app
+  }
+
+  #[test]
+  fn selected_table_row_is_not_bold_when_text_emphasis_is_off() {
+    let modifier = modifier_at(&song_table(false), draw_song_table, 2, "Track 0");
+    assert!(modifier.contains(Modifier::REVERSED), "{modifier:?}");
+    assert!(!modifier.contains(Modifier::BOLD), "{modifier:?}");
+  }
+
+  #[test]
+  fn selected_table_row_is_bold_when_text_emphasis_is_on() {
+    let modifier = modifier_at(&song_table(true), draw_song_table, 2, "Track 0");
+    assert!(modifier.contains(Modifier::REVERSED), "{modifier:?}");
+    assert!(modifier.contains(Modifier::BOLD), "{modifier:?}");
+  }
+
+  #[test]
+  fn selected_list_row_is_not_bold_when_text_emphasis_is_off() {
+    let mut app = App::default();
+    app.user_config.behavior.enable_text_emphasis = false;
+    *app.local_playlists_mut() = vec![folder("MyAlbum", 3)];
+    let modifier = modifier_at(&app, draw_local_browser, 1, "MyAlbum");
+    assert!(modifier.contains(Modifier::REVERSED), "{modifier:?}");
+    assert!(!modifier.contains(Modifier::BOLD), "{modifier:?}");
   }
 }

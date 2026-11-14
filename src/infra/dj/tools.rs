@@ -165,7 +165,7 @@ pub const TOOLS: &[ToolSpec] = &[
   ToolSpec {
     name: "play_now",
     title: "Play now",
-    description: "Start playing a track immediately, interrupting whatever is playing. Use queue_tracks instead unless the user asked for something right now. The track has to exist: give a URI from search_tracks rather than one you assembled yourself.",
+    description: "Ask the player to start a track immediately, interrupting whatever is playing. Use queue_tracks instead unless the user asked for something right now. The track has to exist: give a URI from search_tracks rather than one you assembled yourself. A problem known up front (a source that is missing or not set up, a malformed URI, no login) comes back as an error and nothing is sent. Otherwise the reply only means the request was sent; a download or device failure can still stop it, so call get_now_playing to confirm.",
     read_only: false,
     needs_network: true,
     dj: true,
