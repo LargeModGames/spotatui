@@ -259,6 +259,7 @@ Everyone who helped, with code or without. To get on this list, see [Recognition
     </tr>
     <tr>
       <td align="center" valign="top" width="14.28%"><a href="http://mattmarsico.com"><img src="https://avatars.githubusercontent.com/u/60232670?v=4&size=100" width="100px" height="100px" alt="Matt Marsico"/><br /><sub><b>Matt Marsico</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=mattmars3" title="Documentation">📖</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://www.abdulkarimmia.in/"><img src="https://avatars.githubusercontent.com/u/97598943?v=4&size=100" width="100px" height="100px" alt="Abdul karim mia"/><br /><sub><b>Abdul karim mia</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=abdul-karim-mia" title="Documentation">📖</a></td>
     </tr>
   </tbody>
 </table>
