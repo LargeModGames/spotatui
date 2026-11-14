@@ -5894,6 +5894,7 @@ dependencies = [
  "open",
  "openssl",
  "openssl-sys",
+ "percent-encoding",
  "pipewire",
  "protobuf",
  "rand 0.10.3",
