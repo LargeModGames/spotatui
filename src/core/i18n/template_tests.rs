@@ -373,6 +373,21 @@ fn every_typed_message_fills_its_placeholders_and_preserves_all_arguments() {
       ["9101"]
     );
     check!(
+      "popups.recap_year_ready",
+      strings.popups.recap_year_ready(9103),
+      ["9103"]
+    );
+    check!(
+      "popups.recap_year_listens",
+      strings.popups.recap_year_listens(9104, 9105),
+      ["9104", "9105"]
+    );
+    check!(
+      "popups.recap_year_title",
+      strings.popups.recap_year_title(9106),
+      ["9106"]
+    );
+    check!(
       "popups.party_code_length",
       strings.popups.party_code_length(9101),
       ["9101"]
@@ -1741,6 +1756,14 @@ fn every_typed_message_fills_its_placeholders_and_preserves_all_arguments() {
         .infra
         .monthly_recap_ready("SENTINEL_PATH_中", 9102),
       ["SENTINEL_PATH_中", "9102"]
+    );
+    check!(
+      "status_infra.year_recap_ready",
+      strings
+        .status
+        .infra
+        .year_recap_ready(9107, "SENTINEL_PATH_中", 9108),
+      ["9107", "SENTINEL_PATH_中", "9108"]
     );
     check!(
       "status_runtime.song_counter_save_failed",

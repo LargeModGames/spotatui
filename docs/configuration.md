@@ -358,7 +358,7 @@ These keys also go under `behavior:`. Defaults below are the built-in values whe
 | `enable_announcements` | `true` | Show one-time announcements from a remote JSON feed. |
 | `announcement_feed_url` | Unset | Override the remote JSON feed URL (HTTPS). |
 | `enable_lyrics` | `true` | Look up lyrics for each track. Spotify tracks try Spotify first, then fall back to LRCLIB if lyrics are unavailable or the request fails; LRCLIB receives the title, artist and length. |
-| `enable_monthly_recap_prompt` | `true` | Show a popup once a month when your listening recap is ready. |
+| `enable_monthly_recap_prompt` | `true` | Show a popup once a month when your listening recap is ready, and once in December for the recap of the year. |
 | `pin_community_playlist` | `true` | Pin the spotatui community playlist to the top of your Spotify playlists. |
 | `visualizer_style` | `Cava` | Visualizer look: `Cava`, `BarGraph`, `HeadUnit`, `AnalogVu`, `Winamp`, `PhosphorScope`, `Outrun`, `RackEq` or `Cassette` (case-sensitive). Older `Classic` and `Equalizer` values are accepted as aliases for `Cava`. |
 | `stop_after_current_track` | `false` | Pause native Spotify streaming when the current track finishes; does not apply to other sources or remote Connect devices. |

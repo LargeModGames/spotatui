@@ -18,6 +18,7 @@ use tokio::task::{JoinHandle, JoinSet};
 const HISTORY_SUBDIR: &str = "history";
 const LISTENS_FILE_NAME: &str = "listens.jsonl";
 const LAST_RECAP_FILE_NAME: &str = "last_recap_at.txt";
+const LAST_YEAR_RECAP_FILE_NAME: &str = "last_year_recap.txt";
 const LAST_SYNCED_FILE_NAME: &str = "last_synced_at.txt";
 const SYNC_BASE_URL: &str = "https://spotatui.com";
 const CLOUD_SYNC_PATH: &str = "/api/sync";
@@ -787,7 +788,17 @@ async fn perform_auto_recap_check(app: &Arc<Mutex<App>>) {
   };
 
   let now = Utc::now();
-  if !auto_recap_is_due(fs::read_to_string(&path).ok().as_deref(), now.timestamp()) {
+  let year_path = history_state_file_path(LAST_YEAR_RECAP_FILE_NAME).ok();
+  let year = year_recap_due(
+    year_path
+      .as_ref()
+      .and_then(|path| fs::read_to_string(path).ok())
+      .as_deref(),
+    now.with_timezone(&Local).date_naive(),
+  );
+  if year.is_none()
+    && !auto_recap_is_due(fs::read_to_string(&path).ok().as_deref(), now.timestamp())
+  {
     return;
   }
 
@@ -796,49 +807,85 @@ async fn perform_auto_recap_check(app: &Arc<Mutex<App>>) {
     Err(_) => return,
   };
 
-  perform_auto_recap_check_with(app, path, output_path, now, export_history_recap_with).await;
+  let offer = AutoRecap {
+    stamp_path: path,
+    year: year.zip(year_path),
+    output_path,
+    now,
+  };
+  perform_auto_recap_check_with(app, offer, export_history_recap_with).await;
+}
+
+/// The year whose recap the December prompt offers: only in December, and only once a year.
+fn year_recap_due(last_year_recap: Option<&str>, today: NaiveDate) -> Option<i32> {
+  let offered = last_year_recap.and_then(|content| content.trim().parse::<i32>().ok());
+  (today.month() == 12 && offered != Some(today.year())).then(|| today.year())
+}
+
+/// One automatic recap: the monthly one, or the year one with the file that records its year.
+struct AutoRecap {
+  stamp_path: PathBuf,
+  year: Option<(i32, PathBuf)>,
+  output_path: PathBuf,
+  now: DateTime<Utc>,
 }
 
 async fn perform_auto_recap_check_with(
   app: &Arc<Mutex<App>>,
-  path: PathBuf,
-  output_path: PathBuf,
-  now: DateTime<Utc>,
+  offer: AutoRecap,
   export: impl FnOnce(RecapPeriod, &Path, &crate::core::i18n::Strings) -> Result<usize> + Send + 'static,
 ) {
+  let AutoRecap {
+    stamp_path: path,
+    year,
+    output_path,
+    now,
+  } = offer;
+  let period = match year {
+    Some(_) => RecapPeriod::Year,
+    None => RecapPeriod::ThirtyDays,
+  };
   let strings = app.lock().await.strings();
   // The export reads and renders the whole history file; keep it off the
   // runtime worker threads.
   let export_path = output_path.clone();
-  let result =
-    tokio::task::spawn_blocking(move || export(RecapPeriod::ThirtyDays, &export_path, strings))
-      .await
-      .map_err(anyhow::Error::from)
-      .and_then(|result| result);
+  let result = tokio::task::spawn_blocking(move || export(period, &export_path, strings))
+    .await
+    .map_err(anyhow::Error::from)
+    .and_then(|result| result);
 
   match result {
     Ok(count) => {
       if count > 0 {
+        // The year recap also counts as this month's, so the two popups never follow each other.
         if let Err(e) = fs::write(&path, now.timestamp().to_string()) {
           log::warn!("failed to write last recap timestamp: {}", e);
         }
+        if let Some((year, year_path)) = &year {
+          if let Err(e) = fs::write(year_path, year.to_string()) {
+            log::warn!("failed to write the year of the last year recap: {}", e);
+          }
+        }
+        let year = year.map(|(year, _)| year);
 
         let mut app_guard = app.lock().await;
         if app_guard.get_current_route().active_block == ActiveBlock::Input {
           // Never steal keystrokes from an input field; fall back to a status
           // message instead of the popup.
           let strings = app_guard.strings();
+          let path = output_path.display().to_string();
           app_guard.set_status_message(
-            strings
-              .status
-              .infra
-              .monthly_recap_ready(&output_path.display().to_string(), count),
+            match year {
+              Some(year) => strings.status.infra.year_recap_ready(year, &path, count),
+              None => strings.status.infra.monthly_recap_ready(&path, count),
+            },
             10,
           );
         } else {
           app_guard.show_recap_prompt(RecapPromptState {
             path: output_path,
             listens: count,
+            year,
           });
         }
       }
@@ -4127,9 +4174,12 @@ mod tests {
       let app = Arc::new(Mutex::new(state));
       perform_auto_recap_check_with(
         &app,
-        stamp.clone(),
-        output.clone(),
-        Utc::now(),
+        AutoRecap {
+          stamp_path: stamp.clone(),
+          year: None,
+          output_path: output.clone(),
+          now: Utc::now(),
+        },
         move |period, path, active| {
           assert!(std::ptr::eq(active, strings));
           assert_eq!(period, RecapPeriod::ThirtyDays);
@@ -4153,6 +4203,73 @@ mod tests {
       assert!(stamp.exists());
       assert!(app.lock().await.recap_prompt().is_some());
     }
+  }
+
+  #[test]
+  fn the_year_recap_is_offered_once_in_december() {
+    let day = |year, month, day| NaiveDate::from_ymd_opt(year, month, day).unwrap();
+
+    assert_eq!(year_recap_due(None, day(2026, 11, 30)), None);
+    assert_eq!(year_recap_due(None, day(2026, 12, 1)), Some(2026));
+    assert_eq!(year_recap_due(Some("2025"), day(2026, 12, 31)), Some(2026));
+    assert_eq!(
+      year_recap_due(Some("not a year"), day(2026, 12, 5)),
+      Some(2026)
+    );
+    assert_eq!(year_recap_due(Some("2026\n"), day(2026, 12, 5)), None);
+    assert_eq!(year_recap_due(Some("2026"), day(2027, 1, 1)), None);
+  }
+
+  #[tokio::test]
+  async fn the_december_recap_covers_the_year_and_records_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let output = dir.path().join("recap.html");
+    let stamp = dir.path().join("last-recap");
+    let year_stamp = dir.path().join("last-year-recap");
+    let app = Arc::new(Mutex::new(App::default()));
+
+    perform_auto_recap_check_with(
+      &app,
+      AutoRecap {
+        stamp_path: stamp.clone(),
+        year: Some((2026, year_stamp.clone())),
+        output_path: output.clone(),
+        now: Utc::now(),
+      },
+      |period, _, _| {
+        assert_eq!(period, RecapPeriod::Year);
+        Ok(321)
+      },
+    )
+    .await;
+
+    assert_eq!(fs::read_to_string(&year_stamp).unwrap(), "2026");
+    assert!(stamp.exists());
+    let app = app.lock().await;
+    let prompt = app.recap_prompt().unwrap();
+    assert_eq!((prompt.year, prompt.listens), (Some(2026), 321));
+  }
+
+  #[tokio::test]
+  async fn an_empty_year_recap_is_not_offered_and_stays_due() {
+    let dir = tempfile::tempdir().unwrap();
+    let year_stamp = dir.path().join("last-year-recap");
+    let app = Arc::new(Mutex::new(App::default()));
+
+    perform_auto_recap_check_with(
+      &app,
+      AutoRecap {
+        stamp_path: dir.path().join("last-recap"),
+        year: Some((2026, year_stamp.clone())),
+        output_path: dir.path().join("recap.html"),
+        now: Utc::now(),
+      },
+      |_, _, _| Ok(0),
+    )
+    .await;
+
+    assert!(!year_stamp.exists());
+    assert!(app.lock().await.recap_prompt().is_none());
   }
 
   #[test]

@@ -1378,15 +1378,28 @@ pub fn draw_recap_prompt(f: &mut Frame<'_>, app: &App) {
 
   f.render_widget(Clear, rect);
 
+  let popups = &app.strings().popups;
+  let (ready, listens, title) = match prompt.year {
+    Some(year) => (
+      popups.recap_year_ready(year),
+      popups.recap_year_listens(year, prompt.listens),
+      popups.recap_year_title(year),
+    ),
+    None => (
+      popups.recap_ready.to_string(),
+      popups.recap_listens(prompt.listens),
+      popups.recap_title.to_string(),
+    ),
+  };
   let text = vec![
     Line::from(Span::styled(
-      app.strings().popups.recap_ready,
+      ready,
       Style::default()
         .fg(app.user_config.theme.active.into())
         .add_modifier(app.user_config.behavior.emphasis(Modifier::BOLD)),
     )),
     Line::from(""),
-    Line::from(app.strings().popups.recap_listens(prompt.listens)),
+    Line::from(listens),
     Line::from(app.strings().popups.recap_browser),
     Line::from(""),
     Line::from(Span::styled(
@@ -1404,10 +1417,55 @@ pub fn draw_recap_prompt(f: &mut Frame<'_>, app: &App) {
         .borders(Borders::ALL)
         .style(app.user_config.theme.base_style())
         .border_style(Style::default().fg(app.user_config.theme.active.into()))
-        .title(app.strings().popups.recap_title),
+        .title(title),
     );
 
   f.render_widget(paragraph, rect);
+}
+
+#[cfg(test)]
+mod recap_prompt_tests {
+  use super::*;
+  use crate::core::app::RecapPromptState;
+  use ratatui::{backend::TestBackend, Terminal};
+
+  fn rendered_prompt(year: Option<i32>) -> String {
+    let mut app = App::default();
+    app.show_recap_prompt(RecapPromptState {
+      path: std::path::PathBuf::from("recap.html"),
+      listens: 321,
+      year,
+    });
+    let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+    terminal.draw(|f| draw_recap_prompt(f, &app)).unwrap();
+    let buffer = terminal.backend().buffer();
+
+    (0..20)
+      .map(|y| {
+        (0..80)
+          .filter_map(|x| buffer.cell((x, y)).map(|cell| cell.symbol().to_string()))
+          .collect::<String>()
+      })
+      .collect::<Vec<_>>()
+      .join("\n")
+  }
+
+  #[test]
+  fn the_year_recap_popup_names_the_year() {
+    let screen = rendered_prompt(Some(2026));
+
+    assert!(screen.contains(" 2026 Recap "), "{screen}");
+    assert!(screen.contains("Your 2026 listening recap is ready!"));
+    assert!(screen.contains("321 listens made it into your 2026 recap."));
+  }
+
+  #[test]
+  fn the_monthly_recap_popup_keeps_its_text() {
+    let screen = rendered_prompt(None);
+
+    assert!(screen.contains(" Monthly Recap "), "{screen}");
+    assert!(screen.contains("321 listens made it into your 30-day recap."));
+  }
 }
 
 /// The offer to set up Soloist, after librespot failed several tracks in a row.

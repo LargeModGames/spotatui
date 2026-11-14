@@ -295,6 +295,7 @@ pub struct InfraStatusStrings {
   pub network_error: &'static str,
   pub network_rate_error: &'static str,
   pub monthly_recap_ready: &'static str,
+  pub year_recap_ready: &'static str,
   pub queue_local_source: &'static str,
   pub unnamed_folder: &'static str,
   pub local_root_folder: &'static str,
@@ -852,6 +853,16 @@ impl InfraStatusStrings {
       &[("path", path), ("count", &count.to_string())],
     )
   }
+  pub fn year_recap_ready(&self, year: i32, path: &str, count: usize) -> String {
+    super::format_template(
+      self.year_recap_ready,
+      &[
+        ("year", &year.to_string()),
+        ("path", path),
+        ("count", &count.to_string()),
+      ],
+    )
+  }
 }
 
 pub const EN: InfraStatusStrings = InfraStatusStrings {
@@ -1163,6 +1174,7 @@ pub const EN: InfraStatusStrings = InfraStatusStrings {
   network_error: "{error}",
   network_rate_error: "{error}",
   monthly_recap_ready: "Monthly listening recap ready at {path} ({count} listens)",
+  year_recap_ready: "Your {year} listening recap is ready at {path} ({count} listens)",
   queue_local_source: "Local",
   unnamed_folder: "Unnamed Folder",
   local_root_folder: "(root)",
@@ -1438,6 +1450,7 @@ pub const ZH_HANS: InfraStatusStrings = InfraStatusStrings {
   network_error: "Spotify 请求失败：{error}",
   network_rate_error: "Spotify 请求受限：{error}",
   monthly_recap_ready: "月度收听回顾已生成于 {path}（{count} 次收听）",
+  year_recap_ready: "{year} 年度收听回顾已生成于 {path}（{count} 次收听）",
   queue_local_source: "本地",
   unnamed_folder: "未命名文件夹",
   local_root_folder: "（根目录）",
@@ -1756,6 +1769,7 @@ pub const ZH_HANT: InfraStatusStrings = InfraStatusStrings {
   network_error: "Spotify 請求失敗：{error}",
   network_rate_error: "Spotify 請求受限：{error}",
   monthly_recap_ready: "每月聆聽回顧已產生於 {path}（{count} 次聆聽）",
+  year_recap_ready: "{year} 年度聆聽回顧已產生於 {path}（{count} 次聆聽）",
   queue_local_source: "本機",
   unnamed_folder: "未命名資料夾",
   local_root_folder: "（根目錄）",

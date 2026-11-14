@@ -4,6 +4,7 @@
 
 ### Added
 
+- **A recap of the year in December**: from 1 December the terminal app offers the recap of the whole year once, in the popup that offers the monthly recap. The year popup also counts as that month's, and `enable_monthly_recap_prompt: false` turns both off. `spotatui history recap --period year` makes the same recap on any day.
 - **The recap share card shows where you listened**: a Sources line names the three services with the most plays and their share, such as "Spotify 78% · Qobuz 21% · YouTube <1%", from the history spotatui already keeps. The card of the year recap shows the year in its badge, and the card footer names `spotatui.com`.
 - **Sort the playlists sidebar**: order the Spotify playlists by Spotify's own order, by what you played last in spotatui, or by name. Press `,` in the playlists sidebar or choose the order in Your Library in the GUI. The choice is saved in `state.yml`; folders keep their positions and the community playlist stays pinned first ([#657](https://github.com/LargeModGames/spotatui/issues/657)).
 - **Scroll to change the volume in the GUI**: the mouse wheel over the volume bar in the desktop app and the browser GUI steps the volume up or down by the same step as the arrow keys. A trackpad swipe adds up its small scroll events instead of stepping on each one, and the seek bar still ignores the wheel ([#1059](https://github.com/LargeModGames/spotatui/issues/1059)).

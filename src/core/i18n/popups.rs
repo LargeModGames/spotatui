@@ -61,6 +61,9 @@ pub struct PopupStrings {
   pub recap_browser: &'static str,
   pub recap_controls: &'static str,
   pub recap_title: &'static str,
+  pub recap_year_ready: &'static str,
+  pub recap_year_listens_template: &'static str,
+  pub recap_year_title: &'static str,
   pub community_pinned: &'static str,
   pub community_details: &'static str,
   pub community_add: &'static str,
@@ -202,6 +205,9 @@ pub const EN: PopupStrings = PopupStrings {
   recap_browser: "Open it in the browser to view and download your share card.",
   recap_controls: "[ENTER] Open   [ESC] Later   [d] Don't show this again",
   recap_title: " Monthly Recap ",
+  recap_year_ready: "Your {year} listening recap is ready! 🎉",
+  recap_year_listens_template: "{count} listens made it into your {year} recap.",
+  recap_year_title: " {year} Recap ",
   community_pinned: "📌 spotatui community playlist pinned",
   community_details: "The \"spotatui community\" playlist is now pinned to the top of your Spotify playlists.",
   community_add: "Add songs to it any time with the /queue command in the spotatui Discord.",
@@ -346,6 +352,9 @@ pub const ZH_HANS: PopupStrings = PopupStrings {
   recap_browser: "在浏览器中打开，可查看并下载分享卡片。",
   recap_controls: "[ENTER] 打开   [ESC] 稍后   [d] 不再提示",
   recap_title: " 月度回顾 ",
+  recap_year_ready: "你的 {year} 年度听歌回顾已生成！🎉",
+  recap_year_listens_template: "你的 {year} 年回顾收录了 {count} 次播放。",
+  recap_year_title: " {year} 年度回顾 ",
   community_pinned: "📌 spotatui 社区播放列表已置顶",
   community_details: "“spotatui community”播放列表已置顶于你的 Spotify 播放列表。",
   community_add: "随时可在 spotatui Discord 中使用 /queue 命令添加歌曲。",
@@ -491,6 +500,9 @@ pub const ZH_HANT: PopupStrings = PopupStrings {
   recap_browser: "在瀏覽器中開啟，可查看並下載分享卡片。",
   recap_controls: "[ENTER] 開啟   [ESC] 稍後   [d] 不再提示",
   recap_title: " 每月回顧 ",
+  recap_year_ready: "你的 {year} 年度聆聽回顧已產生！🎉",
+  recap_year_listens_template: "你的 {year} 年回顧收錄了 {count} 次播放。",
+  recap_year_title: " {year} 年度回顧 ",
   community_pinned: "📌 spotatui 社群播放清單已置頂",
   community_details: "「spotatui community」播放清單已置頂於你的 Spotify 播放清單。",
   community_add: "隨時可在 spotatui Discord 中使用 /queue 指令加入歌曲。",
@@ -654,6 +666,21 @@ impl PopupStrings {
       self.recap_listens_template,
       &[("count", &count.to_string())],
     )
+  }
+
+  pub fn recap_year_ready(&self, year: i32) -> String {
+    super::format_template(self.recap_year_ready, &[("year", &year.to_string())])
+  }
+
+  pub fn recap_year_listens(&self, year: i32, count: usize) -> String {
+    super::format_template(
+      self.recap_year_listens_template,
+      &[("year", &year.to_string()), ("count", &count.to_string())],
+    )
+  }
+
+  pub fn recap_year_title(&self, year: i32) -> String {
+    super::format_template(self.recap_year_title, &[("year", &year.to_string())])
   }
 
   pub fn party_code_length(&self, count: usize) -> String {
