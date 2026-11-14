@@ -747,21 +747,25 @@ export function Shell({
     paneCommand,
   ]);
 
-  // A switch or a closed overlay hands the keyboard to the page; the first render leaves focus alone.
-  // One modal at a time: the recap waits for the announcement channel, an announcement and the Soloist dialogs.
+  // One modal at a time: the recap waits for the announcement channel, an announcement,
+  // the Soloist dialogs and the command palette.
+  const recapPending = channels.status?.payload.recap_prompt ?? null;
   const recapPrompt =
+    overlay !== null ||
     !channels.announcement ||
     channels.announcement.payload.active ||
     channels.status?.payload.soloist_offer ||
     channels.status?.payload.soloist_pairing
       ? null
-      : (channels.status?.payload.recap_prompt ?? null);
+      : recapPending;
+
+  // A switch or a closed overlay hands the keyboard to the page; the first render leaves focus alone.
   // The Soloist offer opens Settings under itself, so it holds the focus until it closes.
-  // The recap can open as the offer closes, so it holds the focus too.
+  // A recap that waits holds it too: it opens when the dialog before it closes.
   const covered =
     overlay !== null ||
     channels.status?.payload.soloist_offer != null ||
-    recapPrompt !== null;
+    recapPending !== null;
   const shown = useRef({ page, covered });
   useEffect(() => {
     const before = shown.current;
