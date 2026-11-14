@@ -2,8 +2,10 @@
 //!
 //! Provides sorting functionality for playlists, albums, artists, etc.
 
-use crate::core::plugin_api::TrackInfo;
+use crate::core::plugin_api::{PlaylistInfo, TrackInfo};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// Fields that can be used for sorting
 ///
@@ -27,6 +29,8 @@ pub enum SortField {
   Album,
   /// By release date (for albums)
   ReleaseDate,
+  /// Latest local listen in a playlist context
+  RecentlyPlayed,
 }
 
 impl SortField {
@@ -40,6 +44,7 @@ impl SortField {
       SortField::Duration => Some('t'),
       SortField::Album => Some('l'),
       SortField::ReleaseDate => Some('y'),
+      SortField::RecentlyPlayed => Some('r'),
     }
   }
 
@@ -53,6 +58,7 @@ impl SortField {
       SortField::Duration => "duration",
       SortField::Album => "album",
       SortField::ReleaseDate => "release_date",
+      SortField::RecentlyPlayed => "recently_played",
     }
   }
 
@@ -67,6 +73,7 @@ impl SortField {
       "duration" => Some(SortField::Duration),
       "album" => Some(SortField::Album),
       "release_date" => Some(SortField::ReleaseDate),
+      "recently_played" => Some(SortField::RecentlyPlayed),
       _ => None,
     }
   }
@@ -129,6 +136,8 @@ impl SortOrder {
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub enum SortContext {
+  /// Spotify playlists in the library sidebar
+  SidebarPlaylists,
   /// Tracks in a playlist
   PlaylistTracks,
   /// User's saved albums
@@ -144,6 +153,11 @@ impl SortContext {
   /// Get the available sort fields for this context
   pub fn available_fields(&self) -> &'static [SortField] {
     match self {
+      SortContext::SidebarPlaylists => &[
+        SortField::Default,
+        SortField::RecentlyPlayed,
+        SortField::Name,
+      ],
       SortContext::PlaylistTracks => &[
         SortField::Default,
         SortField::Name,
@@ -168,6 +182,74 @@ impl SortContext {
         SortField::Album,
       ],
     }
+  }
+}
+
+/// The three orders for Spotify's playlists sidebar. Folder slots stay fixed.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
+#[serde(rename_all = "snake_case")]
+pub enum SidebarPlaylistOrder {
+  #[default]
+  Spotify,
+  RecentlyPlayed,
+  Name,
+}
+
+impl SidebarPlaylistOrder {
+  pub fn field(self) -> SortField {
+    match self {
+      Self::Spotify => SortField::Default,
+      Self::RecentlyPlayed => SortField::RecentlyPlayed,
+      Self::Name => SortField::Name,
+    }
+  }
+
+  pub fn from_field(field: SortField) -> Option<Self> {
+    match field {
+      SortField::Default => Some(Self::Spotify),
+      SortField::RecentlyPlayed => Some(Self::RecentlyPlayed),
+      SortField::Name => Some(Self::Name),
+      _ => None,
+    }
+  }
+}
+
+/// Latest local listen by playlist context URI; read once off the UI thread and
+/// maintained as the history collector appends records.
+pub type PlaylistLastListens = BTreeMap<String, DateTime<Utc>>;
+
+/// Reorder only playlist slots at one folder level. Folders, back rows and pins
+/// keep their positions. Stable ties (including never-played playlists) keep the
+/// rootlist order supplied by the caller, in either frontend.
+pub fn sort_playlist_slots<'a, T: Clone>(
+  items: &mut [T],
+  order: SidebarPlaylistOrder,
+  last_listens: &PlaylistLastListens,
+  playlist: impl Fn(&T) -> Option<&'a PlaylistInfo>,
+) {
+  if order == SidebarPlaylistOrder::Spotify {
+    return;
+  }
+  let slots: Vec<usize> = items
+    .iter()
+    .enumerate()
+    .filter_map(|(index, item)| playlist(item).map(|_| index))
+    .collect();
+  let mut sorted: Vec<T> = slots.iter().map(|index| items[*index].clone()).collect();
+  match order {
+    SidebarPlaylistOrder::Spotify => {}
+    SidebarPlaylistOrder::Name => {
+      sorted.sort_by_cached_key(|item| playlist(item).unwrap().name.to_lowercase());
+    }
+    SidebarPlaylistOrder::RecentlyPlayed => {
+      sorted.sort_by_cached_key(|item| {
+        std::cmp::Reverse(last_listens.get(&playlist(item).unwrap().uri).copied())
+      });
+    }
+  }
+  for (index, item) in slots.into_iter().zip(sorted) {
+    items[index] = item;
   }
 }
 

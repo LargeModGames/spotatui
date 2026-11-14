@@ -1648,7 +1648,9 @@ pub fn draw_sort_menu(f: &mut Frame<'_>, app: &App) {
         .shortcut()
         .map(|c| format!(" ({})", c))
         .unwrap_or_default();
-      let indicator = if *field == current_sort.field {
+      let indicator = if *field == current_sort.field
+        && context != crate::core::sort::SortContext::SidebarPlaylists
+      {
         format!(
           " {}",
           current_sort.order.indicator_icon(
@@ -1661,7 +1663,13 @@ pub fn draw_sort_menu(f: &mut Frame<'_>, app: &App) {
       };
       let text = format!(
         "{}{}{}",
-        app.strings().popups.sort_field(*field),
+        if context == crate::core::sort::SortContext::SidebarPlaylists
+          && *field == crate::core::sort::SortField::Default
+        {
+          app.strings().popups.sort_spotify
+        } else {
+          app.strings().popups.sort_field(*field)
+        },
         shortcut,
         indicator
       );
@@ -1681,6 +1689,7 @@ pub fn draw_sort_menu(f: &mut Frame<'_>, app: &App) {
     .collect();
 
   let title = match context {
+    crate::core::sort::SortContext::SidebarPlaylists => app.strings().popups.sort_playlists,
     crate::core::sort::SortContext::PlaylistTracks => app.strings().popups.sort_tracks,
     crate::core::sort::SortContext::SavedAlbums => app.strings().popups.sort_albums,
     crate::core::sort::SortContext::SavedArtists => app.strings().popups.sort_artists,

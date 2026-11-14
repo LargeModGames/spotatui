@@ -798,6 +798,75 @@ mod tests {
   // --- Sort menu shortcut routing (issue #660) ---
 
   #[test]
+  fn sidebar_playlist_sort_key_menu_and_shortcuts_use_three_fixed_orders() {
+    // macOS must let comma reach sorting rather than its settings fallback.
+    let mut user_config = crate::core::user_config::UserConfig::new();
+    user_config.keys.open_settings = Key::Ctrl(',');
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, user_config, Some(SystemTime::now()));
+    app.set_current_route_state(
+      Some(ActiveBlock::MyPlaylists),
+      Some(ActiveBlock::MyPlaylists),
+    );
+    for (key, field) in [
+      ('r', SortField::RecentlyPlayed),
+      ('n', SortField::Name),
+      ('N', SortField::Name),
+      ('d', SortField::Default),
+    ] {
+      handle_app(Key::Char(','), &mut app);
+      assert_eq!(app.get_current_route().active_block, ActiveBlock::SortMenu);
+      assert_eq!(app.view.sort_context, Some(SortContext::SidebarPlaylists));
+      handle_app(Key::Char(key), &mut app);
+      assert!(!app.view.sort_menu_visible);
+      assert_eq!(
+        app.get_current_route().active_block,
+        ActiveBlock::MyPlaylists
+      );
+      assert_eq!(app.sort_state(SortContext::SidebarPlaylists).field, field);
+      assert_eq!(
+        app.sort_state(SortContext::SidebarPlaylists).order,
+        SortOrder::Ascending
+      );
+    }
+    handle_app(Key::Char(','), &mut app);
+    app.view.sort_menu_selected = 1;
+    handle_app(Key::Enter, &mut app);
+    assert_eq!(
+      app.sort_state(SortContext::SidebarPlaylists).field,
+      SortField::RecentlyPlayed
+    );
+    handle_app(Key::Char(','), &mut app);
+    assert_eq!(app.view.sort_menu_selected, 1);
+    handle_app(Key::Esc, &mut app);
+    assert_eq!(
+      app.get_current_route().active_block,
+      ActiveBlock::MyPlaylists
+    );
+  }
+
+  #[test]
+  fn sidebar_playlist_sort_menu_requires_the_spotify_source_and_session() {
+    for (source, connected) in [
+      (Source::Spotify, false),
+      (Source::Local, false),
+      (Source::Local, true),
+    ] {
+      let mut user_config = crate::core::user_config::UserConfig::new();
+      user_config.keys.open_settings = Key::Alt(',');
+      let (tx, _rx) = channel();
+      let mut app =
+        App::new(tx, user_config, connected.then_some(SystemTime::now())).under_source(source);
+      app.set_current_route_state(
+        Some(ActiveBlock::MyPlaylists),
+        Some(ActiveBlock::MyPlaylists),
+      );
+      handle_app(Key::Char(','), &mut app);
+      assert!(!app.view.sort_menu_visible);
+    }
+  }
+
+  #[test]
   fn sort_menu_shortcut_letters_reach_the_menu_instead_of_global_bindings() {
     // 'n' is next_track, 'd' is manage_devices and 'a' is jump_to_album
     // globally; inside the open sort menu each must sort instead.
