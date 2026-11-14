@@ -9,6 +9,7 @@
 
 ### Fixed
 
+- Settings rows show the saved value after a save clamps a number or refuses an icon, without reopening Settings ([#1063](https://github.com/LargeModGames/spotatui/issues/1063)).
 - **Text Emphasis off no longer bolds the selected row**: with `behavior.enable_text_emphasis: false`, the highlighted row in every list and table keeps its reversed colors but is no longer drawn bold ([#822](https://github.com/LargeModGames/spotatui/issues/822)).
 - **A misspelled default sort direction warns instead of sorting ascending**: a `default_sort_*` setting with a direction other than `asc` or `desc`, such as `name:dsc` or `name:DESC`, sorted the screen by name from A to Z and logged nothing. It now warns at config load and falls back to the default order, like a misspelled field ([#1021](https://github.com/LargeModGames/spotatui/issues/1021)).
 - **Keybindings docs**: the submit key row now says it seeks to the selected lyric line in the lyrics view instead of "not wired yet" ([#1066](https://github.com/LargeModGames/spotatui/issues/1066)).

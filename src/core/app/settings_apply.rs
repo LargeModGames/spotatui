@@ -26,8 +26,19 @@ impl App {
       return false;
     }
 
+    self.refresh_settings_items_from_config();
     self.settings_saved_items = self.settings_items.clone();
     true
+  }
+
+  /// Refresh values accepted by the config, preserving staged row identity and UI state.
+  fn refresh_settings_items_from_config(&mut self) {
+    let fresh = self.settings_items_for_category();
+    for item in &mut self.settings_items {
+      if let Some(saved) = fresh.iter().find(|saved| saved.id == item.id) {
+        item.value = saved.value.clone();
+      }
+    }
   }
 
   /// Set one Behavior row and write `config.yml`, past the Settings screen's staged rows.
@@ -1078,6 +1089,75 @@ fn trimmed(value: &str) -> Option<String> {
 mod tests {
   use super::*;
   use crate::core::app::test_support::*;
+
+  #[test]
+  fn settings_rows_show_the_clamped_value_after_save() {
+    let mut app = make_app_simple();
+    app.view.settings_category = SettingsCategory::Behavior;
+    app.settings_items = vec![
+      setting("behavior.volume_increment", SettingValue::Number(500)),
+      setting("behavior.seek_milliseconds", SettingValue::Number(-1)),
+    ];
+    app.view.settings_selected_index = 1;
+    app.view.settings_scroll_offset.set(1);
+    app.view.settings_unsaved_prompt_visible = true;
+    app.view.settings_unsaved_prompt_save_selected = false;
+
+    app.apply_settings_changes();
+    app.settings_items[0].name = "Volume row".into();
+    app.settings_items[0].description = "Keep this description".into();
+    app.refresh_settings_items_from_config();
+
+    assert_eq!(app.settings_items.len(), 2);
+    assert_eq!(app.settings_items[0].id, "behavior.volume_increment");
+    assert_eq!(app.settings_items[0].value, SettingValue::Number(100));
+    assert_eq!(app.settings_items[1].id, "behavior.seek_milliseconds");
+    assert_eq!(app.settings_items[1].value, SettingValue::Number(0));
+    assert_eq!(app.settings_items[0].name, "Volume row");
+    assert_eq!(app.settings_items[0].description, "Keep this description");
+    assert_eq!(app.view.settings_selected_index, 1);
+    assert_eq!(app.view.settings_scroll_offset.get(), 1);
+    assert!(app.view.settings_unsaved_prompt_visible);
+    assert!(!app.view.settings_unsaved_prompt_save_selected);
+  }
+
+  #[test]
+  fn settings_rows_show_the_kept_icon_after_a_rejected_wide_icon() {
+    let mut app = make_app_simple();
+    app.view.settings_category = SettingsCategory::Icons;
+    let kept = app.user_config.behavior.playing_icon.clone();
+    app.settings_items = vec![setting(
+      "behavior.playing_icon",
+      SettingValue::String(">>".into()),
+    )];
+
+    app.apply_settings_changes();
+    app.refresh_settings_items_from_config();
+
+    assert_eq!(app.settings_items.len(), 1);
+    assert_eq!(app.settings_items[0].value, SettingValue::String(kept));
+    assert!(app
+      .status_message()
+      .is_some_and(|message| message.contains("one terminal cell")));
+  }
+
+  #[test]
+  fn settings_rows_show_leaves_rows_without_a_match_alone() {
+    let mut app = make_app_simple();
+    app.view.settings_category = SettingsCategory::Icons;
+    // The GUI saves one Behavior row even when the TUI has another category open.
+    app.settings_items = vec![setting(
+      "behavior.volume_increment",
+      SettingValue::Number(500),
+    )];
+
+    app.apply_settings_changes();
+    let row = app.settings_items[0].clone();
+    app.refresh_settings_items_from_config();
+
+    assert_eq!(app.user_config.behavior.volume_increment, 100);
+    assert_eq!(app.settings_items, vec![row]);
+  }
 
   #[test]
   fn saving_a_theme_preset_bumps_the_theme_revision_and_an_unrelated_save_does_not() {
