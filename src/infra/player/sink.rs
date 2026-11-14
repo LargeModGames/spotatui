@@ -2,10 +2,11 @@
 //!
 //! The fork's `RodioSink` has three faults when the output device is unplugged:
 //! - rodio's default error callback `eprintln!`s into the TUI
-//! - `write` spins on `Sink::len() > 26` forever.
-//! - A dead device never drains.
-//! - `stop` calls `sleep_until_end()`. This sink stays silent, notices `DeviceNotAvailable`
-//!   and bounds every wait, so `RecoveringSink` sees an `Err` and recovers.
+//! - `write` spins on `Sink::len() > 26` forever (a dead device never drains).
+//! - `stop` calls `sleep_until_end()`.
+//!
+//! This sink stays silent, notices `DeviceNotAvailable` and bounds every wait,
+//! so `RecoveringSink` sees an `Err` and recovers.
 
 use librespot_playback::{
   audio_backend::{Sink, SinkError, SinkResult},
@@ -186,6 +187,7 @@ impl SpotatuiSink {
           Ok(mut stream) => {
             // Its drop warning goes to stderr by default.
             stream.log_on_drop(false);
+            debug!("Opened streaming audio output: {:?}", stream.config());
             let player = Player::connect_new(stream.mixer());
             if init_tx.send(Ok(player)).is_err() {
               return;
