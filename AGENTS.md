@@ -446,7 +446,10 @@ reads a file in that directory. Other agents must open it.
 ### Alternative sources (Local / Subsonic / Radio / YouTube / Qobuz)
 
 - All five decode through **one** shared rodio sink, `LocalPlayer`
-  (`src/infra/audio/player.rs`) - the only file where rodio types appear.
+  (`src/infra/audio/player.rs`), where the decoded-source rodio types live. The
+  only other file that names them is the Windows-only native-streaming sink,
+  `src/infra/player/sink.rs` (see Native streaming below); nothing on the
+  decoded-source path touches rodio outside `audio/player.rs`.
   Subsonic and YouTube download each track to a `NamedTempFile` first (YouTube by
   shelling out to `yt-dlp`); Radio streams through a non-seekable ring buffer.
 - Set the `advancing` flag synchronously before dispatching a track change: the
