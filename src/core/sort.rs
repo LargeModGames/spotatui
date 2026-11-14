@@ -122,12 +122,14 @@ impl SortOrder {
     }
   }
 
-  /// Parse a `:desc` direction suffix. Only `desc` flips to descending;
-  /// everything else (including `asc` or empty) is ascending.
-  pub fn parse_suffix(s: &str) -> Self {
+  /// Parse a direction suffix. `desc` is descending and `asc` or an empty
+  /// string is ascending; any other spelling is `None`, so a config typo is
+  /// reported instead of silently sorting ascending.
+  pub fn parse_suffix(s: &str) -> Option<Self> {
     match s.trim() {
-      "desc" => SortOrder::Descending,
-      _ => SortOrder::Ascending,
+      "desc" => Some(SortOrder::Descending),
+      "" | "asc" => Some(SortOrder::Ascending),
+      _ => None,
     }
   }
 }
@@ -294,7 +296,8 @@ impl SortState {
 
   /// Parse a `"<field>"` / `"<field>:desc"` spec, validating that the field is
   /// available in `ctx`. Hard error (with the context's valid fields) if the
-  /// field is unknown or unavailable in this context.
+  /// field is unknown or unavailable in this context, or if the direction is
+  /// not `asc` / `desc` / empty.
   pub fn parse(spec: &str, ctx: SortContext) -> Result<Self, String> {
     let (field_str, order_str) = match spec.split_once(':') {
       Some((f, o)) => (f, o),
@@ -324,10 +327,13 @@ impl SortState {
           .join(", ")
       ));
     }
-    Ok(Self {
-      field,
-      order: SortOrder::parse_suffix(order_str),
-    })
+    let order = SortOrder::parse_suffix(order_str).ok_or_else(|| {
+      format!(
+        "unknown sort direction '{}' (expected asc or desc)",
+        order_str.trim()
+      )
+    })?;
+    Ok(Self { field, order })
   }
 }
 
@@ -439,6 +445,31 @@ mod tests {
       SortState::parse("artist", SortContext::SavedArtists).unwrap_err(),
       "sort field 'artist' is not available in this context (valid: default, name)"
     );
+  }
+
+  #[test]
+  fn unknown_sort_direction_is_rejected_instead_of_sorting_ascending() {
+    for spec in ["name:dsc", "name:DESC", "name:descending"] {
+      let direction = spec.split_once(':').unwrap().1;
+      assert_eq!(
+        SortState::parse(spec, SortContext::SavedArtists).unwrap_err(),
+        format!("unknown sort direction '{direction}' (expected asc or desc)")
+      );
+    }
+    // The valid spellings keep working; the suffix stays trimmed.
+    for (spec, order) in [
+      ("name", SortOrder::Ascending),
+      ("name:asc", SortOrder::Ascending),
+      ("name:desc", SortOrder::Descending),
+      ("name: desc", SortOrder::Descending),
+    ] {
+      assert_eq!(
+        SortState::parse(spec, SortContext::SavedArtists)
+          .unwrap()
+          .order,
+        order
+      );
+    }
   }
 
   #[test]
