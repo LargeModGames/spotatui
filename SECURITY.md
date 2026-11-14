@@ -9,7 +9,7 @@ This policy also covers our librespot fork, the `spotatui-librespot-*` crates ([
 
 ## Desktop app
 
-The desktop app (preview) shows the browser GUI's page in the system WebView (WebView2 on Windows, WKWebView on macOS, WebKitGTK on Linux) instead of a browser tab. The page still comes from spotatui's own server on `127.0.0.1`, with the same protections:
+The desktop app shows the browser GUI's page in the system WebView (WebView2 on Windows, WKWebView on macOS, WebKitGTK on Linux) instead of a browser tab. The page still comes from spotatui's own server on `127.0.0.1`, with the same protections:
 
 - the server listens on loopback only, and the window opens with a one-time launch code, valid for 60 seconds, that the page trades for a session token over its socket;
 - every request must name the exact loopback host and port, and a request with an `Origin` must come from that same origin, which blocks DNS rebinding and other sites;
