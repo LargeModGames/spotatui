@@ -88,6 +88,7 @@ import { PlayerBar, type CoverSrc } from "./PlayerBar";
 import type { WatchVisualizer } from "./PlayerBarVisualizer";
 import { QueueDrawer } from "./QueueDrawer";
 import { RadioPage } from "./RadioPage";
+import { RecapDialog } from "./RecapDialog";
 import { RecentlyPlayed } from "./RecentlyPlayed";
 import { Room } from "./Room";
 import { Search } from "./Search";
@@ -1120,6 +1121,15 @@ export function Shell({
         offer={channels.status?.payload.soloist_offer ?? null}
         send={send}
         onSetUp={() => open({ page: "settings" })}
+      />
+      {/* An announcement shows first; the recap waits under it. */}
+      <RecapDialog
+        prompt={
+          channels.announcement?.payload.active
+            ? null
+            : (channels.status?.payload.recap_prompt ?? null)
+        }
+        send={send}
       />
     </TrackActionsContext.Provider>
   );

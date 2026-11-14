@@ -1,0 +1,16 @@
+.recap-dialog {
+  width: min(480px, 100%);
+}
+
+.recap-dialog .recap-ready {
+  color: var(--text);
+}
+
+.recap-dialog .dialog-buttons {
+  flex-wrap: wrap;
+}
+
+/* Apart from the two answers that keep the prompt on. */
+.recap-dialog .recap-disable {
+  margin-right: auto;
+}

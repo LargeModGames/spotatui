@@ -256,6 +256,36 @@ test("soloist offer", async ({ page }) => {
   await shot(page, "soloist-offer");
 });
 
+test("year recap prompt", async ({ page }) => {
+  await openWith(page, [
+    ...playing,
+    ...library,
+    {
+      kind: "status",
+      rev: 1,
+      payload: {
+        message: null,
+        is_error: false,
+        api_error: null,
+        soloist_pairing: null,
+        soloist_offer: null,
+        recap_prompt: {
+          title: "2026 Recap",
+          ready: "Your 2026 listening recap is ready! 🎉",
+          listens: "4812 listens made it into your 2026 recap.",
+          browser:
+            "Open it in the browser to view and download your share card.",
+          open: "Open",
+          later: "Later",
+          disable: "Don't show this again",
+        },
+      },
+    },
+  ]);
+  await page.getByRole("dialog").waitFor();
+  await shot(page, "recap-prompt");
+});
+
 test("queue panel", async ({ page }) => {
   await openWith(page, [...playing, ...library]);
   await page.getByText("Set Fire to the Rain").first().waitFor();
