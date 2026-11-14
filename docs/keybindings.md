@@ -51,7 +51,7 @@ key and its default from `UserConfig::new`. The five AI DJ keys live in the
 | Toggle shuffle | `Ctrl-s` | `shuffle` |
 | Toggle repeat mode | `Ctrl-r` | `repeat` |
 | Search | `/` | `search` |
-| Confirm (not wired yet — rebinding it has no effect today) | `Enter` | `submit` |
+| Seek to the selected line in the lyrics view (Enter works there too; elsewhere Enter is fixed) | `Enter` | `submit` |
 | Copy song URL | `c` | `copy_song_url` |
 | Copy album URL | `C` | `copy_album_url` |
 | Audio visualization | `v` | `audio_analysis` |
