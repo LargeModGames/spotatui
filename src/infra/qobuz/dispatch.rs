@@ -33,7 +33,8 @@ use tokio::sync::Mutex;
 use super::auth::{self, QobuzBundleCache};
 use super::stream::progressive;
 use super::{
-  track_id_from_uri, QobuzPlaybackState, QobuzSource, ResumePoint, StreamQuality, Unauthorized,
+  track_id_from_uri, NoFullStream, QobuzPlaybackState, QobuzSource, ResumePoint, StreamQuality,
+  Unauthorized,
 };
 use crate::core::app::{App, TrackTableContext};
 use crate::core::source::{MediaSource, Searcher, Source};
@@ -270,6 +271,9 @@ fn report_locked(app: &mut App, step: QobuzStep, err: anyhow::Error) {
     auth::set_token(None);
     let strings = app.strings();
     app.set_error_status_message(strings.status.infra.qobuz_login_expired, 8);
+  } else if err.downcast_ref::<NoFullStream>().is_some() {
+    let strings = app.strings();
+    app.set_error_status_message(strings.status.infra.qobuz_no_full_stream, 8);
   } else {
     log::warn!("[qobuz] {step}: {err:#}");
     let strings = app.strings();
@@ -524,12 +528,18 @@ async fn prepare_track(
   source: &QobuzSource,
   track_id: &str,
   quality: u8,
-) -> Result<(NamedTempFile, StreamQuality, PreparedStream)> {
+) -> Result<(
+  NamedTempFile,
+  progressive::Completion,
+  StreamQuality,
+  PreparedStream,
+)> {
   let tmp = NamedTempFile::new().context("creating temp file for Qobuz stream")?;
   let (init, stream) = source.begin_stream(track_id, quality).await?;
   let delivered = init.quality();
   let total = init.total_bytes();
   let failure = stream.failure();
+  let complete = stream.completion();
   let reader = progressive::open(stream, &tmp).await?;
   let mime = if delivered.flac {
     "audio/flac"
@@ -542,7 +552,7 @@ async fn prepare_track(
   .await
   .context("decoder task")?
   .map_err(|e| stream_cause(&failure, e))?;
-  Ok((tmp, delivered, prepared))
+  Ok((tmp, complete, delivered, prepared))
 }
 
 /// Open the track's stream on a detached task and build its decoder, then
@@ -563,8 +573,8 @@ fn spawn_fetch(
   let fetch_id = session.fetch_id;
   let task = tokio::spawn(async move {
     match prepare_track(&source, &track_id, quality).await {
-      Ok((tmp, delivered, prepared)) => {
-        commit_fetch(&app, fetch_id, tmp, delivered, prepared).await
+      Ok((tmp, complete, delivered, prepared)) => {
+        commit_fetch(&app, fetch_id, (tmp, complete), delivered, prepared).await
       }
       Err(e) => fail_fetch(&app, fetch_id, QobuzStep::Stream, e).await,
     }
@@ -640,7 +650,7 @@ async fn fail_fetch(app: &Arc<Mutex<App>>, fetch_id: u64, step: QobuzStep, err: 
 async fn commit_fetch(
   app: &Arc<Mutex<App>>,
   fetch_id: u64,
-  tmp: NamedTempFile,
+  (tmp, complete): (NamedTempFile, progressive::Completion),
   quality: StreamQuality,
   prepared: PreparedStream,
 ) {
@@ -688,6 +698,7 @@ async fn commit_fetch(
       return;
     };
     s.tempfile = Some(tmp);
+    s.complete = complete;
     s.quality = Some(quality);
     s.fetch = None;
     (s.resume_at.take(), volume)
@@ -723,8 +734,9 @@ async fn commit_fetch(
     return;
   };
   if !staged {
-    // The device went under the stage. Replay the retained file instead,
-    // with the same pause; the advance latch stays on until it does.
+    // The device went under the stage, and the dropped stream left the file
+    // partial: the replay fetches it again, with the same pause. The advance
+    // latch stays on until it plays.
     s.resume_at = Some(ResumePoint {
       position_ms: resume.map_or(0, |r| r.position_ms),
       paused,
@@ -817,6 +829,7 @@ pub(crate) async fn start_qobuz_queue(
     index,
     advancing: true,
     tempfile: None,
+    complete: Default::default(),
     quality: None,
     shuffle_backup: None,
     fetch_id: next_fetch_id(),
@@ -861,32 +874,36 @@ async fn skip(app: &Arc<Mutex<App>>, direction: Direction) -> bool {
 }
 
 /// Replay the current track (repeat-one) from its retained tempfile, with no
-/// second download. Returns `true` if Qobuz owns the session.
+/// second download when the file is whole. Returns `true` if Qobuz owns the session.
 async fn replay_current(app: &Arc<Mutex<App>>) -> bool {
-  let replay = {
+  let (player, path, resume) = {
     let mut guard = app.lock().await;
     let Some(s) = guard.qobuz_playback.as_mut() else {
       return false;
     };
     s.advancing = true;
-    match s.tempfile.as_ref() {
-      Some(t) => Some((
-        Arc::clone(&s.player),
-        t.path().to_path_buf(),
-        s.resume_at.take().or(Some(ResumePoint {
-          position_ms: 0,
-          paused: s.player.is_paused(),
-        })),
-      )),
-      // Still downloading: the commit applies `resume_at`, clears `advancing`
-      // and starts playback.
-      None => None,
+    // Still downloading: the commit applies `resume_at`, clears `advancing`
+    // and starts playback.
+    if s.tempfile.is_none() {
+      return true;
+    }
+    let finished = s.finished_file().map(std::path::Path::to_path_buf);
+    let resume = s.resume_at.take().unwrap_or(ResumePoint {
+      position_ms: 0,
+      paused: s.player.is_paused(),
+    });
+    match finished {
+      Some(path) => (Arc::clone(&s.player), path, resume),
+      // A partial file (a dropped reader cancelled its download): fetch again.
+      None => {
+        let index = s.index;
+        drop(guard);
+        play_index(app, index, Some(resume)).await;
+        return true;
+      }
     }
   };
-  let Some((player, path, resume)) = replay else {
-    return true;
-  };
-  if replay_file(player, path, resume).await {
+  if replay_file(player, path, Some(resume)).await {
     if let Some(s) = app.lock().await.qobuz_playback.as_mut() {
       s.advancing = false;
     }
@@ -979,6 +996,18 @@ mod tests {
       stream_cause(&failure, decoder()).to_string(),
       "segment 1 returned HTTP 403 Forbidden"
     );
+  }
+
+  #[test]
+  fn a_track_without_a_full_stream_names_the_subscription() {
+    let mut app = App::default();
+    let err = anyhow::Error::new(NoFullStream).context("file url");
+    report_locked(&mut app, QobuzStep::Stream, err);
+    assert_eq!(
+      app.status_message(),
+      Some(crate::core::i18n::EN.status.infra.qobuz_no_full_stream)
+    );
+    assert!(app.status_message_is_error());
   }
 
   #[test]

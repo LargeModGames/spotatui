@@ -24,6 +24,7 @@ fn native_streaming_refusal(
     Unavailable::NoLogin => None,
     Unavailable::NotPremium => Some(strings.status.runtime.premium_required),
     Unavailable::Offline => Some(strings.status.runtime.native_offline),
+    Unavailable::TimedOut => Some(strings.status.runtime.native_timed_out),
   }
 }
 impl StartupDeviceEvent {
@@ -42,8 +43,8 @@ impl StartupDeviceEvent {
 }
 
 /// Everything native streaming needs that used to gate the first frame:
-/// account probe, librespot session handshake, player event handler, recovery
-/// supervisor, and the saved-device startup decision. Bundled so
+/// account probe, librespot session handshake, player event handler, and the
+/// saved-device startup decision. Bundled so
 /// `deferred_streaming_startup` can run it all on a background task after the
 /// UI is already up.
 pub(crate) struct DeferredStreamingContext {
@@ -56,7 +57,6 @@ pub(crate) struct DeferredStreamingContext {
   pub(crate) spotify_startup_behavior: Option<StartupBehavior>,
   pub(crate) initial_shuffle_enabled: bool,
   pub(crate) recovery_tx: tokio::sync::mpsc::UnboundedSender<player::StreamingRecoveryRequest>,
-  pub(crate) recovery_rx: tokio::sync::mpsc::UnboundedReceiver<player::StreamingRecoveryRequest>,
   pub(crate) shared_position: Arc<AtomicU64>,
   pub(crate) shared_is_playing: Arc<std::sync::atomic::AtomicBool>,
   #[cfg(all(feature = "mpris", target_os = "linux"))]
@@ -68,9 +68,9 @@ pub(crate) struct DeferredStreamingContext {
 }
 
 /// Initialize native streaming in the background. The UI renders its
-/// first frame immediately; this task spawns the recovery supervisor, probes
-/// the account (reusing the auth `/me` when available), performs the librespot
-/// handshake with the same double-timeout as before, stores the player in
+/// first frame immediately; this task probes the account (reusing the auth
+/// `/me` when available), performs the librespot handshake with the same
+/// double-timeout as before, stores the player in
 /// `App`, spawns the player event handler, and finally makes the saved-device
 /// startup decision — dispatching its outcome through the normal IoEvent pump.
 // CLI mode never starts native streaming; only a frontend launch does.
@@ -94,21 +94,6 @@ pub(crate) fn deferred_streaming_startup(ctx: DeferredStreamingContext) {
 }
 
 async fn deferred_streaming_startup_inner(ctx: DeferredStreamingContext) {
-  player::spawn_streaming_recovery_handler(player::StreamingRecoveryContext {
-    app: Arc::clone(&ctx.app),
-    shared_position: Arc::clone(&ctx.shared_position),
-    shared_is_playing: Arc::clone(&ctx.shared_is_playing),
-    recovery_rx: ctx.recovery_rx,
-    recovery_tx: ctx.recovery_tx.clone(),
-    streaming_config: ctx.streaming_config.clone(),
-    #[cfg(all(feature = "mpris", target_os = "linux"))]
-    mpris_manager: ctx.mpris_manager.clone(),
-    #[cfg(all(feature = "macos-media", target_os = "macos"))]
-    macos_media_manager: ctx.macos_media_manager.clone(),
-    #[cfg(all(feature = "windows-media", target_os = "windows"))]
-    windows_media_manager: ctx.windows_media_manager.clone(),
-  });
-
   // The session refuses a non-Premium account, so it answers the plan check.
   if let Err(reason) = session::current().await {
     info!("native streaming not started: {}", reason.message());
@@ -206,6 +191,7 @@ async fn deferred_streaming_startup_inner(ctx: DeferredStreamingContext) {
   // streaming). This used to run inline in the network task before the pump
   // started; the decision's outcome now dispatches through the pump.
   let device_name = streaming_player.device_name().to_string();
+  let device_id = streaming_player.device_id();
   let saved_device_id = ctx.app.lock().await.saved_spotify_device_id();
   let mut devices_snapshot = None;
   if let Ok(devices) =
@@ -225,6 +211,7 @@ async fn deferred_streaming_startup_inner(ctx: DeferredStreamingContext) {
     saved_device_id,
     devices_snapshot.as_deref(),
     &device_name,
+    &device_id,
     strings,
   );
 
@@ -252,5 +239,9 @@ mod tests {
         .is_some_and(|message| message.contains("Premium"))
     );
     assert!(native_streaming_refusal(Unavailable::Offline, &crate::core::i18n::EN).is_some());
+    assert!(
+      native_streaming_refusal(Unavailable::TimedOut, &crate::core::i18n::EN)
+        .is_some_and(|message| message.contains("timed out"))
+    );
   }
 }

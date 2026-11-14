@@ -93,42 +93,73 @@ pub(super) fn target_levels(resolved: LevelFilter) -> Vec<(&'static str, LevelFi
   }
 }
 
-/// The compiled feature list for the startup header. Kept as one flat list
-/// (source features included) rather than a separate "enabled sources"
-/// field — a bug reporter just needs to see `local-files`/`subsonic`/... in
-/// the same place as everything else.
-pub(super) fn compiled_features() -> Vec<&'static str> {
-  let mut features = Vec::new();
-  macro_rules! push_if_enabled {
-    ($feature:literal) => {
-      if cfg!(feature = $feature) {
-        features.push($feature);
-      }
-    };
-  }
-  push_if_enabled!("telemetry");
-  push_if_enabled!("tui");
-  push_if_enabled!("streaming");
-  push_if_enabled!("audio-viz");
-  push_if_enabled!("audio-viz-cpal");
-  push_if_enabled!("cover-art");
-  push_if_enabled!("art-decode");
-  push_if_enabled!("scripting");
-  push_if_enabled!("self-update");
-  push_if_enabled!("mcp-server");
-  push_if_enabled!("ai-dj");
-  push_if_enabled!("dj-core");
-  push_if_enabled!("mpris");
-  push_if_enabled!("discord-rpc");
-  push_if_enabled!("macos-media");
-  push_if_enabled!("windows-media");
-  push_if_enabled!("local-files");
-  push_if_enabled!("subsonic");
-  push_if_enabled!("internet-radio");
-  push_if_enabled!("youtube");
-  push_if_enabled!("qobuz");
-  features
+/// Builds `compiled_features` and, for tests, `LISTED_FEATURES` from one list,
+/// so the test that holds the list to `Cargo.toml` checks the very names the
+/// header reports. `cfg!` needs each name as a literal, so the list cannot be
+/// read from the manifest at build time.
+macro_rules! feature_list {
+  ($($feature:literal),* $(,)?) => {
+    /// The compiled feature list for the startup header. Kept as one flat list
+    /// (source features included) rather than a separate "enabled sources"
+    /// field — a bug reporter just needs to see `local-files`/`subsonic`/... in
+    /// the same place as everything else.
+    pub(super) fn compiled_features() -> Vec<&'static str> {
+      let mut features = Vec::new();
+      $(
+        if cfg!(feature = $feature) {
+          features.push($feature);
+        }
+      )*
+      features
+    }
+
+    #[cfg(test)]
+    const LISTED_FEATURES: &[&str] = &[$($feature),*];
+  };
 }
+
+// Every `[features]` entry except the `default` and `all-sources` aliases, whose
+// members are listed one by one. `every_cargo_feature_is_in_the_startup_header`
+// fails when a feature is added to `Cargo.toml` without a line here.
+feature_list![
+  "telemetry",
+  "tui",
+  "gui",
+  "spotify-session",
+  "streaming",
+  "soloist",
+  "apple-music",
+  "audio-viz",
+  "audio-viz-cpal",
+  "cover-art",
+  "art-decode",
+  "scripting",
+  "self-update",
+  "mcp-server",
+  "ai-dj",
+  "dj-core",
+  "mpris",
+  "discord-rpc",
+  "macos-media",
+  "windows-media",
+  "local-files",
+  "subsonic",
+  "internet-radio",
+  "youtube",
+  "qobuz",
+  "audio-decode",
+  "audio-decode-queue",
+  "queue",
+  "queue-download",
+  "alsa-backend",
+  "pulseaudio-backend",
+  "rodio-backend",
+  "portaudio-backend",
+  "jackaudio-backend",
+  "rodiojack-backend",
+  "sdl-backend",
+  "gstreamer-backend",
+];
 
 /// The always-on startup line written once at the top of every log, so a bug
 /// report has the version/platform/build context without needing `--debug`.
@@ -339,6 +370,44 @@ mod tests {
   fn compiled_features_contains_tui_when_the_tui_feature_is_enabled() {
     let features = compiled_features();
     assert_eq!(features.contains(&"tui"), cfg!(feature = "tui"));
+  }
+
+  #[test]
+  fn every_cargo_feature_is_in_the_startup_header() {
+    // The header list is hand-kept, and it fell behind once: release builds
+    // carried `soloist` while the header left it out (#949).
+    // Scanned rather than parsed: the crate has no TOML parser, and adding one
+    // for a test would change `Cargo.lock`. Lines are trimmed first so an
+    // indented key still counts; continuation lines of a multi-line array start
+    // with `"` or `]` and comments with `#`, so the lowercase filter skips them.
+    let manifest = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"));
+    let declared: Vec<&str> = manifest
+      .lines()
+      .map(str::trim_start)
+      .skip_while(|line| line.trim() != "[features]")
+      .skip(1)
+      .take_while(|line| !line.starts_with('['))
+      .filter(|line| line.starts_with(|c: char| c.is_ascii_lowercase()))
+      .filter_map(|line| line.split_once('=').map(|(name, _)| name.trim()))
+      .filter(|name| !matches!(*name, "default" | "all-sources"))
+      .collect();
+    assert!(declared.contains(&"soloist"), "parsed {declared:?}");
+
+    let missing: Vec<&str> = declared
+      .iter()
+      .copied()
+      .filter(|name| !LISTED_FEATURES.contains(name))
+      .collect();
+    assert!(
+      missing.is_empty(),
+      "add these to `feature_list!` in src/runtime/logging.rs: {missing:?}"
+    );
+    let stale: Vec<&str> = LISTED_FEATURES
+      .iter()
+      .copied()
+      .filter(|name| !declared.contains(name))
+      .collect();
+    assert!(stale.is_empty(), "not in Cargo.toml any more: {stale:?}");
   }
 
   #[test]

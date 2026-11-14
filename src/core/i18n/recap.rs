@@ -74,11 +74,79 @@ pub const EN: RecapStrings = RecapStrings {
 
 // Keep ..EN so new English fields compile before their translations are added.
 #[allow(clippy::needless_update)]
-pub const ZH_HANS: RecapStrings = RecapStrings { ..EN };
+pub const ZH_HANS: RecapStrings = RecapStrings {
+  language: "zh-Hans",
+  page_title: "spotatui 听歌回顾",
+  title: "听歌记录回顾",
+  cover_art: "封面",
+  first_track: "最常听歌曲",
+  qualified_plays: "有效播放次数",
+  listening_time: "听歌时长",
+  top_artist: "最常听艺人",
+  top_album: "最常听专辑",
+  generated_by: "生成自 ",
+  generated_by_product: "由 spotatui 生成",
+  download: "下载分享卡片",
+  analytics: "详细统计",
+  top_tracks: "最常听歌曲",
+  top_artists: "最常听艺人",
+  top_albums: "最常听专辑",
+  recent_plays: "最近播放",
+  by_day: "每日听歌时长",
+  by_hour: "各时段听歌时长",
+  footer: "回顾根据 spotatui 本地听歌记录生成，从启用此功能时开始统计。短时播放或跳过的歌曲会被记录，但不计入回顾的主要统计。",
+  generating: "正在生成…",
+  render_failed: "无法生成图片，请重试！",
+  empty_summary: "此时间段还没有有效的本地听歌记录。",
+  summary: "由 spotatui 直接生成的本地听歌回顾，可作为 HTML 页面分享。",
+  no_tracks: "暂无歌曲。",
+  no_artists: "暂无艺人。",
+  no_albums: "暂无专辑。",
+  no_recent: "暂无最近播放记录。",
+  no_data_yet: "暂无数据。",
+  no_data: "暂无数据",
+  listened_at_template: "播放于 {time}",
+  recent_date_format: "%m月%d日 %H:%M",
+  ..EN
+};
 
 // Keep ..EN so new English fields compile before their translations are added.
 #[allow(clippy::needless_update)]
-pub const ZH_HANT: RecapStrings = RecapStrings { ..EN };
+pub const ZH_HANT: RecapStrings = RecapStrings {
+  language: "zh-Hant",
+  page_title: "spotatui 聆聽回顧",
+  title: "聆聽紀錄回顧",
+  cover_art: "封面",
+  first_track: "最常聽歌曲",
+  qualified_plays: "有效播放次數",
+  listening_time: "聆聽時間",
+  top_artist: "最常聽藝人",
+  top_album: "最常聽專輯",
+  generated_by: "產生自 ",
+  generated_by_product: "由 spotatui 產生",
+  download: "下載分享卡片",
+  analytics: "詳細統計",
+  top_tracks: "最常聽歌曲",
+  top_artists: "最常聽藝人",
+  top_albums: "最常聽專輯",
+  recent_plays: "最近播放",
+  by_day: "每日聆聽時間",
+  by_hour: "各時段聆聽時間",
+  footer: "回顧根據 spotatui 本機聆聽紀錄產生，從啟用此功能時開始統計。短暫播放或跳過的歌曲會被記錄，但不計入回顧的主要統計。",
+  generating: "正在產生…",
+  render_failed: "無法產生圖片，請重試！",
+  empty_summary: "此時間範圍還沒有有效的本機聆聽紀錄。",
+  summary: "由 spotatui 直接產生的本機聆聽回顧，可作為 HTML 頁面分享。",
+  no_tracks: "尚無歌曲。",
+  no_artists: "尚無藝人。",
+  no_albums: "尚無專輯。",
+  no_recent: "尚無最近播放紀錄。",
+  no_data_yet: "尚無資料。",
+  no_data: "尚無資料",
+  listened_at_template: "播放於 {time}",
+  recent_date_format: "%m月%d日 %H:%M",
+  ..EN
+};
 
 impl RecapStrings {
   pub fn listened_at(&self, time: &str) -> String {

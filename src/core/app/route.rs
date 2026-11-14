@@ -389,6 +389,10 @@ impl App {
     }
   }
 
+  pub fn navigation_depth(&self) -> usize {
+    self.navigation_stack.len()
+  }
+
   pub fn get_current_route(&self) -> &Route {
     // if for some reason there is no route return the default
     self.navigation_stack.last().unwrap_or(&DEFAULT_ROUTE)
@@ -416,12 +420,10 @@ impl App {
     }
   }
 
-  /// Opens the audio analysis screen: the Spotify pitch view while a Spotify
-  /// track plays, else the captured spectrum.
+  /// Opens the audio analysis screen with the visualizer `V` last picked.
   pub fn get_audio_analysis(&mut self) {
     info!("entering audio analysis view");
     if self.get_current_route().id != RouteId::Analysis {
-      self.view.pitch_dismissed = false;
       self.push_navigation_stack(RouteId::Analysis, ActiveBlock::Analysis);
     }
   }

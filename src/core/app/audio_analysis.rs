@@ -191,12 +191,22 @@ impl App {
 
   /// Whether the analysis screen shows the Spotify pitch view instead of a capture style.
   pub fn pitch_view_shows(&self) -> bool {
-    self.pitch_view_available() && !self.view.pitch_dismissed
+    self.pitch_view_available() && self.runtime_state.pitch_view_chosen
   }
 
-  /// Whether `V` can pick the pitch view: the analysis screen shows and a Spotify track plays.
+  /// Remember whether `V` last picked the pitch view, so the next launch opens the same visualizer.
+  pub(crate) fn choose_pitch_view(&mut self, chosen: bool) {
+    if self.runtime_state.pitch_view_chosen != chosen {
+      self.runtime_state.pitch_view_chosen = chosen;
+      self.schedule_state_save(PersistedRuntimeState::pitch_view_chosen(chosen));
+    }
+  }
+
+  /// Whether `V` can pick the pitch view: the analysis screen or its pane shows and a Spotify track plays.
   pub(crate) fn pitch_view_available(&self) -> bool {
-    self.spotify_track_playing && self.get_current_route().active_block == ActiveBlock::Analysis
+    self.spotify_track_playing
+      && (self.get_current_route().active_block == ActiveBlock::Analysis
+        || self.pane_open(Pane::Visualizer))
   }
 
   /// The tick's decision for the playing Spotify track; an analysis stays while its track plays.
@@ -207,6 +217,22 @@ impl App {
     } else if self.audio_analysis.track_id() != track {
       self.want_audio_analysis(None);
     }
+  }
+
+  /// Whether the last tick saw any source play.
+  pub fn playing_as_of_last_tick(&self) -> bool {
+    self.analysis_clock.is_some_and(|clock| clock.playing)
+  }
+
+  /// Whether the visualizer still moves: a source plays, or its bars still fall after a pause.
+  pub fn visualizer_moves(&self) -> bool {
+    const SETTLED: f32 = 0.01;
+    self.playing_as_of_last_tick()
+      || self.pitch_levels.iter().any(|level| *level > SETTLED)
+      || self
+        .spectrum_data
+        .as_ref()
+        .is_some_and(|spectrum| spectrum.bands.iter().any(|band| *band > SETTLED))
   }
 
   /// Starts the clock from a new position: a small correction is blended in, a seek is not.
@@ -552,7 +578,7 @@ mod tests {
       app.user_config.behavior.visualizer_style,
       VisualizerStyle::Cava
     );
-    assert!(!app.view.pitch_dismissed);
+    assert!(!app.runtime_state.pitch_view_chosen);
   }
 
   #[test]
@@ -570,7 +596,7 @@ mod tests {
   }
 
   #[test]
-  fn reopening_the_analysis_screen_brings_the_pitch_view_back() {
+  fn the_analysis_screen_reopens_with_the_visualizer_v_last_picked_and_saves_it() {
     let (mut app, _rx) = app_on_the_analysis_screen();
     app.sync_audio_analysis(Some("track1"));
     app.cycle_visualizer_style();
@@ -578,7 +604,20 @@ mod tests {
 
     app.get_audio_analysis();
 
-    assert!(app.pitch_view_shows());
+    assert!(!app.pitch_view_shows());
+    assert_eq!(app.pending_state_save_patch.pitch_view_chosen, Some(false));
+  }
+
+  #[test]
+  fn a_saved_style_choice_keeps_the_pitch_view_away_after_a_restart() {
+    let (mut app, _rx) = app_on_the_analysis_screen();
+    app
+      .runtime_state
+      .apply_persisted(&PersistedRuntimeState::pitch_view_chosen(false));
+
+    app.sync_audio_analysis(Some("track1"));
+
+    assert!(!app.pitch_view_shows());
   }
 
   #[test]

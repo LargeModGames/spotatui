@@ -1,5 +1,8 @@
 import { EN, type GuiStrings } from "./i18n";
 import { useCallback, useRef, useState } from "react";
+import type { ReactNode } from "react";
+import type { WindowEdge } from "./bindings/WindowEdge";
+import type { SidePane } from "./paneModel";
 import type { Action } from "./bindings/Action";
 import type { DeviceInfo } from "./bindings/DeviceInfo";
 import type { PlaybackPayload } from "./bindings/PlaybackPayload";
@@ -20,9 +23,6 @@ import { Cover } from "./ui";
 import { usePosition } from "./usePosition";
 import { isEmptySpace, nextMode, VISUALIZER_SETTING } from "./visualizerModel";
 
-/** What the right panel shows; null hides it. */
-export type Panel = "now" | "queue" | null;
-
 /** The volume an unmute restores when the mute happened elsewhere. */
 const UNMUTE_VOLUME = 50;
 
@@ -39,7 +39,7 @@ export function PlayerBar({
   position,
   connected,
   devices,
-  panel,
+  panels,
   onPanel,
   lyricsOpen,
   onLyrics,
@@ -51,14 +51,17 @@ export function PlayerBar({
   covered = false,
   look = null,
   coverSrc = NO_COVER,
+  edge,
+  grip,
 }: {
   s?: GuiStrings;
   playback: PlaybackPayload | null;
   position: Position | null;
   connected: boolean;
   devices: DeviceInfo[];
-  panel: Panel;
-  onPanel: (panel: Panel) => void;
+  /** The side panes that show now. */
+  panels: SidePane[];
+  onPanel: (panel: SidePane) => void;
   lyricsOpen: boolean;
   onLyrics: () => void;
   onRoom: () => void;
@@ -72,6 +75,10 @@ export function PlayerBar({
   covered?: boolean;
   look?: VisualizerLook | null;
   coverSrc?: CoverSrc;
+  /** The window edge the bar sits on; a column on the left or right. */
+  edge?: WindowEdge;
+  /** The handle the bar moves by. */
+  grip?: ReactNode;
 }) {
   const item = playback?.item ?? null;
   const uri = item?.uri ?? null;
@@ -105,6 +112,7 @@ export function PlayerBar({
   return (
     <footer
       className="playerbar"
+      data-edge={edge}
       // Only over the empty space: a title would also show over the controls.
       title={overEmptySpace ? s.change_visualizer : undefined}
       onMouseOver={
@@ -197,8 +205,8 @@ export function PlayerBar({
           type="button"
           className="icon-button"
           aria-label={s.now_playing_view}
-          aria-pressed={panel === "now"}
-          onClick={() => onPanel(panel === "now" ? null : "now")}
+          aria-pressed={panels.includes("now_playing")}
+          onClick={() => onPanel("now_playing")}
         >
           <Glyph name="panel" />
         </button>
@@ -217,8 +225,8 @@ export function PlayerBar({
           className="icon-button"
           aria-label={s.queue}
           aria-keyshortcuts="Shift+Q"
-          aria-pressed={panel === "queue"}
-          onClick={() => onPanel(panel === "queue" ? null : "queue")}
+          aria-pressed={panels.includes("queue")}
+          onClick={() => onPanel("queue")}
         >
           <Glyph name="queue" />
         </button>
@@ -267,6 +275,7 @@ export function PlayerBar({
           disabled={!connected}
           onPick={(ratio) => send({ SetVolume: Math.round(ratio * 100) })}
           onStep={(up) => send(up ? "VolumeUp" : "VolumeDown")}
+          onWheelStep={(up) => send(up ? "VolumeUp" : "VolumeDown")}
         />
         <button
           type="button"
@@ -288,6 +297,7 @@ export function PlayerBar({
           <Glyph name="fullscreen" />
         </button>
       </div>
+      {grip}
     </footer>
   );
 }

@@ -25,6 +25,58 @@ impl App {
     ));
   }
 
+  pub fn pane_layout(&self) -> &PaneNode {
+    &self.runtime_state.pane_layout
+  }
+
+  pub fn pane_open(&self, pane: Pane) -> bool {
+    self.runtime_state.pane_layout.contains(pane)
+  }
+
+  /// Move the focus to `Main`, or to the first pane while `Main` is hidden, when the focused pane is gone.
+  pub fn keep_pane_focus_in_layout(&mut self) {
+    let tree = &self.runtime_state.pane_layout;
+    if !tree.contains(self.view.focused_pane) {
+      self.view.focused_pane = if tree.contains(Pane::Main) {
+        Pane::Main
+      } else {
+        tree.panes()[0]
+      };
+    }
+  }
+
+  /// Run `change` on the pane layout and save it when it reports a change.
+  pub fn change_pane_layout(&mut self, change: impl FnOnce(&mut PaneNode) -> bool) -> bool {
+    if !change(&mut self.runtime_state.pane_layout) {
+      return false;
+    }
+    self.keep_pane_focus_in_layout();
+    self.schedule_state_save(PersistedRuntimeState::pane_layout(
+      &self.runtime_state.pane_layout,
+    ));
+    true
+  }
+
+  #[cfg_attr(not(feature = "gui"), allow(dead_code))]
+  pub fn gui_pane_layout(&self) -> &GuiLayout {
+    &self.runtime_state.gui_pane_layout
+  }
+
+  /// Store and save the GUI layout, or the default for `None`; false when nothing changed.
+  #[cfg_attr(not(feature = "gui"), allow(dead_code))]
+  pub fn set_gui_pane_layout(&mut self, layout: Option<GuiLayout>) -> bool {
+    let layout = layout.map_or_else(GuiLayout::default, |layout| layout.sanitized());
+    if layout == self.runtime_state.gui_pane_layout {
+      return false;
+    }
+    self.runtime_state.gui_pane_layout = layout;
+    self.bump_display(DisplayDomain::PaneLayout);
+    self.schedule_state_save(PersistedRuntimeState::gui_pane_layout(
+      &self.runtime_state.gui_pane_layout,
+    ));
+    true
+  }
+
   /// Every pane back to its configured default, or the runtime default.
   pub fn reset_layout(&mut self) {
     let defaults = RuntimeState::default();

@@ -135,3 +135,25 @@ fn reports_entries_still_in_english() {
     }
   }
 }
+
+#[test]
+fn the_soloist_expiry_unit_reads_in_the_language_and_keeps_an_unknown_one() {
+  let english = EN.status.infra;
+  assert_eq!(english.soloist_expiry_unit("day"), "day");
+  assert_eq!(english.soloist_expiry_unit("hours"), "hours");
+  let simplified = ZH_HANS.status.infra;
+  assert_eq!(
+    simplified.soloist_expires_soon(3, simplified.soloist_expiry_unit("days")),
+    "Soloist 版本将在 3 天后过期，请尽快下载新版本。"
+  );
+  assert_eq!(ZH_HANT.status.infra.soloist_expiry_unit("minutes"), "分鐘");
+  assert_eq!(simplified.soloist_expiry_unit("weeks"), "weeks");
+}
+
+#[test]
+fn the_soloist_quality_choices_read_in_the_language_without_changing_the_stored_value() {
+  let id = "behavior.soloist_audio_quality";
+  assert_eq!(EN.settings.option_label(id, "Very high"), "Very high");
+  assert_eq!(ZH_HANS.settings.option_label(id, "Very high"), "极高");
+  assert_eq!(ZH_HANT.settings.option_label(id, "Lossless"), "無損");
+}

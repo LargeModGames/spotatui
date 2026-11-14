@@ -26,6 +26,7 @@ mod local_browser;
 mod lyrics_view;
 mod miniplayer;
 mod mouse;
+mod panes;
 mod party;
 mod playbar;
 mod playlist;
@@ -53,8 +54,10 @@ use crate::core::source::Source;
 use crate::tui::event::Key;
 
 pub use announcement_prompt::dismiss as dismiss_announcement;
+pub(crate) use dialog::playlist_picker_captures_key;
 pub use input::handler as input_handler;
 pub use mouse::handler as mouse_handler;
+pub use panes::{leave_focused_pane, pane_arrows_apply, show_main_for_new_screen};
 
 #[cfg(target_os = "macos")]
 fn key_matches_open_settings_binding(key: Key, binding: Key) -> bool {
@@ -115,12 +118,36 @@ pub fn handle_app(key: Key, app: &mut App) {
     return;
   }
 
+  if app.soloist_offer_shows() {
+    if key == Key::Enter {
+      app.apply(Action::AnswerSoloistOffer { set_up: true });
+    } else if matches!(key, Key::Esc | Key::Char('q')) || key == app.user_config.keys.back {
+      app.apply(Action::AnswerSoloistOffer { set_up: false });
+    }
+    return;
+  }
+
+  // The Soloist pairing guide is a modal too, under the plugin popup.
+  if app.soloist_pairing_device().is_some() {
+    if matches!(key, Key::Esc | Key::Enter | Key::Char('q')) || key == app.user_config.keys.back {
+      app.apply(Action::DismissSoloistPairing);
+    }
+    return;
+  }
+
   // Help filtering is an inline modal input. Give it priority over global
   // bindings so queries can contain keys such as d, n, p, q, or ?.
   if app.get_current_route().active_block == ActiveBlock::HelpMenu
     && (app.view.help_filter_editing || key == app.user_config.keys.search)
   {
     help_menu::handler(key, app);
+    return;
+  }
+
+  // The add-to-playlist picker's search is an inline input too: typed playlist
+  // names must not trigger global bindings.
+  if dialog::playlist_picker_captures_key(app, key) {
+    handle_block_events(key, app);
     return;
   }
 
@@ -131,7 +158,8 @@ pub fn handle_app(key: Key, app: &mut App) {
     && (app.view.settings_unsaved_prompt_visible
       || app.view.settings_edit_mode
       || app.view.settings_filter_editing
-      || key == app.user_config.keys.search)
+      || key == app.user_config.keys.search
+      || (key == settings::BUTTON_KEY && settings::selected_row_has_button(app)))
   {
     settings::handler(key, app);
     return;
@@ -189,6 +217,10 @@ pub fn handle_app(key: Key, app: &mut App) {
     || key_matches_open_settings_binding(key, effective_open_settings)
   {
     app.apply(Action::Navigate(NavTarget::Settings));
+    return;
+  }
+
+  if !is_input_mode(app) && panes::handle_pane_key(key, app) {
     return;
   }
 
@@ -407,7 +439,11 @@ pub fn handle_app(key: Key, app: &mut App) {
         app.apply(Action::OpenAddPlayingTrackDialog);
       }
     }
-    _ => handle_block_events(key, app),
+    _ => {
+      if !panes::handle_focused_pane_key(key, app) {
+        handle_block_events(key, app);
+      }
+    }
   }
 }
 
@@ -760,6 +796,75 @@ mod tests {
   };
 
   // --- Sort menu shortcut routing (issue #660) ---
+
+  #[test]
+  fn sidebar_playlist_sort_key_menu_and_shortcuts_use_three_fixed_orders() {
+    // macOS must let comma reach sorting rather than its settings fallback.
+    let mut user_config = crate::core::user_config::UserConfig::new();
+    user_config.keys.open_settings = Key::Ctrl(',');
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, user_config, Some(SystemTime::now()));
+    app.set_current_route_state(
+      Some(ActiveBlock::MyPlaylists),
+      Some(ActiveBlock::MyPlaylists),
+    );
+    for (key, field) in [
+      ('r', SortField::RecentlyPlayed),
+      ('n', SortField::Name),
+      ('N', SortField::Name),
+      ('d', SortField::Default),
+    ] {
+      handle_app(Key::Char(','), &mut app);
+      assert_eq!(app.get_current_route().active_block, ActiveBlock::SortMenu);
+      assert_eq!(app.view.sort_context, Some(SortContext::SidebarPlaylists));
+      handle_app(Key::Char(key), &mut app);
+      assert!(!app.view.sort_menu_visible);
+      assert_eq!(
+        app.get_current_route().active_block,
+        ActiveBlock::MyPlaylists
+      );
+      assert_eq!(app.sort_state(SortContext::SidebarPlaylists).field, field);
+      assert_eq!(
+        app.sort_state(SortContext::SidebarPlaylists).order,
+        SortOrder::Ascending
+      );
+    }
+    handle_app(Key::Char(','), &mut app);
+    app.view.sort_menu_selected = 1;
+    handle_app(Key::Enter, &mut app);
+    assert_eq!(
+      app.sort_state(SortContext::SidebarPlaylists).field,
+      SortField::RecentlyPlayed
+    );
+    handle_app(Key::Char(','), &mut app);
+    assert_eq!(app.view.sort_menu_selected, 1);
+    handle_app(Key::Esc, &mut app);
+    assert_eq!(
+      app.get_current_route().active_block,
+      ActiveBlock::MyPlaylists
+    );
+  }
+
+  #[test]
+  fn sidebar_playlist_sort_menu_requires_the_spotify_source_and_session() {
+    for (source, connected) in [
+      (Source::Spotify, false),
+      (Source::Local, false),
+      (Source::Local, true),
+    ] {
+      let mut user_config = crate::core::user_config::UserConfig::new();
+      user_config.keys.open_settings = Key::Alt(',');
+      let (tx, _rx) = channel();
+      let mut app =
+        App::new(tx, user_config, connected.then_some(SystemTime::now())).under_source(source);
+      app.set_current_route_state(
+        Some(ActiveBlock::MyPlaylists),
+        Some(ActiveBlock::MyPlaylists),
+      );
+      handle_app(Key::Char(','), &mut app);
+      assert!(!app.view.sort_menu_visible);
+    }
+  }
 
   #[test]
   fn sort_menu_shortcut_letters_reach_the_menu_instead_of_global_bindings() {

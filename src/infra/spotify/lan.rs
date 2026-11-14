@@ -102,12 +102,22 @@ fn resolve_cast(service: &ResolvedService) -> Option<Entry> {
 }
 
 fn resolve_speaker(service: &ResolvedService) -> Option<Entry> {
-  speaker_at(&format!(
-    "http://{}:{}{}",
+  speaker_at(&speaker_url(
     first_ipv4(service)?,
     service.get_port(),
-    service.get_property_val_str("CPath").unwrap_or("/")
-  ))
+    service.get_property_val_str("CPath"),
+  )?)
+}
+
+/// The zeroconf URL of a speaker, or `None` when `CPath` is not a plain path that keeps the host.
+fn speaker_url(ip: IpAddr, port: u16, cpath: Option<&str>) -> Option<String> {
+  let cpath = cpath.unwrap_or("/");
+  let plain = cpath.starts_with('/')
+    && !cpath.contains("//")
+    && !cpath
+      .chars()
+      .any(|ch| matches!(ch, '@' | '?' | '#' | '\\') || ch.is_whitespace() || ch.is_control());
+  plain.then(|| format!("http://{ip}:{port}{cpath}"))
 }
 
 fn resolve_sonos(service: &ResolvedService) -> Option<Entry> {
@@ -228,6 +238,29 @@ mod tests {
   use super::*;
   use serde_json::json;
   use std::net::Ipv4Addr;
+
+  #[test]
+  fn a_cpath_that_is_not_a_plain_path_is_refused() {
+    let ip = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 9));
+    assert_eq!(
+      speaker_url(ip, 8080, Some("/zc")).as_deref(),
+      Some("http://192.168.1.9:8080/zc")
+    );
+    assert_eq!(
+      speaker_url(ip, 8080, None).as_deref(),
+      Some("http://192.168.1.9:8080/")
+    );
+    for bad in [
+      "@evil.example/",
+      "zc",
+      "//evil.example/",
+      "/zc?x=1",
+      "/a b",
+      "/zc#x",
+    ] {
+      assert_eq!(speaker_url(ip, 8080, Some(bad)), None, "{bad}");
+    }
+  }
 
   const IP: Option<IpAddr> = Some(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 20)));
 

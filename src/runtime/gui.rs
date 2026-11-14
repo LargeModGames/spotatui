@@ -115,6 +115,40 @@ fn launch_url(port: u16, code: &str) -> String {
   format!("http://127.0.0.1:{port}/#code={code}")
 }
 
+/// Opens the launch URL; on macOS through `osascript` stdin, since any account can list argv.
+#[cfg(target_os = "macos")]
+fn open_browser(url: &str) -> std::io::Result<()> {
+  use std::io::Write;
+  use std::process::{Command, Stdio};
+  let mut child = Command::new("/usr/bin/osascript")
+    .stdin(Stdio::piped())
+    .stdout(Stdio::null())
+    .stderr(Stdio::null())
+    .spawn()?;
+  if let Some(mut stdin) = child.stdin.take() {
+    stdin.write_all(open_location_script(url).as_bytes())?;
+  }
+  let status = child.wait()?;
+  if status.success() {
+    Ok(())
+  } else {
+    Err(std::io::Error::other(format!(
+      "osascript exited with {status}"
+    )))
+  }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn open_browser(url: &str) -> std::io::Result<()> {
+  open::that_detached(url)
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn open_location_script(url: &str) -> String {
+  let quoted = url.replace('\\', "\\\\").replace('"', "\\\"");
+  format!("open location \"{quoted}\"\n")
+}
+
 /// Only the language is deserialized here; boot remains the owner of full config
 /// validation and reports errors. This never creates paths or logs config data.
 fn preload_language(path: Option<&Path>, system: Language) -> Language {
@@ -176,7 +210,7 @@ async fn launch_gui(host: Option<GuiHost>) -> Result<()> {
   match show {
     Some(show) => show(&url)?,
     None => {
-      if let Err(e) = open::that_detached(&url) {
+      if let Err(e) = open_browser(&url) {
         log::warn!("could not open the browser: {e}");
         eprintln!("{}", language.strings().gui.open_browser(&url));
       }
@@ -363,7 +397,13 @@ async fn serve_until_quit(
           },
         );
         // After the tick, which opens, polls or closes the capture.
-        visualizer.note(&app, plays_here(&app), publisher.visualizer_watched(), now);
+        visualizer.note(
+          &app,
+          plays_here(&app),
+          publisher.visualizer_watched(),
+          publisher.screen_watched().is_some(),
+          now,
+        );
         last_tick = now;
         publisher.publish(&app);
         publisher.tick(&app, now);
@@ -373,9 +413,18 @@ async fn serve_until_quit(
           break;
         }
       }
-      _ = frame_clock.tick(), if visualizer.streams(publisher.visualizer_watched(), Instant::now()) => {
-        if let Some(frame) = visualizer.frame(driver, Instant::now()) {
-          publisher.frame(&frame);
+      _ = frame_clock.tick(), if visualizer.streams(publisher.visualizer_watched(), Instant::now())
+        || visualizer.screen_streams(publisher.screen_watched(), Instant::now()).is_some() => {
+        let now = Instant::now();
+        if visualizer.streams(publisher.visualizer_watched(), now) {
+          if let Some(frame) = visualizer.frame(driver, now) {
+            publisher.frame(&frame);
+          }
+        }
+        if let Some(bars) = visualizer.screen_streams(publisher.screen_watched(), now) {
+          if let Some(frame) = visualizer.screen_frame(driver, bars, now) {
+            publisher.screen_frame(&frame);
+          }
         }
       }
       _ = update_checks.tick(), if update_requests.is_some() => {
@@ -423,11 +472,17 @@ async fn serve_until_quit(
       message = inbox.recv() => match message {
         Some(ClientMessage::Action { action }) => {
           let mut app = app.lock().await;
-          app.apply(*action);
+          crate::gui::protocol::apply_page_action(&mut app, *action);
           driver.run_pending_script_commands(&mut app);
           publisher.publish(&app);
           // A click on the bar changes the visualizer's mode at once.
-          visualizer.note(&app, plays_here(&app), publisher.visualizer_watched(), Instant::now());
+          visualizer.note(
+            &app,
+            plays_here(&app),
+            publisher.visualizer_watched(),
+            publisher.screen_watched().is_some(),
+            Instant::now(),
+          );
           // A changed auto-update setting reaches the updater at once.
           if let Some(check) = changed_check(last_check, &app.user_config.behavior) {
             last_check = Some(check);
@@ -438,6 +493,7 @@ async fn serve_until_quit(
         Some(
           ClientMessage::Onboarding { .. }
           | ClientMessage::Visualizer { .. }
+          | ClientMessage::VisualizerScreen { .. }
           | ClientMessage::Changelog,
         ) => {}
         Some(ClientMessage::Update { ask }) => match ask {
@@ -457,6 +513,12 @@ async fn serve_until_quit(
         Some(ClientMessage::Window { mode }) => {
           if let Some(set) = &window {
             set(mode);
+          }
+        }
+        Some(ClientMessage::PaneLayout { layout }) => {
+          let mut app = app.lock().await;
+          if app.set_gui_pane_layout(layout) {
+            publisher.publish(&app);
           }
         }
         Some(ClientMessage::Quit) | None => break,
@@ -482,7 +544,7 @@ fn owns_sound(app: &App) -> bool {
   matches!(
     app.playback_owner(),
     PlaybackOwner::Queue | PlaybackOwner::Decoded | PlaybackOwner::NativeSpotify
-  )
+  ) || app.soloist_is_target()
 }
 
 /// Send the media controls `app`'s state when they must hear of it.
@@ -635,6 +697,14 @@ mod tests {
   #[test]
   fn the_launch_url_carries_the_code_in_the_fragment() {
     assert_eq!(launch_url(40513, "abc"), "http://127.0.0.1:40513/#code=abc");
+  }
+
+  #[test]
+  fn the_open_location_script_quotes_the_url() {
+    assert_eq!(
+      open_location_script("http://127.0.0.1:1/#code=a\"b\\c"),
+      "open location \"http://127.0.0.1:1/#code=a\\\"b\\\\c\"\n"
+    );
   }
 
   fn media(position_ms: u64, playing: bool) -> MediaState {

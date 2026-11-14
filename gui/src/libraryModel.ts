@@ -3,6 +3,7 @@ import type { Action } from "./bindings/Action";
 import type { AlbumInfo } from "./bindings/AlbumInfo";
 import type { ArtistInfo } from "./bindings/ArtistInfo";
 import type { LibraryNode } from "./bindings/LibraryNode";
+import type { ListTarget } from "./bindings/ListTarget";
 import type { PlaylistInfo } from "./bindings/PlaylistInfo";
 import type { QueuePayload } from "./bindings/QueuePayload";
 import type { Source } from "./bindings/Source";
@@ -423,6 +424,35 @@ export function wantsNextPage(
   askedFor: unknown,
 ): boolean {
   return atEnd && hasMore && list !== askedFor;
+}
+
+/** The list a Library filter pages through: its LoadMore target, the list shown and whether more remain. */
+export function libraryPager(
+  filter: "Playlists" | "Albums" | "Artists" | "Podcasts",
+  playlists: SourcePlaylists | null,
+): { target: ListTarget; list: unknown; more: boolean } | null {
+  switch (filter) {
+    case "Albums":
+      return {
+        target: "SavedAlbums",
+        list: playlists?.saved_albums,
+        more: playlists?.saved_albums_has_more ?? false,
+      };
+    case "Artists":
+      return {
+        target: "SavedArtists",
+        list: playlists?.followed_artists,
+        more: playlists?.followed_artists_has_more ?? false,
+      };
+    case "Podcasts":
+      return {
+        target: "SavedShows",
+        list: playlists?.saved_shows,
+        more: playlists?.saved_shows_has_more ?? false,
+      };
+    case "Playlists":
+      return null;
+  }
 }
 
 const FOLDERS_KEY = "spotatui.library.expandedFolders";

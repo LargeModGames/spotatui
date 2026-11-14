@@ -12,6 +12,7 @@ import {
   createPlaylistAction,
   createsPlaylists,
   focusAfterAsk,
+  libraryPager,
   libraryTree,
   matchesFilter,
   listPlayRequest,
@@ -51,6 +52,7 @@ const track = (name: string, uri: string | null): TrackInfo => ({
 });
 
 const empty: SourcePlaylists = {
+  playlist_sidebar_order: "spotify",
   spotify: [],
   local: [],
   subsonic: [],
@@ -62,6 +64,7 @@ const empty: SourcePlaylists = {
   saved_albums: [],
   saved_albums_has_more: false,
   followed_artists: [],
+  followed_artists_has_more: false,
   saved_shows: [],
   saved_shows_has_more: false,
   saved_show_ids: [],
@@ -598,5 +601,22 @@ describe("expanded folders storage", () => {
     };
     expect(loadExpanded(blocked).size).toBe(0);
     expect(() => saveExpanded(blocked, new Set(["f:a"]))).not.toThrow();
+  });
+});
+
+describe("libraryPager", () => {
+  it("pages the followed artists with their own has-more flag", () => {
+    const lists = { ...empty, followed_artists_has_more: true };
+    expect(libraryPager("Artists", lists)).toEqual({
+      target: "SavedArtists",
+      list: lists.followed_artists,
+      more: true,
+    });
+  });
+
+  it("pages albums and podcasts, and leaves playlists alone", () => {
+    expect(libraryPager("Albums", empty)?.target).toBe("SavedAlbums");
+    expect(libraryPager("Podcasts", empty)?.target).toBe("SavedShows");
+    expect(libraryPager("Playlists", empty)).toBe(null);
   });
 });

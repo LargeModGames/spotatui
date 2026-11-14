@@ -247,12 +247,24 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
   // "+ Add Playlist" is the leading row (row 0), above the display items.
   let mut display_list = vec![strings.add_playlist.to_string()];
   display_list.extend(playlist_items);
+  // Past the selectable rows, so the cursor and clicks never reach it.
+  if !app.spotify_connected {
+    display_list.push(strings.empty_spotify(&app.user_config.keys.manage_devices.to_string()));
+  }
 
+  let order = match app.runtime_state.playlist_sidebar_order {
+    crate::core::sort::SidebarPlaylistOrder::Spotify => app.strings().popups.sort_spotify,
+    crate::core::sort::SidebarPlaylistOrder::RecentlyPlayed => {
+      app.strings().popups.sort_recently_played
+    }
+    crate::core::sort::SidebarPlaylistOrder::Name => app.strings().popups.sort_name,
+  };
+  let title = format!("{} · {}", strings.playlists, order);
   draw_selectable_list(
     f,
     app,
     layout_chunk,
-    strings.playlists,
+    &title,
     &display_list,
     highlight_state,
     app.view.selected_playlist_index,
@@ -297,6 +309,45 @@ mod tests {
       .flat_map(|y| (0..area.width).map(move |x| (x, y)))
       .filter_map(|(x, y)| buffer.cell((x, y)).map(|c| c.symbol().to_string()))
       .collect()
+  }
+
+  #[test]
+  fn sidebar_playlist_title_shows_each_order_in_all_three_languages() {
+    use crate::core::action::Action;
+    use crate::core::i18n::Language;
+    use crate::core::sort::{SortContext, SortField};
+    let mut app = App::default_connected();
+    for language in [Language::En, Language::ZhHans, Language::ZhHant] {
+      app.user_config.behavior.language = language;
+      app.refresh_language();
+      for field in [
+        SortField::Default,
+        SortField::RecentlyPlayed,
+        SortField::Name,
+      ] {
+        app.apply(Action::Sort {
+          context: SortContext::SidebarPlaylists,
+          field,
+        });
+        let label = if field == SortField::Default {
+          app.strings().popups.sort_spotify
+        } else {
+          app.strings().popups.sort_field(field)
+        };
+        let title = format!("{} · {}", app.strings().sidebar.playlists, label);
+        // Wide characters leave continuation cells in the TestBackend buffer.
+        let compact = |text: &str| {
+          text
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect::<String>()
+        };
+        assert!(
+          compact(&rendered(&app, Rect::new(0, 0, 140, 30))).contains(&compact(&title)),
+          "{language:?} {field:?}"
+        );
+      }
+    }
   }
 
   fn folder(name: &str) -> PlaylistInfo {
@@ -437,6 +488,26 @@ mod tests {
       !content.contains("Liked Songs"),
       "Spotify rows need a session: {content}"
     );
+  }
+
+  #[test]
+  fn spotify_scope_without_a_session_shows_the_login_hint_with_the_configured_key() {
+    let mut app = App::default();
+    app.user_config.keys.manage_devices = Key::Char('D');
+    app.view.selected_playlist_index = Some(0);
+    // The default sidebar on a 120-column terminal, with the cursor gutter.
+    let content = rendered(&app, Rect::new(0, 0, 24, 40));
+    assert!(
+      content.contains("(`D`: log in"),
+      "the hint names the rebound key: {content}"
+    );
+  }
+
+  #[test]
+  fn spotify_scope_with_a_session_shows_no_login_hint() {
+    let app = App::default_connected();
+    let content = rendered(&app, Rect::new(0, 0, 60, 40));
+    assert!(!content.contains("log in to Spotify"), "{content}");
   }
 
   #[test]

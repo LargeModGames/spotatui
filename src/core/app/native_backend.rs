@@ -112,7 +112,8 @@ impl App {
   /// TCP: `is_connected` true, Spirc commands silently dropped).
   #[cfg(feature = "streaming")]
   pub fn force_native_streaming_recovery(&mut self, reselect_device: bool) {
-    if !self.native_should_drive() {
+    // A librespot recovery would clear Soloist's device id.
+    if !self.native_should_drive() || self.soloist_engine_installed() {
       return;
     }
     let position_ms = u32::try_from(self.song_progress_ms).unwrap_or(u32::MAX);
@@ -230,6 +231,12 @@ impl App {
   /// another owner of the sink. An install ends the park.
   #[cfg(feature = "streaming")]
   pub(crate) fn accept_rebuilt_native_backend(&mut self) -> bool {
+    // A rebuild that started before a switch to Soloist must not register a second device.
+    #[cfg(feature = "soloist")]
+    if self.soloist_engine_selected() {
+      self.native_backend_pending = false;
+      return false;
+    }
     // A rebuild may have started before Music took over. Park it, so an
     // explicit Spotify start later reacquires it instead of it resuming now.
     if self.apple_music_owns_playback() {

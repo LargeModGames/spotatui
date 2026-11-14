@@ -104,6 +104,16 @@ pub(super) fn saved_tracks_page(
   }
 }
 
+/// A settings row with no name or description.
+pub(super) fn setting(id: &str, value: SettingValue) -> SettingItem {
+  SettingItem {
+    id: id.to_string(),
+    name: String::new(),
+    description: String::new(),
+    value,
+  }
+}
+
 pub(super) fn make_app_simple() -> App {
   let (tx, _rx) = channel();
   App::new(tx, UserConfig::new(), Some(SystemTime::now()))

@@ -491,7 +491,10 @@ pub fn draw_queue(f: &mut Frame<'_>, app: &App) {
   let [area] = f
     .area()
     .layout(&Layout::vertical([Constraint::Percentage(100)]).margin(2));
+  draw_queue_in(f, app, area);
+}
 
+pub fn draw_queue_in(f: &mut Frame<'_>, app: &App, area: Rect) {
   let style = app.user_config.theme.base_style();
   let mut items: Vec<ListItem> = Vec::new();
 
@@ -1091,6 +1094,7 @@ fn draw_add_track_to_playlist_picker_dialog(f: &mut Frame<'_>, app: &App) {
     .margin(1)
     .constraints([
       Constraint::Length(2),
+      Constraint::Length(1),
       Constraint::Min(3),
       Constraint::Length(1),
     ])
@@ -1109,6 +1113,41 @@ fn draw_add_track_to_playlist_picker_dialog(f: &mut Frame<'_>, app: &App) {
   .style(app.user_config.theme.base_style());
   f.render_widget(header, vchunks[0]);
 
+  let theme = app.user_config.theme;
+  let popups = &app.strings().popups;
+  let filter = app.view.playlist_picker_filter.as_str();
+  let search_line = if app.view.playlist_picker_filter_editing {
+    Line::from(vec![
+      Span::styled(
+        popups.playlist_picker_search_prompt,
+        Style::default().fg(theme.active.into()),
+      ),
+      Span::raw(filter),
+      Span::styled("▏", Style::default().fg(theme.active.into())),
+      Span::styled(
+        popups.playlist_picker_search_edit_hint,
+        Style::default().fg(theme.inactive.into()),
+      ),
+    ])
+  } else if !filter.is_empty() {
+    Line::from(vec![
+      Span::styled(
+        popups.playlist_picker_search_prompt,
+        Style::default().fg(theme.active.into()),
+      ),
+      Span::raw(filter),
+    ])
+  } else {
+    Line::from(Span::styled(
+      popups.playlist_picker_search_hint(&app.user_config.keys.search.to_string()),
+      Style::default().fg(theme.inactive.into()),
+    ))
+  };
+  f.render_widget(
+    Paragraph::new(search_line).style(theme.base_style()),
+    vchunks[1],
+  );
+
   let mut list_state = ListState::default();
   // Rows follow the active source: local YouTube playlists under the YouTube
   // source, editable Spotify playlists plus folder rows otherwise (must stay
@@ -1116,10 +1155,15 @@ fn draw_add_track_to_playlist_picker_dialog(f: &mut Frame<'_>, app: &App) {
   let picker_rows = app.playlist_picker_items();
 
   if picker_rows.is_empty() {
-    let empty_text = Paragraph::new(app.strings().popups.no_editable_playlists)
+    let empty_message = if filter.trim().is_empty() {
+      popups.no_editable_playlists.to_string()
+    } else {
+      popups.no_matching_playlists(filter.trim())
+    };
+    let empty_text = Paragraph::new(empty_message)
       .style(Style::default().fg(app.user_config.theme.inactive.into()))
       .alignment(Alignment::Center);
-    f.render_widget(empty_text, vchunks[1]);
+    f.render_widget(empty_text, vchunks[2]);
   } else {
     let is_own_playlist = |playlist: &crate::core::plugin_api::PlaylistInfo| -> bool {
       // Local YouTube playlists carry no owner id — they are always the
@@ -1170,7 +1214,7 @@ fn draw_add_track_to_playlist_picker_dialog(f: &mut Frame<'_>, app: &App) {
       .highlight_style(Style::default().fg(app.user_config.theme.hovered.into()))
       .highlight_symbol("▶ ");
 
-    f.render_stateful_widget(list, vchunks[1], &mut list_state);
+    f.render_stateful_widget(list, vchunks[2], &mut list_state);
   }
 
   let footer = Paragraph::new(app.strings().popups.playlist_picker_controls(
@@ -1179,7 +1223,7 @@ fn draw_add_track_to_playlist_picker_dialog(f: &mut Frame<'_>, app: &App) {
   ))
   .style(Style::default().fg(app.user_config.theme.inactive.into()))
   .alignment(Alignment::Center);
-  f.render_widget(footer, vchunks[2]);
+  f.render_widget(footer, vchunks[3]);
 }
 
 fn draw_playlist_sync_picker_dialog(f: &mut Frame<'_>, app: &App) {
@@ -1366,6 +1410,134 @@ pub fn draw_recap_prompt(f: &mut Frame<'_>, app: &App) {
   f.render_widget(paragraph, rect);
 }
 
+/// The offer to set up Soloist, after librespot failed several tracks in a row.
+pub fn draw_soloist_offer(f: &mut Frame<'_>, app: &App) {
+  if !app.soloist_offer_shows() {
+    return;
+  }
+  let strings = &app.strings().popups;
+  let width = std::cmp::min(f.area().width.saturating_sub(4), 70);
+  let rect = f
+    .area()
+    .centered(Constraint::Length(width), Constraint::Length(13));
+  f.render_widget(Clear, rect);
+  let text = vec![
+    Line::from(strings.soloist_offer_body),
+    Line::from(""),
+    Line::from(strings.soloist_offer_step_download),
+    Line::from(strings.soloist_offer_step_key),
+    Line::from(strings.soloist_offer_step_engine),
+    Line::from(""),
+    Line::from(Span::styled(
+      strings.soloist_offer_controls,
+      Style::default().fg(app.user_config.theme.inactive.into()),
+    )),
+  ];
+  let paragraph = Paragraph::new(text)
+    .style(app.user_config.theme.base_style())
+    .wrap(Wrap { trim: false })
+    .block(
+      Block::default()
+        .borders(Borders::ALL)
+        .style(app.user_config.theme.base_style())
+        .border_style(Style::default().fg(app.user_config.theme.active.into()))
+        .title(strings.soloist_offer_title),
+    );
+  f.render_widget(paragraph, rect);
+}
+
+/// The Soloist pairing guide over every screen, until Soloist logs in or Esc closes it.
+pub fn draw_soloist_pairing(f: &mut Frame<'_>, app: &App) {
+  let Some(device) = app.soloist_pairing_device() else {
+    return;
+  };
+  let strings = &app.strings().popups;
+  let width = std::cmp::min(f.area().width.saturating_sub(4), 60);
+  let rect = f
+    .area()
+    .centered(Constraint::Length(width), Constraint::Length(9));
+  f.render_widget(Clear, rect);
+  let text = vec![
+    Line::from(strings.soloist_pair_open),
+    Line::from(strings.soloist_pair_pick(device)),
+    Line::from(""),
+    Line::from(Span::styled(
+      strings.soloist_pair_waiting,
+      Style::default().fg(app.user_config.theme.active.into()),
+    )),
+    Line::from(""),
+    Line::from(Span::styled(
+      strings.plugin_close_hint,
+      Style::default().fg(app.user_config.theme.inactive.into()),
+    )),
+  ];
+  let paragraph = Paragraph::new(text)
+    .style(app.user_config.theme.base_style())
+    .wrap(Wrap { trim: false })
+    .block(
+      Block::default()
+        .borders(Borders::ALL)
+        .style(app.user_config.theme.base_style())
+        .border_style(Style::default().fg(app.user_config.theme.active.into()))
+        .title(strings.soloist_pair_title),
+    );
+  f.render_widget(paragraph, rect);
+}
+
+#[cfg(all(test, feature = "soloist"))]
+mod soloist_pairing_tests {
+  use super::*;
+  use crate::tui::event::Key;
+  use ratatui::{backend::TestBackend, Terminal};
+
+  #[test]
+  fn the_pairing_guide_names_the_device_until_esc_closes_it() {
+    let mut app = App::default();
+    app.soloist_notice(crate::infra::soloist::Notice::NotPaired);
+    let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+    terminal.draw(|f| draw_soloist_pairing(f, &app)).unwrap();
+    let content: String = terminal
+      .backend()
+      .buffer()
+      .content()
+      .iter()
+      .map(|cell| cell.symbol())
+      .collect();
+    let pick = app
+      .strings()
+      .popups
+      .soloist_pair_pick(&app.user_config.behavior.streaming_device_name);
+    assert!(content.contains(&pick), "{content}");
+
+    crate::tui::handlers::handle_app(Key::Esc, &mut app);
+    assert_eq!(app.soloist_pairing_device(), None);
+  }
+
+  #[test]
+  fn the_soloist_offer_lists_the_steps_until_esc_closes_it() {
+    let mut app = App::default();
+    app.offer_soloist_setup();
+    let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+    terminal.draw(|f| draw_soloist_offer(f, &app)).unwrap();
+    let content: String = terminal
+      .backend()
+      .buffer()
+      .content()
+      .iter()
+      .map(|cell| cell.symbol())
+      .collect();
+    let strings = &app.strings().popups;
+    assert!(content.contains(strings.soloist_offer_title), "{content}");
+    assert!(
+      content.contains(strings.soloist_offer_step_key),
+      "{content}"
+    );
+
+    crate::tui::handlers::handle_app(Key::Esc, &mut app);
+    assert!(!app.soloist_offer_shows());
+  }
+}
+
 pub fn draw_community_pin_prompt(f: &mut Frame<'_>, app: &App) {
   let width = std::cmp::min(f.area().width.saturating_sub(4), 66);
   let height = 14;
@@ -1476,7 +1648,9 @@ pub fn draw_sort_menu(f: &mut Frame<'_>, app: &App) {
         .shortcut()
         .map(|c| format!(" ({})", c))
         .unwrap_or_default();
-      let indicator = if *field == current_sort.field {
+      let indicator = if *field == current_sort.field
+        && context != crate::core::sort::SortContext::SidebarPlaylists
+      {
         format!(
           " {}",
           current_sort.order.indicator_icon(
@@ -1489,7 +1663,13 @@ pub fn draw_sort_menu(f: &mut Frame<'_>, app: &App) {
       };
       let text = format!(
         "{}{}{}",
-        app.strings().popups.sort_field(*field),
+        if context == crate::core::sort::SortContext::SidebarPlaylists
+          && *field == crate::core::sort::SortField::Default
+        {
+          app.strings().popups.sort_spotify
+        } else {
+          app.strings().popups.sort_field(*field)
+        },
         shortcut,
         indicator
       );
@@ -1509,6 +1689,7 @@ pub fn draw_sort_menu(f: &mut Frame<'_>, app: &App) {
     .collect();
 
   let title = match context {
+    crate::core::sort::SortContext::SidebarPlaylists => app.strings().popups.sort_playlists,
     crate::core::sort::SortContext::PlaylistTracks => app.strings().popups.sort_tracks,
     crate::core::sort::SortContext::SavedAlbums => app.strings().popups.sort_albums,
     crate::core::sort::SortContext::SavedArtists => app.strings().popups.sort_artists,
@@ -1917,6 +2098,34 @@ mod playlist_picker_localization_tests {
   use crate::core::app::{PlaylistFolder, PlaylistFolderItem};
   use crate::core::i18n::Language;
   use ratatui::{backend::TestBackend, Terminal};
+
+  #[test]
+  fn the_playlist_picker_shows_the_search_hint_query_and_no_match_message() {
+    let mut app = App::default();
+    let render = |app: &App| {
+      let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+      terminal
+        .draw(|frame| draw_add_track_to_playlist_picker_dialog(frame, app))
+        .unwrap();
+      let buffer = terminal.backend().buffer();
+      (0..buffer.area.height)
+        .map(|y| {
+          (0..buffer.area.width)
+            .map(|x| buffer[(x, y)].symbol())
+            .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+    };
+
+    assert!(render(&app).contains("/ search playlists"));
+
+    app.view.playlist_picker_filter = "zzz".to_string();
+    app.view.playlist_picker_filter_editing = true;
+    let text = render(&app);
+    assert!(text.contains("Search: zzz"), "{text}");
+    assert!(text.contains("No playlists match \"zzz\""), "{text}");
+  }
 
   #[test]
   fn the_playlist_picker_relabels_generated_folders_and_back_rows_without_renaming_user_folders() {

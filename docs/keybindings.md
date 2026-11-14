@@ -51,7 +51,7 @@ key and its default from `UserConfig::new`. The five AI DJ keys live in the
 | Toggle shuffle | `Ctrl-s` | `shuffle` |
 | Toggle repeat mode | `Ctrl-r` | `repeat` |
 | Search | `/` | `search` |
-| Confirm (not wired yet — rebinding it has no effect today) | `Enter` | `submit` |
+| Seek to the selected line in the lyrics view (Enter works there too; elsewhere Enter is fixed) | `Enter` | `submit` |
 | Copy song URL | `c` | `copy_song_url` |
 | Copy album URL | `C` | `copy_album_url` |
 | Audio visualization | `v` | `audio_analysis` |
@@ -66,6 +66,39 @@ key and its default from `UserConfig::new`. The five AI DJ keys live in the
 | Listening party | `Ctrl-p` | `listening_party` |
 | Like / save track | `F` | `like_track` |
 | Generate recap | `R` | `generate_recap` |
+
+### Now playing panel
+
+`Enter` on the playbar opens a panel to the right of the main content with the
+cover (cover-art builds) and the playing track's album, year, track number,
+length, device, liked and explicit marks, and the next items in the queue once
+the queue has been fetched for this track. `Enter` again closes it. The panel
+steps aside while you type a search or read its results, and on a terminal too
+narrow to keep the content 60 columns wide; it comes back by itself afterwards.
+The playbar leaves out its own cover thumbnail while the panel shows.
+
+### Pane keys
+
+These keys arrange the views you detach beside the main layout. `Alt` with an
+arrow key also moves the focus, and `Alt-Shift` with an arrow key swaps panes. See
+[Detached panes](configuration.md#detached-panes).
+
+| Action | Default | Config key |
+|---|---|---|
+| Detach the open full-screen view into a pane, or put the focused pane back to full screen | `Alt-d` | `detach_pane` |
+| Close the focused pane, or hide the main layout when it has focus | `Alt-x` | `close_pane` |
+| Focus the pane on the left | `Alt-h` | `focus_pane_left` |
+| Focus the pane below | `Alt-j` | `focus_pane_down` |
+| Focus the pane above | `Alt-k` | `focus_pane_up` |
+| Focus the pane on the right | `Alt-l` | `focus_pane_right` |
+| Swap the focused pane with the pane on the left | `Alt-H` | `move_pane_left` |
+| Swap the focused pane with the pane below | `Alt-J` | `move_pane_down` |
+| Swap the focused pane with the pane above | `Alt-K` | `move_pane_up` |
+| Swap the focused pane with the pane on the right | `Alt-L` | `move_pane_right` |
+| Turn the split of the focused pane | `Alt-r` | `rotate_pane` |
+| Make the focused pane larger | `Alt-=` | `grow_pane` |
+| Make the focused pane smaller | `Alt--` | `shrink_pane` |
+| Close every pane and show the main layout again | `Alt-0` | `reset_panes` |
 
 A few keys in the help menu are fixed and have no config name: the sort menu
 (`,`), the visualizer style picker (`V`), list jumps `H` / `M` / `L`, the
@@ -87,15 +120,15 @@ keybindings:
   # ... etc
 ```
 
-Every row in the table above is a `keybindings:` entry: the config key names
-the action and the value is its new default. Use the table as the full list of
-rebindable names — 40 actions plus the five AI DJ keys below.
+Every row in the tables above is a `keybindings:` entry: the config key names
+the action and the value is its new default. Use the tables as the full list of
+rebindable names — 40 actions, the 14 pane keys and the five AI DJ keys below.
 
 ### Key Format
 
 - Single keys: `"a"`, `"/"`, `" "` (or `"space"`)
 - With Ctrl: `"ctrl-q"`, `"ctrl-s"`, `"ctrl--"` (Ctrl and the `-` key)
-- With Alt: `"alt-,"`, `"alt-s"`, `"alt--"`
+- With Alt: `"alt-,"`, `"alt-s"`, `"alt--"`, `"alt-H"` for Alt with Shift, and `"alt-left"` or `"alt-shift-left"` for an arrow (left, right, up, down)
 - With Shift: use the capital letter, `"A"`, `"C"` (Shift is not a modifier of its own)
 - Special keys: `"enter"`, `"tab"`, `"esc"` (or `"escape"`), `"backspace"`,
   `"del"`, `"left"` / `"right"` / `"up"` / `"down"`, `"pageup"` / `"pagedown"`,

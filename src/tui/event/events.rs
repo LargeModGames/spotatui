@@ -45,13 +45,15 @@ pub enum Event {
 
 /// Whether the reader thread hands a mouse event to the UI loop. Every
 /// forwarded event locks the `App` and redraws, so pointer motion (`Moved`)
-/// and button releases are dropped. A left drag is kept: it scrubs the
-/// playbar progress line.
+/// and most button releases are dropped. A left drag is kept: it scrubs the
+/// playbar progress line and moves a pane border, and the left release ends
+/// the border drag.
 fn forwards_mouse(kind: MouseEventKind) -> bool {
   matches!(
     kind,
     MouseEventKind::Down(_)
       | MouseEventKind::Drag(MouseButton::Left)
+      | MouseEventKind::Up(MouseButton::Left)
       | MouseEventKind::ScrollUp
       | MouseEventKind::ScrollDown
   )
@@ -61,6 +63,8 @@ fn forwards_mouse(kind: MouseEventKind) -> bool {
 /// type is handled in its own thread and returned to a common `Receiver`
 pub struct Events {
   rx: mpsc::Receiver<Event>,
+  /// The event `next` read past a run of ticks, returned by the next call.
+  held: Option<Event>,
   tick_rate_milliseconds: Arc<AtomicU64>,
   // Need to be kept around to prevent disposing the sender side.
   _tx: mpsc::Sender<Event>,
@@ -131,6 +135,7 @@ impl Events {
 
     Events {
       rx,
+      held: None,
       tick_rate_milliseconds,
       _tx: tx,
     }
@@ -152,9 +157,34 @@ impl Events {
 
   /// Attempts to read an event.
   /// This function will block the current thread.
-  pub fn next(&self) -> Result<Event, mpsc::RecvError> {
-    self.rx.recv()
+  pub fn next(&mut self) -> Result<Event, mpsc::RecvError> {
+    next_coalesced(&self.rx, &mut self.held)
   }
+}
+
+/// The next event, with the ticks queued behind a tick merged into it, so a
+/// frame slower than the tick rate does not queue ticks in front of the keys.
+fn next_coalesced(
+  rx: &mpsc::Receiver<Event>,
+  held: &mut Option<Event>,
+) -> Result<Event, mpsc::RecvError> {
+  let event = match held.take() {
+    Some(event) => event,
+    None => rx.recv()?,
+  };
+  let Event::Tick(mut elapsed) = event else {
+    return Ok(event);
+  };
+  while let Ok(next) = rx.try_recv() {
+    match next {
+      Event::Tick(more) => elapsed += more,
+      other => {
+        *held = Some(other);
+        break;
+      }
+    }
+  }
+  Ok(Event::Tick(elapsed))
 }
 
 #[cfg(test)]
@@ -162,8 +192,30 @@ mod tests {
   use super::*;
 
   #[test]
-  fn left_drag_is_forwarded_to_the_mouse_handler() {
+  fn queued_ticks_merge_into_one_and_the_key_behind_them_keeps_its_place() {
+    let (tx, rx) = mpsc::channel();
+    let mut held = None;
+    for event in [
+      Event::Tick(Duration::from_millis(16)),
+      Event::Tick(Duration::from_millis(17)),
+      Event::Input(Key::Char('j')),
+      Event::Tick(Duration::from_millis(16)),
+    ] {
+      tx.send(event).unwrap();
+    }
+
+    let mut next = || next_coalesced(&rx, &mut held).unwrap();
+
+    assert!(matches!(next(), Event::Tick(elapsed) if elapsed == Duration::from_millis(33)));
+    assert!(matches!(next(), Event::Input(Key::Char('j'))));
+    assert!(matches!(next(), Event::Tick(elapsed) if elapsed == Duration::from_millis(16)));
+  }
+
+  #[test]
+  fn left_drag_and_its_release_are_forwarded_to_the_mouse_handler() {
     assert!(forwards_mouse(MouseEventKind::Drag(MouseButton::Left)));
+    assert!(forwards_mouse(MouseEventKind::Up(MouseButton::Left)));
+    assert!(!forwards_mouse(MouseEventKind::Up(MouseButton::Right)));
   }
 
   #[test]

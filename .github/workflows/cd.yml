@@ -28,39 +28,42 @@ jobs:
           # there, which is why `portaudio-backend` stays on the macOS rows).
           # The youtube source needs a yt-dlp binary at runtime (ffmpeg
           # recommended); without one it shows an actionable error.
+          # `soloist` adds the opt-in Soloist engine; it needs the Soloist binary
+          # the user downloads from Spotify, so nothing changes until it is set.
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             artifact_prefix: linux-x86_64 # most Linux distros
             binary_postfix: ""
-            audio_features: "audio-viz,mpris,local-files,subsonic,internet-radio,youtube,qobuz"
+            audio_features: "audio-viz,audio-viz-cpal,mpris,local-files,subsonic,internet-radio,youtube,qobuz,soloist"
           - os: ubuntu-24.04-arm # free native ARM64 runner for public repos
             target: aarch64-unknown-linux-gnu
             artifact_prefix: linux-aarch64 # Raspberry Pi 4/5, ARM servers, Asahi Linux
             binary_postfix: ""
-            audio_features: "audio-viz,mpris,local-files,subsonic,internet-radio,youtube,qobuz"
+            audio_features: "audio-viz,audio-viz-cpal,mpris,local-files,subsonic,internet-radio,youtube,qobuz,soloist"
           - os: macos-15-intel # Intel runner for x86_64 (available until Aug 2027)
             target: x86_64-apple-darwin
             artifact_prefix: macos-x86_64
             binary_postfix: ""
-            audio_features: "audio-viz-cpal,portaudio-backend,macos-media,local-files,subsonic,internet-radio,youtube,qobuz,apple-music"
+            audio_features: "audio-viz-cpal,portaudio-backend,macos-media,local-files,subsonic,internet-radio,youtube,qobuz,soloist,apple-music"
           - os: macos-latest # Apple Silicon runner for aarch64
             target: aarch64-apple-darwin
             artifact_prefix: macos-aarch64
             binary_postfix: ""
-            audio_features: "audio-viz-cpal,portaudio-backend,macos-media,local-files,subsonic,internet-radio,youtube,qobuz,apple-music"
+            audio_features: "audio-viz-cpal,portaudio-backend,macos-media,local-files,subsonic,internet-radio,youtube,qobuz,soloist,apple-music"
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact_prefix: windows-x86_64
             binary_postfix: ".exe"
-            audio_features: "audio-viz-cpal,windows-media,local-files,subsonic,internet-radio,youtube,qobuz"
+            audio_features: "audio-viz-cpal,windows-media,local-files,subsonic,internet-radio,youtube,qobuz,soloist"
 
     steps:
       - name: Checkout sources
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
+          toolchain: stable
           targets: ${{ matrix.target }}
 
       - name: Install Linux dependencies
@@ -73,9 +76,12 @@ jobs:
         if: runner.os == 'Linux'
         run: cargo install cargo-deb --locked
 
+      # Static portaudio, so the install.sh binary runs without Homebrew (checked below).
       - name: Install macOS dependencies
         if: runner.os == 'macOS'
-        run: brew install openssl@3 portaudio
+        run: |
+          brew install openssl@3 portaudio
+          echo "PKG_CONFIG_ALL_STATIC=1" >> "$GITHUB_ENV"
 
       - name: Build release binary
         run: |
@@ -85,6 +91,17 @@ jobs:
             cargo build --release --target ${{ matrix.target }} --no-default-features --features telemetry,tui,streaming,discord-rpc,cover-art,self-update,scripting,mcp-server,ai-dj,${{ matrix.audio_features }}
           fi
         shell: bash
+
+      - name: Check the macOS binary links only system libraries
+        if: runner.os == 'macOS'
+        run: |
+          bin=target/${{ matrix.target }}/release/${{ env.BINARY_NAME }}
+          otool -L "$bin"
+          foreign=$(otool -L "$bin" | tail -n +2 | awk '{print $1}' | grep -v -e '^/System/' -e '^/usr/lib/' || true)
+          if [ -n "$foreign" ]; then
+            echo "::error::$bin links libraries outside /System and /usr/lib: $foreign"
+            exit 1
+          fi
 
       - name: Package binary (Unix)
         if: runner.os != 'Windows'
@@ -121,7 +138,7 @@ jobs:
 
       - name: Upload artifact (Unix)
         if: runner.os != 'Windows'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ env.BINARY_NAME }}-${{ matrix.artifact_prefix }}
           path: |
@@ -130,14 +147,14 @@ jobs:
 
       - name: Upload artifact (Linux .deb)
         if: runner.os == 'Linux'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ env.BINARY_NAME }}-${{ matrix.artifact_prefix }}-deb
           path: "*.deb"
 
       - name: Upload artifact (Windows)
         if: runner.os == 'Windows'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ env.BINARY_NAME }}-${{ matrix.artifact_prefix }}
           path: |
@@ -158,10 +175,10 @@ jobs:
 
     steps:
       - name: Checkout sources
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: artifacts
           pattern: spotatui-*
@@ -195,7 +212,7 @@ jobs:
         run: echo "tag=$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases --limit 1 --json tagName --jq '.[0].tagName // ""')" >> "$GITHUB_OUTPUT"
 
       - name: Create Release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
           files: artifacts/*
           draft: true
@@ -288,12 +305,14 @@ jobs:
     steps:
       # The build runs dependency code; `gh` reads GH_TOKEN, so no token stays in .git/config.
       - name: Checkout sources
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
 
       - name: Install Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -398,7 +417,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
     steps:
       - name: Checkout sources
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Download the update signatures
         run: gh release download "$GITHUB_REF_NAME" --pattern '*.sig' --dir sigs --repo "$GITHUB_REPOSITORY"
@@ -504,7 +523,7 @@ jobs:
     if: ${{ startsWith(github.ref, 'refs/tags/') && !contains(github.ref_name, '-') }}
     steps:
       - name: Checkout sources
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Post the release and ping Release Pings
         env:
@@ -530,10 +549,12 @@ jobs:
     if: ${{ !contains(github.ref_name, '-') }}
     steps:
       - name: Checkout sources
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
 
       - name: Install Linux dependencies
         run: |
@@ -550,7 +571,7 @@ jobs:
     if: ${{ !contains(github.ref_name, '-') }}
     steps:
       - name: Checkout sources
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Extract version
         id: version
@@ -617,7 +638,7 @@ jobs:
     if: ${{ !contains(github.ref_name, '-') }}
     steps:
       - name: Checkout sources
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Extract version
         id: version
@@ -714,7 +735,7 @@ jobs:
     if: ${{ !contains(github.ref_name, '-') }}
     steps:
       - name: Install cargo-binstall
-        uses: cargo-bins/cargo-binstall@main
+        uses: cargo-bins/cargo-binstall@851112458b5f28a29e5bc14a690c3f283d9dcc6f # v1.26.2
         env:
           GITHUB_TOKEN: ${{ github.token }}
 
@@ -753,7 +774,7 @@ jobs:
     if: ${{ !contains(github.ref_name, '-') }}
     steps:
       - name: Checkout sources
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Extract version
         id: version

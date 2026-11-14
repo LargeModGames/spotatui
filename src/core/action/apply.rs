@@ -191,6 +191,7 @@ impl App {
         super::ListTarget::SavedTracks => self.get_current_user_saved_tracks_next(),
         super::ListTarget::SavedAlbums => self.get_current_user_saved_albums_next(),
         super::ListTarget::SavedShows => self.get_current_user_saved_shows_next(),
+        super::ListTarget::SavedArtists => self.get_current_user_saved_artists_next(),
         super::ListTarget::ShowEpisodes => self.get_episode_table_next(),
       },
       Action::Sort { context, field } => self.apply_sort_field(context, field),
@@ -282,8 +283,11 @@ impl App {
           saved: self.save_settings_from_items(),
         };
       }
+      Action::PressSettingButton { id } => self.press_setting_button(&id),
       Action::CycleVisualizerStyle => self.cycle_visualizer_style(),
       Action::AnswerCommunityPinPrompt { keep } => self.answer_community_pin_prompt(keep),
+      Action::DismissSoloistPairing => self.dismiss_soloist_pairing(),
+      Action::AnswerSoloistOffer { set_up } => self.answer_soloist_offer(set_up),
       Action::OpenRecap => self.open_recap(),
       Action::DismissRecapPrompt => self.dismiss_recap_prompt(),
       Action::DisableRecapPrompt => self.disable_recap_prompt(),

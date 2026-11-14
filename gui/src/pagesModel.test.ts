@@ -11,6 +11,7 @@ import {
   asksDiscover,
   copyLink,
   discoverView,
+  loadLatch,
   lengthLine,
   radioRows,
   releaseLine,
@@ -238,3 +239,47 @@ for (const key of [
     });
   }
 }
+
+describe("loadLatch", () => {
+  const load = {
+    id: "seed",
+    fresh: false,
+    landed: false,
+    statusRev: 5,
+    statusError: true,
+  };
+
+  it("keeps the page failed after the error status expires", () => {
+    const failed = loadLatch({ openedAt: 4, failedId: null }, load);
+    expect(failed.failedId).toBe("seed");
+    const expired = loadLatch(failed, {
+      ...load,
+      statusRev: 6,
+      statusError: false,
+    });
+    expect(expired.failedId).toBe("seed");
+  });
+
+  it("clears the failure once the data lands", () => {
+    const landed = loadLatch(
+      { openedAt: 4, failedId: "seed" },
+      { ...load, landed: true },
+    );
+    expect(landed).toEqual({ openedAt: 5, failedId: null });
+  });
+
+  it("ignores an error from before the open", () => {
+    expect(loadLatch({ openedAt: 5, failedId: null }, load).failedId).toBe(
+      null,
+    );
+  });
+
+  it("clears the failure when the page opens again, even under a live error", () => {
+    const reopened = loadLatch(
+      { openedAt: 4, failedId: "seed" },
+      { ...load, fresh: true },
+    );
+    expect(reopened).toEqual({ openedAt: 5, failedId: null });
+    expect(loadLatch(reopened, load).failedId).toBe(null);
+  });
+});

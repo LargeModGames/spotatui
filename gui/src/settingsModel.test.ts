@@ -15,7 +15,14 @@ const row = (
   id: string,
   group: string,
   value: SettingRow["value"],
-): SettingRow => ({ id, group, name: id, description: "", value });
+): SettingRow => ({
+  id,
+  group,
+  name: id,
+  description: "",
+  value,
+  button: null,
+});
 
 const seek = row("behavior.seek_milliseconds", "playback", {
   kind: "number",
@@ -97,6 +104,7 @@ describe("sections with a query", () => {
     group,
     name,
     description,
+    button: null,
     value: { kind: "bool", value: true },
   });
   const all = [

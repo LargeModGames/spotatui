@@ -35,6 +35,7 @@ const table = (
 const render = (value: TrackTablePayload | null, available = true) =>
   renderToStaticMarkup(
     <RadioPage
+      view={{}}
       id="seed"
       name="Firestone"
       table={value}

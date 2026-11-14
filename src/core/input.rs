@@ -71,10 +71,46 @@ pub enum Key {
   Char(char),
   Ctrl(char),
   Alt(char),
+  /// An arrow key with Alt held
+  AltArrow(Arrow),
+  /// An arrow key with Alt and Shift held
+  AltShiftArrow(Arrow),
   Unknown,
 }
 
+#[derive(PartialEq, Eq, Clone, Copy, Hash, Debug)]
+pub enum Arrow {
+  Left,
+  Right,
+  Up,
+  Down,
+}
+
+impl Arrow {
+  pub fn name(self) -> &'static str {
+    match self {
+      Arrow::Left => "left",
+      Arrow::Right => "right",
+      Arrow::Up => "up",
+      Arrow::Down => "down",
+    }
+  }
+}
+
 impl Key {
+  /// The same arrow without its modifiers, for a screen that has no use for them.
+  pub fn plain_arrow(self) -> Option<Key> {
+    let (Key::AltArrow(arrow) | Key::AltShiftArrow(arrow)) = self else {
+      return None;
+    };
+    Some(match arrow {
+      Arrow::Left => Key::Left,
+      Arrow::Right => Key::Right,
+      Arrow::Up => Key::Up,
+      Arrow::Down => Key::Down,
+    })
+  }
+
   /// Returns the function key corresponding to the given number
   ///
   /// 1 -> F1, etc... Unmapped keys (F13+) return `Unknown`.
@@ -108,6 +144,8 @@ impl fmt::Display for Key {
       Key::Ctrl(c) => write!(f, "<Ctrl+{}>", c),
       Key::Char(c) => write!(f, "{}", c),
       Key::Left | Key::Right | Key::Up | Key::Down => write!(f, "<{:?} Arrow Key>", self),
+      Key::AltArrow(arrow) => write!(f, "<Alt+{:?} Arrow Key>", arrow),
+      Key::AltShiftArrow(arrow) => write!(f, "<Alt+Shift+{:?} Arrow Key>", arrow),
       Key::Enter
       | Key::Tab
       | Key::Backspace

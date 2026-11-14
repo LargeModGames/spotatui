@@ -586,8 +586,10 @@ mod tests {
   async fn removed_methods_report_method_not_found() {
     // `ping` and `logging/setLevel` were removed in 2026-07-28; we advertise
     // neither prompts nor resources.
-    let mut session = Session::default();
-    session.era = Era::Modern;
+    let mut session = Session {
+      era: Era::Modern,
+      ..Default::default()
+    };
     for method in ["ping", "logging/setLevel", "prompts/list", "resources/list"] {
       let response = exchange(
         &mut session,

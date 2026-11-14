@@ -66,12 +66,22 @@ mod pipewire_capture;
 #[allow(dead_code)]
 mod capture;
 
+// On Linux with both backends, PipeWire falls back to cpal when no PipeWire
+// server answers.
+#[cfg(all(feature = "audio-viz", feature = "audio-viz-cpal", target_os = "linux"))]
+mod fallback_capture;
+
 // Re-export the appropriate capture manager based on platform
-#[cfg(all(feature = "audio-viz", target_os = "linux"))]
+#[cfg(all(feature = "audio-viz", feature = "audio-viz-cpal", target_os = "linux"))]
+pub use fallback_capture::AudioCaptureManager;
+
+#[cfg(all(
+  feature = "audio-viz",
+  not(feature = "audio-viz-cpal"),
+  target_os = "linux"
+))]
 pub use pipewire_capture::PipeWireCapture as AudioCaptureManager;
 
-// On Linux with audio-viz, use cpal only if audio-viz is not enabled
-// This prevents conflict when --all-features is used
 #[cfg(all(
   feature = "audio-viz-cpal",
   not(all(feature = "audio-viz", target_os = "linux"))

@@ -19,10 +19,20 @@ impl AudioCaptureManager {
   /// Create a new audio capture manager sized for `display_bars`
   /// Returns None if no suitable audio device is found
   pub fn new(display_bars: usize) -> Option<Self> {
+    Self::open(display_bars, true)
+  }
+
+  /// Like `new`, but on Linux it never falls back to the default input, which
+  /// can be a microphone.
+  pub fn new_monitor_only(display_bars: usize) -> Option<Self> {
+    Self::open(display_bars, false)
+  }
+
+  fn open(display_bars: usize, allow_default_input: bool) -> Option<Self> {
     let host = cpal::default_host();
 
     // Try to find a loopback/monitor device
-    let device = Self::find_loopback_device(&host)?;
+    let device = Self::find_loopback_device(&host, allow_default_input)?;
 
     // Device name is now stored internally for debugging if needed
     let _device_name = device
@@ -76,7 +86,8 @@ impl AudioCaptureManager {
 
   /// Find a suitable loopback/monitor device
   /// Prefers: default output monitor > bluetooth > speakers > HDMI
-  fn find_loopback_device(host: &cpal::Host) -> Option<Device> {
+  #[cfg_attr(not(target_os = "linux"), allow(unused_variables))]
+  fn find_loopback_device(host: &cpal::Host, allow_default_input: bool) -> Option<Device> {
     #[cfg(target_os = "windows")]
     {
       // On Windows, WASAPI supports loopback on output devices
@@ -85,7 +96,7 @@ impl AudioCaptureManager {
 
     #[cfg(target_os = "linux")]
     {
-      // On Linux with PipeWire/PulseAudio, look for a monitor device
+      // On Linux with PipeWire/PulseAudio, look for a monitor or ALSA loopback device
       // Priority: bluetooth first, then speakers, then anything else
       if let Ok(devices) = host.input_devices() {
         let mut monitors: Vec<Device> = Vec::new();
@@ -95,7 +106,7 @@ impl AudioCaptureManager {
         for device in devices {
           if let Ok(description) = device.description() {
             let name_lower = description.name().to_lowercase();
-            if name_lower.contains("monitor") {
+            if name_lower.contains("monitor") || name_lower.contains("loopback") {
               monitors.push(device);
             }
           }
@@ -129,8 +140,10 @@ impl AudioCaptureManager {
       // Fallback: try default input device - on PipeWire systems this might
       // route correctly, but may be the microphone on pure ALSA systems.
       // User can disable audio-viz feature if this causes issues.
-      if let Some(device) = host.default_input_device() {
-        return Some(device);
+      if allow_default_input {
+        if let Some(device) = host.default_input_device() {
+          return Some(device);
+        }
       }
 
       None

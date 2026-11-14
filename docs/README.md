@@ -12,13 +12,21 @@
 ## Features
 
 - **[Native streaming](native-streaming.md):** play Spotify in spotatui itself, and where else Spotify can play.
+- **[Soloist](soloist.md):** play Spotify through Spotify's own player, for lossless audio or an account that native streaming cannot play.
 - **[CLI](cli.md):** control spotatui from your shell.
 - **[Playlist sync](playlist-sync.md):** mirror one playlist onto other sources.
 - **[Listening Party](listening-party.md):** listen in sync with friends.
 - **[Friends](friends.md):** see what your friends play.
 - **[AI DJ](ai-dj.md):** let a model pick the music inside spotatui.
 - **[MCP setup](mcp-setup.md):** make your coding agent the DJ.
+- **[ChatGPT](mcp-chatgpt.md):** control spotatui from ChatGPT, on the web, the desktop or your phone.
 - **[Scripting](scripting.md):** the Lua plugin API. [PLUGINS.md](../PLUGINS.md) lists plugins to install.
+
+## Community setups
+
+Unofficial setups that people got working. They are not supported installs.
+
+- **[Android TV box](android-tv-termux.md):** the terminal app fullscreen on a TV, through Termux and a Debian container.
 
 ## Help
 

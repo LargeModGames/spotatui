@@ -71,7 +71,7 @@ impl crate::core::onboarding::Onboarding for HeadlessOnboarding {
     &self,
     prompt: &crate::core::onboarding::OnboardingPrompt,
   ) -> Result<crate::core::onboarding::OnboardingAnswer> {
-    use crate::core::onboarding::{confirm_answer, OnboardingPrompt, BANNER_RULE};
+    use crate::core::onboarding::{confirm_answer, confirm_console_text, OnboardingPrompt};
     // Both bootstrap prompts are UI-launch-only and headless builds bail out
     // before boot there; keep a plain console fallback if this is reached.
     let OnboardingPrompt::Confirm {
@@ -79,8 +79,7 @@ impl crate::core::onboarding::Onboarding for HeadlessOnboarding {
       body,
       question,
     } = prompt;
-    println!("\n{BANNER_RULE}\n{title}\n{BANNER_RULE}\n{body}");
-    println!("{question}");
+    println!("{}", confirm_console_text(title, body, question));
     let mut input = String::new();
     io::stdin().read_line(&mut input)?;
     Ok(confirm_answer(&input))

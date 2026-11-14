@@ -42,6 +42,16 @@ fn row(description: &'static str, key: HelpKey, context: &'static str) -> HelpEn
   }
 }
 
+/// A pane key with its fixed arrow alias, for example `<Alt+h> | <Alt+Left>`.
+fn with_arrow_alias(app: &App, key: Key, modifiers: &str, arrow: &str) -> String {
+  format!(
+    "{} | <{}+{}>",
+    key,
+    modifiers,
+    app.strings().help.arrow_key(arrow)
+  )
+}
+
 impl HelpEntry {
   fn needs(mut self, needs: Requirement) -> Self {
     self.needs = needs;
@@ -212,6 +222,12 @@ pub fn help_entries_for(strings: &crate::core::i18n::Strings) -> Vec<HelpEntry> 
       help.context_settings,
     ),
     row(
+      help.search_playlist_picker,
+      Binding(|k| k.search),
+      help.context_playlist_picker,
+    )
+    .needs(Requirement::AnyOf(&[PLAYLIST_WRITE, SESSION])),
+    row(
       help.toggle_playback,
       Binding(|k| k.toggle_playback),
       help.context_general,
@@ -250,6 +266,18 @@ pub fn help_entries_for(strings: &crate::core::i18n::Strings) -> Vec<HelpEntry> 
           "{}/{} | <Right>/<Left> | <Ctrl+f>/<Ctrl+b>",
           app.user_config.keys.move_right, app.user_config.keys.move_left
         )
+      }),
+      help.context_lyrics,
+    ),
+    row(
+      help.lyrics_seek,
+      Custom(|app| {
+        let submit = app.user_config.keys.submit;
+        if submit == Key::Enter {
+          "<Enter>".to_string()
+        } else {
+          format!("{submit} | <Enter>")
+        }
       }),
       help.context_lyrics,
     ),
@@ -298,12 +326,108 @@ pub fn help_entries_for(strings: &crate::core::i18n::Strings) -> Vec<HelpEntry> 
       help.context_playbar,
     )
     .needs(SESSION),
+    row(
+      help.now_playing_panel,
+      Literal("<Enter>"),
+      help.context_playbar,
+    ),
     row(help.quick_add_playing, Literal("W"), help.context_global).needs(SESSION),
     row(help.sidebar_narrower, Literal("{"), help.context_layout),
     row(help.sidebar_wider, Literal("}"), help.context_layout),
     row(help.panels_shorter, Literal("("), help.context_layout),
     row(help.panels_taller, Literal(")"), help.context_layout),
     row(help.layout_reset, Literal("|"), help.context_layout),
+    row(
+      help.pane_detach,
+      Binding(|k| k.detach_pane),
+      help.context_layout,
+    ),
+    row(
+      help.pane_close,
+      Binding(|k| k.close_pane),
+      help.context_layout,
+    ),
+    row(
+      help.pane_focus_left,
+      Custom(|app| with_arrow_alias(app, app.user_config.keys.focus_pane_left, "Alt", "Left")),
+      help.context_layout,
+    ),
+    row(
+      help.pane_focus_down,
+      Custom(|app| with_arrow_alias(app, app.user_config.keys.focus_pane_down, "Alt", "Down")),
+      help.context_layout,
+    ),
+    row(
+      help.pane_focus_up,
+      Custom(|app| with_arrow_alias(app, app.user_config.keys.focus_pane_up, "Alt", "Up")),
+      help.context_layout,
+    ),
+    row(
+      help.pane_focus_right,
+      Custom(|app| with_arrow_alias(app, app.user_config.keys.focus_pane_right, "Alt", "Right")),
+      help.context_layout,
+    ),
+    row(
+      help.pane_move_left,
+      Custom(|app| {
+        with_arrow_alias(
+          app,
+          app.user_config.keys.move_pane_left,
+          "Alt+Shift",
+          "Left",
+        )
+      }),
+      help.context_layout,
+    ),
+    row(
+      help.pane_move_down,
+      Custom(|app| {
+        with_arrow_alias(
+          app,
+          app.user_config.keys.move_pane_down,
+          "Alt+Shift",
+          "Down",
+        )
+      }),
+      help.context_layout,
+    ),
+    row(
+      help.pane_move_up,
+      Custom(|app| with_arrow_alias(app, app.user_config.keys.move_pane_up, "Alt+Shift", "Up")),
+      help.context_layout,
+    ),
+    row(
+      help.pane_move_right,
+      Custom(|app| {
+        with_arrow_alias(
+          app,
+          app.user_config.keys.move_pane_right,
+          "Alt+Shift",
+          "Right",
+        )
+      }),
+      help.context_layout,
+    ),
+    row(
+      help.pane_rotate,
+      Binding(|k| k.rotate_pane),
+      help.context_layout,
+    ),
+    row(
+      help.pane_grow,
+      Binding(|k| k.grow_pane),
+      help.context_layout,
+    ),
+    row(
+      help.pane_shrink,
+      Binding(|k| k.shrink_pane),
+      help.context_layout,
+    ),
+    row(
+      help.pane_reset,
+      Binding(|k| k.reset_panes),
+      help.context_layout,
+    ),
     row(
       help.remove_playlist_track,
       Literal("x"),
@@ -510,6 +634,9 @@ pub fn help_entries_for(strings: &crate::core::i18n::Strings) -> Vec<HelpEntry> 
       Binding(|k| k.dj_pick_model),
       help.context_ai_dj,
     ),
+    // Append new rows here so the pinned English table keeps its indices.
+    row(help.settings_button, Literal("o"), help.context_settings),
+    row(help.sort_open, Literal(","), help.context_sidebar_playlists).needs(SPOTIFY),
   ]
 }
 
@@ -674,7 +801,7 @@ pub fn default_binding(action: &Action) -> Exposure<TuiSurface> {
     ),
     Action::LoadMore(_) => binding(|k| k.next_page),
     Action::Sort {
-      context: SortContext::PlaylistTracks | SortContext::SavedAlbums | SortContext::SavedArtists,
+      context: SortContext::SidebarPlaylists | SortContext::PlaylistTracks | SortContext::SavedAlbums | SortContext::SavedArtists,
       ..
     } => literal(ENTER, "Sort menu"),
     Action::Sort {
@@ -682,7 +809,7 @@ pub fn default_binding(action: &Action) -> Exposure<TuiSurface> {
       ..
     } => Unbound("no sort menu opens on Recently Played"),
     Action::ToggleSortOrder(
-      SortContext::PlaylistTracks | SortContext::SavedAlbums | SortContext::SavedArtists,
+      SortContext::SidebarPlaylists | SortContext::PlaylistTracks | SortContext::SavedAlbums | SortContext::SavedArtists,
     ) => literal("uppercase field shortcut", "Sort menu"),
     Action::ToggleSortOrder(SortContext::RecentlyPlayed) => {
       Unbound("no sort menu opens on Recently Played")
@@ -749,6 +876,7 @@ pub fn default_binding(action: &Action) -> Exposure<TuiSurface> {
     Action::SetTheme(_) => Unbound(PLUGIN_ONLY),
     Action::SaveSettings => binding(|k| k.save_settings),
     Action::SetSetting { .. } => Unbound("the GUI's settings page sets one row"),
+    Action::PressSettingButton { .. } => literal("o", "Settings"),
     Action::CycleVisualizerStyle => literal("V", "Audio analysis"),
     Action::SetScreenContent { .. } => Unbound(PLUGIN_ONLY),
     Action::ShowScreen(_) => Unbound(PLUGIN_ONLY),
@@ -829,6 +957,9 @@ pub fn default_binding(action: &Action) -> Exposure<TuiSurface> {
     Action::AnswerCommunityPinPrompt { keep: true } => literal(ENTER, "Community pin prompt"),
     Action::OpenRecap => literal(ENTER, "Recap prompt"),
     Action::DismissRecapPrompt => literal(ESC, "Recap prompt"),
+    Action::DismissSoloistPairing => literal(ESC, "Soloist pairing guide"),
+    Action::AnswerSoloistOffer { set_up: false } => literal(ESC, "Soloist offer"),
+    Action::AnswerSoloistOffer { set_up: true } => literal(ENTER, "Soloist offer"),
     Action::DisableRecapPrompt => literal("d", "Recap prompt"),
     Action::DismissAnnouncement { .. } => literal(ENTER, "Announcement prompt"),
     Action::OpenAnnouncementUrl { .. } => {
@@ -875,6 +1006,13 @@ mod tests {
     for row in entries.iter_mut().filter(|row| row[0] == "Open settings") {
       row[1] = open_settings.clone();
     }
+    // New rows append to the historical table so its indexed views stay valid.
+    let sidebar_sort = vec![
+      "Open sort menu".to_string(),
+      ",".to_string(),
+      "Spotify playlists sidebar".to_string(),
+    ];
+    entries.push(sidebar_sort.clone());
     let enabled = |row: &Vec<String>| {
       (cfg!(feature = "cover-art") || row[0] != "Go to cover art view")
         && (cfg!(feature = "ai-dj") || row[2] != "AI DJ")
@@ -910,7 +1048,7 @@ mod tests {
         App::default()
       };
       app.active_source = serde_json::from_value(view[0].clone()).unwrap();
-      let expected = view[2]
+      let mut expected = view[2]
         .as_array()
         .unwrap()
         .iter()
@@ -926,6 +1064,9 @@ mod tests {
           Some(row)
         })
         .collect::<Vec<_>>();
+      if app.availability(SPOTIFY).is_available() {
+        expected.push(sidebar_sort.clone());
+      }
       assert_eq!(
         help_rows(&app),
         expected,
@@ -961,6 +1102,32 @@ mod tests {
           cell_text(3 + description_width + 2, event_width).trim_end(),
           row[1],
           "rendered Event {index}"
+        );
+      }
+    }
+  }
+
+  #[test]
+  fn sidebar_playlist_sort_help_uses_the_same_source_and_session_requirement_as_its_key() {
+    let context = crate::core::i18n::EN.help.context_sidebar_playlists;
+    let entries = help_entries_for(&crate::core::i18n::EN);
+    let entry = entries
+      .iter()
+      .find(|entry| entry.context == context)
+      .unwrap();
+    assert_eq!(entry.needs, Requirement::Source(Source::Spotify));
+    assert!(matches!(entry.key, HelpKey::Literal(",")));
+    for source in Source::ALL {
+      for connected in [false, true] {
+        let mut app = if connected {
+          App::default_connected()
+        } else {
+          App::default()
+        };
+        app.active_source = source;
+        assert_eq!(
+          help_rows(&app).iter().any(|row| row[2] == context),
+          source == Source::Spotify && connected
         );
       }
     }
@@ -1012,6 +1179,7 @@ mod tests {
         event(help.lyrics_follow),
         help.key_alternative("f", "<Esc>")
       );
+      assert_eq!(event(help.lyrics_seek), "<Enter>");
     }
   }
 
@@ -1439,10 +1607,13 @@ mod tests {
         id: text(),
         value: SettingInput::Bool(true),
       },
+      Action::PressSettingButton { id: text() },
       Action::CycleVisualizerStyle,
       Action::AnswerCommunityPinPrompt { keep: false },
       Action::OpenRecap,
       Action::DismissRecapPrompt,
+      Action::DismissSoloistPairing,
+      Action::AnswerSoloistOffer { set_up: true },
       Action::DisableRecapPrompt,
       Action::DismissAnnouncement { id: text() },
       Action::OpenAnnouncementUrl { id: text() },

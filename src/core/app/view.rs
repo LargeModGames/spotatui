@@ -21,6 +21,13 @@ pub struct ViewState {
   /// Terminal geometry as of the last frame. The small/large search limits
   /// derive from it.
   pub size: Viewport,
+  /// The pane that gets the keys; `Pane::Main` is the normal layout.
+  pub focused_pane: Pane,
+  /// Whether the user asked for the now playing panel beside the main content.
+  /// The layout still leaves it out on the search screen and when it would not fit.
+  pub now_playing_panel: bool,
+  /// The pre-order index of the split border the mouse drags, from Down until Up.
+  pub dragged_pane_split: Option<usize>,
   /// What the terminal can report about key presses, probed at startup and
   /// consulted when the rebind flow validates a capture.
   pub terminal_input_caps: TerminalInputCapabilities,
@@ -106,8 +113,6 @@ pub struct ViewState {
 
   /// Scroll/browse state for the lyrics view.
   pub lyrics_view: LyricsViewState,
-  /// Set when `V` leaves the Spotify pitch view; cleared when the analysis screen opens.
-  pub pitch_dismissed: bool,
 
   // Settings screen state
   pub settings_category: SettingsCategory,
@@ -163,6 +168,10 @@ pub struct ViewState {
   pub playlist_picker_selected_index: usize,
   /// Folder ID the add-to-playlist picker dialog is viewing (0 = root)
   pub playlist_picker_folder_id: usize,
+  /// Search query narrowing the add-to-playlist picker to matching playlists
+  pub playlist_picker_filter: String,
+  /// Whether typed keys are currently editing [`Self::playlist_picker_filter`]
+  pub playlist_picker_filter_editing: bool,
 
   // Friends screen state
   /// Cursor position in the friends list
@@ -211,6 +220,7 @@ pub struct ViewState {
   pub artist_albums_scroll_offset: Cell<usize>,
   pub artist_related_artists_scroll_offset: Cell<usize>,
   pub playlist_sync_scroll_offset: Cell<usize>,
+  pub settings_scroll_offset: Cell<usize>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

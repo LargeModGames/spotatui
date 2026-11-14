@@ -6,7 +6,19 @@ use crate::tui::handlers::common_key_events::{
   down_event, left_event, on_down_press_handler, on_up_press_handler, right_event, up_event,
 };
 use crate::tui::handlers::filter_input::{self, FilterEdit};
+pub(super) use crate::tui::ui::settings::BUTTON_KEY;
 use crate::tui::ui::settings::{filtered_setting_indices, selected_setting_position};
+
+fn selected_row_id(app: &App) -> Option<&str> {
+  app
+    .settings_items
+    .get(app.view.settings_selected_index)
+    .map(|setting| setting.id.as_str())
+}
+
+pub(super) fn selected_row_has_button(app: &App) -> bool {
+  selected_row_id(app).is_some_and(|id| app.setting_button_label(id).is_some())
+}
 
 pub fn handler(key: Key, app: &mut App) {
   if app.view.settings_unsaved_prompt_visible {
@@ -39,6 +51,12 @@ fn handle_navigation(key: Key, app: &mut App) {
 
     // Enter edit mode
     Key::Enter => enter_edit_mode(app),
+
+    BUTTON_KEY => {
+      if let Some(id) = selected_row_id(app).map(str::to_string) {
+        app.apply(Action::PressSettingButton { id });
+      }
+    }
 
     // Save settings
     key if key == app.effective_save_settings_key() => {
@@ -638,6 +656,25 @@ mod tests {
       .iter()
       .position(|setting| setting.id == id)
       .unwrap_or_else(|| panic!("expected a {id} setting"))
+  }
+
+  #[cfg(feature = "soloist")]
+  #[test]
+  fn o_presses_the_selected_row_button_past_the_global_jump_key() {
+    let mut app = App::default();
+    assert_eq!(app.user_config.keys.jump_to_context, BUTTON_KEY);
+    open_settings(&mut app);
+    app.view.settings_selected_index = setting_index(&app, "behavior.soloist_path");
+
+    handle_app(BUTTON_KEY, &mut app);
+
+    assert_eq!(
+      app
+        .setting_button_label("behavior.soloist_path")
+        .map(|(_, busy)| busy),
+      Some(true)
+    );
+    assert_eq!(app.get_current_route().id, RouteId::Settings);
   }
 
   fn first_bool_setting_index(app: &App) -> usize {

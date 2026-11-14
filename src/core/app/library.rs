@@ -252,10 +252,16 @@ impl App {
 
   /// Sort one list surface by a field, like the sort menu's Enter.
   pub(crate) fn apply_sort_field(&mut self, context: SortContext, field: SortField) {
-    self.sort_state_mut(context).apply_field(field);
+    if context == SortContext::SidebarPlaylists && !context.available_fields().contains(&field) {
+      return;
+    }
+    let mut state = self.sort_state(context);
+    state.apply_field(field);
+    self.set_sort_state(context, state);
 
     // Actually sort the data
     match context {
+      SortContext::SidebarPlaylists => {}
       SortContext::PlaylistTracks => {
         if let Some(playlist_id) = self.current_playlist_track_table_id() {
           if self.try_sort_playlist_tracks_from_cached_pages(&playlist_id) {
@@ -276,30 +282,44 @@ impl App {
   /// Flip the recorded direction without re-sorting loaded rows (the sort
   /// menu's uppercase shortcut, quirk kept).
   pub(crate) fn toggle_sort_order(&mut self, context: SortContext) {
-    let sort_state = self.sort_state_mut(context);
-    sort_state.order = sort_state.order.toggle();
+    // The sidebar offers three fixed orders, without descending variants.
+    if context == SortContext::SidebarPlaylists {
+      return;
+    }
+    let mut state = self.sort_state(context);
+    state.order = state.order.toggle();
+    self.set_sort_state(context, state);
   }
 
-  pub(crate) fn sort_state(&self, context: SortContext) -> &SortState {
+  pub(crate) fn sort_state(&self, context: SortContext) -> SortState {
     match context {
-      SortContext::PlaylistTracks => &self.playlist_sort,
-      SortContext::SavedAlbums => &self.album_sort,
-      SortContext::SavedArtists => &self.artist_sort,
-      SortContext::RecentlyPlayed => &self.recently_played_sort,
+      SortContext::SidebarPlaylists => SortState {
+        field: self.runtime_state.playlist_sidebar_order.field(),
+        order: crate::core::sort::SortOrder::Ascending,
+      },
+      SortContext::PlaylistTracks => self.playlist_sort,
+      SortContext::SavedAlbums => self.album_sort,
+      SortContext::SavedArtists => self.artist_sort,
+      SortContext::RecentlyPlayed => self.recently_played_sort,
     }
   }
 
-  fn sort_state_mut(&mut self, context: SortContext) -> &mut SortState {
+  fn set_sort_state(&mut self, context: SortContext, state: SortState) {
     match context {
-      SortContext::PlaylistTracks => &mut self.playlist_sort,
-      SortContext::SavedAlbums => &mut self.album_sort,
-      SortContext::SavedArtists => &mut self.artist_sort,
-      SortContext::RecentlyPlayed => &mut self.recently_played_sort,
+      SortContext::SidebarPlaylists => {
+        if let Some(order) = SidebarPlaylistOrder::from_field(state.field) {
+          self.set_playlist_sidebar_order(order);
+        }
+      }
+      SortContext::PlaylistTracks => self.playlist_sort = state,
+      SortContext::SavedAlbums => self.album_sort = state,
+      SortContext::SavedArtists => self.artist_sort = state,
+      SortContext::RecentlyPlayed => self.recently_played_sort = state,
     }
   }
 
   fn sort_saved_albums(&mut self) {
-    use crate::core::sort::sort_by_key_with_order;
+    use crate::core::sort::{sort_by_key_with_order, SortOrder};
 
     let sort_state = self.album_sort;
 
@@ -323,6 +343,11 @@ impl App {
         // order chronologically; an album without one sorts first.
         SortField::ReleaseDate => sort_by_key_with_order(&mut page.items, sort_state.order, |a| {
           a.album.release_date.clone()
+        }),
+        // The library arrives newest saved first, whatever order the user
+        // picked since, so Default is always descending by `added_at`.
+        SortField::Default => sort_by_key_with_order(&mut page.items, SortOrder::Descending, |a| {
+          a.added_at.clone()
         }),
         _ => {}
       }
@@ -1248,6 +1273,54 @@ mod tests {
     assert_eq!(ids, ["new", "mid", "old", "undated"]);
   }
 
+  fn saved_album_ids(app: &App) -> Vec<&str> {
+    app.library.saved_albums.pages[0]
+      .items
+      .iter()
+      .filter_map(|a| a.album.id.as_deref())
+      .collect()
+  }
+
+  fn app_with_saved_albums_in_library_order() -> App {
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    let mut page = saved_album_page(0, &["zebra", "apple", "mango"], false);
+    let added = [
+      "2024-05-17T00:00:00+00:00",
+      "2020-01-01T00:00:00+00:00",
+      "2010-01-01T00:00:00+00:00",
+    ];
+    let names = ["Zebra", "Apple", "Mango"];
+    for ((item, at), name) in page.items.iter_mut().zip(added).zip(names) {
+      item.added_at = at.to_string();
+      item.album.name = name.to_string();
+    }
+    app.library.saved_albums.upsert_page_by_offset(page);
+    app
+  }
+
+  #[test]
+  fn default_sort_restores_the_saved_album_library_order() {
+    let mut app = app_with_saved_albums_in_library_order();
+
+    app.apply_sort_field(SortContext::SavedAlbums, SortField::Name);
+    assert_eq!(saved_album_ids(&app), ["apple", "mango", "zebra"]);
+
+    app.apply_sort_field(SortContext::SavedAlbums, SortField::Default);
+    assert_eq!(saved_album_ids(&app), ["zebra", "apple", "mango"]);
+  }
+
+  #[test]
+  fn default_sort_twice_keeps_the_newest_saved_album_first() {
+    let mut app = app_with_saved_albums_in_library_order();
+
+    app.apply_sort_field(SortContext::SavedAlbums, SortField::Name);
+    app.apply_sort_field(SortContext::SavedAlbums, SortField::Default);
+    app.apply_sort_field(SortContext::SavedAlbums, SortField::Default);
+
+    assert_eq!(saved_album_ids(&app), ["zebra", "apple", "mango"]);
+  }
+
   #[test]
   fn saved_albums_next_fetches_the_following_offset_and_resets_the_cursor() {
     let (tx, rx) = channel();
@@ -1707,9 +1780,11 @@ mod tests {
 
   #[test]
   fn clear_saved_artists_in_flight_resets_guard_and_pending_selection() {
-    let mut app = App::default();
-    app.saved_artists_prefetch_in_flight = Some("cursor_token".to_string());
-    app.pending_artist_selection = Some(15);
+    let mut app = App {
+      saved_artists_prefetch_in_flight: Some("cursor_token".to_string()),
+      pending_artist_selection: Some(15),
+      ..Default::default()
+    };
 
     app.clear_saved_artists_in_flight();
 

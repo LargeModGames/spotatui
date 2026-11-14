@@ -10,6 +10,7 @@ import {
   longDescription,
   newestEpisode,
   resumeOf,
+  heldShowId,
   showLink,
 } from "./showModel";
 
@@ -131,6 +132,14 @@ describe("episodePager", () => {
     expect(pager.ask(page(true, 100))).toBe(false);
   });
 
+  it("asks again after a failed fetch", () => {
+    const pager = episodePager();
+    expect(pager.ask(page(true, 50))).toBe(true);
+    expect(pager.ask(page(true, 50))).toBe(false);
+    pager.retry();
+    expect(pager.ask(page(true, 50))).toBe(true);
+  });
+
   it("asks again after a refetch brings back a list of the same length", () => {
     const pager = episodePager();
     expect(pager.ask(page(true, 50))).toBe(true);
@@ -165,5 +174,13 @@ describe("links", () => {
   it("builds the open.spotify.com show and episode links", () => {
     expect(showLink("s")).toBe("https://open.spotify.com/show/s");
     expect(episodeLink("e")).toBe("https://open.spotify.com/episode/e");
+  });
+});
+
+describe("heldShowId", () => {
+  it("holds a show only once its episodes landed", () => {
+    expect(heldShowId(page(false, 3))).toBe("s");
+    expect(heldShowId({ ...page(false, 0), loaded: false })).toBe(null);
+    expect(heldShowId(null)).toBe(null);
   });
 });

@@ -24,6 +24,7 @@ export type View =
   | { page: "session" }
   | { page: "stats" }
   | { page: "party" }
+  | { page: "visualizer" }
   | { page: "health" }
   | { page: "settings" };
 

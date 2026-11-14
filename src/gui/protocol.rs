@@ -7,7 +7,9 @@ use crate::core::app::{
   AnnouncementLevel, App, DiscoverShelf, DisplayDomain, DisplayRevisions, SessionPlay,
 };
 use crate::core::first_run::compiled_in_sources;
+use crate::core::gui_layout::GuiLayout;
 use crate::core::i18n::{Language, Strings};
+use crate::core::input::{Arrow, Key};
 use crate::core::playlist_sync::Unmatched;
 use crate::core::plugin_api::{
   device_list, recently_played_snapshot, route_name, AlbumInfo, ArtistInfo, DeviceInfo,
@@ -16,6 +18,7 @@ use crate::core::plugin_api::{
 use crate::core::source::Source;
 use crate::core::theme::{resolve, Color, Palette, Theme, ThemeField};
 use crate::core::update::{UpdateAsk, UpdateStatus};
+use crate::core::user_config::KeyBindings;
 use crate::core::visualizer_look::VisualizerLook;
 use crate::gui::onboarding::{OnboardingReply, OnboardingView};
 use serde::{Deserialize, Serialize};
@@ -39,6 +42,10 @@ pub(crate) enum ServerMessage {
   /// A frame of the player bar's visualizer, sent only to a page that asked for them.
   Visualizer {
     payload: VisualizerFrame,
+  },
+  /// A frame of the visualizer screen, sent only to a page that shows it.
+  VisualizerScreen {
+    payload: ScreenFrame,
   },
   /// The Home page's lines under the banner, sent on connect and on every change.
   Welcome {
@@ -169,6 +176,99 @@ pub(crate) enum ServerMessage {
     rev: u64,
     payload: AnnouncementsPayload,
   },
+  /// The window layout: panes, floating panes and bar edges, with the pane keys.
+  PaneLayout {
+    rev: u64,
+    payload: PaneLayoutPayload,
+  },
+}
+
+#[derive(Serialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
+pub(crate) struct PaneLayoutPayload {
+  layout: GuiLayout,
+  keys: PaneKeys,
+}
+
+/// The pane keys from `config.yml`; `null` for a key the page cannot match.
+#[derive(Serialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
+pub(crate) struct PaneKeys {
+  detach: Option<PaneChord>,
+  close: Option<PaneChord>,
+  focus_left: Option<PaneChord>,
+  focus_down: Option<PaneChord>,
+  focus_up: Option<PaneChord>,
+  focus_right: Option<PaneChord>,
+  reset: Option<PaneChord>,
+}
+
+/// A key as the browser's `KeyboardEvent.code` names it, with its modifiers.
+#[derive(Serialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
+pub(crate) struct PaneChord {
+  code: String,
+  alt: bool,
+  ctrl: bool,
+  shift: bool,
+}
+
+fn chord(key: Key) -> Option<PaneChord> {
+  let arrow = |arrow: Arrow, alt: bool, shift: bool| PaneChord {
+    code: format!("Arrow{arrow:?}"),
+    alt,
+    ctrl: false,
+    shift,
+  };
+  let (c, alt, ctrl) = match key {
+    Key::Left => return Some(arrow(Arrow::Left, false, false)),
+    Key::Right => return Some(arrow(Arrow::Right, false, false)),
+    Key::Up => return Some(arrow(Arrow::Up, false, false)),
+    Key::Down => return Some(arrow(Arrow::Down, false, false)),
+    Key::AltArrow(direction) => return Some(arrow(direction, true, false)),
+    Key::AltShiftArrow(direction) => return Some(arrow(direction, true, true)),
+    Key::Char(c) => (c, false, false),
+    Key::Alt(c) => (c, true, false),
+    Key::Ctrl(c) => (c, false, true),
+    _ => return None,
+  };
+  let code = match c {
+    'a'..='z' | 'A'..='Z' => format!("Key{}", c.to_ascii_uppercase()),
+    '0'..='9' => format!("Digit{c}"),
+    _ => match c {
+      '=' => "Equal",
+      '-' => "Minus",
+      '.' => "Period",
+      ',' => "Comma",
+      '/' => "Slash",
+      ';' => "Semicolon",
+      '\'' => "Quote",
+      '[' => "BracketLeft",
+      ']' => "BracketRight",
+      '\\' => "Backslash",
+      '`' => "Backquote",
+      _ => return None,
+    }
+    .to_string(),
+  };
+  Some(PaneChord {
+    code,
+    alt,
+    ctrl,
+    shift: c.is_ascii_uppercase(),
+  })
+}
+
+fn pane_keys(keys: &KeyBindings) -> PaneKeys {
+  PaneKeys {
+    detach: chord(keys.detach_pane),
+    close: chord(keys.close_pane),
+    focus_left: chord(keys.focus_pane_left),
+    focus_down: chord(keys.focus_pane_down),
+    focus_up: chord(keys.focus_pane_up),
+    focus_right: chord(keys.focus_pane_right),
+    reset: chord(keys.reset_panes),
+  }
 }
 
 #[derive(Serialize)]
@@ -190,6 +290,16 @@ pub(crate) struct SettingRow {
   name: String,
   description: String,
   value: SettingRowValue,
+  /// The row's one button; pressing it sends `PressSettingButton`.
+  button: Option<SettingRowButton>,
+}
+
+#[derive(Serialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
+pub(crate) struct SettingRowButton {
+  label: String,
+  /// Its work runs, so the button is off.
+  busy: bool,
 }
 
 #[derive(Serialize)]
@@ -239,6 +349,14 @@ const GUI_SETTINGS: &[(&str, &str)] = &[
   ("behavior.streaming_bitrate", "streaming"),
   ("behavior.streaming_audio_cache", "streaming"),
   ("behavior.streaming_autoplay", "streaming"),
+  #[cfg(feature = "soloist")]
+  ("behavior.playback_engine", "streaming"),
+  #[cfg(feature = "soloist")]
+  ("behavior.soloist_path", "streaming"),
+  #[cfg(feature = "soloist")]
+  ("behavior.soloist_api_key", "streaming"),
+  #[cfg(feature = "soloist")]
+  ("behavior.soloist_audio_quality", "streaming"),
   #[cfg(feature = "discord-rpc")]
   ("behavior.enable_discord_rpc", "integrations"),
   ("behavior.enable_global_song_count", "integrations"),
@@ -255,6 +373,25 @@ const GUI_SETTINGS: &[(&str, &str)] = &[
   ("behavior.disable_auto_update", "updates"),
   ("behavior.auto_update_delay", "updates"),
 ];
+
+/// Page rows that name a program to run; only `config.yml` or the terminal change them.
+const PAGE_LOCKED_SETTINGS: &[&str] = &["behavior.ytdlp_path", "behavior.soloist_path"];
+
+/// Applies an action from the page; a setting only when it is a page row and not a locked one.
+pub(crate) fn apply_page_action(app: &mut App, action: Action) {
+  if let Action::SetSetting { id, .. } = &action {
+    if PAGE_LOCKED_SETTINGS.contains(&id.as_str()) {
+      let message = app.strings().status.app.setting_locked_from_page;
+      app.set_error_status_message(message, 8);
+      return;
+    }
+    if !settings(app).iter().any(|row| row.id == *id) {
+      log::warn!("GUI: refusing a write to {id}, which is not a page row");
+      return;
+    }
+  }
+  app.apply(action);
+}
 
 /// The page's rows a phone leaves out: keyboard steps, a desktop sleep lock, and the player it always runs.
 const PHONE_HIDDEN_SETTINGS: &[&str] = &[
@@ -321,6 +458,29 @@ pub(crate) struct StatusPayload {
   message: Option<String>,
   is_error: bool,
   api_error: Option<String>,
+  /// The Soloist pairing guide to show in a modal.
+  soloist_pairing: Option<SoloistPairingGuide>,
+  /// The offer to set up Soloist to show in a modal.
+  soloist_offer: Option<SoloistOffer>,
+}
+
+#[derive(Serialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
+pub(crate) struct SoloistOffer {
+  title: &'static str,
+  body: &'static str,
+  steps: [&'static str; 3],
+  set_up: &'static str,
+  not_now: &'static str,
+}
+
+#[derive(Serialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
+pub(crate) struct SoloistPairingGuide {
+  title: &'static str,
+  steps: Vec<String>,
+  waiting: &'static str,
+  close: &'static str,
 }
 
 #[derive(Serialize)]
@@ -360,7 +520,7 @@ pub(crate) struct TrackTablePayload {
 }
 
 /// A playlist folder of the Spotify rootlist, or a playlist inside one.
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(crate) enum LibraryNode {
@@ -396,6 +556,8 @@ pub(crate) struct SourcePlaylists {
   saved_albums_has_more: bool,
   /// Spotify's followed artists cached so far; `OpenLibrary(Artists)` fetches them.
   followed_artists: Vec<ArtistInfo>,
+  /// `LoadMore(SavedArtists)` fetches the next page.
+  followed_artists_has_more: bool,
   /// Spotify's saved podcast shows cached so far; `OpenLibrary(Podcasts)` fetches them.
   saved_shows: Vec<ShowInfo>,
   /// `LoadMore(SavedShows)` fetches the next page.
@@ -406,6 +568,8 @@ pub(crate) struct SourcePlaylists {
   editable: Vec<String>,
   /// The Spotify playlists in their folders; `null` without the rootlist, so the flat list stands.
   folders: Option<Vec<LibraryNode>>,
+  // The persisted order of Spotify playlists at every folder level.
+  playlist_sidebar_order: crate::core::sort::SidebarPlaylistOrder,
 }
 
 #[derive(Serialize)]
@@ -695,8 +859,16 @@ pub(crate) enum ClientMessage {
   Visualizer {
     on: bool,
   },
+  /// The bands the visualizer screen's style draws while this page shows it; `null` once it hides.
+  VisualizerScreen {
+    bars: Option<u16>,
+  },
   /// The Home page asks for the changelog once it shows.
   Changelog,
+  /// The layout after a drop or a key; `null` resets it.
+  PaneLayout {
+    layout: Option<GuiLayout>,
+  },
   Quit,
 }
 
@@ -760,14 +932,43 @@ pub(crate) struct VisualizerFrame {
 pub(crate) fn visualizer(levels: &[f32], wave: &[f32]) -> ServerMessage {
   ServerMessage::Visualizer {
     payload: VisualizerFrame {
-      levels: levels
-        .iter()
-        .map(|level| (level.clamp(0.0, 1.0) * 255.0).round() as u8)
-        .collect(),
-      wave: wave
-        .iter()
-        .map(|value| (value.clamp(-1.0, 1.0) * 127.0).round() as i8)
-        .collect(),
+      levels: unit_bytes(levels),
+      wave: signed_bytes(wave),
+    },
+  }
+}
+
+/// 0 to 1 as 0 to 255.
+fn unit_bytes(values: &[f32]) -> Vec<u8> {
+  values
+    .iter()
+    .map(|value| (value.clamp(0.0, 1.0) * 255.0).round() as u8)
+    .collect()
+}
+
+/// -1 to 1 as -127 to 127.
+fn signed_bytes(values: &[f32]) -> Vec<i8> {
+  values
+    .iter()
+    .map(|value| (value.clamp(-1.0, 1.0) * 127.0).round() as i8)
+    .collect()
+}
+
+/// cava's frame as the terminal's styles read it; both lists are empty when the sound stops.
+#[derive(Serialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
+pub(crate) struct ScreenFrame {
+  /// Both channels, 0 to 255: the left from treble to bass, then the right from bass to treble.
+  bands: Vec<u8>,
+  /// The newest 50 ms as a mono mix from oldest to newest, -127 to 127.
+  wave: Vec<i8>,
+}
+
+pub(crate) fn visualizer_screen(bands: &[f32], wave: &[f32]) -> ServerMessage {
+  ServerMessage::VisualizerScreen {
+    payload: ScreenFrame {
+      bands: unit_bytes(bands),
+      wave: signed_bytes(wave),
     },
   }
 }
@@ -843,6 +1044,32 @@ fn channel_message(
         api_error: Some(app.api_error())
           .filter(|error| !error.is_empty())
           .map(str::to_string),
+        soloist_pairing: app.soloist_pairing_device().map(|device| {
+          let strings = &app.strings().popups;
+          SoloistPairingGuide {
+            title: strings.soloist_pair_title,
+            steps: vec![
+              strings.soloist_pair_open.to_string(),
+              strings.soloist_pair_pick(device),
+            ],
+            waiting: strings.soloist_pair_waiting,
+            close: strings.soloist_pair_close,
+          }
+        }),
+        soloist_offer: app.soloist_offer_shows().then(|| {
+          let strings = &app.strings().popups;
+          SoloistOffer {
+            title: strings.soloist_offer_title,
+            body: strings.soloist_offer_body,
+            steps: [
+              strings.soloist_offer_step_download,
+              strings.soloist_offer_step_key,
+              strings.soloist_offer_step_engine,
+            ],
+            set_up: strings.soloist_offer_set_up,
+            not_now: strings.soloist_offer_not_now,
+          }
+        }),
       },
     },
     DisplayDomain::Theme => ServerMessage::Theme {
@@ -1000,6 +1227,13 @@ fn channel_message(
         history: app.announcement_history().map(Into::into).collect(),
       },
     },
+    DisplayDomain::PaneLayout => ServerMessage::PaneLayout {
+      rev,
+      payload: PaneLayoutPayload {
+        layout: app.gui_pane_layout().clone(),
+        keys: pane_keys(&app.user_config.keys),
+      },
+    },
   })
 }
 
@@ -1083,6 +1317,12 @@ fn settings_for(app: &App, phone: bool) -> Vec<SettingRow> {
           _ => item.description.clone(),
         },
         value,
+        button: app
+          .setting_button_label(id)
+          .map(|(label, busy)| SettingRowButton {
+            label: label.to_string(),
+            busy,
+          }),
       })
     })
     .collect()
@@ -1327,8 +1567,11 @@ fn liked(app: &App) -> LikedSongs {
 }
 
 fn playlists(app: &App) -> SourcePlaylists {
+  let mut spotify: Vec<_> = app.all_playlists().iter().collect();
+  app.sort_sidebar_playlist_slots(&mut spotify, |playlist| Some(*playlist));
   SourcePlaylists {
-    spotify: app.all_playlists().clone(),
+    spotify: spotify.into_iter().cloned().collect(),
+    playlist_sidebar_order: app.runtime_state.playlist_sidebar_order,
     local: app
       .local_playlists()
       .iter()
@@ -1379,6 +1622,7 @@ fn playlists(app: &App) -> SourcePlaylists {
       .iter()
       .flat_map(|page| page.items.iter().cloned())
       .collect(),
+    followed_artists_has_more: app.current_saved_artists_has_more(),
     saved_shows: saved_shows(app),
     saved_shows_has_more: last_page_has_next(&app.library().saved_shows.pages),
     saved_show_ids: app.saved_show_ids_set().iter().cloned().collect(),
@@ -1389,36 +1633,67 @@ fn playlists(app: &App) -> SourcePlaylists {
       .collect(),
     folders: app.playlist_folder_nodes().as_ref().map(|nodes| {
       fn convert(
-        node: &crate::core::app::PlaylistFolderNode,
-        strings: &crate::core::i18n::Strings,
-        language: crate::core::i18n::Language,
-      ) -> LibraryNode {
-        match node.node_type {
-          crate::core::app::PlaylistFolderNodeType::Folder => LibraryNode::Folder {
-            name: node.name.clone().unwrap_or_else(|| {
-              // English preserves the original protocol's blank missing-name label.
-              if language == crate::core::i18n::Language::En {
-                String::new()
-              } else {
-                strings.status.infra.unnamed_folder.to_string()
-              }
-            }),
-            uri: node.uri.clone(),
-            children: node
-              .children
-              .iter()
-              .map(|node| convert(node, strings, language))
-              .collect(),
-          },
-          crate::core::app::PlaylistFolderNodeType::Playlist => LibraryNode::Playlist {
-            uri: node.uri.clone(),
-          },
+        nodes: &[crate::core::app::PlaylistFolderNode],
+        app: &App,
+        by_uri: &BTreeMap<&str, &PlaylistInfo>,
+      ) -> Vec<LibraryNode> {
+        let mut converted: Vec<_> = nodes
+          .iter()
+          .map(|node| match node.node_type {
+            crate::core::app::PlaylistFolderNodeType::Folder => LibraryNode::Folder {
+              name: node.name.clone().unwrap_or_else(|| {
+                if app.language() == Language::En {
+                  String::new()
+                } else {
+                  app.strings().status.infra.unnamed_folder.to_string()
+                }
+              }),
+              uri: node.uri.clone(),
+              children: convert(&node.children, app, by_uri),
+            },
+            crate::core::app::PlaylistFolderNodeType::Playlist => LibraryNode::Playlist {
+              uri: node.uri.clone(),
+            },
+          })
+          .collect();
+        app.sort_sidebar_playlist_slots(&mut converted, |node| match node {
+          LibraryNode::Playlist { uri } => by_uri.get(uri.as_str()).copied(),
+          LibraryNode::Folder { .. } => None,
+        });
+        converted
+      }
+      // Rootlist omissions already appear as trailing root rows in the page.
+      // Include them before sorting, so they share the top-level playlist slots.
+      fn placed_uris<'a>(
+        nodes: &'a [crate::core::app::PlaylistFolderNode],
+        placed: &mut std::collections::BTreeSet<&'a str>,
+      ) {
+        for node in nodes {
+          placed.insert(node.uri.as_str());
+          placed_uris(&node.children, placed);
         }
       }
-      nodes
+      let by_uri = app
+        .all_playlists()
         .iter()
-        .map(|node| convert(node, app.strings(), app.language()))
-        .collect()
+        .map(|p| (p.uri.as_str(), p))
+        .collect();
+      let mut placed = std::collections::BTreeSet::new();
+      placed_uris(nodes, &mut placed);
+      let mut complete = nodes.clone();
+      complete.extend(
+        app
+          .all_playlists()
+          .iter()
+          .filter(|p| !placed.contains(p.uri.as_str()))
+          .map(|p| crate::core::app::PlaylistFolderNode {
+            name: Some(p.name.clone()),
+            node_type: crate::core::app::PlaylistFolderNodeType::Playlist,
+            uri: p.uri.clone(),
+            children: Vec::new(),
+          }),
+      );
+      convert(&complete, app, &by_uri)
     }),
   }
 }
@@ -1510,6 +1785,103 @@ pub(crate) fn pushed(messages: &[ServerMessage], kind: &str) -> serde_json::Valu
 
 #[cfg(test)]
 mod tests {
+
+  #[test]
+  fn sidebar_playlist_order_updates_the_gui_library_tree_without_moving_folders() {
+    use crate::core::app::{PlaylistFolderNode, PlaylistFolderNodeType};
+    use crate::core::sort::{SortContext, SortField};
+    let (mut app, _rx) = app();
+    *app.all_playlists_mut() = ["Zulu", "Alpha", "Inner Zulu", "Inner Alpha", "beta"]
+      .iter()
+      .enumerate()
+      .map(|(i, name)| {
+        crate::core::test_helpers::playlist_info(&format!("p{i}"), name, "me", false)
+      })
+      .collect();
+    let node = |index: usize| PlaylistFolderNode {
+      node_type: PlaylistFolderNodeType::Playlist,
+      name: None,
+      uri: format!("spotify:playlist:p{index}"),
+      children: vec![],
+    };
+    *app.playlist_folder_nodes_mut() = Some(vec![
+      node(0),
+      PlaylistFolderNode {
+        node_type: PlaylistFolderNodeType::Folder,
+        name: Some("Folder".to_string()),
+        uri: "folder:1".to_string(),
+        children: vec![
+          node(2),
+          PlaylistFolderNode {
+            node_type: PlaylistFolderNodeType::Folder,
+            name: Some("Nested".to_string()),
+            uri: "folder:2".to_string(),
+            children: vec![],
+          },
+          node(3),
+        ],
+      },
+      node(1),
+    ]);
+    // p4 is omitted by the rootlist; it still participates in top-level sorting.
+    let before = app.display_revisions();
+    app.apply(Action::Sort {
+      context: SortContext::SidebarPlaylists,
+      field: SortField::Name,
+    });
+    let message = pushed(&diff(&before, &app, Language::En), "library");
+    let payload = &message["payload"];
+    assert_eq!(payload["playlist_sidebar_order"], "name");
+    let tree = &payload["folders"];
+    assert_eq!(tree[0]["uri"], "spotify:playlist:p1");
+    assert_eq!(tree[1]["uri"], "folder:1");
+    assert_eq!(tree[2]["uri"], "spotify:playlist:p4");
+    assert_eq!(tree[3]["uri"], "spotify:playlist:p0");
+    assert_eq!(tree[1]["children"][0]["uri"], "spotify:playlist:p3");
+    assert_eq!(tree[1]["children"][1]["uri"], "folder:2");
+    assert_eq!(tree[1]["children"][2]["uri"], "spotify:playlist:p2");
+
+    app.apply(Action::Sort {
+      context: SortContext::SidebarPlaylists,
+      field: SortField::RecentlyPlayed,
+    });
+    let before = app.display_revisions();
+    app.set_playlist_last_listens(
+      [(
+        "spotify:playlist:p4".to_string(),
+        chrono::DateTime::from_timestamp(1, 0).unwrap(),
+      )]
+      .into(),
+    );
+    let recent = pushed(&diff(&before, &app, Language::En), "library");
+    assert_eq!(
+      recent["payload"]["playlist_sidebar_order"],
+      "recently_played"
+    );
+    assert_eq!(
+      recent["payload"]["folders"][0]["uri"],
+      "spotify:playlist:p4"
+    );
+    assert_eq!(recent["payload"]["folders"][1]["uri"], "folder:1");
+    assert_eq!(
+      recent["payload"]["folders"][2]["uri"],
+      "spotify:playlist:p0"
+    );
+    assert_eq!(
+      recent["payload"]["folders"][3]["uri"],
+      "spotify:playlist:p1"
+    );
+    app.apply(Action::Sort {
+      context: SortContext::SidebarPlaylists,
+      field: SortField::Default,
+    });
+    let restored = serde_json::to_value(playlists(&app)).unwrap();
+    assert_eq!(restored["folders"][0]["uri"], "spotify:playlist:p0");
+    assert_eq!(
+      restored["folders"][1]["children"][0]["uri"],
+      "spotify:playlist:p2"
+    );
+  }
 
   #[test]
   fn cached_generated_track_titles_follow_language_in_track_and_queue_payloads() {
@@ -1643,6 +2015,69 @@ mod tests {
     (App::new(tx, UserConfig::new(), Some(SystemTime::now())), rx)
   }
 
+  #[test]
+  fn the_page_cannot_set_a_program_to_run() {
+    use crate::core::action::SettingInput;
+    let (mut app, _rx) = app();
+    for id in PAGE_LOCKED_SETTINGS {
+      apply_page_action(
+        &mut app,
+        Action::SetSetting {
+          id: id.to_string(),
+          value: SettingInput::Text("/tmp/evil".to_string()),
+        },
+      );
+    }
+    assert_eq!(app.user_config.behavior.ytdlp_path, None);
+    assert_eq!(app.user_config.behavior.soloist_path, None);
+    assert!(app.status_message_is_error());
+
+    apply_page_action(
+      &mut app,
+      Action::SetSetting {
+        id: "behavior.sync_token".to_string(),
+        value: SettingInput::Text("stolen".to_string()),
+      },
+    );
+    assert_eq!(app.user_config.behavior.sync_token, None);
+  }
+
+  #[cfg(feature = "soloist")]
+  #[test]
+  fn the_status_channel_carries_the_soloist_pairing_guide_until_the_page_closes_it() {
+    let (mut app, _rx) = app();
+    let before = app.display_revisions();
+    app.soloist_notice(crate::infra::soloist::Notice::NotPaired);
+    let status = pushed(&diff(&before, &app, Language::En), "status");
+    let pick = app
+      .strings()
+      .popups
+      .soloist_pair_pick(&app.user_config.behavior.streaming_device_name);
+    assert_eq!(status["payload"]["soloist_pairing"]["steps"][1], pick);
+
+    let closed = apply_from_page(&mut app, &action_frame(Action::DismissSoloistPairing));
+    assert!(pushed(&closed, "status")["payload"]["soloist_pairing"].is_null());
+  }
+
+  #[cfg(feature = "soloist")]
+  #[test]
+  fn the_status_channel_carries_the_soloist_offer_until_the_page_answers_it() {
+    let (mut app, _rx) = app();
+    let before = app.display_revisions();
+    app.offer_soloist_setup();
+    let status = pushed(&diff(&before, &app, Language::En), "status");
+    assert_eq!(
+      status["payload"]["soloist_offer"]["set_up"],
+      app.strings().popups.soloist_offer_set_up
+    );
+
+    let answered = apply_from_page(
+      &mut app,
+      &action_frame(Action::AnswerSoloistOffer { set_up: false }),
+    );
+    assert!(pushed(&answered, "status")["payload"]["soloist_offer"].is_null());
+  }
+
   fn apply_from_page(app: &mut App, text: &str) -> Vec<ServerMessage> {
     let before = app.display_revisions();
     let ClientMessage::Action { action } = serde_json::from_str(text).unwrap() else {
@@ -1668,6 +2103,7 @@ mod tests {
     assert_eq!(
       kinds,
       [
+        "pane_layout",
         "route",
         "status",
         "source",
@@ -1700,6 +2136,88 @@ mod tests {
     assert_eq!(
       revisions.as_object().unwrap().len(),
       DisplayDomain::ALL.len()
+    );
+  }
+
+  #[test]
+  fn a_layout_change_pushes_the_pane_layout_channel_and_null_resets_it() {
+    use crate::core::gui_layout::{GuiLayout, WindowEdge};
+    let (mut app, _rx) = app();
+    let mut moved = GuiLayout::default();
+    moved.bars[1].edge = WindowEdge::Left;
+    let before = app.display_revisions();
+
+    assert!(app.set_gui_pane_layout(Some(moved)));
+    let payload = &pushed(&diff(&before, &app, Language::En), "pane_layout")["payload"];
+    assert_eq!(payload["layout"]["bars"][1]["edge"], "left");
+    assert_eq!(payload["keys"]["detach"]["code"], "KeyD");
+
+    let message: ClientMessage =
+      serde_json::from_str(r#"{"type":"pane_layout","layout":null}"#).unwrap();
+    let ClientMessage::PaneLayout { layout } = message else {
+      panic!("not a pane layout message");
+    };
+    assert!(app.set_gui_pane_layout(layout));
+    assert_eq!(app.gui_pane_layout(), &GuiLayout::default());
+    assert!(!app.set_gui_pane_layout(None));
+  }
+
+  #[test]
+  fn chord_maps_letters_digits_and_symbols_to_browser_codes() {
+    let code = |key| chord(key).map(|chord| (chord.code, chord.alt, chord.ctrl, chord.shift));
+
+    assert_eq!(
+      code(Key::Alt('d')),
+      Some(("KeyD".into(), true, false, false))
+    );
+    assert_eq!(
+      code(Key::Alt('H')),
+      Some(("KeyH".into(), true, false, true))
+    );
+    assert_eq!(
+      code(Key::Alt('0')),
+      Some(("Digit0".into(), true, false, false))
+    );
+    assert_eq!(
+      code(Key::Ctrl('=')),
+      Some(("Equal".into(), false, true, false))
+    );
+    assert_eq!(
+      code(Key::Char('-')),
+      Some(("Minus".into(), false, false, false))
+    );
+    assert_eq!(
+      code(Key::Alt('.')),
+      Some(("Period".into(), true, false, false))
+    );
+    assert_eq!(
+      code(Key::Ctrl('/')),
+      Some(("Slash".into(), false, true, false))
+    );
+    assert_eq!(
+      code(Key::Alt('[')),
+      Some(("BracketLeft".into(), true, false, false))
+    );
+    assert_eq!(code(Key::Alt('?')), None);
+    assert_eq!(code(Key::Alt('ä')), None);
+    assert_eq!(code(Key::Enter), None);
+  }
+
+  #[test]
+  fn chord_maps_arrow_keys_with_their_modifiers_to_browser_codes() {
+    let code = |key| chord(key).map(|chord| (chord.code, chord.alt, chord.ctrl, chord.shift));
+
+    assert_eq!(
+      code(Key::Down),
+      Some(("ArrowDown".into(), false, false, false))
+    );
+    assert_eq!(
+      code(Key::AltArrow(Arrow::Left)),
+      Some(("ArrowLeft".into(), true, false, false))
+    );
+    assert_eq!(
+      code(Key::AltShiftArrow(Arrow::Up)),
+      Some(("ArrowUp".into(), true, false, true))
     );
   }
 
@@ -2074,6 +2592,7 @@ mod tests {
       guests: vec!["Sam".to_string()],
       control_mode: ControlMode::HostOnly,
       host_name: "Host".to_string(),
+      host_state_at: None,
     }));
 
     let party = &pushed(&diff(&before, &app, Language::En), "party")["payload"];
@@ -2179,6 +2698,26 @@ mod tests {
 
     let library = &pushed(&diff(&before, &app, Language::En), "library")["payload"];
     assert_eq!(library["followed_artists"][0]["name"], "Avicii");
+    assert_eq!(library["followed_artists_has_more"], false);
+  }
+
+  #[test]
+  fn the_library_payload_says_when_more_followed_artists_remain() {
+    let (mut app, _rx) = app();
+    let before = app.display_revisions();
+
+    app
+      .library_mut()
+      .saved_artists
+      .add_pages(crate::core::pagination::CursorPaged {
+        items: vec![ArtistInfo::default()],
+        next: Some("next".to_string()),
+        cursor_after: Some("a2".to_string()),
+        ..Default::default()
+      });
+
+    let library = &pushed(&diff(&before, &app, Language::En), "library")["payload"];
+    assert_eq!(library["followed_artists_has_more"], true);
   }
 
   #[test]
@@ -2673,10 +3212,7 @@ mod tests {
     app.refresh_language();
     let changed = pushed(&diff(&before, &app, Language::En), "settings");
     assert_eq!(changed["payload"]["language"], "zh-Hant");
-    assert_eq!(
-      changed["payload"]["strings"]["gui"]["settings"],
-      app.strings().gui.settings
-    );
+    assert_eq!(changed["payload"]["strings"]["gui"]["settings"], "設定");
     let language = changed["payload"]["rows"]
       .as_array()
       .unwrap()
@@ -2688,13 +3224,7 @@ mod tests {
       language["value"]["options"],
       serde_json::json!(["auto", "en", "zh-Hans", "zh-Hant"])
     );
-    assert_eq!(
-      language["value"]["labels"][0],
-      app
-        .strings()
-        .settings
-        .option_label("behavior.language", "auto")
-    );
+    assert_eq!(language["value"]["labels"][0], "自動（跟隨系統）");
   }
 
   #[test]
@@ -2732,7 +3262,7 @@ mod tests {
     assert_eq!(message["payload"]["language"], "zh-Hans");
     assert_eq!(
       message["payload"]["strings"]["gui"]["continue_button"],
-      crate::core::i18n::ZH_HANS.gui.continue_button
+      "继续"
     );
   }
 
@@ -2755,7 +3285,7 @@ mod tests {
         .find(|row| row.id == "behavior.disable_auto_update")
         .unwrap()
         .description,
-      app.strings().gui.update_checks_description
+      "跳过启动时及每 6 小时的自动检查；改为在此页手动检查、下载和安装更新"
     );
   }
 
@@ -2988,26 +3518,28 @@ mod tests {
     app.user_config.behavior.language = Language::ZhHant;
     app.refresh_language();
     let changed = pushed(&diff(&before, &app, Language::En), "playlist_sync");
-    assert!(changed["payload"]["links"][0]["last_line"]
-      .as_str()
-      .unwrap()
-      .contains("{added} 五月天"));
+    assert_eq!(
+      changed["payload"]["links"][0]["last_line"],
+      "{added} 五月天：已新增 2 首，已移除 1 首，3 首未對應"
+    );
+    assert_eq!(
+      changed["payload"]["last_summary"],
+      "播放清單同步（模擬執行）：新增 2 首，移除 1 首，未對應 3 首"
+    );
 
     let mut failed = report;
     failed.error = Some("{added} HTTP 503".to_string());
     failed.links[0].outcome = LinkOutcome::Failed("{name} HTTP 503".into());
     app.finish_playlist_sync(failed);
     let localized = playlist_sync(&app);
-    assert!(localized
-      .last_summary
-      .as_deref()
-      .unwrap()
-      .contains("{added} HTTP 503"));
-    assert!(localized.links[0]
-      .last_line
-      .as_deref()
-      .unwrap()
-      .contains("{name} HTTP 503"));
+    assert_eq!(
+      localized.last_summary.as_deref(),
+      Some("播放清單同步失敗：{added} HTTP 503")
+    );
+    assert_eq!(
+      localized.links[0].last_line.as_deref(),
+      Some("{added} 五月天：失敗（{name} HTTP 503）")
+    );
   }
 
   #[test]
@@ -3106,6 +3638,34 @@ mod tests {
       serde_json::from_str(r#"{ "type": "visualizer", "on": true }"#).unwrap();
 
     assert!(matches!(message, ClientMessage::Visualizer { on: true }));
+  }
+
+  #[test]
+  fn a_screen_frame_carries_bands_as_bytes_and_the_wave_as_signed_bytes() {
+    assert_eq!(
+      serde_json::to_value(visualizer_screen(&[0.0, 0.5, 1.5], &[-2.0, 0.25])).unwrap(),
+      serde_json::json!({
+        "kind": "visualizer_screen",
+        "payload": { "bands": [0, 128, 255], "wave": [-127, 32] }
+      })
+    );
+  }
+
+  #[test]
+  fn a_page_asking_for_the_visualizer_screen_parses_with_its_band_count() {
+    let message: ClientMessage =
+      serde_json::from_str(r#"{ "type": "visualizer_screen", "bars": 24 }"#).unwrap();
+    let off: ClientMessage =
+      serde_json::from_str(r#"{ "type": "visualizer_screen", "bars": null }"#).unwrap();
+
+    assert!(matches!(
+      message,
+      ClientMessage::VisualizerScreen { bars: Some(24) }
+    ));
+    assert!(matches!(
+      off,
+      ClientMessage::VisualizerScreen { bars: None }
+    ));
   }
 
   #[test]
@@ -3326,9 +3886,21 @@ mod tests {
     written::<ShowInfo>(&dir, &cfg);
     written::<WindowMode>(&dir, &cfg);
     written::<VisualizerFrame>(&dir, &cfg);
+    written::<ScreenFrame>(&dir, &cfg);
+    written::<crate::core::user_config::VisualizerStyle>(&dir, &cfg);
     written::<WelcomePayload>(&dir, &cfg);
     written::<WelcomeStreak>(&dir, &cfg);
     written::<AnnouncementsPayload>(&dir, &cfg);
+    written::<PaneLayoutPayload>(&dir, &cfg);
+    written::<crate::core::gui_layout::GuiLayout>(&dir, &cfg);
+    written::<crate::core::pane::PaneNode>(&dir, &cfg);
+    written::<crate::core::pane::Split>(&dir, &cfg);
+    written::<crate::core::pane::Pane>(&dir, &cfg);
+    std::fs::write(
+      dir.join("default_layout.json"),
+      serde_json::to_string_pretty(&crate::core::gui_layout::GuiLayout::default()).unwrap(),
+    )
+    .unwrap();
     std::fs::write(
       dir.join("strings.json"),
       serde_json::to_string_pretty(&serde_json::json!({

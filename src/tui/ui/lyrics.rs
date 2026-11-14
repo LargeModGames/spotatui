@@ -19,7 +19,7 @@ pub fn draw_lyrics_view(f: &mut Frame<'_>, app: &App) {
   }
 }
 
-fn draw_lyrics(f: &mut Frame<'_>, app: &App, area: Rect) {
+pub(crate) fn draw_lyrics(f: &mut Frame<'_>, app: &App, area: Rect) {
   let theme = &app.user_config.theme;
 
   let mut notes: Vec<String> = Vec::new();

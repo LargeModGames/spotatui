@@ -7,7 +7,7 @@
 
 use crate::core::i18n::{Language, Strings, EN};
 use crate::core::onboarding::{
-  confirm_answer, Onboarding, OnboardingAnswer, OnboardingPrompt, BANNER_RULE,
+  confirm_answer, confirm_console_text, Onboarding, OnboardingAnswer, OnboardingPrompt,
 };
 use crate::core::source::Source;
 use anyhow::Result;
@@ -54,8 +54,7 @@ impl Onboarding for ConsoleOnboarding {
         question,
       } => (title, body, question),
     };
-    println!("\n{BANNER_RULE}\n{title}\n{BANNER_RULE}\n{body}");
-    println!("{question}");
+    println!("{}", confirm_console_text(title, body, question));
     let _ = stdout().flush();
     let mut input = String::new();
     stdin().read_line(&mut input)?;

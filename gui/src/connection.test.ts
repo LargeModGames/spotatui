@@ -61,6 +61,22 @@ describe("Connection", () => {
     expect(sockets[0].sent).toEqual([JSON.stringify({ type: "quit" })]);
   });
 
+  it("keeps the last layout sent while disconnected and sends it after the next hello", () => {
+    const { connection, sockets, retries } = harness("abc");
+    sockets[0].handlers.message(hello("t1"));
+    sockets[0].handlers.close();
+    connection.send({ type: "pane_layout", layout: null });
+    connection.send({ type: "quit" });
+    const layout = { tree: "main" as const, floating: [], bars: [] };
+    connection.send({ type: "pane_layout", layout });
+    retries[0]();
+    expect(sockets[1].sent).toEqual([]);
+    sockets[1].handlers.message(hello("t1"));
+    expect(sockets[1].sent).toEqual([
+      JSON.stringify({ type: "pane_layout", layout }),
+    ]);
+  });
+
   it("connects with the launch code and keeps the token from hello", () => {
     const { connection, sockets, storage } = harness("abc");
     sockets[0].handlers.message(hello("t1"));
@@ -143,7 +159,7 @@ describe("Connection", () => {
     expect(connection.getState().booted).toBe(false);
     expect(
       connection.getState().localization?.strings.gui.continue_button,
-    ).toBe(strings.ZH_HANT.gui.continue_button);
+    ).toBe("繼續");
     receive({
       kind: "settings",
       rev: 3,
@@ -166,7 +182,7 @@ describe("Connection", () => {
     });
     const active = connection.getState().localization;
     expect(active?.language).toBe("zh-Hans");
-    expect(active?.strings.gui.settings).toBe(strings.ZH_HANS.gui.settings);
+    expect(active?.strings.gui.settings).toBe("设置");
     receive({
       kind: "settings",
       rev: 4,
@@ -230,6 +246,30 @@ describe("Connection", () => {
     expect(connection.getState().position).toEqual({ ms: 103_000, at: 42 });
     sockets[0].handlers.message(playback(3, "spotify:track:b"));
     expect(connection.getState().position).toEqual({ ms: 0, at: 42 });
+  });
+
+  it("a Subsonic item gets its cover from the server's /cover", () => {
+    const { connection, sockets } = harness("abc");
+    const playback = (uri: string, image_url: string | null) =>
+      JSON.stringify({
+        kind: "playback",
+        rev: 1,
+        payload: {
+          item: { uri, image_url, is_playing: true },
+          volume: 50,
+          device: null,
+          liked: false,
+        },
+      });
+    sockets[0].handlers.message(hello("t1"));
+    sockets[0].handlers.message(playback("subsonic:track:7", null));
+    expect(
+      connection.getState().channels.playback?.payload.item?.image_url,
+    ).toBe("/cover?uri=subsonic%3Atrack%3A7&t=t1");
+    sockets[0].handlers.message(playback("spotify:track:a", null));
+    expect(
+      connection.getState().channels.playback?.payload.item?.image_url,
+    ).toBeNull();
   });
 
   it("an action goes out as a typed client message", () => {

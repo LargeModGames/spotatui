@@ -62,6 +62,30 @@ pub(crate) fn qobuz_credentials_path() -> Option<PathBuf> {
   app_config_dir().map(|dir| dir.join("qobuz_credentials.yml"))
 }
 
+/// The Soloist API key: `<config dir>/soloist_credentials.yml`.
+#[cfg(feature = "soloist")]
+pub(crate) fn soloist_credentials_path() -> Option<PathBuf> {
+  app_config_dir().map(|dir| dir.join("soloist_credentials.yml"))
+}
+
+/// Soloist's own data dir (device id, paired session, prefs): `<state dir>/soloist`.
+#[cfg(feature = "soloist")]
+pub(crate) fn soloist_data_dir() -> Option<PathBuf> {
+  app_state_dir().map(|dir| dir.join("soloist"))
+}
+
+/// The Soloist builds spotatui downloaded from Spotify: `<state dir>/soloist-bin`.
+#[cfg(feature = "soloist")]
+pub(crate) fn soloist_bin_dir() -> Option<PathBuf> {
+  app_state_dir().map(|dir| dir.join("soloist-bin"))
+}
+
+/// Soloist's playback cache: `<cache dir>/soloist`.
+#[cfg(feature = "soloist")]
+pub(crate) fn soloist_cache_dir() -> Option<PathBuf> {
+  app_cache_dir().map(|dir| dir.join("soloist"))
+}
+
 /// The player-bar visualizer's look: `<config dir>/visualizer.yml`, never written by the app.
 #[cfg(feature = "gui")]
 pub(crate) fn visualizer_config_path() -> Option<PathBuf> {
@@ -77,7 +101,54 @@ pub(crate) fn visualizer_config_path() -> Option<PathBuf> {
 /// drive-relative there and left Windows users looking for a path the app
 /// reported but their shell could not find.
 pub(crate) fn app_log_dir() -> PathBuf {
-  std::env::temp_dir().join("spotatui_logs")
+  static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+  DIR
+    .get_or_init(|| log_dir_in(&std::env::temp_dir()))
+    .clone()
+}
+
+/// `spotatui_logs` when this user owns it, else a fresh one: another account can take that name.
+fn log_dir_in(temp: &Path) -> PathBuf {
+  let shared = temp.join("spotatui_logs");
+  // A symlink first: `ensure_private_dir` follows one and would chmod its target.
+  let is_symlink = shared
+    .symlink_metadata()
+    .is_ok_and(|meta| meta.file_type().is_symlink());
+  let owned = !is_symlink
+    && ensure_private_dir(&shared).is_ok()
+    && shared
+      .symlink_metadata()
+      .is_ok_and(|meta| meta.file_type().is_dir());
+  if owned {
+    return shared;
+  }
+  fresh_private_dir(temp, "spotatui_logs").unwrap_or(shared)
+}
+
+/// A new, uniquely named, owner-only directory under `temp`, or `None` when
+/// none could be made. A non-recursive create refuses an existing entry, a
+/// symlink included, so the result is always one this process made. It is not
+/// removed on exit: temp is the one location the platform clears on its own.
+pub(crate) fn fresh_private_dir(temp: &Path, prefix: &str) -> Option<PathBuf> {
+  // Owner-only from the start, whatever the umask.
+  #[cfg(unix)]
+  let builder = {
+    use std::os::unix::fs::DirBuilderExt;
+    let mut builder = std::fs::DirBuilder::new();
+    builder.mode(0o700);
+    builder
+  };
+  #[cfg(not(unix))]
+  let builder = std::fs::DirBuilder::new();
+  let pid = std::process::id();
+  (0..8).find_map(|attempt| {
+    let nanos = std::time::SystemTime::now()
+      .duration_since(std::time::UNIX_EPOCH)
+      .map(|since| since.subsec_nanos())
+      .unwrap_or(0);
+    let dir = temp.join(format!("{prefix}-{pid}-{nanos}-{attempt}"));
+    builder.create(&dir).ok().map(|()| dir)
+  })
 }
 
 /// Path of this process's log file. Callers on both the writing side
@@ -135,6 +206,36 @@ fn valid_xdg_home(value: OsString) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn an_owned_log_dir_keeps_the_shared_name() {
+    let temp = tempfile::tempdir().unwrap();
+    assert_eq!(log_dir_in(temp.path()), temp.path().join("spotatui_logs"));
+  }
+
+  #[test]
+  fn a_log_dir_name_that_is_taken_falls_back_to_a_fresh_dir() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(temp.path().join("spotatui_logs"), b"").unwrap();
+    let dir = log_dir_in(temp.path());
+    assert_ne!(dir, temp.path().join("spotatui_logs"));
+    assert!(dir.is_dir());
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn a_planted_log_dir_symlink_leaves_its_target_alone() {
+    use std::os::unix::fs::PermissionsExt;
+    let temp = tempfile::tempdir().unwrap();
+    let target = temp.path().join("target");
+    std::fs::create_dir(&target).unwrap();
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::os::unix::fs::symlink(&target, temp.path().join("spotatui_logs")).unwrap();
+    let dir = log_dir_in(temp.path());
+    assert_ne!(dir, temp.path().join("spotatui_logs"));
+    let mode = std::fs::metadata(&target).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o755);
+  }
 
   fn test_home() -> PathBuf {
     std::env::temp_dir().join("spotatui-home-alice")

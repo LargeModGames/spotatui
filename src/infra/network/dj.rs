@@ -71,6 +71,61 @@ fn pick_device(
   Some((found.id.clone()?, found.name.clone()))
 }
 
+/// Reject known source failures before a start can interrupt current playback.
+#[cfg(any(feature = "mcp-server", feature = "ai-dj"))]
+fn play_now_source_error(
+  uri: &str,
+  subsonic_configured: bool,
+  qobuz_logged_in: bool,
+) -> Option<ToolOutcome> {
+  if let Some(feature) = crate::core::queue::missing_source_feature(uri) {
+    return Some(ToolOutcome::error_localized(|strings| {
+      strings.status.tools.missing_feature(feature, uri)
+    }));
+  }
+  #[cfg(feature = "local-files")]
+  if uri.starts_with("file:") {
+    if let Err(error) = crate::infra::local::file_uri_to_path(uri) {
+      return Some(ToolOutcome::error_localized(|strings| {
+        strings.status.infra.local_uri_invalid(&error.to_string())
+      }));
+    }
+  }
+  #[cfg(feature = "youtube")]
+  if uri.starts_with("youtube:") && crate::infra::youtube::video_id_from_uri(uri).is_err() {
+    return Some(ToolOutcome::error_localized(|strings| {
+      strings.status.infra.youtube_uri_invalid
+    }));
+  }
+  if uri.starts_with("subsonic:") {
+    #[cfg(feature = "subsonic")]
+    if crate::infra::subsonic::track_id_from_uri(uri).map_or(true, str::is_empty) {
+      return Some(ToolOutcome::error_localized(|strings| {
+        strings.status.infra.subsonic_uri_invalid
+      }));
+    }
+    if !subsonic_configured {
+      return Some(ToolOutcome::error_localized(|strings| {
+        strings.status.infra.subsonic_no_server
+      }));
+    }
+  }
+  if uri.starts_with("qobuz:") {
+    #[cfg(feature = "qobuz")]
+    if crate::infra::qobuz::track_id_from_uri(uri).map_or(true, str::is_empty) {
+      return Some(ToolOutcome::error_localized(|strings| {
+        strings.status.infra.qobuz_uri_invalid
+      }));
+    }
+    if !qobuz_logged_in {
+      return Some(ToolOutcome::error_localized(|strings| {
+        strings.status.infra.qobuz_login_expired
+      }));
+    }
+  }
+  None
+}
+
 /// The tool handlers behind `DjToolCall`, shared by both front doors.
 #[cfg(any(feature = "mcp-server", feature = "ai-dj"))]
 impl Network {
@@ -552,13 +607,14 @@ impl Network {
     )
   }
 
-  /// Interrupt playback with one track, after confirming it exists.
+  /// Request playback of one track, after checking known failures.
   ///
   /// A Spotify track goes to the Spotify lane purely for that confirmation;
-  /// another source's track has no catalogue and is answered without a client. Dispatching straight to `StartPlayback` is what the caller
-  /// ultimately wants, but doing it blind meant a URI the catalogue does not
-  /// have stopped playback while the tool reported it was playing — the one
-  /// answer an agent cannot recover from, because it has no reason to re-check.
+  /// another source's track is answered without a Spotify client. Catalogue
+  /// resolution and dispatch do not confirm that a player started: source
+  /// downloads, decoding and device selection can still fail after we answer.
+  /// Waiting here for those results would require a per-start acknowledgement;
+  /// the shared playback state can still describe the previous track.
   ///
   /// Deliberately not filtered by `exclude_owned`: the caller asked for this
   /// exact track right now, and owning it is not a reason to refuse.
@@ -567,15 +623,9 @@ impl Network {
     // by their own sources and have no catalogue to look them up in, so they go
     // through with wording that does not overclaim.
     if !uri.starts_with("spotify:track:") {
-      // Well-formed is not the same as playable *here*: the router that would
-      // consume this scheme is gated on its own feature, and without it the event
-      // reaches nothing while the caller is told playback started.
-      if let Some(feature) = crate::core::queue::missing_source_feature(&uri) {
-        return ToolOutcome::error_localized(|strings| {
-          strings.status.tools.missing_feature(feature, &uri)
-        });
+      if let Some(error) = self.dj_start_playback(&uri).await {
+        return error;
       }
-      self.dj_start_playback(&uri).await;
       return ToolOutcome::ok_localized(|strings| strings.status.tools.sent(&uri));
     }
 
@@ -585,19 +635,34 @@ impl Network {
     };
 
     let label = format!("{} — {}", track.name, track.artists.join(", "));
-    self.dj_start_playback(&uri).await;
+    if let Some(error) = self.dj_start_playback(&uri).await {
+      return error;
+    }
     ToolOutcome::data_localized(
       |strings| strings.status.tools.play_started(&label),
       json!({"uri": uri, "title": track.name, "artist": track.artists.join(", ")}),
     )
   }
 
-  async fn dj_start_playback(&self, uri: &str) {
+  async fn dj_start_playback(&self, uri: &str) -> Option<ToolOutcome> {
+    #[cfg(feature = "qobuz")]
+    let qobuz_logged_in =
+      !uri.starts_with("qobuz:") || crate::infra::qobuz::auth::current_token().is_some();
+    #[cfg(not(feature = "qobuz"))]
+    let qobuz_logged_in = false;
     let mut app = self.app.lock().await;
+    if let Some(error) = play_now_source_error(
+      uri,
+      app.user_config.behavior.subsonic_url.is_some(),
+      qobuz_logged_in,
+    ) {
+      return Some(error);
+    }
     app.apply(Action::PlayUris {
       uris: vec![uri.to_string()],
       offset: Some(0),
     });
+    None
   }
 
   /// Whether the listener already has each of these search results.
@@ -1069,6 +1134,201 @@ mod tests {
   async fn unauthenticated_network() -> Network {
     let app = Arc::new(Mutex::new(App::default()));
     Network::new(None, &app)
+  }
+
+  fn network_with_events() -> (Network, std::sync::mpsc::Receiver<IoEvent>) {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let app = Arc::new(Mutex::new(App::new(
+      tx,
+      crate::core::user_config::UserConfig::new(),
+      None,
+    )));
+    (Network::new(None, &app), rx)
+  }
+
+  #[tokio::test]
+  async fn play_now_without_a_spotify_session_reports_an_error_without_dispatching() {
+    let (mut network, events) = network_with_events();
+    let outcome = network
+      .dj_tool_outcome(DjToolCall::PlayNow {
+        uri: "spotify:track:abc".into(),
+      })
+      .await;
+
+    assert!(outcome.is_error);
+    assert!(outcome.text.contains("no Spotify session"));
+    assert!(matches!(
+      events.try_recv(),
+      Err(std::sync::mpsc::TryRecvError::Empty)
+    ));
+  }
+
+  #[tokio::test]
+  async fn play_now_reports_missing_source_features_without_dispatching() {
+    for uri in [
+      "file:/music/a.flac",
+      "subsonic:track:1",
+      "youtube:abc",
+      "qobuz:track:1",
+    ] {
+      let Some(feature) = crate::core::queue::missing_source_feature(uri) else {
+        continue;
+      };
+      let (network, events) = network_with_events();
+      let outcome = Network::answer_dj_tool_call_without_spotify(
+        &network.app,
+        DjToolCall::PlayNow { uri: uri.into() },
+      )
+      .await;
+
+      assert!(outcome.is_error, "{uri}: {}", outcome.text);
+      assert!(outcome.text.contains(feature), "{}", outcome.text);
+      assert!(matches!(
+        events.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty)
+      ));
+    }
+  }
+
+  #[cfg(feature = "local-files")]
+  #[tokio::test]
+  async fn play_now_requests_an_off_screen_track_without_claiming_it_started() {
+    let (network, events) = network_with_events();
+    let uri = "file:/music/off-screen.flac";
+    let outcome = Network::answer_dj_tool_call_without_spotify(
+      &network.app,
+      DjToolCall::PlayNow { uri: uri.into() },
+    )
+    .await;
+
+    // No pump is running: the reply can only acknowledge the queued request.
+    assert!(!outcome.is_error, "{}", outcome.text);
+    assert_eq!(outcome.text, format!("Asked the player to start {uri}. Playback has not been confirmed; use get_now_playing to check."));
+    assert!(
+      matches!(events.try_recv(), Ok(IoEvent::StartPlayback(None, Some(uris), Some(0))) if uris == [uri])
+    );
+    assert!(matches!(
+      events.try_recv(),
+      Err(std::sync::mpsc::TryRecvError::Empty)
+    ));
+  }
+
+  #[cfg(feature = "subsonic")]
+  #[tokio::test]
+  async fn play_now_reports_an_unconfigured_subsonic_source_without_dispatching() {
+    let (network, events) = network_with_events();
+    let outcome = Network::answer_dj_tool_call_without_spotify(
+      &network.app,
+      DjToolCall::PlayNow {
+        uri: "subsonic:track:1".into(),
+      },
+    )
+    .await;
+
+    assert!(outcome.is_error);
+    assert_eq!(
+      outcome.text,
+      crate::core::i18n::EN.status.infra.subsonic_no_server
+    );
+    assert!(matches!(
+      events.try_recv(),
+      Err(std::sync::mpsc::TryRecvError::Empty)
+    ));
+    assert!(play_now_source_error("subsonic:track:1", true, false).is_none());
+  }
+
+  #[cfg(feature = "qobuz")]
+  #[test]
+  fn play_now_requires_a_qobuz_login_before_requesting_playback() {
+    // Pass readiness facts rather than changing the process-wide login cache.
+    let outcome = play_now_source_error("qobuz:track:51628161", false, false).unwrap();
+    assert!(outcome.is_error);
+    assert_eq!(
+      outcome.text,
+      crate::core::i18n::EN.status.infra.qobuz_login_expired
+    );
+    assert!(play_now_source_error("qobuz:track:51628161", false, true).is_none());
+  }
+
+  #[cfg(any(
+    feature = "local-files",
+    feature = "youtube",
+    feature = "subsonic",
+    feature = "qobuz"
+  ))]
+  #[test]
+  fn play_now_reports_malformed_uris_for_compiled_sources() {
+    let cases: &[(&str, &str)] = &[
+      #[cfg(feature = "local-files")]
+      ("file://[", "Invalid local file URI"),
+      #[cfg(feature = "youtube")]
+      ("youtube:id&x=1", "Invalid YouTube URI"),
+      #[cfg(feature = "subsonic")]
+      ("subsonic:album:1", "Invalid Subsonic track URI"),
+      #[cfg(feature = "subsonic")]
+      ("subsonic:track:", "Invalid Subsonic track URI"),
+      #[cfg(feature = "qobuz")]
+      ("qobuz:album:1", "Invalid Qobuz track URI"),
+      #[cfg(feature = "qobuz")]
+      ("qobuz:track:", "Invalid Qobuz track URI"),
+    ];
+    for (uri, message) in cases {
+      let outcome = play_now_source_error(uri, true, true).unwrap();
+      assert!(outcome.is_error, "{uri}");
+      assert!(outcome.text.contains(message), "{}", outcome.text);
+    }
+  }
+
+  #[tokio::test]
+  async fn play_now_only_requests_a_catalogue_match_and_reports_a_missing_track() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    for exists in [true, false] {
+      let (network, events) = network_with_events();
+      let uri = "spotify:track:7o2AeQZzfCERsRmOM86EcB";
+      let body = if exists {
+        serde_json::to_string(&crate::core::test_helpers::full_track(
+          "7o2AeQZzfCERsRmOM86EcB",
+          "Test Song",
+        ))
+        .unwrap()
+      } else {
+        "null".to_string()
+      };
+      let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+      let _fake = super::super::requests::fake::use_fake_spotify(format!(
+        "http://{}/v1/",
+        listener.local_addr().unwrap()
+      ));
+      let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut request = Vec::new();
+        while !request.ends_with(b"\r\n\r\n") {
+          request.push(stream.read_u8().await.unwrap());
+        }
+        assert!(String::from_utf8(request)
+          .unwrap()
+          .starts_with("GET /v1/tracks/7o2AeQZzfCERsRmOM86EcB "));
+        let response = format!("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}", body.len());
+        stream.write_all(response.as_bytes()).await.unwrap();
+      });
+
+      let outcome = network.dj_play_now(uri.into()).await;
+      server.await.unwrap();
+      assert_eq!(outcome.is_error, !exists, "{}", outcome.text);
+      if exists {
+        assert_eq!(outcome.text, "Asked the player to start Test Song — Test Artist. Playback has not been confirmed; use get_now_playing to check.");
+        assert_eq!(outcome.structured.as_ref().unwrap()["uri"], uri);
+        assert!(
+          matches!(events.try_recv(), Ok(IoEvent::StartPlayback(None, Some(uris), Some(0))) if uris == [uri])
+        );
+      } else {
+        assert!(outcome.text.contains("not in the catalogue"));
+        assert!(matches!(
+          events.try_recv(),
+          Err(std::sync::mpsc::TryRecvError::Empty)
+        ));
+      }
+    }
   }
 
   #[tokio::test]

@@ -33,6 +33,8 @@ pub mod radio;
 pub mod redirect_uri;
 #[cfg(feature = "scripting")]
 pub mod scripting;
+#[cfg(feature = "soloist")]
+pub mod soloist;
 #[cfg(feature = "spotify-session")]
 pub mod spotify;
 #[cfg(feature = "subsonic")]

@@ -35,6 +35,18 @@ describe("Onboarding", () => {
     expect(html).toContain(">No<");
   });
 
+  it("shows the question as text with a primary yes, not a console block", () => {
+    const html = render({
+      kind: "Confirm",
+      title: "Song counter",
+      body: "Count plays?",
+      question: "Join?",
+    });
+    expect(html).toContain("<p>Count plays?</p>");
+    expect(html).not.toContain("<pre>Count plays?");
+    expect(html).toContain('class="onboarding-primary"');
+  });
+
   it("lists every offered source as a checkbox", () => {
     const html = render({
       kind: "PickSources",

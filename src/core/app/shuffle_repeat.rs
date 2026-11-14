@@ -251,6 +251,12 @@ impl App {
       .map(|context| context.repeat_state)
     {
       info!("toggling repeat mode: {:?}", current_repeat_state);
+      use rspotify::model::enums::RepeatState as Rs;
+      let next_repeat_state = match current_repeat_state {
+        Rs::Off => Rs::Context,
+        Rs::Context => Rs::Track,
+        Rs::Track => Rs::Off,
+      };
 
       // Use native streaming player for instant control (bypasses event channel latency)
       #[cfg(feature = "streaming")]
@@ -258,13 +264,6 @@ impl App {
         if let Some(player) = self.streaming_player.clone() {
           // Try to set repeat on the native player (pass current state, not next)
           let _ = player.set_repeat(current_repeat_state);
-
-          // Calculate next state for UI update
-          let next_repeat_state = match current_repeat_state {
-            RepeatState::Off => RepeatState::Context,
-            RepeatState::Context => RepeatState::Track,
-            RepeatState::Track => RepeatState::Off,
-          };
           self.set_native_recovery_repeat(next_repeat_state);
 
           // Update UI state immediately
@@ -288,7 +287,7 @@ impl App {
       }
 
       // Fallback to API-based repeat for external devices
-      self.dispatch_spotify_fallback(IoEvent::Repeat(current_repeat_state));
+      self.dispatch_spotify_fallback(IoEvent::Repeat(next_repeat_state));
     }
   }
 }

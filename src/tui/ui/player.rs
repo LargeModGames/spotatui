@@ -155,6 +155,15 @@ fn split_playbar_rows(area: Rect) -> (Rect, Rect, Rect) {
   (artist_area, controls_area, progress_area)
 }
 
+/// Whether `layout_chunk` is the main playbar while the now playing panel
+/// shows: the panel has the cover, so the playbar leaves its thumbnail out.
+/// A Mini player pane's playbar is another rect and keeps its own.
+#[cfg(feature = "cover-art")]
+fn now_playing_panel_beside(app: &App, layout_chunk: Rect) -> bool {
+  crate::tui::layout::compute_main_layout(app)
+    .is_some_and(|areas| areas.now_playing.is_some() && areas.playbar == layout_chunk)
+}
+
 fn playbar_layout_areas(app: &App, layout_chunk: Rect) -> PlaybarLayoutAreas {
   #[cfg(feature = "cover-art")]
   {
@@ -164,6 +173,7 @@ fn playbar_layout_areas(app: &App, layout_chunk: Rect) -> PlaybarLayoutAreas {
     let (other, cover_art) = if app
       .user_config
       .do_draw_cover_art(crate::tui::cover_art::full_image_support())
+      && !now_playing_panel_beside(app, layout_chunk)
     {
       let cover_layout = playbar_cover_layout(
         other,
@@ -562,7 +572,9 @@ fn playbar_controls_available(app: &App) -> bool {
   }
 
   if app.current_playback_context.as_ref().is_some_and(|ctx| {
-    ctx.item.is_some() || (app.is_streaming_active && app.native_device_id.is_some())
+    ctx.item.is_some()
+      || (app.is_streaming_active && app.native_device_id.is_some())
+      || app.soloist_is_target()
   }) {
     return true;
   }
@@ -576,10 +588,6 @@ fn playbar_controls_available(app: &App) -> bool {
 /// compile in the slim build (no source features) as well as any single- or
 /// all-sources build.
 fn non_spotify_source_playback_active(app: &App) -> bool {
-  if app.apple_music_owns_playback() {
-    return true;
-  }
-
   #[cfg(feature = "local-files")]
   if app.local_playback.is_some() {
     return true;
@@ -605,7 +613,7 @@ fn non_spotify_source_playback_active(app: &App) -> bool {
     return true;
   }
 
-  false
+  app.apple_music_owns_playback()
 }
 
 pub(crate) fn playbar_control_at(
@@ -770,6 +778,33 @@ fn draw_playbar_controls(f: &mut Frame<'_>, app: &App, controls_area: Rect) {
   }
 }
 
+/// A badge on the free left part of the controls row, up to the first control.
+fn draw_playbar_badge(f: &mut Frame<'_>, app: &App, controls_area: Rect, badge: String) {
+  let first_control = playbar_control_hitboxes_in_area_localized(
+    controls_area,
+    &app.user_config.behavior,
+    &playbar_supported_controls(app),
+    &app.strings().screens,
+  )
+  .into_iter()
+  .map(|hitbox| hitbox.rect.x)
+  .min()
+  .unwrap_or_else(|| controls_area.right());
+  let width = first_control
+    .saturating_sub(controls_area.x)
+    .saturating_sub(1);
+  if width == 0 || controls_area.height == 0 {
+    return;
+  }
+  let style = Style::default()
+    .fg(app.user_config.theme.playbar_text.into())
+    .add_modifier(app.user_config.behavior.emphasis(Modifier::DIM));
+  f.render_widget(
+    Paragraph::new(Span::styled(badge, style)),
+    Rect::new(controls_area.x, controls_area.y, width, 1),
+  );
+}
+
 #[cfg(feature = "cover-art")]
 pub fn draw_cover_art_view(f: &mut Frame<'_>, app: &App) {
   let (content_area, playbar_area) = fullscreen_view_layout(&app.runtime_state, f.area());
@@ -786,7 +821,7 @@ pub fn draw_miniplayer(f: &mut Frame<'_>, app: &App) {
 }
 
 #[cfg(feature = "cover-art")]
-fn draw_cover_art_content(f: &mut Frame<'_>, app: &App, area: Rect) {
+pub(crate) fn draw_cover_art_content(f: &mut Frame<'_>, app: &App, area: Rect) {
   use ratatui::widgets::Clear;
 
   // Clear the area to remove any lingering terminal image protocol artifacts
@@ -1566,6 +1601,9 @@ pub fn draw_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
         );
       f.render_widget(artist, artist_area);
       draw_playbar_controls(f, app, playbar_areas.controls_area);
+      if let Some(quality) = app.soloist_quality_label() {
+        draw_playbar_badge(f, app, playbar_areas.controls_area, quality);
+      }
 
       let progress_ms = match app.seek_ms {
         Some(seek_ms) => seek_ms,
@@ -1649,7 +1687,8 @@ pub fn draw_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       }
 
       drew_playbar = true;
-    } else if app.is_streaming_active && app.native_device_id.is_some() {
+    } else if (app.is_streaming_active && app.native_device_id.is_some()) || app.soloist_is_target()
+    {
       let shuffle_text = if current_playback_context.shuffle_state {
         app.strings().screens.on
       } else {
@@ -2445,6 +2484,31 @@ mod tests {
     assert!(
       content.contains("FLAC 16/44.1") && !content.contains('\u{2022}'),
       "no separator without artists: {content}"
+    );
+  }
+
+  #[test]
+  fn playbar_badge_fills_the_free_left_part_of_the_controls_row() {
+    let app = App::default();
+    let area = Rect::new(0, 0, 100, 1);
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 1)).unwrap();
+    terminal
+      .draw(|f| {
+        draw_playbar_controls(f, &app, area);
+        draw_playbar_badge(f, &app, area, "FLAC 44.1".to_string());
+      })
+      .unwrap();
+    let row: String = terminal
+      .backend()
+      .buffer()
+      .content()
+      .iter()
+      .map(|cell| cell.symbol())
+      .collect();
+    assert!(row.starts_with("FLAC 44.1"), "badge at the left: {row}");
+    assert!(
+      row.trim_end().len() > "FLAC 44.1".len(),
+      "controls kept: {row}"
     );
   }
 

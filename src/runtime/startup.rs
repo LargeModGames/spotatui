@@ -256,6 +256,7 @@ pub(super) async fn prepare_frontend(boot: Boot) -> FrontendHandles {
         app_ref.io_tx_clone(),
       )
     };
+    crate::infra::mcp::remove_stale_handshake();
     if enabled {
       match io_tx {
         Some(io_tx) => match crate::infra::mcp::spawn_listener(Arc::clone(&app), io_tx).await {
@@ -286,7 +287,26 @@ pub(super) async fn prepare_frontend(boot: Boot) -> FrontendHandles {
   // UI is up (see `deferred_streaming_startup`) instead of gating the first
   // frame for seconds (worst case tens of seconds).
   #[cfg(feature = "streaming")]
-  let streaming_attempted = user_config.behavior.enable_streaming && spotify.is_some();
+  let engine = super::streaming::effective_engine(
+    user_config.behavior.playback_engine,
+    cfg!(feature = "soloist"),
+    cfg!(all(target_os = "macos", target_arch = "x86_64")),
+  );
+  #[cfg(feature = "streaming")]
+  if engine != user_config.behavior.playback_engine && user_config.behavior.enable_streaming {
+    let mut app = app.lock().await;
+    let message = app.strings().status.infra.soloist_engine_unavailable;
+    app.set_status_message(message, 8);
+  }
+  #[cfg(feature = "streaming")]
+  let streaming_on = user_config.behavior.enable_streaming && spotify.is_some();
+  // In soloist mode no Spirc device starts: Soloist is the device.
+  #[cfg(feature = "streaming")]
+  let streaming_attempted =
+    streaming_on && engine == crate::core::user_config::PlaybackEngine::Librespot;
+  #[cfg(feature = "soloist")]
+  let soloist_attempted =
+    streaming_on && engine == crate::core::user_config::PlaybackEngine::Soloist;
 
   // Create shared atomic for real-time position updates from native player
   // This avoids lock contention - the player event handler can update position
@@ -310,14 +330,21 @@ pub(super) async fn prepare_frontend(boot: Boot) -> FrontendHandles {
   #[cfg(feature = "streaming")]
   let (streaming_recovery_tx, streaming_recovery_rx) =
     tokio::sync::mpsc::unbounded_channel::<player::StreamingRecoveryRequest>();
-  // The supervisor that drains this channel starts inside
-  // `deferred_streaming_startup`, so install the sender on the same
-  // condition; otherwise a recovery request would latch
-  // `native_backend_pending` on a channel nobody reads.
+  // The supervisor that drains this channel starts below for either engine,
+  // so install the sender on the same condition; otherwise a recovery request
+  // would latch `native_backend_pending` on a channel nobody reads.
   #[cfg(feature = "streaming")]
   if streaming_attempted {
     let mut app_mut = app.lock().await;
     app_mut.streaming_recovery_tx = Some(streaming_recovery_tx.clone());
+  }
+  // Soloist mode keeps the sender aside, for a switch to librespot in Settings.
+  #[cfg(feature = "soloist")]
+  if soloist_attempted {
+    app
+      .lock()
+      .await
+      .stand_by_librespot(streaming_recovery_tx.clone());
   }
 
   // Initialize MPRIS D-Bus integration for desktop media control
@@ -516,6 +543,37 @@ pub(super) async fn prepare_frontend(boot: Boot) -> FrontendHandles {
   #[cfg(all(feature = "windows-media", target_os = "windows"))]
   let windows_media_for_events = windows_media_manager.clone();
 
+  #[cfg(feature = "streaming")]
+  let streaming_config = {
+    let behavior = &user_config.behavior;
+    player::StreamingConfig {
+      device_name: behavior.streaming_device_name.clone(),
+      bitrate: crate::core::user_config::streaming_bitrate_or_default(behavior.streaming_bitrate),
+      audio_cache: behavior.streaming_audio_cache,
+      autoplay: behavior.streaming_autoplay,
+      cache_path: crate::infra::spotify::credentials::get_default_cache_path(),
+      initial_volume: runtime_state.volume_percent,
+    }
+  };
+  // The recovery supervisor builds every librespot player after the first one,
+  // and under Soloist the first one too, on a switch in Settings.
+  #[cfg(feature = "streaming")]
+  if streaming_on {
+    player::spawn_streaming_recovery_handler(player::StreamingRecoveryContext {
+      app: Arc::clone(&app),
+      shared_position: Arc::clone(&shared_position_for_events),
+      shared_is_playing: Arc::clone(&shared_is_playing_for_events),
+      recovery_rx: streaming_recovery_rx,
+      recovery_tx: streaming_recovery_tx.clone(),
+      streaming_config: streaming_config.clone(),
+      #[cfg(all(feature = "mpris", target_os = "linux"))]
+      mpris_manager: mpris_for_events.clone(),
+      #[cfg(all(feature = "macos-media", target_os = "macos"))]
+      macos_media_manager: macos_media_for_events.clone(),
+      #[cfg(all(feature = "windows-media", target_os = "windows"))]
+      windows_media_manager: windows_media_for_events.clone(),
+    });
+  }
   // Kick off the deferred native-streaming startup: account probe, librespot
   // handshake, player event handler, and saved-device startup decision all
   // run on a background task while the UI renders (see
@@ -535,17 +593,9 @@ pub(super) async fn prepare_frontend(boot: Boot) -> FrontendHandles {
     // parks itself for replay instead of erroring (the task clears this and
     // replays whatever parked when it finishes, whatever the outcome).
     app.lock().await.native_backend_pending = true;
-    let behavior = &user_config.behavior;
     deferred_streaming_startup(DeferredStreamingContext {
       app: Arc::clone(&app),
-      streaming_config: player::StreamingConfig {
-        device_name: behavior.streaming_device_name.clone(),
-        bitrate: crate::core::user_config::streaming_bitrate_or_default(behavior.streaming_bitrate),
-        audio_cache: behavior.streaming_audio_cache,
-        autoplay: behavior.streaming_autoplay,
-        cache_path: crate::infra::spotify::credentials::get_default_cache_path(),
-        initial_volume: runtime_state.volume_percent,
-      },
+      streaming_config,
       device_startup_behavior,
       // A restored non-Spotify session owns the startup play/pause decision;
       // otherwise the deferred task fires it once the device is selected.
@@ -556,7 +606,6 @@ pub(super) async fn prepare_frontend(boot: Boot) -> FrontendHandles {
       },
       initial_shuffle_enabled,
       recovery_tx: streaming_recovery_tx,
-      recovery_rx: streaming_recovery_rx,
       shared_position: shared_position_for_events,
       shared_is_playing: shared_is_playing_for_events,
       #[cfg(all(feature = "mpris", target_os = "linux"))]
@@ -566,6 +615,24 @@ pub(super) async fn prepare_frontend(boot: Boot) -> FrontendHandles {
       #[cfg(all(feature = "windows-media", target_os = "windows"))]
       windows_media_manager: windows_media_for_events,
     });
+  }
+
+  #[cfg(feature = "soloist")]
+  if soloist_attempted {
+    app.lock().await.soloist_starting();
+    crate::infra::soloist::startup::deferred_soloist_startup(
+      Arc::clone(&app),
+      crate::infra::soloist::startup::SoloistStart::from_behavior(
+        &user_config.behavior,
+        runtime_state.volume_percent,
+        if restore_playback.is_some() {
+          None
+        } else {
+          Some(initial_startup_behavior)
+        },
+        initial_shuffle_enabled,
+      ),
+    );
   }
 
   let cloned_app = Arc::clone(&app);
@@ -606,6 +673,9 @@ pub(super) async fn prepare_frontend(boot: Boot) -> FrontendHandles {
       let startup_behavior_runs_here = !streaming_attempted;
       #[cfg(not(feature = "streaming"))]
       let startup_behavior_runs_here = true;
+      // Soloist fires it at its first login.
+      #[cfg(feature = "soloist")]
+      let startup_behavior_runs_here = startup_behavior_runs_here && !soloist_attempted;
       if startup_behavior_runs_here {
         match initial_startup_behavior {
           StartupBehavior::Continue => {}
@@ -732,6 +802,8 @@ pub(super) async fn shutdown_frontend(
 
   #[cfg(feature = "streaming")]
   let native_teardown = park_native_playback_before_exit(app).await;
+  #[cfg(feature = "soloist")]
+  crate::infra::soloist::supervisor::stop(std::time::Duration::from_millis(1500)).await;
 
   // Stop the collector and all network work it owns before the final sync and
   // clear. In particular, a pause-triggered now-playing push must not race the
@@ -1026,6 +1098,18 @@ async fn handle_mpris_events(
       continue;
     }
 
+    let play_key = match &event {
+      MprisEvent::PlayPause => Some(None),
+      MprisEvent::Play => Some(Some(true)),
+      MprisEvent::Pause => Some(Some(false)),
+      _ => None,
+    };
+    if let Some(play) = play_key {
+      if app.lock().await.relay_party_play_key(play) {
+        continue;
+      }
+    }
+
     // Dynamically fetch the current active player so MPRIS can target the correct player
     // and not the stale player. The old player can be stale on, e.g., native streaming recovery.
     // While another Spotify device plays, the idle local player would swallow the command
@@ -1042,14 +1126,20 @@ async fn handle_mpris_events(
 
     match event {
       MprisEvent::PlayPause => {
+        // The local player takes the same paths as the TUI's play/pause, so the
+        // App state, the playbar and the MPRIS status follow at once (#985).
+        // Read the App's own play state: librespot's last event can be stale.
         #[cfg(feature = "streaming")]
-        if let Some(ref player) = current_player {
-          if shared_is_playing.load(Ordering::Relaxed) {
-            player.pause();
-          } else {
-            player.play();
+        {
+          let mut app_lock = app.lock().await;
+          if local_player_takes_play_key(&app_lock, &shared_is_playing) {
+            press_local_play_key(
+              &mut app_lock,
+              None,
+              shared_is_playing.load(Ordering::Relaxed),
+            );
+            continue;
           }
-          continue;
         }
         // Fallback: the same toggle as the TUI's play/pause. It follows the playback
         // owner; `native_is_playing` still describes the idle local player while
@@ -1058,20 +1148,24 @@ async fn handle_mpris_events(
       }
       MprisEvent::Play => {
         #[cfg(feature = "streaming")]
-        if let Some(ref player) = current_player {
-          player.play();
-          app.lock().await.arm_native_play_intent();
-          continue;
+        {
+          let mut app_lock = app.lock().await;
+          if local_player_takes_play_key(&app_lock, &shared_is_playing) {
+            app_lock.resume_native_playback();
+            continue;
+          }
         }
         let mut app_lock = app.lock().await;
         app_lock.dispatch_spotify_fallback(IoEvent::StartPlayback(None, None, None));
       }
       MprisEvent::Pause => {
         #[cfg(feature = "streaming")]
-        if let Some(ref player) = current_player {
-          player.pause();
-          app.lock().await.set_native_playback_intent(false);
-          continue;
+        {
+          let mut app_lock = app.lock().await;
+          if local_player_takes_play_key(&app_lock, &shared_is_playing) {
+            app_lock.pause_native_playback();
+            continue;
+          }
         }
         let mut app_lock = app.lock().await;
         app_lock.dispatch_spotify_fallback(IoEvent::PausePlayback);
@@ -1084,10 +1178,12 @@ async fn handle_mpris_events(
       }
       MprisEvent::Stop => {
         #[cfg(feature = "streaming")]
-        if let Some(ref player) = current_player {
-          player.pause();
-          app.lock().await.set_native_playback_intent(false);
-          continue;
+        {
+          let mut app_lock = app.lock().await;
+          if local_player_takes_play_key(&app_lock, &shared_is_playing) {
+            app_lock.pause_native_playback();
+            continue;
+          }
         }
         let mut app_lock = app.lock().await;
         app_lock.dispatch_spotify_fallback(IoEvent::PausePlayback);
@@ -1384,48 +1480,61 @@ async fn handle_macos_media_events(
       continue;
     }
 
+    let play_key = match &event {
+      MacMediaEvent::PlayPause => Some(None),
+      MacMediaEvent::Play => Some(Some(true)),
+      MacMediaEvent::Pause => Some(Some(false)),
+      _ => None,
+    };
+    if let Some(play) = play_key {
+      if app.lock().await.relay_party_play_key(play) {
+        continue;
+      }
+    }
+
     if route_remote_spotify_macos_event(&event, &mut *app.lock().await, &shared_is_playing) {
       continue;
     }
 
-    let Some(player) = player::active_streaming_player(&app).await else {
-      // A parked backend resumes through the fallback, which rebuilds it.
-      if matches!(event, MacMediaEvent::PlayPause | MacMediaEvent::Play) {
-        let mut app_lock = app.lock().await;
-        if app_lock.native_parked_here() {
-          app_lock.dispatch_spotify_fallback(IoEvent::StartPlayback(None, None, None));
-        }
+    // The local player takes the same paths as the TUI's play/pause, so the App
+    // state and the playbar follow at once (#985). Checked under the lock that
+    // runs the action: recovery can remove the player in between.
+    let local_key = match event {
+      MacMediaEvent::PlayPause => Some(None),
+      MacMediaEvent::Play => Some(Some(true)),
+      MacMediaEvent::Pause | MacMediaEvent::Stop => Some(Some(false)),
+      MacMediaEvent::Next | MacMediaEvent::Previous => None,
+    };
+    if let Some(play) = local_key {
+      let mut app_lock = app.lock().await;
+      let has_player = app_lock
+        .streaming_player
+        .as_ref()
+        .is_some_and(|player| player.is_available());
+      if has_player {
+        press_local_play_key(
+          &mut app_lock,
+          play,
+          shared_is_playing.load(Ordering::Relaxed),
+        );
+      } else if play != Some(false) && app_lock.native_parked_here() {
+        // A parked backend resumes through the fallback, which rebuilds it.
+        app_lock.dispatch_spotify_fallback(IoEvent::StartPlayback(None, None, None));
       }
       continue;
-    };
+    }
+
+    if player::active_streaming_player(&app).await.is_none() {
+      continue;
+    }
 
     match event {
-      MacMediaEvent::PlayPause => {
-        // Toggle based on atomic state (lock-free, always up-to-date)
-        if shared_is_playing.load(Ordering::Relaxed) {
-          player.pause();
-        } else {
-          player.play();
-        }
-      }
-      MacMediaEvent::Play => {
-        player.play();
-      }
-      MacMediaEvent::Pause => {
-        player.pause();
-      }
-      MacMediaEvent::Next => {
-        let _ = player;
-        app.lock().await.next_track();
-      }
-      MacMediaEvent::Previous => {
-        let _ = player;
-        app.lock().await.previous_track();
-      }
-      MacMediaEvent::Stop => {
-        player.pause();
-        app.lock().await.set_native_playback_intent(false);
-      }
+      MacMediaEvent::Next => app.lock().await.next_track(),
+      MacMediaEvent::Previous => app.lock().await.previous_track(),
+      MacMediaEvent::PlayPause
+      | MacMediaEvent::Play
+      | MacMediaEvent::Pause
+      | MacMediaEvent::Stop => {}
     }
   }
 }
@@ -1441,7 +1550,10 @@ fn route_remote_spotify_macos_event(
 ) -> bool {
   use macos_media::MacMediaEvent;
   use std::sync::atomic::Ordering;
-  let native_playing = shared_is_playing.load(Ordering::Relaxed);
+  let native_playing = local_player_is_playing(
+    shared_is_playing.load(Ordering::Relaxed),
+    app.native_is_playing,
+  );
   if local_player_takes_media_keys(app.playback_owner(), native_playing) {
     return false;
   }
@@ -1470,6 +1582,91 @@ fn route_remote_spotify_macos_event(
 ))]
 fn local_player_takes_media_keys(owner: PlaybackOwner, native_playing: bool) -> bool {
   native_playing || owner != PlaybackOwner::Spotify
+}
+
+/// The same choice as `current_player` in `handle_mpris_events`, made on the
+/// locked `App` that runs the play/pause: recovery can remove the player
+/// between the two locks, and a pause or resume without one would still flip
+/// the play state.
+#[cfg(all(feature = "streaming", feature = "mpris", target_os = "linux"))]
+fn local_player_takes_play_key(
+  app: &App,
+  shared_is_playing: &std::sync::atomic::AtomicBool,
+) -> bool {
+  play_key_goes_to_local_player(
+    app.streaming_player.is_some(),
+    app.playback_owner(),
+    shared_is_playing.load(std::sync::atomic::Ordering::Relaxed),
+    app.native_is_playing,
+  )
+}
+
+/// The decision behind `local_player_takes_play_key`, on plain values.
+#[cfg(all(feature = "streaming", feature = "mpris", target_os = "linux"))]
+fn play_key_goes_to_local_player(
+  has_player: bool,
+  owner: PlaybackOwner,
+  shared_is_playing: bool,
+  native_is_playing: Option<bool>,
+) -> bool {
+  has_player
+    && local_player_takes_media_keys(
+      owner,
+      local_player_is_playing(shared_is_playing, native_is_playing),
+    )
+}
+
+/// Whether the local player counts as playing when a media key picks its
+/// target. `shared_is_playing` changes only on librespot's Playing/Paused
+/// events, so it can still say playing after another device took over, when
+/// `Stopped` has already set `native_is_playing` to false. Count the local
+/// player as playing only while the App agrees, so PlayPause pauses the other
+/// device instead of resuming here. An active pull-back (#693) has the App
+/// flag set.
+#[cfg(all(
+  feature = "streaming",
+  any(
+    all(feature = "mpris", target_os = "linux"),
+    all(feature = "macos-media", target_os = "macos")
+  )
+))]
+fn local_player_is_playing(shared_is_playing: bool, native_is_playing: Option<bool>) -> bool {
+  shared_is_playing && native_is_playing != Some(false)
+}
+
+/// A play key (`None` toggles, `Some(true)` plays, `Some(false)` pauses or
+/// stops) on the local player, through the same App paths as the TUI's
+/// play/pause, so the App's play state follows at once (#985).
+#[cfg(all(
+  feature = "streaming",
+  any(
+    all(feature = "mpris", target_os = "linux"),
+    all(feature = "macos-media", target_os = "macos")
+  )
+))]
+fn press_local_play_key(app: &mut App, play: Option<bool>, shared_is_playing: bool) {
+  if play_key_resumes(play, app.native_is_playing, shared_is_playing) {
+    app.resume_native_playback();
+  } else {
+    app.pause_native_playback();
+  }
+}
+
+/// Whether a play key resumes. A toggle reads the App's own play state first:
+/// librespot's last event can be stale.
+#[cfg(all(
+  feature = "streaming",
+  any(
+    all(feature = "mpris", target_os = "linux"),
+    all(feature = "macos-media", target_os = "macos")
+  )
+))]
+fn play_key_resumes(
+  play: Option<bool>,
+  native_is_playing: Option<bool>,
+  shared_is_playing: bool,
+) -> bool {
+  play.unwrap_or_else(|| !native_is_playing.unwrap_or(shared_is_playing))
 }
 
 /// While Music owns playback, a media key that still reaches spotatui drives
@@ -1564,54 +1761,57 @@ async fn handle_windows_media_events(
       continue;
     }
 
+    let play_key = match &event {
+      WindowsMediaEvent::Play => Some(Some(true)),
+      WindowsMediaEvent::Pause => Some(Some(false)),
+      _ => None,
+    };
+    if let Some(play) = play_key {
+      if app.lock().await.relay_party_play_key(play) {
+        continue;
+      }
+    }
+
+    // The local player takes the same paths as the TUI's play/pause, so the App
+    // state and the playbar follow at once (#985). Checked under the lock that
+    // runs the action: recovery can remove the player in between.
+    let play = match event {
+      WindowsMediaEvent::Play => Some(true),
+      WindowsMediaEvent::Pause | WindowsMediaEvent::Stop => Some(false),
+      _ => None,
+    };
+    if let Some(play) = play {
+      let mut app_lock = app.lock().await;
+      let has_player = app_lock
+        .streaming_player
+        .as_ref()
+        .is_some_and(|player| player.is_available());
+      if has_player && app_lock.native_track_info.is_some() {
+        if play {
+          app_lock.resume_native_playback();
+        } else {
+          app_lock.pause_native_playback();
+        }
+      } else if play {
+        app_lock.dispatch_spotify_fallback(IoEvent::StartPlayback(None, None, None));
+      } else {
+        app_lock.dispatch_spotify_fallback(IoEvent::PausePlayback);
+      }
+      continue;
+    }
+
     let player_opt = player::active_streaming_player(&app).await;
 
     let is_native_loaded = app.lock().await.native_track_info.is_some();
 
     match event {
-      WindowsMediaEvent::Play => {
-        if let Some(player) = &player_opt {
-          if is_native_loaded {
-            player.play();
-            continue;
-          }
-        }
-        app
-          .lock()
-          .await
-          .dispatch_spotify_fallback(IoEvent::StartPlayback(None, None, None));
-      }
-      WindowsMediaEvent::Pause => {
-        if let Some(player) = &player_opt {
-          if is_native_loaded {
-            player.pause();
-            continue;
-          }
-        }
-        app
-          .lock()
-          .await
-          .dispatch_spotify_fallback(IoEvent::PausePlayback);
-      }
       WindowsMediaEvent::Next => {
         app.lock().await.next_track();
       }
       WindowsMediaEvent::Previous => {
         app.lock().await.previous_track();
       }
-      WindowsMediaEvent::Stop => {
-        if let Some(player) = &player_opt {
-          if is_native_loaded {
-            player.pause();
-            app.lock().await.set_native_playback_intent(false);
-            continue;
-          }
-        }
-        app
-          .lock()
-          .await
-          .dispatch_spotify_fallback(IoEvent::PausePlayback);
-      }
+      WindowsMediaEvent::Play | WindowsMediaEvent::Pause | WindowsMediaEvent::Stop => {}
       WindowsMediaEvent::SetPosition(pos) => {
         if let Some(player) = &player_opt {
           if is_native_loaded {
@@ -1712,5 +1912,97 @@ mod media_key_tests {
     ] {
       assert!(local_player_takes_media_keys(owner, false), "{owner:?}");
     }
+  }
+
+  /// Recovery can remove the player after `current_player` was picked; the
+  /// recheck under the action's lock then sends the key to the fallback (#986).
+  #[cfg(all(feature = "mpris", target_os = "linux"))]
+  #[test]
+  fn a_play_key_without_a_local_player_takes_the_fallback() {
+    let (tx, _rx) = std::sync::mpsc::channel();
+    let app = App::new(tx, UserConfig::new(), Some(std::time::SystemTime::now()));
+    let playing = std::sync::atomic::AtomicBool::new(true);
+
+    assert!(!local_player_takes_play_key(&app, &playing));
+  }
+
+  /// Another device took over: `Stopped` cleared the App flag before a
+  /// `Paused` cleared the shared one. PlayPause must pause that device.
+  #[cfg(all(feature = "mpris", target_os = "linux"))]
+  #[test]
+  fn after_another_device_takes_over_the_play_key_goes_to_that_device() {
+    assert!(!play_key_goes_to_local_player(
+      true,
+      PlaybackOwner::Spotify,
+      true,
+      Some(false)
+    ));
+  }
+
+  #[cfg(all(feature = "mpris", target_os = "linux"))]
+  #[test]
+  fn a_pull_back_that_plays_here_keeps_the_play_key() {
+    for native in [Some(true), None] {
+      assert!(
+        play_key_goes_to_local_player(true, PlaybackOwner::Spotify, true, native),
+        "{native:?}"
+      );
+    }
+  }
+
+  /// macOS reads the remote-device route the same way: a stale librespot flag
+  /// after a takeover must not keep the keys on the local player.
+  #[test]
+  fn a_stale_librespot_playing_flag_does_not_keep_the_media_keys_after_a_takeover() {
+    assert!(!local_player_takes_media_keys(
+      PlaybackOwner::Spotify,
+      local_player_is_playing(true, Some(false))
+    ));
+  }
+
+  #[test]
+  fn a_toggle_reads_the_app_play_state_before_librespot() {
+    assert!(!play_key_resumes(None, Some(true), false));
+    assert!(play_key_resumes(None, Some(false), true));
+  }
+
+  #[test]
+  fn a_toggle_follows_librespot_until_the_app_knows_the_play_state() {
+    assert!(!play_key_resumes(None, None, true));
+    assert!(play_key_resumes(None, None, false));
+  }
+
+  #[test]
+  fn play_and_pause_keys_ignore_the_play_state() {
+    assert!(play_key_resumes(Some(true), Some(true), true));
+    assert!(!play_key_resumes(Some(false), Some(false), false));
+  }
+
+  #[test]
+  fn a_pause_key_then_a_toggle_pauses_then_resumes_the_last_playback() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(std::time::SystemTime::now()));
+
+    press_local_play_key(&mut app, Some(false), true);
+    assert_eq!(app.native_is_playing, Some(false));
+
+    // librespot still says playing; the App's paused state wins, and with
+    // nothing loaded the resume asks Spotify for the last playback.
+    press_local_play_key(&mut app, None, true);
+    assert!(matches!(
+      rx.try_recv(),
+      Ok(IoEvent::StartPlayback(None, None, None))
+    ));
+  }
+
+  #[cfg(all(feature = "mpris", target_os = "linux"))]
+  #[test]
+  fn a_paused_local_player_keeps_the_play_key_to_resume() {
+    assert!(play_key_goes_to_local_player(
+      true,
+      PlaybackOwner::NativeSpotify,
+      false,
+      Some(false)
+    ));
   }
 }

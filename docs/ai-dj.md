@@ -262,6 +262,10 @@ A **bare binary name expands to a known preset**, so this is enough:
 | `opencode` | `opencode run` | `opencode run -m openai/gpt-5.4` | argv (trailing positional) |
 | `gemini` (legacy) | `gemini -p` | `gemini -m MODEL -p` | argv |
 
+At run time `claude` also gets `--tools "" --disallowedTools "mcp__*"` right after the program name, and `codex exec`
+gets `--sandbox read-only` after `exec` (see below), so `claude -p` runs as
+`claude --tools "" --disallowedTools "mcp__*" -p`.
+
 `agy` is Google's current CLI. The Gemini CLI it superseded is kept as a preset only
 so an existing config keeps working, and it is not offered in the picker unless the
 binary is installed.
@@ -288,19 +292,32 @@ suggestion costs you one error message and nothing else.
 
 Any other headless command works too, since spotatui writes the prompt and reads
 stdout and nothing is hardcoded about these six. **A multi-part command you wrote
-yourself is used exactly as written and never gains a model flag**, so your own argv
-keeps ownership of its own flags. The single exception is the shipped
-`["claude", "-p"]`: it is byte-identical to what the preset produces, so it still
-counts as the preset shape and can still take a model.
+yourself never gains a model flag**, so your own argv keeps ownership of its own flags.
+It can gain the restricting flag of its CLI, unless it already names a tool or sandbox
+flag (see below). The exception is a command byte-identical to what a preset produces
+with no model, such as the shipped `["claude", "-p"]` or `["codex", "exec", "-"]`: it
+still counts as the preset shape and takes `dj_agent_model`.
 
 **Be clear about the cost of this mode:** every step is a fresh subprocess with
 several seconds of startup latency, so a multi-step turn is several of those.
 That is what the four-step cap bounds. The API backends below keep one HTTP
 connection per step instead and are correspondingly quicker.
 
-The agent runs in a scratch directory (`~/.config/spotatui/dj-scratch`), *not* your
+The agent runs in a scratch directory (`~/.local/state/spotatui/dj-scratch`), *not* your
 current directory — otherwise it reads the `CLAUDE.md` and source files of whatever
 project you happen to be in and starts recommending music about Rust.
+
+The prompt carries track titles, and anyone can write a title. So spotatui restricts
+the agent: `claude` gets `--tools "" --disallowedTools "mcp__*"`, which turns its built-in
+tools off and denies the tools of your configured MCP servers (the servers still start),
+and `codex exec` gets
+`--sandbox read-only`, which stops writes but still lets it read files and run
+read-only commands. Neither is added when your `dj_agent_command` already names a tool,
+MCP or sandbox flag. The Codex flag goes in only when the command starts with
+`codex exec`: with options between the two (`codex --profile work exec`), your Codex
+config decides the sandbox. `copilot -p` denies a tool request that needs approval, but its
+policy can still let read-only operations through. `opencode`, `agy` and `gemini`
+have no such flag, so they run with whatever permissions you gave them.
 
 ### `anthropic` — API key
 
@@ -419,7 +436,7 @@ batch rather than per track is what keeps latency and quota sane.
 | "did not answer within 90s" | Raise `dj_agent_timeout_secs`. If you go much above ~180, also revisit auto-queue: the refill watermark assumes a round trip well under the queue's runway. |
 | "could not read a decision out of … output" | The CLI answered with prose and no JSON. Check it is logged in by running the same command by hand. |
 | "There's an issue with the selected model (…)" | `dj_agent_model` names something that CLI does not accept. It fails locally in milliseconds without calling anything, so nothing was spent: pick another model with <kbd>Ctrl</kbd>+<kbd>G</kbd>, or clear the key. |
-| `codex`: "Not inside a trusted directory and --skip-git-repo-check was not specified" | `codex exec` refuses to run in the DJ's scratch directory. Known limitation: use another agent (`claude`, `agy`) or an API backend, or trust `~/.config/spotatui/dj-scratch` in your codex config. |
+| `codex`: "Not inside a trusted directory and --skip-git-repo-check was not specified" | `codex exec` refuses to run in the DJ's scratch directory. Known limitation: use another agent (`claude`, `agy`) or an API backend, or trust `~/.local/state/spotatui/dj-scratch` in your codex config. |
 | The DJ answers a question you did not ask | `agy` ignores stdin, so a config carrying `dj_agent_prompt_via: stdin` delivers the prompt nowhere. Remove that key so the preset decides, or set it to `arg`. |
 | It never asked which AI to use | Something in your config already counts as a deliberate choice. See [It never asked me](#it-never-asked-me), or just press <kbd>Ctrl</kbd>+<kbd>G</kbd>. |
 | "no API key for the Anthropic DJ backend" | `export SPOTATUI_DJ_API_KEY=…`. |

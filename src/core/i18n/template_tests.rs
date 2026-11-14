@@ -339,6 +339,18 @@ fn every_typed_message_fills_its_placeholders_and_preserves_all_arguments() {
       ["SENTINEL_DOWN_中", "SENTINEL_UP_中"]
     );
     check!(
+      "popups.playlist_picker_search_hint",
+      strings
+        .popups
+        .playlist_picker_search_hint("SENTINEL_KEY_中"),
+      ["SENTINEL_KEY_中"]
+    );
+    check!(
+      "popups.no_matching_playlists",
+      strings.popups.no_matching_playlists("SENTINEL_QUERY_中"),
+      ["SENTINEL_QUERY_中"]
+    );
+    check!(
       "popups.mirror_onto",
       strings.popups.mirror_onto("SENTINEL_NAME_中"),
       ["SENTINEL_NAME_中"]
@@ -374,6 +386,11 @@ fn every_typed_message_fills_its_placeholders_and_preserves_all_arguments() {
     check!(
       "popups.add_tracks_title",
       strings.popups.add_tracks_title("SENTINEL_NAME_中"),
+      ["SENTINEL_NAME_中"]
+    );
+    check!(
+      "popups.soloist_pair_pick",
+      strings.popups.soloist_pair_pick("SENTINEL_NAME_中"),
       ["SENTINEL_NAME_中"]
     );
     check!(
@@ -787,6 +804,11 @@ fn every_typed_message_fills_its_placeholders_and_preserves_all_arguments() {
       ["SENTINEL_KEY_中"]
     );
     check!(
+      "sidebar.empty_spotify",
+      strings.sidebar.empty_spotify("SENTINEL_KEY_中"),
+      ["SENTINEL_KEY_中"]
+    );
+    check!(
       "status_app.audio_backend_failed",
       strings.status.app.audio_backend_failed("SENTINEL_ERROR_中"),
       ["SENTINEL_ERROR_中"]
@@ -953,6 +975,16 @@ fn every_typed_message_fills_its_placeholders_and_preserves_all_arguments() {
       "status_app.visualizer_config",
       strings.status.app.visualizer_config("SENTINEL_PROBLEM_中"),
       ["SENTINEL_PROBLEM_中"]
+    );
+    check!(
+      "status_app.pane_nothing_to_detach",
+      strings.status.app.pane_nothing_to_detach("SENTINEL_KEY_中"),
+      ["SENTINEL_KEY_中"]
+    );
+    check!(
+      "status_app.pane_hidden",
+      strings.status.app.pane_hidden("SENTINEL_KEY_中"),
+      ["SENTINEL_KEY_中"]
     );
     check!(
       "status_infra.local_uri_invalid",
@@ -1404,6 +1436,79 @@ fn every_typed_message_fills_its_placeholders_and_preserves_all_arguments() {
       "status_infra.shuffle_capped",
       strings.status.infra.shuffle_capped(9101),
       ["9101"]
+    );
+    check!(
+      "status_infra.soloist_missing",
+      strings.status.infra.soloist_missing("SENTINEL_PATH_中"),
+      ["SENTINEL_PATH_中"]
+    );
+    check!(
+      "status_infra.soloist_not_executable",
+      strings
+        .status
+        .infra
+        .soloist_not_executable("SENTINEL_PATH_中"),
+      ["SENTINEL_PATH_中"]
+    );
+    check!(
+      "status_infra.soloist_start_failed",
+      strings
+        .status
+        .infra
+        .soloist_start_failed("SENTINEL_ERROR_中"),
+      ["SENTINEL_ERROR_中"]
+    );
+    check!(
+      "status_infra.soloist_downloading",
+      strings.status.infra.soloist_downloading(87),
+      ["87"]
+    );
+    check!(
+      "status_infra.soloist_download_failed",
+      strings
+        .status
+        .infra
+        .soloist_download_failed("SENTINEL_ERROR_中"),
+      ["SENTINEL_ERROR_中"]
+    );
+    check!(
+      "status_infra.soloist_key_save_failed",
+      strings
+        .status
+        .infra
+        .soloist_key_save_failed("SENTINEL_ERROR_中"),
+      ["SENTINEL_ERROR_中"]
+    );
+    check!(
+      "status_infra.soloist_key_missing",
+      strings.status.infra.soloist_key_missing("SENTINEL_PATH_中"),
+      ["SENTINEL_PATH_中"]
+    );
+    check!(
+      "status_infra.soloist_expires_soon",
+      strings
+        .status
+        .infra
+        .soloist_expires_soon(9101, "SENTINEL_UNIT_中"),
+      ["9101", "SENTINEL_UNIT_中"]
+    );
+    check!(
+      "status_infra.soloist_streams",
+      strings.status.infra.soloist_streams("SENTINEL_QUALITY_中"),
+      ["SENTINEL_QUALITY_中"]
+    );
+    check!(
+      "status_infra.soloist_lossy_hint",
+      strings
+        .status
+        .infra
+        .soloist_lossy_hint("SENTINEL_QUALITY_中"),
+      ["SENTINEL_QUALITY_中"]
+    );
+    check!(
+      "status_infra.soloist_dropped",
+      strings.status.infra.soloist_dropped("SENTINEL_QUALITY_中"),
+      ["SENTINEL_QUALITY_中"]
     );
     check!(
       "status_infra.friend_added_code",

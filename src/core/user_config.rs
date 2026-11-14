@@ -1,5 +1,5 @@
 use crate::core::format::Template;
-use crate::core::input::Key;
+use crate::core::input::{Arrow, Key};
 use crate::core::state::{sanitized_radio_stations, RadioStationConfig};
 // Re-exported so existing `crate::core::user_config::{Theme, ...}` importers
 // keep working now that the theme types live in `core/theme.rs`.
@@ -213,6 +213,7 @@ pub struct UserTheme {
 
 /// Available audio visualizer styles
 #[derive(Clone, Copy, Debug, PartialEq, Default, Serialize, Deserialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub enum VisualizerStyle {
   /// Cava mode: cava's engine and mirrored stereo layout drawn in eighth blocks
   ///
@@ -337,6 +338,83 @@ impl StartupBehavior {
   }
 }
 
+/// What plays the audio behind spotatui's own Connect device.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlaybackEngine {
+  #[default]
+  Librespot,
+  /// Spotify Soloist, a binary the user downloads from Spotify.
+  Soloist,
+}
+
+#[cfg(feature = "soloist")]
+impl PlaybackEngine {
+  pub fn name(self) -> &'static str {
+    match self {
+      PlaybackEngine::Librespot => "librespot",
+      PlaybackEngine::Soloist => "Soloist",
+    }
+  }
+
+  pub fn options() -> &'static [&'static str] {
+    &["librespot", "Soloist"]
+  }
+
+  pub fn from_name(name: &str) -> Self {
+    match name {
+      "Soloist" => PlaybackEngine::Soloist,
+      _ => PlaybackEngine::Librespot,
+    }
+  }
+}
+
+/// The stream quality Soloist asks for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SoloistQuality {
+  Normal,
+  High,
+  VeryHigh,
+  #[default]
+  Lossless,
+}
+
+#[cfg(feature = "soloist")]
+impl SoloistQuality {
+  pub fn name(self) -> &'static str {
+    match self {
+      SoloistQuality::Normal => "Normal",
+      SoloistQuality::High => "High",
+      SoloistQuality::VeryHigh => "Very high",
+      SoloistQuality::Lossless => "Lossless",
+    }
+  }
+
+  pub fn options() -> &'static [&'static str] {
+    &["Normal", "High", "Very high", "Lossless"]
+  }
+
+  pub fn from_name(name: &str) -> Self {
+    match name {
+      "Normal" => SoloistQuality::Normal,
+      "High" => SoloistQuality::High,
+      "Very high" => SoloistQuality::VeryHigh,
+      _ => SoloistQuality::Lossless,
+    }
+  }
+
+  /// Spotify's `audio.play_bitrate_enumeration`; only 5 (FLAC) is measured on Soloist.
+  pub fn enumeration(self) -> u8 {
+    match self {
+      SoloistQuality::Normal => 2,
+      SoloistQuality::High => 3,
+      SoloistQuality::VeryHigh => 4,
+      SoloistQuality::Lossless => 5,
+    }
+  }
+}
+
 fn parse_key(key: String) -> Result<Key> {
   // "ctrl" with no dash and "ctrl-" with nothing after the dash are config
   // typos; they must surface as config errors naming the binding, never a
@@ -379,7 +457,10 @@ fn parse_key(key: String) -> Result<Key> {
 
   match sections[0].to_lowercase().as_str() {
     "ctrl" => Ok(Key::Ctrl(modifier_char(&key, &sections)?)),
-    "alt" => Ok(Key::Alt(modifier_char(&key, &sections)?)),
+    "alt" => match sections.get(1).and_then(|rest| alt_arrow_key(rest)) {
+      Some(arrow_key) => Ok(arrow_key),
+      None => Ok(Key::Alt(modifier_char(&key, &sections)?)),
+    },
     "left" => Ok(Key::Left),
     "right" => Ok(Key::Right),
     "up" => Ok(Key::Up),
@@ -412,6 +493,23 @@ fn parse_key(key: String) -> Result<Key> {
   }
 }
 
+/// `left` or `shift-left` (any arrow) after `alt-`.
+fn alt_arrow_key(rest: &str) -> Option<Key> {
+  let rest = rest.to_lowercase();
+  let (shift, name) = match rest.strip_prefix("shift-") {
+    Some(name) => (true, name),
+    None => (false, rest.as_str()),
+  };
+  let arrow = [Arrow::Left, Arrow::Right, Arrow::Up, Arrow::Down]
+    .into_iter()
+    .find(|arrow| arrow.name() == name)?;
+  Some(if shift {
+    Key::AltShiftArrow(arrow)
+  } else {
+    Key::AltArrow(arrow)
+  })
+}
+
 /// Public version of parse_key for use in app.rs
 pub fn parse_key_public(key: String) -> Result<Key> {
   parse_key(key)
@@ -424,6 +522,8 @@ pub fn key_to_config_string(key: &Key) -> String {
     Key::Char(c) => c.to_string(),
     Key::Ctrl(c) => format!("ctrl-{}", c),
     Key::Alt(c) => format!("alt-{}", c),
+    Key::AltArrow(arrow) => format!("alt-{}", arrow.name()),
+    Key::AltShiftArrow(arrow) => format!("alt-shift-{}", arrow.name()),
     Key::Enter => "enter".to_string(),
     Key::Esc => "esc".to_string(),
     Key::Backspace => "backspace".to_string(),
@@ -541,6 +641,20 @@ pub struct KeyBindingsString {
   listening_party: Option<String>,
   like_track: Option<String>,
   generate_recap: Option<String>,
+  detach_pane: Option<String>,
+  close_pane: Option<String>,
+  focus_pane_left: Option<String>,
+  focus_pane_down: Option<String>,
+  focus_pane_up: Option<String>,
+  focus_pane_right: Option<String>,
+  move_pane_left: Option<String>,
+  move_pane_down: Option<String>,
+  move_pane_up: Option<String>,
+  move_pane_right: Option<String>,
+  rotate_pane: Option<String>,
+  grow_pane: Option<String>,
+  shrink_pane: Option<String>,
+  reset_panes: Option<String>,
 }
 
 #[derive(Clone, PartialEq)]
@@ -602,6 +716,20 @@ pub struct KeyBindings {
   pub listening_party: Key,
   pub like_track: Key,
   pub generate_recap: Key,
+  pub detach_pane: Key,
+  pub close_pane: Key,
+  pub focus_pane_left: Key,
+  pub focus_pane_down: Key,
+  pub focus_pane_up: Key,
+  pub focus_pane_right: Key,
+  pub move_pane_left: Key,
+  pub move_pane_down: Key,
+  pub move_pane_up: Key,
+  pub move_pane_right: Key,
+  pub rotate_pane: Key,
+  pub grow_pane: Key,
+  pub shrink_pane: Key,
+  pub reset_panes: Key,
 }
 
 #[derive(Default, Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -694,6 +822,9 @@ pub struct BehaviorConfigString {
   pub subsonic_username: Option<String>,
   pub subsonic_password: Option<String>,
   pub ytdlp_path: Option<String>,
+  pub playback_engine: Option<PlaybackEngine>,
+  pub soloist_path: Option<String>,
+  pub soloist_audio_quality: Option<SoloistQuality>,
   pub qobuz_quality: Option<u8>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub radio_stations: Option<Vec<RadioStationConfig>>,
@@ -896,6 +1027,11 @@ pub struct BehaviorConfig {
   /// Path to the `yt-dlp` binary used by the YouTube source. `None` resolves
   /// plain `yt-dlp` through `$PATH`.
   pub ytdlp_path: Option<String>,
+  /// What plays behind the Native Streaming device; a change in Settings switches at once.
+  pub playback_engine: PlaybackEngine,
+  /// Path to the Soloist binary the user downloaded from Spotify.
+  pub soloist_path: Option<String>,
+  pub soloist_audio_quality: SoloistQuality,
   /// Qobuz stream quality: 5 (MP3 320), 6 (FLAC 16/44.1), 7 (FLAC 24/96),
   /// 27 (FLAC 24/192). Default 6.
   pub qobuz_quality: u8,
@@ -1268,6 +1404,20 @@ impl UserConfig {
         listening_party: Key::Ctrl('p'),
         like_track: Key::Char('F'),
         generate_recap: Key::Char('R'),
+        detach_pane: Key::Alt('d'),
+        close_pane: Key::Alt('x'),
+        focus_pane_left: Key::Alt('h'),
+        focus_pane_down: Key::Alt('j'),
+        focus_pane_up: Key::Alt('k'),
+        focus_pane_right: Key::Alt('l'),
+        move_pane_left: Key::Alt('H'),
+        move_pane_down: Key::Alt('J'),
+        move_pane_up: Key::Alt('K'),
+        move_pane_right: Key::Alt('L'),
+        rotate_pane: Key::Alt('r'),
+        grow_pane: Key::Alt('='),
+        shrink_pane: Key::Alt('-'),
+        reset_panes: Key::Alt('0'),
       },
       plugin_command_keys: HashMap::new(),
       behavior: BehaviorConfig {
@@ -1362,6 +1512,9 @@ impl UserConfig {
         subsonic_username: None,
         subsonic_password: None,
         ytdlp_path: None,
+        playback_engine: PlaybackEngine::Librespot,
+        soloist_path: None,
+        soloist_audio_quality: SoloistQuality::Lossless,
         qobuz_quality: QOBUZ_QUALITY_DEFAULT,
         radio_stations: Vec::new(),
         // --- Phase 2: icons / glyphs / labels (defaults = today's glyphs) ---
@@ -1506,6 +1659,20 @@ impl UserConfig {
     to_keys!(listening_party);
     to_keys!(like_track);
     to_keys!(generate_recap);
+    to_keys!(detach_pane);
+    to_keys!(close_pane);
+    to_keys!(focus_pane_left);
+    to_keys!(focus_pane_down);
+    to_keys!(focus_pane_up);
+    to_keys!(focus_pane_right);
+    to_keys!(move_pane_left);
+    to_keys!(move_pane_down);
+    to_keys!(move_pane_up);
+    to_keys!(move_pane_right);
+    to_keys!(rotate_pane);
+    to_keys!(grow_pane);
+    to_keys!(shrink_pane);
+    to_keys!(reset_panes);
 
     Ok(())
   }
@@ -1972,6 +2139,15 @@ impl UserConfig {
     if let Some(ytdlp_path) = trim_to_none(behavior_config.ytdlp_path) {
       self.behavior.ytdlp_path = Some(ytdlp_path);
     }
+    if let Some(playback_engine) = behavior_config.playback_engine {
+      self.behavior.playback_engine = playback_engine;
+    }
+    if let Some(soloist_path) = trim_to_none(behavior_config.soloist_path) {
+      self.behavior.soloist_path = Some(soloist_path);
+    }
+    if let Some(quality) = behavior_config.soloist_audio_quality {
+      self.behavior.soloist_audio_quality = quality;
+    }
     if let Some(qobuz_quality) = behavior_config.qobuz_quality {
       self.behavior.qobuz_quality = qobuz_quality_or_default(qobuz_quality);
     }
@@ -2238,6 +2414,20 @@ impl UserConfig {
       k.listening_party,
       k.like_track,
       k.generate_recap,
+      k.detach_pane,
+      k.close_pane,
+      k.focus_pane_left,
+      k.focus_pane_down,
+      k.focus_pane_up,
+      k.focus_pane_right,
+      k.move_pane_left,
+      k.move_pane_down,
+      k.move_pane_up,
+      k.move_pane_right,
+      k.rotate_pane,
+      k.grow_pane,
+      k.shrink_pane,
+      k.reset_panes,
     ]
   }
 
@@ -2410,6 +2600,9 @@ impl UserConfig {
       subsonic_username: self.behavior.subsonic_username.clone(),
       subsonic_password: self.behavior.subsonic_password.clone(),
       ytdlp_path: self.behavior.ytdlp_path.clone(),
+      playback_engine: Some(self.behavior.playback_engine),
+      soloist_path: self.behavior.soloist_path.clone(),
+      soloist_audio_quality: Some(self.behavior.soloist_audio_quality),
       qobuz_quality: Some(self.behavior.qobuz_quality),
       radio_stations: if self.behavior.radio_stations.is_empty() {
         None
@@ -2506,42 +2699,7 @@ impl UserConfig {
     };
 
     // Helper to convert Key to config string
-    let key_to_config_string = |key: Key| -> String {
-      match key {
-        Key::Char(' ') => "space".to_string(),
-        Key::Char(c) => c.to_string(),
-        Key::Ctrl(c) => format!("ctrl-{}", c),
-        Key::Alt(c) => format!("alt-{}", c),
-        Key::Enter => "enter".to_string(),
-        Key::Tab => "tab".to_string(),
-        Key::Esc => "esc".to_string(),
-        Key::Backspace => "backspace".to_string(),
-        Key::Delete => "del".to_string(),
-        Key::Left => "left".to_string(),
-        Key::Right => "right".to_string(),
-        Key::Up => "up".to_string(),
-        Key::Down => "down".to_string(),
-        Key::Home => "home".to_string(),
-        Key::End => "end".to_string(),
-        Key::Ins => "ins".to_string(),
-        Key::PageUp => "pageup".to_string(),
-        Key::PageDown => "pagedown".to_string(),
-        Key::F0 => "f0".to_string(),
-        Key::F1 => "f1".to_string(),
-        Key::F2 => "f2".to_string(),
-        Key::F3 => "f3".to_string(),
-        Key::F4 => "f4".to_string(),
-        Key::F5 => "f5".to_string(),
-        Key::F6 => "f6".to_string(),
-        Key::F7 => "f7".to_string(),
-        Key::F8 => "f8".to_string(),
-        Key::F9 => "f9".to_string(),
-        Key::F10 => "f10".to_string(),
-        Key::F11 => "f11".to_string(),
-        Key::F12 => "f12".to_string(),
-        _ => "unknown".to_string(),
-      }
-    };
+    let key_to_config_string = |key: Key| -> String { self::key_to_config_string(&key) };
 
     // Helper to build keybindings config from current values
     let build_keybindings = || KeyBindingsString {
@@ -2595,6 +2753,20 @@ impl UserConfig {
       listening_party: Some(key_to_config_string(self.keys.listening_party)),
       like_track: Some(key_to_config_string(self.keys.like_track)),
       generate_recap: Some(key_to_config_string(self.keys.generate_recap)),
+      detach_pane: Some(key_to_config_string(self.keys.detach_pane)),
+      close_pane: Some(key_to_config_string(self.keys.close_pane)),
+      focus_pane_left: Some(key_to_config_string(self.keys.focus_pane_left)),
+      focus_pane_down: Some(key_to_config_string(self.keys.focus_pane_down)),
+      focus_pane_up: Some(key_to_config_string(self.keys.focus_pane_up)),
+      focus_pane_right: Some(key_to_config_string(self.keys.focus_pane_right)),
+      move_pane_left: Some(key_to_config_string(self.keys.move_pane_left)),
+      move_pane_down: Some(key_to_config_string(self.keys.move_pane_down)),
+      move_pane_up: Some(key_to_config_string(self.keys.move_pane_up)),
+      move_pane_right: Some(key_to_config_string(self.keys.move_pane_right)),
+      rotate_pane: Some(key_to_config_string(self.keys.rotate_pane)),
+      grow_pane: Some(key_to_config_string(self.keys.grow_pane)),
+      shrink_pane: Some(key_to_config_string(self.keys.shrink_pane)),
+      reset_panes: Some(key_to_config_string(self.keys.reset_panes)),
     };
 
     // Helper to build theme config from current values
@@ -2908,6 +3080,20 @@ mod tests {
   }
 
   #[test]
+  fn alt_arrows_parse_and_write_back_the_same_string() {
+    use super::{key_to_config_string, parse_key};
+    use crate::core::input::{Arrow, Key};
+
+    for (text, key) in [
+      ("alt-left", Key::AltArrow(Arrow::Left)),
+      ("alt-shift-up", Key::AltShiftArrow(Arrow::Up)),
+    ] {
+      assert_eq!(parse_key(text.to_string()).unwrap(), key);
+      assert_eq!(key_to_config_string(&key), text);
+    }
+  }
+
+  #[test]
   fn a_malformed_keybinding_keeps_the_default_and_still_loads() {
     use super::{KeyBindingsString, UserConfig};
     use crate::core::input::Key;
@@ -3198,6 +3384,19 @@ mod tests {
     // Missing field defaults to None (not overriding the config default)
     let config: BehaviorConfigString = serde_yaml::from_str("{}").unwrap();
     assert_eq!(config.startup_behavior, None);
+  }
+
+  #[test]
+  fn soloist_settings_parse_in_every_build() {
+    use super::{BehaviorConfigString, PlaybackEngine, SoloistQuality};
+
+    let config: BehaviorConfigString = serde_yaml::from_str(
+      "playback_engine: soloist\nsoloist_path: C:/soloist.exe\nsoloist_audio_quality: very_high",
+    )
+    .unwrap();
+    assert_eq!(config.playback_engine, Some(PlaybackEngine::Soloist));
+    assert_eq!(config.soloist_path.as_deref(), Some("C:/soloist.exe"));
+    assert_eq!(config.soloist_audio_quality, Some(SoloistQuality::VeryHigh));
   }
 
   #[test]
@@ -3609,6 +3808,30 @@ dj_api_key: null
     config.behavior.dj_configured = Some(true);
     config.save_config().unwrap();
     assert_eq!(on_disk(&config_path).dj_configured, Some(true));
+  }
+
+  #[test]
+  fn a_save_keeps_alt_arrow_bindings() {
+    use super::{UserConfig, UserConfigPaths, UserConfigString};
+    use crate::core::input::{Arrow, Key};
+
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("config.yml");
+    let mut config = UserConfig::new();
+    config.path_to_config = Some(UserConfigPaths {
+      config_file_path: config_path.clone(),
+    });
+    config.keys.focus_pane_left = Key::AltArrow(Arrow::Left);
+    config.keys.move_pane_left = Key::AltShiftArrow(Arrow::Left);
+
+    config.save_config().unwrap();
+    let raw = std::fs::read_to_string(&config_path).unwrap();
+    let keys = serde_yaml::from_str::<UserConfigString>(&raw)
+      .unwrap()
+      .keybindings
+      .unwrap();
+    assert_eq!(keys.focus_pane_left.as_deref(), Some("alt-left"));
+    assert_eq!(keys.move_pane_left.as_deref(), Some("alt-shift-left"));
   }
 
   #[test]

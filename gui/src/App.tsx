@@ -2,6 +2,7 @@ import { StringsReaderContext } from "./useStringsReader";
 import { EN } from "./i18n";
 import { useEffect, useMemo, useSyncExternalStore } from "react";
 import type { Action } from "./bindings/Action";
+import type { GuiLayout } from "./bindings/GuiLayout";
 import type { UpdateAsk } from "./bindings/UpdateAsk";
 import type { WindowMode } from "./bindings/WindowMode";
 import { showsOnboarding, type Connection } from "./connection";
@@ -32,6 +33,11 @@ export function App({ connection }: { connection: Connection }) {
   );
   const resize = useMemo(
     () => (mode: WindowMode) => connection.send({ type: "window", mode }),
+    [connection],
+  );
+  const sendLayout = useMemo(
+    () => (layout: GuiLayout | null) =>
+      connection.send({ type: "pane_layout", layout }),
     [connection],
   );
 
@@ -65,8 +71,10 @@ export function App({ connection }: { connection: Connection }) {
         onWindow={state.window ? resize : null}
         onQuit={() => connection.send({ type: "quit" })}
         watchVisualizer={connection.watchVisualizer}
+        visualizerScreen={connection.screen}
         coverSrc={connection.coverSrc}
         askChangelog={connection.askChangelog}
+        onLayout={sendLayout}
       />
     </StringsReaderContext.Provider>
   );

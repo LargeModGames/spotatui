@@ -4,4 +4,4 @@
  * A paginated list surface [`Action::LoadMore`] can advance. Grows
  * additively as later screens adopt continuous pagination.
  */
-export type ListTarget = "PlaylistTracks" | "SavedTracks" | "SavedAlbums" | "SavedShows" | "ShowEpisodes";
+export type ListTarget = "PlaylistTracks" | "SavedTracks" | "SavedAlbums" | "SavedShows" | "SavedArtists" | "ShowEpisodes";

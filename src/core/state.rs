@@ -5,7 +5,13 @@
 //! edits do not churn every time volume, source, pane sizes, announcements, or
 //! radio stations change.
 
-use crate::core::{limits::MAX_PLAYBAR_ROWS, source::Source};
+use crate::core::{
+  gui_layout::GuiLayout,
+  limits::MAX_PLAYBAR_ROWS,
+  pane::{Pane, PaneNode},
+  sort::SidebarPlaylistOrder,
+  source::Source,
+};
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -49,11 +55,16 @@ pub struct RuntimeState {
   pub volume_percent: u8,
   pub shuffle_enabled: bool,
   pub active_source: Source,
+  pub playlist_sidebar_order: SidebarPlaylistOrder,
   pub seen_announcement_ids: Vec<String>,
   pub dismissed_announcements: Vec<String>,
   pub sidebar_width_percent: u8,
   pub playbar_height_rows: u16,
   pub library_height_percent: u8,
+  pub pane_layout: PaneNode,
+  pub gui_pane_layout: GuiLayout,
+  /// Whether `V` last picked the Spotify pitch view rather than a style.
+  pub pitch_view_chosen: bool,
   pub radio_stations: Vec<RadioStationConfig>,
   /// Whether the one-time community-playlist-pin prompt has been shown.
   pub community_pin_prompt_shown: bool,
@@ -67,11 +78,15 @@ impl Default for RuntimeState {
       volume_percent: 100,
       shuffle_enabled: false,
       active_source: Source::default(),
+      playlist_sidebar_order: SidebarPlaylistOrder::Spotify,
       seen_announcement_ids: Vec::new(),
       dismissed_announcements: Vec::new(),
       sidebar_width_percent: 20,
       playbar_height_rows: 6,
       library_height_percent: 30,
+      pane_layout: PaneNode::default(),
+      gui_pane_layout: GuiLayout::default(),
+      pitch_view_chosen: true,
       radio_stations: Vec::new(),
       community_pin_prompt_shown: false,
       spotify_device_id: None,
@@ -90,6 +105,9 @@ impl RuntimeState {
     if let Some(active_source) = state.active_source {
       self.active_source = active_source;
     }
+    if let Some(playlist_sidebar_order) = state.playlist_sidebar_order {
+      self.playlist_sidebar_order = playlist_sidebar_order;
+    }
     if let Some(seen_announcement_ids) = &state.seen_announcement_ids {
       self.seen_announcement_ids = sanitized_ids(seen_announcement_ids);
     }
@@ -104,6 +122,16 @@ impl RuntimeState {
     }
     if let Some(library_height_percent) = state.library_height_percent {
       self.library_height_percent = library_height_percent.min(100);
+    }
+    if let Some(mut pane_layout) = state.pane_layout.as_ref().and_then(PaneNode::sanitized) {
+      pane_layout.close(Pane::NowPlaying);
+      self.pane_layout = pane_layout;
+    }
+    if let Some(gui_pane_layout) = &state.gui_pane_layout {
+      self.gui_pane_layout = gui_pane_layout.sanitized();
+    }
+    if let Some(pitch_view_chosen) = state.pitch_view_chosen {
+      self.pitch_view_chosen = pitch_view_chosen;
     }
     if let Some(radio_stations) = &state.radio_stations {
       self.radio_stations = sanitized_radio_stations(radio_stations);
@@ -121,11 +149,15 @@ impl RuntimeState {
       volume_percent: Some(self.volume_percent.min(100)),
       shuffle_enabled: Some(self.shuffle_enabled),
       active_source: Some(self.active_source),
+      playlist_sidebar_order: Some(self.playlist_sidebar_order),
       seen_announcement_ids: Some(sanitized_ids(&self.seen_announcement_ids)),
       dismissed_announcements: Some(sanitized_ids(&self.dismissed_announcements)),
       sidebar_width_percent: Some(self.sidebar_width_percent.min(100)),
       playbar_height_rows: Some(self.playbar_height_rows.min(MAX_PLAYBAR_ROWS)),
       library_height_percent: Some(self.library_height_percent.min(100)),
+      pane_layout: self.pane_layout.sanitized(),
+      gui_pane_layout: Some(self.gui_pane_layout.sanitized()),
+      pitch_view_chosen: Some(self.pitch_view_chosen),
       radio_stations: Some(sanitized_radio_stations(&self.radio_stations)),
       community_pin_prompt_shown: Some(self.community_pin_prompt_shown),
       qobuz_bundle_cache: None,
@@ -213,6 +245,11 @@ pub struct PersistedRuntimeState {
     deserialize_with = "source_config::deserialize_option"
   )]
   pub active_source: Option<Source>,
+  #[serde(
+    skip_serializing_if = "Option::is_none",
+    deserialize_with = "deserialize_playlist_sidebar_order"
+  )]
+  pub playlist_sidebar_order: Option<SidebarPlaylistOrder>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub seen_announcement_ids: Option<Vec<String>>,
   #[serde(skip_serializing_if = "Option::is_none")]
@@ -223,6 +260,19 @@ pub struct PersistedRuntimeState {
   pub playbar_height_rows: Option<u16>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub library_height_percent: Option<u8>,
+  /// A layout this build cannot read (for example a pane from a newer release) loads as `None`.
+  #[serde(
+    skip_serializing_if = "Option::is_none",
+    deserialize_with = "deserialize_pane_layout"
+  )]
+  pub pane_layout: Option<PaneNode>,
+  #[serde(
+    skip_serializing_if = "Option::is_none",
+    deserialize_with = "deserialize_gui_pane_layout"
+  )]
+  pub gui_pane_layout: Option<GuiLayout>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub pitch_view_chosen: Option<bool>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub radio_stations: Option<Vec<RadioStationConfig>>,
   #[serde(skip_serializing_if = "Option::is_none")]
@@ -255,6 +305,13 @@ impl PersistedRuntimeState {
     }
   }
 
+  pub fn playlist_sidebar_order(playlist_sidebar_order: SidebarPlaylistOrder) -> Self {
+    Self {
+      playlist_sidebar_order: Some(playlist_sidebar_order),
+      ..Default::default()
+    }
+  }
+
   pub fn announcements(
     seen_announcement_ids: &[String],
     dismissed_announcements: &[String],
@@ -283,6 +340,28 @@ impl PersistedRuntimeState {
   pub fn library_height_percent(library_height_percent: u8) -> Self {
     Self {
       library_height_percent: Some(library_height_percent.min(100)),
+      ..Default::default()
+    }
+  }
+
+  pub fn pane_layout(pane_layout: &PaneNode) -> Self {
+    Self {
+      pane_layout: pane_layout.sanitized(),
+      ..Default::default()
+    }
+  }
+
+  #[cfg_attr(not(feature = "gui"), allow(dead_code))]
+  pub fn gui_pane_layout(gui_pane_layout: &GuiLayout) -> Self {
+    Self {
+      gui_pane_layout: Some(gui_pane_layout.sanitized()),
+      ..Default::default()
+    }
+  }
+
+  pub fn pitch_view_chosen(pitch_view_chosen: bool) -> Self {
+    Self {
+      pitch_view_chosen: Some(pitch_view_chosen),
       ..Default::default()
     }
   }
@@ -325,11 +404,15 @@ impl PersistedRuntimeState {
     self.volume_percent.is_none()
       && self.shuffle_enabled.is_none()
       && self.active_source.is_none()
+      && self.playlist_sidebar_order.is_none()
       && self.seen_announcement_ids.is_none()
       && self.dismissed_announcements.is_none()
       && self.sidebar_width_percent.is_none()
       && self.playbar_height_rows.is_none()
       && self.library_height_percent.is_none()
+      && self.pane_layout.is_none()
+      && self.gui_pane_layout.is_none()
+      && self.pitch_view_chosen.is_none()
       && self.radio_stations.is_none()
       && self.community_pin_prompt_shown.is_none()
       && self.qobuz_bundle_cache.is_none()
@@ -479,6 +562,7 @@ fn sanitized_persisted_state(state: &PersistedRuntimeState) -> PersistedRuntimeS
     volume_percent: state.volume_percent.map(|volume| volume.min(100)),
     shuffle_enabled: state.shuffle_enabled,
     active_source: state.active_source,
+    playlist_sidebar_order: state.playlist_sidebar_order,
     seen_announcement_ids: state.seen_announcement_ids.as_deref().map(sanitized_ids),
     dismissed_announcements: state.dismissed_announcements.as_deref().map(sanitized_ids),
     sidebar_width_percent: state.sidebar_width_percent.map(|width| width.min(100)),
@@ -486,6 +570,9 @@ fn sanitized_persisted_state(state: &PersistedRuntimeState) -> PersistedRuntimeS
       .playbar_height_rows
       .map(|rows| rows.min(MAX_PLAYBAR_ROWS)),
     library_height_percent: state.library_height_percent.map(|height| height.min(100)),
+    pane_layout: state.pane_layout.as_ref().and_then(PaneNode::sanitized),
+    gui_pane_layout: state.gui_pane_layout.as_ref().map(GuiLayout::sanitized),
+    pitch_view_chosen: state.pitch_view_chosen,
     radio_stations: state
       .radio_stations
       .as_deref()
@@ -509,6 +596,9 @@ fn merge_state_patch(merged: &mut PersistedRuntimeState, patch: &PersistedRuntim
   if let Some(active_source) = patch.active_source {
     merged.active_source = Some(active_source);
   }
+  if let Some(playlist_sidebar_order) = patch.playlist_sidebar_order {
+    merged.playlist_sidebar_order = Some(playlist_sidebar_order);
+  }
   if let Some(seen_announcement_ids) = &patch.seen_announcement_ids {
     merged.seen_announcement_ids = Some(merged_ids(
       merged.seen_announcement_ids.as_deref().unwrap_or(&[]),
@@ -530,6 +620,15 @@ fn merge_state_patch(merged: &mut PersistedRuntimeState, patch: &PersistedRuntim
   if let Some(library_height_percent) = patch.library_height_percent {
     merged.library_height_percent = Some(library_height_percent.min(100));
   }
+  if let Some(pane_layout) = patch.pane_layout.as_ref().and_then(PaneNode::sanitized) {
+    merged.pane_layout = Some(pane_layout);
+  }
+  if let Some(gui_pane_layout) = &patch.gui_pane_layout {
+    merged.gui_pane_layout = Some(gui_pane_layout.sanitized());
+  }
+  if let Some(pitch_view_chosen) = patch.pitch_view_chosen {
+    merged.pitch_view_chosen = Some(pitch_view_chosen);
+  }
   if let Some(radio_stations) = &patch.radio_stations {
     merged.radio_stations = Some(merged_radio_stations(
       merged.radio_stations.as_deref().unwrap_or(&[]),
@@ -545,6 +644,55 @@ fn merge_state_patch(merged: &mut PersistedRuntimeState, patch: &PersistedRuntim
   if let Some(device_id) = sanitized_device_id(patch.spotify_device_id.as_deref()) {
     merged.spotify_device_id = Some(device_id);
   }
+}
+
+fn deserialize_playlist_sidebar_order<'de, D>(
+  deserializer: D,
+) -> Result<Option<SidebarPlaylistOrder>, D::Error>
+where
+  D: serde::Deserializer<'de>,
+{
+  deserialize_lenient(deserializer, "playlist_sidebar_order", Some)
+}
+
+fn deserialize_pane_layout<'de, D>(deserializer: D) -> Result<Option<PaneNode>, D::Error>
+where
+  D: serde::Deserializer<'de>,
+{
+  deserialize_lenient(deserializer, "pane_layout", |layout: PaneNode| {
+    layout.sanitized()
+  })
+}
+
+fn deserialize_gui_pane_layout<'de, D>(deserializer: D) -> Result<Option<GuiLayout>, D::Error>
+where
+  D: serde::Deserializer<'de>,
+{
+  deserialize_lenient(deserializer, "gui_pane_layout", |layout: GuiLayout| {
+    Some(layout.sanitized())
+  })
+}
+
+/// Reads an optional field that falls back to None when it does not parse.
+fn deserialize_lenient<'de, D, T>(
+  deserializer: D,
+  field: &str,
+  sanitize: impl FnOnce(T) -> Option<T>,
+) -> Result<Option<T>, D::Error>
+where
+  D: serde::Deserializer<'de>,
+  T: serde::de::DeserializeOwned,
+{
+  let value = Option::<serde_yaml::Value>::deserialize(deserializer)?;
+  Ok(
+    value.and_then(|value| match serde_yaml::from_value::<T>(value) {
+      Ok(parsed) => sanitize(parsed),
+      Err(e) => {
+        log::warn!("[state] ignoring an unreadable {field}: {e}");
+        None
+      }
+    }),
+  )
 }
 
 fn sanitized_device_id(device_id: Option<&str>) -> Option<String> {
@@ -650,6 +798,60 @@ mod source_config {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::core::pane::{Pane, SplitAxis};
+
+  fn lyrics_beside_main() -> PaneNode {
+    let mut layout = PaneNode::default();
+    layout.detach(Pane::Main, Pane::Lyrics, SplitAxis::Horizontal);
+    layout
+  }
+
+  #[test]
+  fn the_pane_layout_saves_as_a_sparse_patch() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.yml");
+    save(&path, &PersistedRuntimeState::volume_percent(42)).unwrap();
+
+    save(
+      &path,
+      &PersistedRuntimeState::pane_layout(&lyrics_beside_main()),
+    )
+    .unwrap();
+
+    let loaded = load(&path).unwrap();
+    assert_eq!(loaded.volume_percent, Some(42));
+    let mut runtime = RuntimeState::default();
+    runtime.apply_persisted(&loaded);
+    assert_eq!(runtime.pane_layout, lyrics_beside_main());
+  }
+
+  #[test]
+  fn an_unreadable_pane_layout_loads_as_none_and_keeps_the_rest() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.yml");
+    std::fs::write(
+      &path,
+      "volume_percent: 42\npane_layout:\n  axis: vertical\n  percent: 50\n  first: main\n  second: hologram\n",
+    )
+    .unwrap();
+
+    let loaded = load(&path).unwrap();
+
+    assert_eq!(loaded.volume_percent, Some(42));
+    assert_eq!(loaded.pane_layout, None);
+  }
+
+  #[test]
+  fn a_now_playing_leaf_in_the_tui_layout_is_dropped_on_load() {
+    let mut layout = lyrics_beside_main();
+    layout.detach(Pane::Lyrics, Pane::NowPlaying, SplitAxis::Vertical);
+    let persisted = PersistedRuntimeState::pane_layout(&layout);
+
+    let mut runtime = RuntimeState::default();
+    runtime.apply_persisted(&persisted);
+
+    assert_eq!(runtime.pane_layout, lyrics_beside_main());
+  }
 
   #[test]
   fn missing_file_loads_as_empty_state() {
@@ -660,6 +862,184 @@ mod tests {
   }
 
   #[test]
+  fn missing_or_older_state_defaults_playlist_sidebar_order_to_spotify() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.yml");
+    let mut runtime = RuntimeState::default();
+
+    assert_eq!(
+      runtime.playlist_sidebar_order,
+      SidebarPlaylistOrder::Spotify
+    );
+    let missing = load(&path).unwrap();
+    assert_eq!(missing.playlist_sidebar_order, None);
+    runtime.apply_persisted(&missing);
+    assert_eq!(
+      runtime.playlist_sidebar_order,
+      SidebarPlaylistOrder::Spotify
+    );
+
+    std::fs::write(&path, "volume_percent: 42\nshuffle_enabled: true\n").unwrap();
+    let older = load(&path).unwrap();
+    assert_eq!(older.playlist_sidebar_order, None);
+    runtime.apply_persisted(&older);
+    assert_eq!(
+      runtime.playlist_sidebar_order,
+      SidebarPlaylistOrder::Spotify
+    );
+    assert_eq!(runtime.volume_percent, 42);
+    assert!(runtime.shuffle_enabled);
+  }
+
+  #[test]
+  fn playlist_sidebar_order_round_trips_all_modes() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.yml");
+
+    for (order, token) in [
+      (SidebarPlaylistOrder::Spotify, "spotify"),
+      (SidebarPlaylistOrder::RecentlyPlayed, "recently_played"),
+      (SidebarPlaylistOrder::Name, "name"),
+    ] {
+      let runtime = RuntimeState {
+        playlist_sidebar_order: order,
+        ..RuntimeState::default()
+      };
+      save(&path, &runtime.to_persisted()).unwrap();
+
+      let yaml = std::fs::read_to_string(&path).unwrap();
+      assert!(yaml.contains(&format!("playlist_sidebar_order: {token}\n")));
+      let loaded = load(&path).unwrap();
+      assert_eq!(loaded.playlist_sidebar_order, Some(order));
+      let mut restored = RuntimeState::default();
+      restored.apply_persisted(&loaded);
+      assert_eq!(restored, runtime);
+    }
+  }
+
+  #[test]
+  fn unreadable_playlist_sidebar_order_keeps_other_state() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.yml");
+
+    for value in ["future_order", "null", "42", "[spotify]", "{new: mode}"] {
+      std::fs::write(
+        &path,
+        format!("volume_percent: 42\nplaylist_sidebar_order: {value}\n"),
+      )
+      .unwrap();
+
+      let loaded = load(&path).unwrap();
+      assert_eq!(loaded.playlist_sidebar_order, None);
+      assert_eq!(loaded.volume_percent, Some(42));
+      let mut runtime = RuntimeState::default();
+      runtime.apply_persisted(&loaded);
+      assert_eq!(
+        runtime.playlist_sidebar_order,
+        SidebarPlaylistOrder::Spotify
+      );
+      assert_eq!(runtime.volume_percent, 42);
+    }
+  }
+
+  #[test]
+  fn playlist_sidebar_order_sparse_save_preserves_concurrent_fields() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.yml");
+    save(
+      &path,
+      &PersistedRuntimeState {
+        volume_percent: Some(20),
+        active_source: Some(Source::Radio),
+        ..Default::default()
+      },
+    )
+    .unwrap();
+    let mut runtime = RuntimeState::default();
+    runtime.apply_persisted(&load(&path).unwrap());
+
+    // Another instance updates the file after this runtime loaded its state.
+    save(
+      &path,
+      &PersistedRuntimeState {
+        volume_percent: Some(73),
+        shuffle_enabled: Some(true),
+        ..Default::default()
+      },
+    )
+    .unwrap();
+    runtime.playlist_sidebar_order = SidebarPlaylistOrder::Name;
+    save(
+      &path,
+      &PersistedRuntimeState::playlist_sidebar_order(runtime.playlist_sidebar_order),
+    )
+    .unwrap();
+
+    assert_eq!(
+      load(&path).unwrap(),
+      PersistedRuntimeState {
+        volume_percent: Some(73),
+        shuffle_enabled: Some(true),
+        active_source: Some(Source::Radio),
+        playlist_sidebar_order: Some(SidebarPlaylistOrder::Name),
+        ..Default::default()
+      }
+    );
+  }
+
+  #[test]
+  fn unrelated_sparse_saves_preserve_playlist_sidebar_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.yml");
+
+    for order in [
+      SidebarPlaylistOrder::RecentlyPlayed,
+      SidebarPlaylistOrder::Name,
+    ] {
+      save(&path, &PersistedRuntimeState::playlist_sidebar_order(order)).unwrap();
+      let mut runtime = RuntimeState {
+        playlist_sidebar_order: order,
+        ..RuntimeState::default()
+      };
+
+      for patch in [
+        PersistedRuntimeState::volume_percent(42),
+        PersistedRuntimeState::active_source(Source::Radio),
+        PersistedRuntimeState::shuffle_enabled(true),
+      ] {
+        runtime.apply_persisted(&patch);
+        assert_eq!(runtime.playlist_sidebar_order, order);
+        save(&path, &patch).unwrap();
+        assert_eq!(load(&path).unwrap().playlist_sidebar_order, Some(order));
+      }
+    }
+  }
+
+  #[test]
+  fn playlist_sidebar_order_patches_merge_and_restore_spotify() {
+    let mut merged = PersistedRuntimeState::default();
+    assert!(merged.is_empty());
+
+    for order in [
+      SidebarPlaylistOrder::RecentlyPlayed,
+      SidebarPlaylistOrder::Name,
+      SidebarPlaylistOrder::Spotify,
+    ] {
+      let patch = PersistedRuntimeState::playlist_sidebar_order(order);
+      assert!(!patch.is_empty());
+      assert_eq!(
+        patch,
+        PersistedRuntimeState {
+          playlist_sidebar_order: Some(order),
+          ..Default::default()
+        }
+      );
+      merged.merge_patch(&patch);
+      assert_eq!(merged, patch);
+    }
+  }
+
+  #[test]
   fn state_round_trips_all_runtime_attributes() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("spotatui").join("state.yml");
@@ -667,11 +1047,15 @@ mod tests {
       volume_percent: Some(42),
       shuffle_enabled: Some(true),
       active_source: Some(Source::Radio),
+      playlist_sidebar_order: Some(SidebarPlaylistOrder::RecentlyPlayed),
       seen_announcement_ids: Some(vec!["a".to_string(), "b".to_string()]),
       dismissed_announcements: Some(vec!["old".to_string()]),
       sidebar_width_percent: Some(25),
       playbar_height_rows: Some(7),
       library_height_percent: Some(35),
+      pane_layout: Some(lyrics_beside_main()),
+      gui_pane_layout: Some(GuiLayout::default()),
+      pitch_view_chosen: Some(false),
       radio_stations: Some(vec![RadioStationConfig {
         name: "Station".to_string(),
         url: "https://example.test/stream".to_string(),

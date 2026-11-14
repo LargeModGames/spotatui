@@ -27,7 +27,7 @@ fn sort_playlist_track_matches(matches: &mut [(TrackInfo, usize)], sort_state: S
     SortField::ReleaseDate => {
       sort_by_key_with_order(matches, sort_state.order, |(t, _)| t.release_date.clone())
     }
-    SortField::Default => {}
+    SortField::Default | SortField::RecentlyPlayed => {}
   }
 }
 

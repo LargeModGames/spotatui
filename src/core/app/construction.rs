@@ -123,6 +123,7 @@ impl Default for App {
       is_fetching_current_playback: false,
       spotify_connected: false,
       pending_keybinding_persist: None,
+      up_next_pending: false,
       keybinding_runtime: KeybindingRuntimeState::default(),
 
       active_announcement: None,
@@ -151,11 +152,13 @@ impl Default for App {
       #[cfg(feature = "streaming")]
       native_shuffle_generation: 0,
       #[cfg(not(target_os = "android"))]
-      keepawake: None,
+      keepawake: Default::default(),
       last_device_activation: None,
       native_activation_pending: false,
       #[cfg(feature = "streaming")]
       native_handed_off: false,
+      #[cfg(feature = "streaming")]
+      native_unavailable_halt: false,
       #[cfg(feature = "streaming")]
       native_handoff_resume_tried: false,
       // Sort menu defaults
@@ -178,6 +181,7 @@ impl Default for App {
       all_playlists: Vec::new(),
       _playlist_folder_nodes: None,
       playlist_folder_items: Vec::new(),
+      playlist_last_listens: PlaylistLastListens::new(),
       current_playlist_folder_id: 0,
       playlist_refresh_generation: 0,
       saved_tracks_prefetch_generation: 0,
@@ -194,6 +198,16 @@ impl Default for App {
       last_dispatched_volume: None,
       #[cfg(feature = "streaming")]
       streaming_player: None,
+      #[cfg(feature = "soloist")]
+      soloist_link: None,
+      #[cfg(feature = "soloist")]
+      soloist_downloading: false,
+      #[cfg(feature = "soloist")]
+      librespot_standby: None,
+      soloist_pairing: false,
+      soloist_offer: false,
+      #[cfg(feature = "soloist")]
+      soloist_offered: false,
       decoded_repeat: RepeatMode::Off,
       decoded_shuffle: false,
       #[cfg(feature = "local-files")]
@@ -295,6 +309,13 @@ impl App {
   #[cfg(all(test, feature = "tui"))]
   pub(crate) fn with_playback(mut self, context: CurrentPlaybackContext) -> App {
     self.current_playback_context = Some(context);
+    self
+  }
+
+  /// This app with song progress seeded, for tests.
+  #[cfg(all(test, feature = "tui"))]
+  pub(crate) fn with_song_progress(mut self, progress_ms: u128) -> App {
+    self.song_progress_ms = progress_ms;
     self
   }
 

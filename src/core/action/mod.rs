@@ -345,12 +345,23 @@ pub enum Action {
     id: String,
     value: SettingInput,
   },
+  /// Press the button of one settings row (Soloist Path: download from
+  /// Spotify). A row without a button changes nothing.
+  PressSettingButton {
+    id: String,
+  },
   /// Cycle the visualizer style and persist it.
   CycleVisualizerStyle,
   /// Answer the community-playlist pin prompt: keep the pin, or hide it and
   /// persist that. Either way the prompt never asks again.
   AnswerCommunityPinPrompt {
     keep: bool,
+  },
+  /// Close the Soloist pairing guide; pairing in Spotify still works after.
+  DismissSoloistPairing,
+  /// Answer the offer to set up Soloist: open Settings at the Playback Engine row, or close it.
+  AnswerSoloistOffer {
+    set_up: bool,
   },
   /// Open the monthly recap in the browser and close its popup.
   OpenRecap,
@@ -513,6 +524,8 @@ pub enum ListTarget {
   SavedAlbums,
   /// The saved-podcasts list (page-flipped, not continuous).
   SavedShows,
+  /// The followed-artists list (cursor-paged, continuous).
+  SavedArtists,
   /// The open show's episode list; the show is resolved at apply time.
   ShowEpisodes,
 }

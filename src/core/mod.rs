@@ -26,6 +26,8 @@ pub mod first_run;
 #[cfg_attr(not(feature = "tui"), allow(dead_code))]
 pub mod format;
 pub mod geometry;
+#[cfg_attr(not(feature = "gui"), allow(dead_code))]
+pub mod gui_layout;
 // Headless builds still serialize the full table, including terminal-only formatters.
 #[cfg_attr(not(feature = "tui"), allow(dead_code))]
 pub mod i18n;
@@ -35,6 +37,8 @@ pub mod limits;
 pub mod migrations;
 pub mod onboarding;
 pub mod pagination;
+#[cfg_attr(not(feature = "tui"), allow(dead_code))]
+pub mod pane;
 pub mod paths;
 #[cfg_attr(not(feature = "tui"), allow(dead_code))]
 pub mod persisted_playback;

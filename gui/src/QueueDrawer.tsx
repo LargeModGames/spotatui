@@ -1,5 +1,5 @@
 import { EN, type GuiStrings } from "./i18n";
-import { useLayoutEffect, useRef, useState } from "react";
+import { useId, useLayoutEffect, useRef, useState } from "react";
 import type { Action } from "./bindings/Action";
 import type { NowPlaying } from "./bindings/NowPlaying";
 import type { QueuePayload } from "./bindings/QueuePayload";
@@ -24,13 +24,17 @@ export function QueueDrawer({
   item,
   send,
   onClose,
+  grab = true,
 }: {
   s?: GuiStrings;
   queue: QueuePayload | null;
   item: NowPlaying | null;
   send: (action: Action) => void;
   onClose: () => void;
+  /** Take the keyboard on mount; false for a queue that was open at launch. */
+  grab?: boolean;
 }) {
+  const ids = useId();
   const native = queue?.native ?? [];
   // The Web API queue mirrors Spotify playback only; under another source it is stale.
   const spotify = sourceOf(item?.uri ?? null) === "Spotify";
@@ -48,7 +52,7 @@ export function QueueDrawer({
   // The panel takes the keyboard when it opens, and hands it to the list once the queue arrives,
   // but never pulls it away from another part of the page.
   const hasList = native.length > 0;
-  const opened = useRef(false);
+  const opened = useRef(!grab);
   useLayoutEffect(() => {
     if (!opened.current || document.activeElement === panel.current)
       (list.current ?? panel.current)?.focus();
@@ -109,7 +113,7 @@ export function QueueDrawer({
             ref={list}
             role="listbox"
             aria-label={s.next_in_queue}
-            aria-activedescendant={`queue-${cursor}`}
+            aria-activedescendant={`${ids}queue-${cursor}`}
             tabIndex={0}
             data-focus
             onKeyDown={(event) => {
@@ -124,7 +128,7 @@ export function QueueDrawer({
             {native.map((track, index) => (
               <li
                 key={`${index}-${track.uri ?? track.name}`}
-                id={`queue-${index}`}
+                id={`${ids}queue-${index}`}
                 role="option"
                 aria-selected={index === cursor}
                 onClick={() => setWant({ index, uri: track.uri })}

@@ -41,7 +41,8 @@ pub const API_KEY_ENV: &str = "SPOTATUI_DJ_API_KEY";
 /// launched inside a repository answers with that repository on its mind.
 ///
 /// Resolved once per process, so every step of every turn runs from the same
-/// directory and the fallback is reported once. The config dir is preferred; a
+/// directory and the fallback is reported once. The state dir is preferred, not
+/// the config dir beside the passwords in `config.yml`; a
 /// private subdirectory of the OS temp dir is the fallback (#478: a build
 /// sandbox sets `HOME` to a path that cannot be created, and `spawn` with a
 /// missing cwd fails with an ENOENT that looks like a missing binary).
@@ -50,7 +51,7 @@ fn agent_scratch_dir() -> PathBuf {
   DIR
     .get_or_init(|| {
       scratch_dir_from(
-        crate::core::user_config::default_app_config_dir().map(|dir| dir.join("dj-scratch")),
+        crate::core::paths::app_state_dir().map(|dir| dir.join("dj-scratch")),
         &std::env::temp_dir(),
       )
     })
@@ -71,7 +72,11 @@ fn scratch_dir_from(preferred: Option<PathBuf>, temp: &Path) -> PathBuf {
   if let Some(dir) = preferred.as_ref().filter(|dir| usable_dir(dir)) {
     return dir.clone();
   }
-  match temp.is_absolute().then(|| fresh_temp_dir(temp)).flatten() {
+  match temp
+    .is_absolute()
+    .then(|| crate::core::paths::fresh_private_dir(temp, "spotatui-dj-scratch"))
+    .flatten()
+  {
     Some(dir) => {
       log::warn!(
         "DJ: could not use the scratch dir {preferred:?}; running agent CLIs from {}",
@@ -104,34 +109,6 @@ fn usable_dir(dir: &Path) -> bool {
   let written = std::fs::write(&probe, b"").is_ok();
   let _ = std::fs::remove_file(&probe);
   written
-}
-
-/// A new, uniquely named, owner-only directory under `temp`, or `None` when
-/// none could be made. A non-recursive create refuses an existing entry, a
-/// symlink included, so the result is always one this process made. It is not
-/// removed on exit: temp is the one location the platform clears on its own,
-/// and the per-process log file already relies on that.
-fn fresh_temp_dir(temp: &Path) -> Option<PathBuf> {
-  // Owner-only from the start, whatever the umask: the agent's working
-  // directory must not be readable or writable by other local users.
-  #[cfg(unix)]
-  let builder = {
-    use std::os::unix::fs::DirBuilderExt;
-    let mut builder = std::fs::DirBuilder::new();
-    builder.mode(0o700);
-    builder
-  };
-  #[cfg(not(unix))]
-  let builder = std::fs::DirBuilder::new();
-  let pid = std::process::id();
-  (0..8).find_map(|attempt| {
-    let nanos = std::time::SystemTime::now()
-      .duration_since(std::time::UNIX_EPOCH)
-      .map(|since| since.subsec_nanos())
-      .unwrap_or(0);
-    let dir = temp.join(format!("spotatui-dj-scratch-{pid}-{nanos}-{attempt}"));
-    builder.create(&dir).ok().map(|()| dir)
-  })
 }
 
 /// The API-key precedence rule: the env var wins, the config field is the
@@ -698,13 +675,20 @@ mod tests {
     let scratch = agent_scratch_dir();
     let cwd = std::env::current_dir().unwrap();
     assert_ne!(scratch, cwd);
-    assert!(scratch.ends_with("dj-scratch"));
+    assert!(scratch.is_absolute(), "{scratch:?}");
+    // `dj-scratch` under the state dir, or the private `spotatui-dj-scratch-…`
+    // fallback when a build sandbox's HOME cannot be created (#1011).
+    let name = scratch.file_name().and_then(|name| name.to_str());
+    assert!(
+      name.is_some_and(|name| name.contains("dj-scratch")),
+      "{scratch:?}"
+    );
   }
 
   #[test]
-  fn the_config_scratch_dir_is_used_when_it_can_be_created() {
+  fn the_state_scratch_dir_is_used_when_it_can_be_created() {
     let temp = tempfile::tempdir().unwrap();
-    let preferred = temp.path().join("config").join("dj-scratch");
+    let preferred = temp.path().join("state").join("dj-scratch");
     let chosen = scratch_dir_from(Some(preferred.clone()), temp.path());
     assert_eq!(chosen, preferred);
     assert!(chosen.is_dir(), "it is created, not only named");

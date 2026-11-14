@@ -1,4 +1,5 @@
 use crate::core::app::SearchResult;
+use crate::core::plugin_api::PlayableInfo;
 use crate::core::user_config::UserConfig;
 use crate::infra::network::{IoEvent, Network};
 
@@ -231,6 +232,34 @@ impl CliApp {
       // Enforced by clap
       _ => unreachable!(),
     }
+  }
+
+  // spotatui list --playlist-tracks URI [--limit N]
+  pub async fn list_playlist_tracks(
+    &mut self,
+    uri: &str,
+    format: &str,
+    limit: Option<&str>,
+  ) -> Result<String> {
+    let max = limit.map(parse_track_limit).transpose()?;
+    let id = crate::infra::network::ids::playlist_id(uri)
+      .ok_or_else(|| anyhow!("'{uri}' is not a playlist URI"))?;
+    let items = self.net.read_playlist_items(&id, max).await?;
+    if items.is_empty() {
+      return Ok("No tracks found".to_string());
+    }
+    Ok(
+      items
+        .into_iter()
+        .map(|item| {
+          self.format_output(
+            format.to_string(),
+            Format::from_type(playable_format_type(item)),
+          )
+        })
+        .collect::<Vec<String>>()
+        .join("\n"),
+    )
   }
 
   // spotatui playback --transfer DEVICE
@@ -788,12 +817,88 @@ fn parse_query_limit(max: &str, ceiling: u32) -> Result<u32> {
   }
 }
 
+/// `--limit` for `--playlist-tracks` counts tracks, not one page, so it has no ceiling.
+fn parse_track_limit(max: &str) -> Result<u32> {
+  match max.parse::<u32>() {
+    Ok(num) if num >= 1 => Ok(num),
+    _ => Err(anyhow!("limit must be a number of tracks, 1 or more")),
+  }
+}
+
+/// A playlist item as the format placeholders read it.
+fn playable_format_type(item: PlayableInfo) -> FormatType {
+  match item {
+    PlayableInfo::Track(track) => FormatType::TrackInfo(Box::new(track)),
+    PlayableInfo::Episode(episode) => FormatType::EpisodeInfo(Box::new(episode)),
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::{
-    device_id_by_name, first_result_uri, parse_query_limit, playlist_items_total, random_offset,
-    SearchResult, Type,
+    device_id_by_name, first_result_uri, parse_query_limit, parse_track_limit,
+    playable_format_type, playlist_items_total, random_offset, SearchResult, Type,
   };
+  use crate::cli::util::{render_format, Format};
+  use crate::core::plugin_api::{EpisodeInfo, PlayableInfo};
+  use crate::core::user_config::UserConfig;
+
+  #[test]
+  fn a_track_limit_has_no_page_ceiling() {
+    assert_eq!(parse_track_limit("1").unwrap(), 1);
+    assert_eq!(parse_track_limit("500").unwrap(), 500);
+  }
+
+  #[test]
+  fn a_track_limit_refuses_zero_and_non_numbers() {
+    for max in ["0", "-1", "ten", ""] {
+      assert!(parse_track_limit(max).is_err(), "{max}");
+    }
+  }
+
+  fn render_item(format: &str, item: PlayableInfo) -> String {
+    render_format(
+      format,
+      &Format::from_type(playable_format_type(item)),
+      &UserConfig::new(),
+    )
+  }
+
+  #[test]
+  fn a_playlist_track_renders_like_a_liked_song() {
+    let track = TrackInfo::from(&full_track("0000000000000000000001", "Song"));
+    assert_eq!(
+      render_item("%t - %a (%u) [%b]", PlayableInfo::Track(track)),
+      "Song - Test Artist (spotify:track:0000000000000000000001) [Test Album]"
+    );
+  }
+
+  fn episode(show_name: &str) -> EpisodeInfo {
+    serde_json::from_value(serde_json::json!({
+      "id": "1",
+      "uri": "spotify:episode:1",
+      "name": "Episode",
+      "duration_ms": 1000,
+      "show_name": show_name,
+    }))
+    .unwrap()
+  }
+
+  #[test]
+  fn a_playlist_episode_renders_its_name_show_and_uri() {
+    assert_eq!(
+      render_item("%t - %h (%u)", PlayableInfo::Episode(episode("Show"))),
+      "Episode - Show (spotify:episode:1)"
+    );
+  }
+
+  #[test]
+  fn a_playlist_episode_without_its_show_name_renders_none() {
+    assert_eq!(
+      render_item("%t - %h", PlayableInfo::Episode(episode(""))),
+      "Episode - None"
+    );
+  }
   use crate::core::pagination::Paged;
   use crate::core::plugin_api::{AlbumInfo, ArtistInfo, ShowInfo, TrackInfo};
   use crate::core::test_helpers::{full_track, playlist_info};

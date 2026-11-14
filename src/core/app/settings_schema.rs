@@ -110,9 +110,14 @@ pub(crate) fn setting_requirement(id: &str) -> Requirement {
     | "behavior.streaming_bitrate"
     | "behavior.streaming_audio_cache"
     | "behavior.streaming_autoplay"
+    | "behavior.playback_engine"
+    | "behavior.soloist_path"
+    | "behavior.soloist_api_key"
+    | "behavior.soloist_audio_quality"
     | "keys.jump_to_album"
     | "keys.jump_to_artist_album"
     | "keys.jump_to_context"
+    | "keys.listening_party"
     | "keys.copy_song_url"
     | "keys.copy_album_url" => Requirement::SpotifySession,
     // The like key favorites the station under Radio.
@@ -122,6 +127,59 @@ pub(crate) fn setting_requirement(id: &str) -> Requirement {
     ]),
     "keys.search" => Requirement::Capability(Capability::Search),
     _ => Requirement::None,
+  }
+}
+
+/// The one button a settings row can carry, beside its value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SettingButton {
+  DownloadSoloist,
+  GetSoloistKey,
+}
+
+pub(crate) fn setting_button(id: &str) -> Option<SettingButton> {
+  match id {
+    "behavior.soloist_path" if cfg!(feature = "soloist") => Some(SettingButton::DownloadSoloist),
+    "behavior.soloist_api_key" if cfg!(feature = "soloist") => Some(SettingButton::GetSoloistKey),
+    _ => None,
+  }
+}
+
+impl App {
+  /// A row's button label, and whether its work runs (the button is then off).
+  pub(crate) fn setting_button_label(&self, id: &str) -> Option<(&'static str, bool)> {
+    let strings = &self.strings().settings;
+    setting_button(id).map(|button| match button {
+      SettingButton::DownloadSoloist if self.soloist_download_runs() => {
+        (strings.soloist_downloading_button, true)
+      }
+      SettingButton::DownloadSoloist => (strings.soloist_download_button, false),
+      SettingButton::GetSoloistKey => (strings.soloist_get_key_button, false),
+    })
+  }
+
+  pub(crate) fn press_setting_button(&mut self, id: &str) {
+    match setting_button(id) {
+      Some(SettingButton::DownloadSoloist) => {
+        #[cfg(feature = "soloist")]
+        self.download_soloist();
+      }
+      Some(SettingButton::GetSoloistKey) => {
+        self.open_external_url("https://developer.spotify.com/dashboard/soloist");
+      }
+      None => {}
+    }
+  }
+
+  fn soloist_download_runs(&self) -> bool {
+    #[cfg(feature = "soloist")]
+    {
+      self.soloist_downloading
+    }
+    #[cfg(not(feature = "soloist"))]
+    {
+      false
+    }
   }
 }
 
@@ -481,6 +539,67 @@ impl App {
         name: strings.behavior_streaming_autoplay_name.to_string(),
         description: strings.behavior_streaming_autoplay_description.to_string(),
         value: SettingValue::Bool(self.user_config.behavior.streaming_autoplay),
+      },
+      // Soloist has no build for Intel Macs.
+      #[cfg(all(
+        feature = "soloist",
+        not(all(target_os = "macos", target_arch = "x86_64"))
+      ))]
+      SettingItem {
+        id: "behavior.playback_engine".to_string(),
+        name: strings.behavior_playback_engine_name.to_string(),
+        description: strings.behavior_playback_engine_description.to_string(),
+        value: SettingValue::Cycle(
+          self.user_config.behavior.playback_engine.name().to_string(),
+          crate::core::user_config::PlaybackEngine::options(),
+        ),
+      },
+      #[cfg(all(
+        feature = "soloist",
+        not(all(target_os = "macos", target_arch = "x86_64"))
+      ))]
+      SettingItem {
+        id: "behavior.soloist_path".to_string(),
+        name: strings.behavior_soloist_path_name.to_string(),
+        description: strings.behavior_soloist_path_description.to_string(),
+        value: SettingValue::String(
+          self
+            .user_config
+            .behavior
+            .soloist_path
+            .clone()
+            .unwrap_or_default(),
+        ),
+      },
+      #[cfg(all(
+        feature = "soloist",
+        not(all(target_os = "macos", target_arch = "x86_64"))
+      ))]
+      SettingItem {
+        id: "behavior.soloist_api_key".to_string(),
+        name: strings.behavior_soloist_api_key_name.to_string(),
+        description: strings.behavior_soloist_api_key_description.to_string(),
+        value: SettingValue::Secret(self.saved_soloist_key()),
+      },
+      #[cfg(all(
+        feature = "soloist",
+        not(all(target_os = "macos", target_arch = "x86_64"))
+      ))]
+      SettingItem {
+        id: "behavior.soloist_audio_quality".to_string(),
+        name: strings.behavior_soloist_audio_quality_name.to_string(),
+        description: strings
+          .behavior_soloist_audio_quality_description
+          .to_string(),
+        value: SettingValue::Cycle(
+          self
+            .user_config
+            .behavior
+            .soloist_audio_quality
+            .name()
+            .to_string(),
+          crate::core::user_config::SoloistQuality::options(),
+        ),
       },
       SettingItem {
         id: "behavior.startup_behavior".to_string(),
@@ -889,6 +1008,18 @@ impl App {
           value: SettingValue::Key(key_to_config_string(&self.user_config.keys.previous_page)),
         },
         SettingItem {
+          id: "keys.jump_to_start".to_string(),
+          name: strings.keys_jump_to_start_name.to_string(),
+          description: strings.keys_jump_to_start_description.to_string(),
+          value: SettingValue::Key(key_to_config_string(&self.user_config.keys.jump_to_start)),
+        },
+        SettingItem {
+          id: "keys.jump_to_end".to_string(),
+          name: strings.keys_jump_to_end_name.to_string(),
+          description: strings.keys_jump_to_end_description.to_string(),
+          value: SettingValue::Key(key_to_config_string(&self.user_config.keys.jump_to_end)),
+        },
+        SettingItem {
           id: "keys.toggle_playback".to_string(),
           name: strings.keys_toggle_playback_name.to_string(),
           description: strings.keys_toggle_playback_description.to_string(),
@@ -987,6 +1118,12 @@ impl App {
           name: strings.keys_manage_devices_name.to_string(),
           description: strings.keys_manage_devices_description.to_string(),
           value: SettingValue::Key(key_to_config_string(&self.user_config.keys.manage_devices)),
+        },
+        SettingItem {
+          id: "keys.listening_party".to_string(),
+          name: strings.keys_listening_party_name.to_string(),
+          description: strings.keys_listening_party_description.to_string(),
+          value: SettingValue::Key(key_to_config_string(&self.user_config.keys.listening_party)),
         },
         SettingItem {
           id: "keys.decrease_volume".to_string(),
@@ -1421,6 +1558,51 @@ mod tests {
       key_row(&app, "keys.toggle_playback"),
       SettingValue::Key("space".to_string())
     );
+  }
+
+  #[test]
+  fn keybinding_rows_show_jump_and_party_keys() {
+    let app = keybinding_rows_with_f5_help_and_home_search();
+    for (id, value) in [
+      ("keys.jump_to_start", "ctrl-a"),
+      ("keys.jump_to_end", "ctrl-e"),
+      ("keys.listening_party", "ctrl-p"),
+    ] {
+      assert_eq!(key_row(&app, id), SettingValue::Key(value.to_string()));
+    }
+  }
+
+  #[test]
+  fn editing_jump_and_party_rows_applies_the_new_keys() {
+    let mut app = keybinding_rows_with_f5_help_and_home_search();
+    for (id, value) in [
+      ("keys.jump_to_start", "f6"),
+      ("keys.jump_to_end", "f7"),
+      ("keys.listening_party", "f8"),
+    ] {
+      let item = app
+        .settings_items
+        .iter_mut()
+        .find(|item| item.id == id)
+        .unwrap();
+      item.value = SettingValue::Key(value.to_string());
+    }
+    app.apply_settings_changes();
+    assert_eq!(app.user_config.keys.jump_to_start, Key::F6);
+    assert_eq!(app.user_config.keys.jump_to_end, Key::F7);
+    assert_eq!(app.user_config.keys.listening_party, Key::F8);
+  }
+
+  #[test]
+  fn the_listening_party_key_row_needs_a_spotify_session() {
+    let mut app = keybinding_rows_with_f5_help_and_home_search();
+    let requirement = setting_requirement("keys.listening_party");
+    assert!(!app.availability(requirement).is_available());
+    assert!(offered(&app, "keys.listening_party"));
+    assert_eq!(setting_requirement("keys.jump_to_start"), Requirement::None);
+    assert_eq!(setting_requirement("keys.jump_to_end"), Requirement::None);
+    app.spotify_connected = true;
+    assert!(app.availability(requirement).is_available());
   }
 
   #[test]

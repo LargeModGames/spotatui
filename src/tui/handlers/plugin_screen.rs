@@ -39,6 +39,8 @@ fn plugin_key_string(key: Key) -> String {
     Key::Char(c) => c.to_string(),
     Key::Ctrl(c) => format!("ctrl-{}", c),
     Key::Alt(c) => format!("alt-{}", c),
+    Key::AltArrow(arrow) => format!("alt-{}", arrow.name()),
+    Key::AltShiftArrow(arrow) => format!("alt-shift-{}", arrow.name()),
     Key::Enter => "enter".to_string(),
     Key::Tab => "tab".to_string(),
     Key::Esc => "esc".to_string(),

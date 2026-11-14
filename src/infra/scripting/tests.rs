@@ -1128,7 +1128,7 @@ mod playbar_effect_tests {
         text: None,
       });
     engine.drain_effects(&mut app);
-    assert!(app.plugin_playbar_segments.get("myplugin").is_none());
+    assert!(!app.plugin_playbar_segments.contains_key("myplugin"));
   }
 }
 
@@ -3404,4 +3404,49 @@ mod config_tests {
       _ => panic!("expected secrets-excluded notify"),
     }
   }
+}
+
+/// The load error of `source`, from a thread, so a time limit that fails cannot hang the run.
+fn load_error_within_limit(source: &'static str) -> String {
+  let (tx, rx) = std::sync::mpsc::channel();
+  std::thread::spawn(move || {
+    let mut engine = ScriptEngine::new().unwrap();
+    let _ = tx.send(
+      engine
+        .load_source("spin", source)
+        .map_err(|e| e.to_string()),
+    );
+  });
+  rx.recv_timeout(std::time::Duration::from_secs(10))
+    .expect("the time limit did not stop the plugin")
+    .unwrap_err()
+}
+
+#[test]
+fn a_plugin_that_loops_forever_is_stopped() {
+  let err = load_error_within_limit("while true do end");
+  assert!(err.contains("stopped after running"), "{err}");
+  ScriptEngine::new()
+    .unwrap()
+    .load_source("fine", "local x = 0 for i = 1, 1000 do x = x + i end")
+    .unwrap();
+}
+
+#[test]
+fn a_protected_call_cannot_catch_the_time_limit() {
+  for source in [
+    "while true do pcall(function() while true do end end) end",
+    "while true do xpcall(function() while true do end end, function() end) end",
+    "while true do coroutine.resume(coroutine.create(function() while true do end end)) end",
+  ] {
+    let err = load_error_within_limit(source);
+    assert!(err.contains("stopped after running"), "{source}: {err}");
+  }
+  ScriptEngine::new()
+    .unwrap()
+    .load_source(
+      "fine",
+      "assert(not pcall(error, 'x')); assert(select('#', pcall(print)) == 1)",
+    )
+    .unwrap();
 }

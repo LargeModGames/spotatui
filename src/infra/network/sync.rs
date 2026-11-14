@@ -15,6 +15,16 @@ pub enum ControlMode {
   SharedControl,
 }
 
+impl ControlMode {
+  /// The mode a relay message names; any unknown name is host-only.
+  pub fn from_wire(mode: &str) -> Self {
+    match mode {
+      "shared_control" => ControlMode::SharedControl,
+      _ => ControlMode::HostOnly,
+    }
+  }
+}
+
 impl std::fmt::Display for ControlMode {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     match self {
@@ -31,8 +41,14 @@ pub enum PlaybackAction {
   Pause,
   NextTrack,
   PrevTrack,
-  Seek { position_ms: u64 },
-  PlayTrack { uri: String },
+  /// Step back a track even past the first seconds, which a plain previous restarts.
+  ForcePrevTrack,
+  Seek {
+    position_ms: u64,
+  },
+  PlayTrack {
+    uri: String,
+  },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -44,6 +60,9 @@ pub enum SyncMessage {
   },
   JoinedRoom {
     host_name: String,
+    /// Absent from a relay deployed before a late joiner learned the mode.
+    #[serde(default)]
+    control_mode: Option<String>,
   },
   GuestJoined {
     name: String,
@@ -107,6 +126,8 @@ pub struct PartySession {
   pub guests: Vec<String>,
   pub control_mode: ControlMode,
   pub host_name: String,
+  /// When a guest last got a host state it follows; the host sends one every 2 s.
+  pub host_state_at: Option<std::time::Instant>,
 }
 
 pub struct PartyConnection {
@@ -191,5 +212,33 @@ pub async fn start_party_reader(
         break;
       }
     }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn joined_room_carries_the_room_control_mode() {
+    let msg = parse_sync_message(
+      r#"{"type":"joined_room","host_name":"H","control_mode":"shared_control"}"#,
+    );
+    assert!(matches!(
+      msg,
+      Some(SyncMessage::JoinedRoom { control_mode: Some(mode), .. }) if mode == "shared_control"
+    ));
+  }
+
+  #[test]
+  fn joined_room_from_an_older_relay_still_parses() {
+    let msg = parse_sync_message(r#"{"type":"joined_room","host_name":"H"}"#);
+    assert!(matches!(
+      msg,
+      Some(SyncMessage::JoinedRoom {
+        control_mode: None,
+        ..
+      })
+    ));
   }
 }

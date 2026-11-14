@@ -70,6 +70,10 @@ impl LyricsViewState {
     self.scroll_pos = self.anim_from + (self.anim_target - self.anim_from) * eased;
   }
 
+  pub fn is_easing(&self) -> bool {
+    self.anim_progress < 1.0
+  }
+
   /// Jump straight to `target` with no animation (used while the view is not
   /// visible so it opens already in position).
   pub fn snap_to(&mut self, target: f64) {
@@ -149,7 +153,7 @@ impl App {
     }
     let active = active_lyric_index(lyrics, self.lyric_progress_ms());
     let target = self.view.lyrics_view.manual_index.unwrap_or(active) as f64;
-    if self.get_current_route().id == RouteId::LyricsView {
+    if self.get_current_route().id == RouteId::LyricsView || self.pane_open(Pane::Lyrics) {
       self.view.lyrics_view.ease_toward(target, elapsed);
     } else {
       self.view.lyrics_view.snap_to(target);
@@ -191,9 +195,11 @@ mod tests {
 
   #[test]
   fn browsing_resnaps_to_follow_after_timeout() {
-    let mut app = App::default();
-    app.lyrics = Some(vec![(0, "a".to_string()), (5_000, "b".to_string())]);
-    app.lyrics_status = LyricsStatus::Found;
+    let mut app = App {
+      lyrics: Some(vec![(0, "a".to_string()), (5_000, "b".to_string())]),
+      lyrics_status: LyricsStatus::Found,
+      ..Default::default()
+    };
     app.view.lyrics_view.manual_index = Some(1);
     app.view.lyrics_view.last_manual_input = Instant::now().checked_sub(Duration::from_secs(9));
     app.advance_lyrics_scroll(Duration::from_millis(16));
@@ -202,8 +208,10 @@ mod tests {
 
   #[test]
   fn lyric_progress_applies_offset_and_clamps_at_zero() {
-    let mut app = App::default();
-    app.song_progress_ms = 10_000;
+    let mut app = App {
+      song_progress_ms: 10_000,
+      ..Default::default()
+    };
     app.view.lyrics_view.timing_offset_ms = 2_500;
     assert_eq!(app.lyric_progress_ms(), 12_500);
     app.view.lyrics_view.timing_offset_ms = -15_000;
@@ -212,9 +220,11 @@ mod tests {
 
   #[test]
   fn browsing_persists_while_input_is_recent() {
-    let mut app = App::default();
-    app.lyrics = Some(vec![(0, "a".to_string()), (5_000, "b".to_string())]);
-    app.lyrics_status = LyricsStatus::Found;
+    let mut app = App {
+      lyrics: Some(vec![(0, "a".to_string()), (5_000, "b".to_string())]),
+      lyrics_status: LyricsStatus::Found,
+      ..Default::default()
+    };
     app.view.lyrics_view.manual_index = Some(1);
     app.view.lyrics_view.last_manual_input = Some(Instant::now());
     app.advance_lyrics_scroll(Duration::from_millis(16));

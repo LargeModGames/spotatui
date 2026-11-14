@@ -1,4 +1,3 @@
-use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -70,11 +69,44 @@ pub struct ScriptEngine {
   http_tx: UnboundedSender<HttpResult>,
 }
 
+/// Wraps the protected calls so that, past the time limit, they raise the caught error again.
+const PROTECTED_CALL_GUARD: &str = r#"
+local expired = ...
+local pcall, xpcall, resume, error = pcall, xpcall, coroutine.resume, error
+local pack, unpack = table.pack, table.unpack
+local function pass(r)
+  local stopped = not r[1] and expired()
+  if stopped then error(stopped, 0) end
+  return unpack(r, 1, r.n)
+end
+_G.pcall = function(...) return pass(pack(pcall(...))) end
+_G.xpcall = function(...) return pass(pack(xpcall(...))) end
+coroutine.resume = function(...) return pass(pack(resume(...))) end
+"#;
+
 impl ScriptEngine {
   /// Build the Lua state and install the `spotatui` global table.
   pub fn new() -> mlua::Result<Self> {
     let lua = Lua::new();
     let shared = Rc::new(ScriptShared::new());
+    // A loop in a plugin would otherwise freeze the frontend.
+    let watched = Rc::clone(&shared);
+    lua.set_global_hook(
+      mlua::HookTriggers::new().every_nth_instruction(100_000),
+      move |_, _| match watched.time_up() {
+        Some(message) => Err(mlua::Error::RuntimeError(message)),
+        None => Ok(mlua::VmState::Continue),
+      },
+    )?;
+    // Without this, `pcall` would catch the hook's error and the loop would go on.
+    let expired = {
+      let watched = Rc::clone(&shared);
+      lua.create_function(move |_, ()| Ok(watched.time_up()))?
+    };
+    lua
+      .load(PROTECTED_CALL_GUARD)
+      .set_name("spotatui")
+      .call::<()>(expired)?;
     let (http_tx, http_rx) = unbounded_channel();
     let http_client = reqwest::Client::builder()
       .timeout(std::time::Duration::from_secs(30))
@@ -212,14 +244,13 @@ impl ScriptEngine {
   /// Execute a Lua chunk under the given plugin name (used as the chunk name for tracebacks).
   /// Public for tests.
   pub fn load_source(&mut self, plugin_name: &str, source: &str) -> mlua::Result<()> {
-    *self.shared.current_plugin.borrow_mut() = plugin_name.to_string();
-    let result = self
-      .lua
-      .load(source)
-      .set_name(plugin_name.to_string())
-      .exec();
-    self.shared.current_plugin.borrow_mut().clear();
-    result
+    let lua = &self.lua;
+    self
+      .shared
+      .run(plugin_name, || {
+        lua.load(source).set_name(plugin_name.to_string()).exec()
+      })
+      .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
   }
 
   /// Refresh caches, emit Start, drain effects.
@@ -370,12 +401,10 @@ impl ScriptEngine {
     };
     drop(screens);
 
-    *self.shared.current_plugin.borrow_mut() = plugin.clone();
-    let call_result = catch_unwind(AssertUnwindSafe(|| match key {
+    let call_result = self.shared.run(&plugin, || match key {
       Some(key) => callback.call::<()>(key),
       None => callback.call::<()>(()),
-    }));
-    self.shared.current_plugin.borrow_mut().clear();
+    });
 
     let err_msg = match call_result {
       Ok(Ok(())) => return,
@@ -445,9 +474,7 @@ impl ScriptEngine {
       };
 
       let arg = arg.clone();
-      *self.shared.current_plugin.borrow_mut() = plugin.clone();
-      let call_result = catch_unwind(AssertUnwindSafe(|| callback.call::<()>(arg)));
-      self.shared.current_plugin.borrow_mut().clear();
+      let call_result = self.shared.run(&plugin, || callback.call::<()>(arg));
 
       let err_msg = match call_result {
         Ok(Ok(())) => None,
@@ -521,9 +548,7 @@ impl ScriptEngine {
         Ok(f) => f,
         Err(_) => continue,
       };
-      *self.shared.current_plugin.borrow_mut() = plugin.clone();
-      let call_result = catch_unwind(AssertUnwindSafe(|| callback.call::<()>(())));
-      self.shared.current_plugin.borrow_mut().clear();
+      let call_result = self.shared.run(&plugin, || callback.call::<()>(()));
       match call_result {
         Ok(Ok(())) => {}
         Ok(Err(e)) => {
@@ -731,9 +756,7 @@ impl ScriptEngine {
     drop(entry);
     drop(callbacks);
 
-    *self.shared.current_plugin.borrow_mut() = plugin.clone();
-    let call_result = catch_unwind(AssertUnwindSafe(|| callback.call::<()>(())));
-    self.shared.current_plugin.borrow_mut().clear();
+    let call_result = self.shared.run(&plugin, || callback.call::<()>(()));
 
     let err_msg = match call_result {
       Ok(Ok(())) => return true,
@@ -836,9 +859,7 @@ impl ScriptEngine {
       },
     };
 
-    *self.shared.current_plugin.borrow_mut() = plugin.clone();
-    let call_result = catch_unwind(AssertUnwindSafe(|| callback.call::<()>(args)));
-    self.shared.current_plugin.borrow_mut().clear();
+    let call_result = self.shared.run(&plugin, || callback.call::<()>(args));
 
     match call_result {
       Ok(Ok(())) => {}
@@ -951,9 +972,7 @@ impl ScriptEngine {
       }
     };
 
-    *self.shared.current_plugin.borrow_mut() = plugin.clone();
-    let call_result = catch_unwind(AssertUnwindSafe(|| callback.call::<()>(args)));
-    self.shared.current_plugin.borrow_mut().clear();
+    let call_result = self.shared.run(&plugin, || callback.call::<()>(args));
 
     match call_result {
       Ok(Ok(())) => {}

@@ -12,6 +12,7 @@ import type { TrackInfo } from "../src/bindings/TrackInfo";
 import type { VisualizerLook } from "../src/bindings/VisualizerLook";
 
 const revisions = {
+  pane_layout: 1,
   route: 1,
   status: 1,
   source: 1,
@@ -121,6 +122,22 @@ export const onboarding: ServerMessage = {
           label,
           note,
         })),
+      },
+    },
+  },
+};
+
+export const onboardingConfirm: ServerMessage = {
+  kind: "onboarding",
+  payload: {
+    transcript: "Welcome to spotatui.\n",
+    pending: {
+      seq: 2,
+      ask: {
+        kind: "Confirm",
+        title: "Global Song Counter",
+        body: "spotatui can contribute to a global counter showing total songs played by all users worldwide.\n\nPrivacy: This feature is completely anonymous.\n• No personal information is collected\n• No song names, artists, or listening history\n• Only a simple increment once a song has played for 30 seconds",
+        question: "Would you like to participate?",
       },
     },
   },
@@ -269,6 +286,7 @@ export const library: ServerMessage[] = [
     kind: "library",
     rev: 1,
     payload: {
+      playlist_sidebar_order: "spotify",
       spotify: [
         playlist("Film scores", "spotify:playlist:1", 142),
         playlist("Kygo & friends", "spotify:playlist:2", 87),
@@ -286,6 +304,7 @@ export const library: ServerMessage[] = [
       saved_albums: [],
       saved_albums_has_more: false,
       followed_artists: [],
+      followed_artists_has_more: false,
       saved_shows: [],
       saved_shows_has_more: false,
       saved_show_ids: [],
@@ -325,6 +344,7 @@ export const libraryUnavailable: ServerMessage[] = [
     kind: "library",
     rev: 1,
     payload: {
+      playlist_sidebar_order: "spotify",
       spotify: [],
       local: [],
       subsonic: [],
@@ -336,6 +356,7 @@ export const libraryUnavailable: ServerMessage[] = [
       saved_albums: [],
       saved_albums_has_more: false,
       followed_artists: [],
+      followed_artists_has_more: false,
       saved_shows: [],
       saved_shows_has_more: false,
       saved_show_ids: [],
@@ -1021,7 +1042,14 @@ function setting(
   description: string,
   value: SettingRow["value"],
 ): SettingRow {
-  return { id: `behavior.${id}`, group, name, description, value };
+  return {
+    id: `behavior.${id}`,
+    group,
+    name,
+    description,
+    value,
+    button: null,
+  };
 }
 
 function visualizerRow(mode: "Spectrum" | "Waveform"): SettingRow {
@@ -1085,6 +1113,33 @@ export const waveFrame: ServerMessage = {
       ),
     ),
   },
+};
+
+/** cava's mirrored bands at `bars`: the bass meets in the middle, the right channel a little quieter. */
+export const screenFrame = (bars: number): ServerMessage => {
+  const half = Math.max(Math.floor(bars / 2), 1);
+  const channel = (gain: number) =>
+    Array.from({ length: half }, (_, band) => {
+      const x = band / Math.max(half - 1, 1);
+      return Math.round(
+        255 *
+          Math.min(
+            1,
+            Math.max(0, gain * (0.9 - 0.55 * x + 0.12 * Math.sin(x * 14))),
+          ),
+      );
+    });
+  return {
+    kind: "visualizer_screen",
+    payload: {
+      bands: [...channel(1).reverse(), ...channel(0.85)],
+      wave: Array.from({ length: 480 }, (_, point) =>
+        Math.round(
+          127 * (0.55 * Math.sin(point / 6) + 0.2 * Math.sin(point / 1.7)),
+        ),
+      ),
+    },
+  };
 };
 
 /** The desktop app's settings rows, with a downloaded update waiting to install. */
@@ -1152,6 +1207,16 @@ export const settings: ServerMessage[] = [
             labels: ["96", "160", "320"],
           },
         ),
+        {
+          ...setting(
+            "soloist_path",
+            "streaming",
+            "Soloist Path",
+            "The Soloist program the Soloist engine runs",
+            { kind: "text", value: "" },
+          ),
+          button: { label: "Download from Spotify", busy: false },
+        },
         setting(
           "enable_discord_rpc",
           "integrations",

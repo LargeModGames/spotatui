@@ -1099,7 +1099,6 @@ mod tests {
     assert!(models[models.len() - 2].value.is_none());
 
     // The same for an API model id that has aged out of the priced list.
-    let mut behavior = behavior;
     behavior.dj_backend = "anthropic".to_string();
     behavior.dj_model = Some("claude-3-5-sonnet-20241022".to_string());
     let (models, cursor) = models_for(&backend_row("anthropic"), &behavior);
@@ -1657,5 +1656,10 @@ mod tests {
       assert!(claude.label_with(strings).contains("claude"));
       assert!(claude.note_with(strings).contains("PATH"));
     }
+    assert_eq!(claude.label_with(&ZH_HANS), "claude（无需 API key）");
+    assert_eq!(
+      claude.note_with(&ZH_HANT),
+      "使用你的 Claude Pro/Max 方案 · 不在 PATH 中"
+    );
   }
 }

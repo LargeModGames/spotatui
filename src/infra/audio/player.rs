@@ -30,7 +30,7 @@
 //! `DeviceNotAvailable`. It cannot notice the far more common case: the OS
 //! moving its **default output** somewhere else — headphones unplugged, AirPods
 //! back in their case — which leaves the stream happily bound to a device
-//! nobody is listening to. So the sink also remembers which device it opened
+//! nobody is listening to. So the sink also remembers its device's id,
 //! and [`device_lost`](LocalPlayer::device_lost) compares that against the
 //! current default.
 //!
@@ -95,7 +95,7 @@ pub struct LocalPlayer {
   stage_transition: Mutex<()>,
 }
 
-/// One default-output read, keyed on the name the sink opened so a swapped
+/// One default-output read, keyed on the opened device's id so a swapped
 /// sink is never answered from the old sink's cache.
 struct DeviceCheck {
   checked_at: Instant,
@@ -132,9 +132,10 @@ struct Sink {
   _keepalive: mpsc::Sender<()>,
   /// Raised by our cpal error callback when the device is *removed*.
   lost: Arc<AtomicBool>,
-  /// The device this sink was opened on, as cpal names it, so a default-output
-  /// change can be spotted (see module docs). `None` when the name could not be
-  /// read, which only disables the comparison — never fakes a change.
+  /// The key identifying the device this sink was opened on (id on macOS,
+  /// name elsewhere - see `device_key`), so a default-output change can be
+  /// spotted (see module docs). `None` when the key could not be read, which
+  /// only disables the comparison — never fakes a change.
   device_name: Option<String>,
 }
 
@@ -157,7 +158,7 @@ const AUDIO_THREAD_CEILING: Duration = Duration::from_secs(90);
 const DEVICE_OPEN_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// How often [`LocalPlayer::device_lost`] re-reads the default output device.
-/// The tick asks on every frame, and the read is a full device enumeration.
+/// The tick asks on every frame, and the read talks to the OS's audio APIs.
 const DEVICE_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 
 /// The spacing between reopen attempts, and how many are made before the
@@ -269,7 +270,7 @@ impl LocalPlayer {
   /// us, or the OS quietly moved its default output elsewhere and nobody did.
   pub fn device_lost(&self) -> bool {
     // Read the sink's answer and release its lock: the default-output read
-    // below enumerates devices, and the render path waits on this mutex.
+    // below queries the OS, and the render path waits on this mutex.
     let (removed, opened) = {
       let sink = self.sink.lock().unwrap();
       (sink.lost.load(Ordering::Relaxed), sink.device_name.clone())
@@ -277,7 +278,7 @@ impl LocalPlayer {
     if removed {
       return true;
     }
-    // Only a name read successfully on *both* sides is evidence: a missing one
+    // Only an id read successfully on *both* sides is evidence: a missing one
     // means "cannot tell", which must not read as "changed" — mid-switch there
     // is briefly no default device at all, and tearing playback down for that
     // would be worse than the silence this exists to catch.
@@ -290,7 +291,7 @@ impl LocalPlayer {
         return cached.moved;
       }
     }
-    let moved = default_output_name().is_some_and(|current| current != opened);
+    let moved = default_output_key().is_some_and(|current| current != opened);
     *check = Some(DeviceCheck {
       checked_at: Instant::now(),
       opened,
@@ -619,7 +620,7 @@ fn open_sink() -> Result<Sink> {
   let device = rodio::cpal::default_host()
     .default_output_device()
     .context("no audio output device available")?;
-  let device_name = device_name(&device);
+  let device_key = device_key(&device);
 
   let lost = Arc::new(AtomicBool::new(false));
   let on_error = {
@@ -683,25 +684,38 @@ fn open_sink() -> Result<Sink> {
     player: Arc::new(player),
     _keepalive: keepalive_tx,
     lost,
-    device_name,
+    device_name: device_key,
   })
 }
 
-/// A device's name as cpal reports it. `None` when it cannot be read — the
-/// caller must treat that as "cannot tell", never as a change.
-fn device_name(device: &rodio::Device) -> Option<String> {
+/// What identifies the device for the default-output comparison.
+///
+/// On macOS the id is read: `description()` builds two AudioUnits through its
+/// config queries, and re-reading it every check churns the device enough to
+/// glitch USB outputs, while `id()` is a plain property read. Everywhere else
+/// the name is kept: cpal's WASAPI `id()` leaks the COM string it copies on
+/// every call, which a once-a-second poll would turn into a steady leak.
+#[cfg(target_os = "macos")]
+fn device_key(device: &rodio::Device) -> Option<String> {
+  use rodio::DeviceTrait;
+  device.id().ok().map(|id| id.to_string())
+}
+
+/// Non-macOS: the description works and carries no per-read side effect.
+#[cfg(not(target_os = "macos"))]
+fn device_key(device: &rodio::Device) -> Option<String> {
   use rodio::DeviceTrait;
   device.description().ok().map(|d| d.name().to_string())
 }
 
-/// The name of the output device the OS currently calls its default, which is
-/// what a sink opened earlier is compared against.
-fn default_output_name() -> Option<String> {
+/// The identifying key of the output device the OS currently calls its
+/// default, which is what a sink opened earlier is compared against.
+fn default_output_key() -> Option<String> {
   use rodio::cpal::traits::HostTrait;
   rodio::cpal::default_host()
     .default_output_device()
     .as_ref()
-    .and_then(device_name)
+    .and_then(device_key)
 }
 
 // ---------------------------------------------------------------------------
@@ -846,19 +860,19 @@ mod tests {
       "a sink freshly opened on the current default is not lost"
     );
 
-    // Stand in for the OS switching away: the sink names a device that is no
-    // longer the default.
+    // Stand in for the OS switching away: the sink holds the id of a device
+    // that is no longer the default.
     player.sink.lock().unwrap().device_name = Some("a device that went away".to_string());
     assert!(
       player.device_lost(),
       "a default that moved is a lost device"
     );
 
-    // A name we could not read means "cannot tell", never "changed": mid-switch
+    // An id we could not read means "cannot tell", never "changed": mid-switch
     // there is briefly no default at all, and tearing playback down for that
     // would be worse than the silence this exists to catch.
     player.sink.lock().unwrap().device_name = None;
-    assert!(!player.device_lost(), "an unreadable name is not evidence");
+    assert!(!player.device_lost(), "an unreadable id is not evidence");
 
     player.reopen().expect("reopen on the default device");
     assert!(

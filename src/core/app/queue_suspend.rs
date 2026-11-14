@@ -83,7 +83,7 @@ impl App {
     if let Some(radio) = self.radio_playback.take() {
       radio.player.stop();
       self.queue_suspended = Some(crate::core::queue::SuspendedContext::Radio {
-        station: radio.station,
+        station: Box::new(radio.station),
       });
     }
   }
@@ -148,7 +148,7 @@ impl App {
     if let Some(radio) = self.radio_playback.take() {
       radio.player.stop();
       self.queue_suspended = Some(crate::core::queue::SuspendedContext::Radio {
-        station: radio.station,
+        station: Box::new(radio.station),
       });
     }
   }

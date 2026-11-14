@@ -29,48 +29,67 @@ pub async fn redirect_uri_web_server_on(
   listener: tokio::net::TcpListener,
   accept: fn(&str) -> bool,
 ) -> Result<String, ()> {
-  run_accept_loop(listener, accept).await
+  run_accept_loop(listener, accept, CALLBACK_READ_TIMEOUT).await
 }
+
+/// How long one connection may stay silent before it is dropped.
+const CALLBACK_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Accept-loop extracted so tests can inject a pre-bound listener (port 0) and
 /// avoid races caused by hard-coding a port that might already be in use.
+/// Connections are read in parallel, so a silent one cannot delay the callback.
 async fn run_accept_loop(
   listener: tokio::net::TcpListener,
   accept: fn(&str) -> bool,
+  read_timeout: std::time::Duration,
 ) -> Result<String, ()> {
   const MAX_CONSECUTIVE_ACCEPT_ERRORS: u8 = 20;
   let mut consecutive_accept_errors = 0u8;
+  let mut reads = tokio::task::JoinSet::new();
   loop {
-    let mut stream = match listener.accept().await {
-      Ok((stream, _)) => {
-        consecutive_accept_errors = 0;
-        stream
-      }
-      Err(e) => {
-        consecutive_accept_errors = consecutive_accept_errors.saturating_add(1);
-        log::warn!("[login] callback accept error: {e}");
-        if consecutive_accept_errors >= MAX_CONSECUTIVE_ACCEPT_ERRORS {
-          return Err(());
+    tokio::select! {
+      accepted = listener.accept() => match accepted {
+        Ok((stream, _)) => {
+          consecutive_accept_errors = 0;
+          reads.spawn(read_callback(stream, accept, read_timeout));
         }
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        continue;
+        Err(e) => {
+          consecutive_accept_errors = consecutive_accept_errors.saturating_add(1);
+          log::warn!("[login] callback accept error: {e}");
+          if consecutive_accept_errors >= MAX_CONSECUTIVE_ACCEPT_ERRORS {
+            return Err(());
+          }
+          tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+      },
+      Some(read) = reads.join_next() => {
+        if let Ok(Some(url)) = read {
+          return Ok(url);
+        }
       }
-    };
-
-    let mut buffer = vec![0u8; 1000];
-    let n = match stream.read(&mut buffer).await {
-      Ok(0) | Err(_) => continue,
-      Ok(n) => n,
-    };
-    let request = String::from_utf8_lossy(&buffer[..n]);
-
-    if let Some(url) = extract_callback_url(&request, accept) {
-      let _ = write_async_response(&mut stream, "200 OK", include_str!("redirect_uri.html")).await;
-      return Ok(url);
     }
-
-    // Browser noise (favicon, pre-flight): 400 and keep waiting for the callback.
-    let _ = write_async_response(&mut stream, "400 Bad Request", "400 - Bad Request").await;
   }
+}
+
+/// Reads one connection: the callback URL, or `None` after a 400 for browser noise.
+async fn read_callback(
+  mut stream: tokio::net::TcpStream,
+  accept: fn(&str) -> bool,
+  read_timeout: std::time::Duration,
+) -> Option<String> {
+  let mut buffer = vec![0u8; 1000];
+  let n = match tokio::time::timeout(read_timeout, stream.read(&mut buffer)).await {
+    Ok(Ok(n)) if n > 0 => n,
+    _ => return None,
+  };
+  let request = String::from_utf8_lossy(&buffer[..n]);
+  if let Some(url) = extract_callback_url(&request, accept) {
+    let _ = write_async_response(&mut stream, "200 OK", include_str!("redirect_uri.html")).await;
+    return Some(url);
+  }
+  // Browser noise (favicon, pre-flight): 400 and keep waiting for the callback.
+  let _ = write_async_response(&mut stream, "400 Bad Request", "400 - Bad Request").await;
+  None
 }
 
 async fn write_async_response(
@@ -165,7 +184,7 @@ mod tests {
       let _ = stream.read(&mut buf).await;
     });
 
-    let result = run_accept_loop(listener, spotify_callback).await;
+    let result = run_accept_loop(listener, spotify_callback, CALLBACK_READ_TIMEOUT).await;
     client.await.unwrap();
 
     let url = result.expect("server should return Ok(url)");
@@ -208,10 +227,48 @@ mod tests {
       let _ = real.read(&mut vec![0u8; 4096]).await;
     });
 
-    let result = run_accept_loop(listener, spotify_callback).await;
+    let result = run_accept_loop(listener, spotify_callback, CALLBACK_READ_TIMEOUT).await;
     client.await.unwrap();
 
     let url = result.expect("server should return Ok(url)");
     assert!(url.contains("code=realcode456"), "unexpected url: {url}");
+  }
+  #[tokio::test]
+  async fn a_silent_connection_does_not_block_the_callback() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+
+    let client = tokio::spawn(async move {
+      use tokio::io::{AsyncReadExt, AsyncWriteExt};
+      let silent = tokio::net::TcpStream::connect(format!("127.0.0.1:{port}"))
+        .await
+        .unwrap();
+      let mut real = tokio::net::TcpStream::connect(format!("127.0.0.1:{port}"))
+        .await
+        .unwrap();
+      real
+        .write_all(
+          format!("GET /callback?code=late HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n").as_bytes(),
+        )
+        .await
+        .unwrap();
+      let _ = real.read(&mut vec![0u8; 4096]).await;
+      drop(silent);
+    });
+
+    // A read timeout far past the deadline: only a parallel read meets it.
+    let result = tokio::time::timeout(
+      std::time::Duration::from_secs(2),
+      run_accept_loop(
+        listener,
+        spotify_callback,
+        std::time::Duration::from_secs(60),
+      ),
+    )
+    .await
+    .expect("the silent connection held the callback");
+    client.await.unwrap();
+
+    assert!(result.unwrap().contains("code=late"));
   }
 }

@@ -71,6 +71,7 @@ describe("main additions share the active language table", () => {
           group: "sources",
           name: "Subsonic",
           description: "",
+          button: null,
           value: { kind: "secret", set },
         };
         const html = renderToStaticMarkup(

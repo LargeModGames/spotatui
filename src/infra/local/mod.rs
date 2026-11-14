@@ -723,16 +723,8 @@ mod tests {
     let cached = futures::executor::block_on(LocalSource::new(root).playlists()).unwrap();
     for (strings, root_label, unknown_track) in [
       (&EN, "(root)", "Unknown Track"),
-      (
-        &ZH_HANS,
-        ZH_HANS.status.infra.local_root_folder,
-        ZH_HANS.status.infra.local_unknown_track,
-      ),
-      (
-        &ZH_HANT,
-        ZH_HANT.status.infra.local_root_folder,
-        ZH_HANT.status.infra.local_unknown_track,
-      ),
+      (&ZH_HANS, "（根目录）", "未知曲目"),
+      (&ZH_HANT, "（根目錄）", "未知曲目"),
     ] {
       let source = LocalSource::new(root);
       let playlists = futures::executor::block_on(source.playlists()).unwrap();
@@ -1067,7 +1059,7 @@ mod tests {
     assert!(t.is_local, "track should be marked local");
     assert!(t.is_playable, "track should be playable");
     assert!(
-      t.uri.as_deref().map_or(false, |u| u.starts_with("file://")),
+      t.uri.as_deref().is_some_and(|u| u.starts_with("file://")),
       "track URI should be a file:// URI"
     );
   }
@@ -1357,7 +1349,7 @@ mod tests {
     // real player by building the queue fields directly is not possible
     // (player is required), so assert the underlying slice access contract that
     // current_uri relies on.
-    let queue = vec!["x".to_string(), "y".to_string()];
+    let queue = ["x".to_string(), "y".to_string()];
     assert_eq!(queue.get(1).map(String::as_str), Some("y"));
     assert_eq!(queue.get(5).map(String::as_str), None);
   }

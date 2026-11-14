@@ -1,13 +1,15 @@
-use crate::core::app::{ActiveBlock, App};
+use crate::core::app::{ActiveBlock, App, RouteId};
+use crate::core::input::Arrow;
+use crate::core::pane::{Pane, PaneNode, SplitAxis};
 use crate::core::state::RuntimeState;
 use crate::core::user_config::BehaviorConfig;
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::{Constraint, Layout, Margin, Rect};
 
 pub const COMPACT_TOP_ROW_THRESHOLD: u16 = 60;
 const COMPACT_HELP_WIDTH: u16 = 6;
 const COMPACT_SETTINGS_WIDTH: u16 = 10;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MainLayoutAreas {
   pub input: Option<Rect>,
   pub help: Option<Rect>,
@@ -18,6 +20,8 @@ pub struct MainLayoutAreas {
   pub library: Rect,
   pub playlists: Rect,
   pub content: Rect,
+  /// The now playing panel to the right of `content`, when it shows.
+  pub now_playing: Option<Rect>,
 }
 
 pub fn small_terminal_width(behavior: &BehaviorConfig) -> u16 {
@@ -37,18 +41,330 @@ pub fn main_layout_margin(app: &App) -> u16 {
 }
 
 pub fn is_wide_layout(app: &App) -> bool {
-  app.view.size.width >= small_terminal_width(&app.user_config.behavior)
+  match main_root(app) {
+    Some(MainRoot::Full(root, _)) => is_wide_width(app, root.width),
+    Some(MainRoot::Hidden { .. }) => false,
+    None => is_wide_width(app, app.view.size.width),
+  }
+}
+
+/// Whether `Main` is hidden and only its search row and playbar show beside the panes.
+pub fn main_hidden(app: &App) -> bool {
+  matches!(main_root(app), Some(MainRoot::Hidden { .. }))
+}
+
+fn is_wide_width(app: &App, width: u16) -> bool {
+  width >= small_terminal_width(&app.user_config.behavior)
     && !app.user_config.behavior.enforce_wide_search_bar
 }
 
-pub fn compute_main_layout(app: &App) -> Option<MainLayoutAreas> {
+const MIN_PANE_WIDTH: u16 = 12;
+const MIN_PANE_HEIGHT: u16 = 4;
+const MIN_MAIN_WIDTH: u16 = 40;
+const MIN_MAIN_HEIGHT: u16 = 12;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PaneLayout {
+  pub panes: Vec<(Pane, Rect)>,
+  pub borders: Vec<PaneBorder>,
+  /// The search, help and settings row and the playbar while `Main` is hidden.
+  pub hidden_main: Option<(Rect, Rect)>,
+}
+
+impl PaneLayout {
+  pub fn area(&self, pane: Pane) -> Option<Rect> {
+    self
+      .panes
+      .iter()
+      .find(|(leaf, _)| *leaf == pane)
+      .map(|(_, area)| *area)
+  }
+}
+
+/// The line between the two children of the `index`th split (pre-order).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PaneBorder {
+  pub index: usize,
+  pub axis: SplitAxis,
+  pub parent: Rect,
+  pub first: Rect,
+}
+
+impl PaneBorder {
+  /// The last cell of the first child and the first cell of the second along the axis.
+  pub fn is_hit(&self, column: u16, row: u16) -> bool {
+    let inside = |pos: u16, start: u16, len: u16| pos >= start && pos < start.saturating_add(len);
+    match self.axis {
+      SplitAxis::Horizontal => {
+        let edge = self.first.x + self.first.width;
+        inside(row, self.parent.y, self.parent.height) && (column + 1 == edge || column == edge)
+      }
+      SplitAxis::Vertical => {
+        let edge = self.first.y + self.first.height;
+        inside(column, self.parent.x, self.parent.width) && (row + 1 == edge || row == edge)
+      }
+    }
+  }
+
+  /// The share of the first child when the border sits at this cell.
+  pub fn percent_at(&self, column: u16, row: u16) -> u8 {
+    let (pos, start, len) = match self.axis {
+      SplitAxis::Horizontal => (column, self.parent.x, self.parent.width),
+      SplitAxis::Vertical => (row, self.parent.y, self.parent.height),
+    };
+    let offset = u32::from(pos.saturating_sub(start)) + 1;
+    (offset * 100 / u32::from(len.max(1))).min(100) as u8
+  }
+}
+
+/// The detached panes and `Main` with their rects, or `None` when only `Main`
+/// shows: nothing is detached, or a pane would not fit the terminal. A hidden
+/// `Main` leaves its search, help and settings row and its playbar beside the panes.
+pub fn compute_pane_layout(app: &App) -> Option<PaneLayout> {
+  compute_pane_layout_for(app, app.pane_layout())
+}
+
+/// `compute_pane_layout` for a tree that is not saved yet.
+pub fn compute_pane_layout_for(app: &App, tree: &PaneNode) -> Option<PaneLayout> {
+  if *tree == PaneNode::default() || app.view.size.width == 0 || app.view.size.height == 0 {
+    return None;
+  }
+  let margin = main_layout_margin(app);
+  let mut root = Rect::new(0, 0, app.view.size.width, app.view.size.height).inner(Margin {
+    horizontal: margin,
+    vertical: margin,
+  });
+  let mut hidden_main = None;
+  if !tree.contains(Pane::Main) {
+    let playbar = playbar_constraint(&app.runtime_state);
+    let (bar, rest, playbar) = if app.user_config.behavior.playbar_position == "top" {
+      let [playbar, bar, rest] = root.layout(&Layout::vertical([
+        playbar,
+        Constraint::Length(3),
+        Constraint::Min(0),
+      ]));
+      (bar, rest, playbar)
+    } else {
+      let [bar, rest, playbar] = root.layout(&Layout::vertical([
+        Constraint::Length(3),
+        Constraint::Min(0),
+        playbar,
+      ]));
+      (bar, rest, playbar)
+    };
+    hidden_main = Some((bar, playbar));
+    root = rest;
+  }
+  let mut layout = PaneLayout {
+    panes: Vec::new(),
+    borders: Vec::new(),
+    hidden_main,
+  };
+  split_pane_node(tree, root, &mut layout, &mut 0);
+  let fits = layout.panes.iter().all(|(pane, area)| {
+    let (width, height) = if *pane == Pane::Main {
+      (MIN_MAIN_WIDTH, MIN_MAIN_HEIGHT)
+    } else {
+      (MIN_PANE_WIDTH, MIN_PANE_HEIGHT)
+    };
+    area.width >= width && area.height >= height
+  });
+  fits.then_some(layout)
+}
+
+fn split_pane_node(node: &PaneNode, area: Rect, layout: &mut PaneLayout, splits: &mut usize) {
+  match node {
+    PaneNode::Leaf(pane) => layout.panes.push((*pane, area)),
+    PaneNode::Split(split) => {
+      let percent = u16::from(split.percent);
+      let constraints = [
+        Constraint::Percentage(percent),
+        Constraint::Percentage(100 - percent),
+      ];
+      let [first, second] = match split.axis {
+        SplitAxis::Horizontal => area.layout(&Layout::horizontal(constraints)),
+        SplitAxis::Vertical => area.layout(&Layout::vertical(constraints)),
+      };
+      layout.borders.push(PaneBorder {
+        index: *splits,
+        axis: split.axis,
+        parent: area,
+        first,
+      });
+      *splits += 1;
+      split_pane_node(&split.first, first, layout, splits);
+      split_pane_node(&split.second, second, layout, splits);
+    }
+  }
+}
+
+enum MainRoot {
+  /// The rect of all of `Main`, with the margin applied inside it.
+  Full(Rect, u16),
+  /// The search, help and settings row and the playbar of a hidden `Main`.
+  Hidden { bar: Rect, playbar: Rect },
+}
+
+fn main_root(app: &App) -> Option<MainRoot> {
   if app.view.size.width == 0 || app.view.size.height == 0 {
     return None;
   }
+  match compute_pane_layout(app) {
+    Some(layout) => match layout.area(Pane::Main) {
+      Some(area) => Some(MainRoot::Full(area, 0)),
+      None => layout
+        .hidden_main
+        .map(|(bar, playbar)| MainRoot::Hidden { bar, playbar }),
+    },
+    None => Some(MainRoot::Full(
+      Rect::new(0, 0, app.view.size.width, app.view.size.height),
+      main_layout_margin(app),
+    )),
+  }
+}
 
-  let root = Rect::new(0, 0, app.view.size.width, app.view.size.height);
-  let margin = main_layout_margin(app);
-  let wide_layout = is_wide_layout(app);
+/// The rect of `pane` in the current layout, when it shows.
+pub fn pane_area(app: &App, pane: Pane) -> Option<Rect> {
+  compute_pane_layout(app)?.area(pane)
+}
+
+/// Whether the current route draws the main layout and with it the panes; keep in step with
+/// the draw match in `runner::start_ui`.
+pub fn route_draws_main_layout(app: &App) -> bool {
+  match app.get_current_route().active_block {
+    ActiveBlock::HelpMenu
+    | ActiveBlock::Queue
+    | ActiveBlock::Error
+    | ActiveBlock::SelectDevice
+    | ActiveBlock::Analysis
+    | ActiveBlock::LyricsView
+    | ActiveBlock::MiniPlayer
+    | ActiveBlock::AnnouncementPrompt
+    | ActiveBlock::ExitPrompt
+    | ActiveBlock::Settings
+    | ActiveBlock::PluginScreen => false,
+    ActiveBlock::CoverArtView => !cfg!(feature = "cover-art"),
+    _ => true,
+  }
+}
+
+/// The rect of `pane` when it is on screen in this frame.
+pub fn visible_pane_area(app: &App, pane: Pane) -> Option<Rect> {
+  if !route_draws_main_layout(app) {
+    return None;
+  }
+  pane_area(app, pane)
+}
+
+/// Whether the panes are on screen and can take keys: no full-screen view or modal covers them.
+pub fn main_layout_has_keys(app: &App) -> bool {
+  !matches!(
+    app.get_current_route().active_block,
+    ActiveBlock::HelpMenu
+      | ActiveBlock::Queue
+      | ActiveBlock::Party
+      | ActiveBlock::Error
+      | ActiveBlock::SelectDevice
+      | ActiveBlock::Analysis
+      | ActiveBlock::LyricsView
+      | ActiveBlock::MiniPlayer
+      | ActiveBlock::CoverArtView
+      | ActiveBlock::AnnouncementPrompt
+      | ActiveBlock::RecapPrompt
+      | ActiveBlock::CommunityPinPrompt
+      | ActiveBlock::ExitPrompt
+      | ActiveBlock::Settings
+      | ActiveBlock::PluginScreen
+      | ActiveBlock::CreatePlaylistForm
+      | ActiveBlock::Dialog(_)
+      | ActiveBlock::SortMenu
+      | ActiveBlock::Input
+  )
+}
+
+/// The detached pane that gets the keys, when one has focus and shows.
+pub fn focused_detached_pane(app: &App) -> Option<Pane> {
+  let pane = app.view.focused_pane;
+  if pane == Pane::Main || !main_layout_has_keys(app) {
+    return None;
+  }
+  pane_area(app, pane).map(|_| pane)
+}
+
+/// Where the close mark sits on a pane's top border, when the pane is wide enough.
+pub fn pane_close_mark(area: Rect) -> Option<Rect> {
+  const MARK_WIDTH: u16 = 3;
+  (area.width >= MARK_WIDTH + 4 && area.height > 0).then(|| Rect {
+    x: area.x + area.width - MARK_WIDTH - 2,
+    y: area.y,
+    width: MARK_WIDTH,
+    height: 1,
+  })
+}
+
+/// The split axis for a new pane beside `area`: side by side when the area is
+/// wide, counting a cell as about twice as tall as it is wide.
+pub fn detach_axis(area: Rect) -> SplitAxis {
+  if area.width >= area.height.saturating_mul(2) {
+    SplitAxis::Horizontal
+  } else {
+    SplitAxis::Vertical
+  }
+}
+
+/// The nearest pane in `direction` from `from` that shares a row or column with it.
+pub fn neighbor_pane(layout: &PaneLayout, from: Pane, direction: Arrow) -> Option<Pane> {
+  let origin = layout.area(from)?;
+  let overlap = |a_start: u16, a_len: u16, b_start: u16, b_len: u16| {
+    let start = a_start.max(b_start);
+    let end = (a_start + a_len).min(b_start + b_len);
+    end.saturating_sub(start)
+  };
+  layout
+    .panes
+    .iter()
+    .filter(|(pane, _)| *pane != from)
+    .filter_map(|(pane, area)| {
+      let (distance, shared) = match direction {
+        Arrow::Left if area.x + area.width <= origin.x => (
+          origin.x - (area.x + area.width),
+          overlap(origin.y, origin.height, area.y, area.height),
+        ),
+        Arrow::Right if area.x >= origin.x + origin.width => (
+          area.x - (origin.x + origin.width),
+          overlap(origin.y, origin.height, area.y, area.height),
+        ),
+        Arrow::Up if area.y + area.height <= origin.y => (
+          origin.y - (area.y + area.height),
+          overlap(origin.x, origin.width, area.x, area.width),
+        ),
+        Arrow::Down if area.y >= origin.y + origin.height => (
+          area.y - (origin.y + origin.height),
+          overlap(origin.x, origin.width, area.x, area.width),
+        ),
+        _ => return None,
+      };
+      (shared > 0).then_some((distance, std::cmp::Reverse(shared), *pane))
+    })
+    .min_by_key(|(distance, shared, _)| (*distance, *shared))
+    .map(|(_, _, pane)| pane)
+}
+
+pub fn compute_main_layout(app: &App) -> Option<MainLayoutAreas> {
+  let (root, margin) = match main_root(app)? {
+    MainRoot::Full(root, margin) => (root, margin),
+    MainRoot::Hidden { bar, playbar } => {
+      let [input, help, settings] = split_input_help_and_settings(app, bar);
+      return Some(MainLayoutAreas {
+        input: Some(input),
+        help: Some(help),
+        settings: Some(settings),
+        playbar,
+        ..MainLayoutAreas::default()
+      });
+    }
+  };
+  let wide_layout = is_wide_width(app, root.width);
   let behavior = &app.user_config.behavior;
   let runtime_state = &app.runtime_state;
 
@@ -87,6 +403,7 @@ pub fn compute_main_layout(app: &App) -> Option<MainLayoutAreas> {
   };
 
   let (user_area, content_area) = split_routes_area(app, routes_area);
+  let (content_area, now_playing_area) = split_now_playing(app, content_area);
   let library = library_constraints(runtime_state);
   let (input, help, settings, library_area, playlist_area) = if wide_layout {
     let [input_area, library_area, playlist_area] = user_area.layout(&Layout::vertical([
@@ -130,7 +447,77 @@ pub fn compute_main_layout(app: &App) -> Option<MainLayoutAreas> {
     library: library_area,
     playlists: playlist_area,
     content: content_area,
+    now_playing: now_playing_area,
   })
+}
+
+/// The narrowest and widest the now playing panel gets, and the share of the
+/// content area it takes in between.
+const NOW_PLAYING_MIN_WIDTH: u16 = 30;
+const NOW_PLAYING_MAX_WIDTH: u16 = 48;
+const NOW_PLAYING_PERCENT: u16 = 30;
+/// The content a panel must leave beside it, so a track table keeps its columns.
+const NOW_PLAYING_MIN_CONTENT_WIDTH: u16 = 60;
+
+/// Why the now playing panel the user asked for is not on screen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NowPlayingHidden {
+  /// The search box has the keys or the search results show: they get the width.
+  Searching,
+  /// The content area cannot spare the panel's minimum width.
+  TooNarrow,
+}
+
+/// The width the now playing panel takes out of a content area this wide,
+/// or `None` when the rest would be too narrow.
+pub fn now_playing_panel_width(content_width: u16) -> Option<u16> {
+  // In u32: `content_width * 30` overflows a u16 past 2184 columns.
+  let share = u32::from(content_width) * u32::from(NOW_PLAYING_PERCENT) / 100;
+  let width = share.clamp(
+    u32::from(NOW_PLAYING_MIN_WIDTH),
+    u32::from(NOW_PLAYING_MAX_WIDTH),
+  ) as u16;
+  (content_width.saturating_sub(width) >= NOW_PLAYING_MIN_CONTENT_WIDTH).then_some(width)
+}
+
+/// Whether the screen the user is on hides the panel: searching needs the width.
+fn now_playing_hidden_by_route(app: &App) -> bool {
+  let route = app.get_current_route();
+  route.id == RouteId::Search || route.active_block == ActiveBlock::Input
+}
+
+/// Why the panel the user asked for does not show over a content area this wide.
+pub fn now_playing_hidden_reason(app: &App, content_width: u16) -> Option<NowPlayingHidden> {
+  if now_playing_hidden_by_route(app) {
+    Some(NowPlayingHidden::Searching)
+  } else if now_playing_panel_width(content_width).is_none() {
+    Some(NowPlayingHidden::TooNarrow)
+  } else {
+    None
+  }
+}
+
+/// Take the now playing panel off the right of `content` when the user asked
+/// for it and it fits; the content keeps the whole area otherwise.
+fn split_now_playing(app: &App, content: Rect) -> (Rect, Option<Rect>) {
+  if !app.view.now_playing_panel || now_playing_hidden_by_route(app) {
+    return (content, None);
+  }
+  let Some(width) = now_playing_panel_width(content.width) else {
+    return (content, None);
+  };
+  let [content, panel] = content.layout(&Layout::horizontal([
+    Constraint::Min(0),
+    Constraint::Length(width),
+  ]));
+  (content, Some(panel))
+}
+
+/// The content area as it would be with the now playing panel closed, to tell
+/// the user why opening it shows nothing.
+pub fn content_width_without_now_playing(app: &App) -> Option<u16> {
+  compute_main_layout(app)
+    .map(|areas| areas.content.width + areas.now_playing.map_or(0, |panel| panel.width))
 }
 
 /// Returns horizontal constraints for the [sidebar, content] split based on runtime state.
@@ -282,9 +669,104 @@ pub fn miniplayer_playbar_area(area: Rect) -> Rect {
   }
 }
 
+/// Main on the left, Lyrics above the Visualizer on the right.
+#[cfg(test)]
+pub(crate) fn app_with_panes(width: u16, height: u16) -> App {
+  let mut app = App::default();
+  app.view.size = crate::core::geometry::Viewport { width, height };
+  app.change_pane_layout(|tree| tree.detach(Pane::Main, Pane::Lyrics, SplitAxis::Horizontal));
+  app.change_pane_layout(|tree| tree.detach(Pane::Lyrics, Pane::Visualizer, SplitAxis::Vertical));
+  app
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn the_main_layout_fills_only_the_main_pane() {
+    let app = app_with_panes(160, 50);
+    let main = pane_area(&app, Pane::Main).unwrap();
+    let lyrics = pane_area(&app, Pane::Lyrics).unwrap();
+    let visualizer = pane_area(&app, Pane::Visualizer).unwrap();
+
+    let areas = compute_main_layout(&app).unwrap();
+
+    assert_eq!(main, Rect::new(1, 1, 95, 48));
+    assert_eq!(areas.playbar.x + areas.playbar.width, main.x + main.width);
+    assert_eq!(lyrics.x, main.x + main.width);
+    assert_eq!(visualizer.y, lyrics.y + lyrics.height);
+  }
+
+  #[test]
+  fn a_hidden_main_leaves_its_search_row_above_and_its_playbar_below_the_panes() {
+    let mut app = app_with_panes(160, 50);
+    app.change_pane_layout(|tree| tree.close(Pane::Main));
+
+    let areas = compute_main_layout(&app).unwrap();
+    let input = areas.input.unwrap();
+    let lyrics = pane_area(&app, Pane::Lyrics).unwrap();
+    let visualizer = pane_area(&app, Pane::Visualizer).unwrap();
+
+    assert!(main_hidden(&app));
+    assert!(!is_wide_layout(&app));
+    assert_eq!((input.x, input.y + input.height), (lyrics.x, lyrics.y));
+    assert_eq!(
+      (areas.playbar.x, areas.playbar.y, areas.playbar.width),
+      (input.x, visualizer.y + visualizer.height, 158)
+    );
+    assert_eq!(areas.playbar.height, 6);
+    assert_eq!(areas.content, Rect::default());
+  }
+
+  #[test]
+  fn the_panes_hide_and_main_takes_the_terminal_when_a_pane_would_not_fit() {
+    let app = app_with_panes(60, 20);
+
+    assert_eq!(compute_pane_layout(&app), None);
+    assert_eq!(compute_main_layout(&app).unwrap().playbar.width, 60);
+    assert!(app.pane_open(Pane::Lyrics));
+  }
+
+  #[test]
+  fn neighbor_pane_follows_the_geometry() {
+    let app = app_with_panes(160, 50);
+    let layout = compute_pane_layout(&app).unwrap();
+
+    assert_eq!(
+      neighbor_pane(&layout, Pane::Main, Arrow::Right),
+      Some(Pane::Lyrics)
+    );
+    assert_eq!(
+      neighbor_pane(&layout, Pane::Visualizer, Arrow::Up),
+      Some(Pane::Lyrics)
+    );
+    assert_eq!(
+      neighbor_pane(&layout, Pane::Visualizer, Arrow::Left),
+      Some(Pane::Main)
+    );
+    assert_eq!(neighbor_pane(&layout, Pane::Main, Arrow::Left), None);
+  }
+
+  #[test]
+  fn a_split_border_is_hit_on_both_sides_and_gives_the_share_at_a_cell() {
+    let app = app_with_panes(160, 50);
+    let layout = compute_pane_layout(&app).unwrap();
+    let root = layout.borders[0];
+    let edge = root.first.x + root.first.width;
+
+    assert_eq!(root.index, 0);
+    assert!(root.is_hit(edge - 1, 10));
+    assert!(root.is_hit(edge, 10));
+    assert!(!root.is_hit(edge + 1, 10));
+    assert_eq!(root.percent_at(root.parent.x + 78, 10), 50);
+  }
+
+  #[test]
+  fn a_wide_area_detaches_side_by_side_and_a_tall_one_stacks() {
+    assert_eq!(detach_axis(Rect::new(0, 0, 100, 40)), SplitAxis::Horizontal);
+    assert_eq!(detach_axis(Rect::new(0, 0, 60, 40)), SplitAxis::Vertical);
+  }
 
   fn make_state_with(sidebar_pct: u8, playbar_rows: u16) -> RuntimeState {
     RuntimeState {
@@ -409,5 +891,86 @@ mod tests {
     let area = Rect::new(0, 0, 60, 12);
 
     assert_eq!(miniplayer_playbar_area(area), Rect::new(1, 1, 58, 10));
+  }
+
+  fn app_with_now_playing(width: u16, height: u16) -> App {
+    let mut app = App::default();
+    app.view.size = crate::core::geometry::Viewport { width, height };
+    app.push_navigation_stack(RouteId::TrackTable, ActiveBlock::TrackTable);
+    app.view.now_playing_panel = true;
+    app
+  }
+
+  #[test]
+  fn the_now_playing_panel_takes_the_right_of_the_content_above_a_full_width_playbar() {
+    let app = app_with_now_playing(160, 50);
+
+    let areas = compute_main_layout(&app).unwrap();
+    let panel = areas.now_playing.expect("panel shows on a wide terminal");
+
+    assert_eq!(panel.x, areas.content.x + areas.content.width);
+    assert_eq!(
+      (panel.y, panel.height),
+      (areas.content.y, areas.content.height)
+    );
+    assert_eq!(
+      areas.playbar.x + areas.playbar.width,
+      panel.x + panel.width,
+      "the playbar keeps the whole width under the panel"
+    );
+    assert!(areas.content.width >= NOW_PLAYING_MIN_CONTENT_WIDTH);
+  }
+
+  #[test]
+  fn the_now_playing_panel_stays_closed_until_asked_for() {
+    let mut app = app_with_now_playing(160, 50);
+    app.view.now_playing_panel = false;
+
+    assert_eq!(compute_main_layout(&app).unwrap().now_playing, None);
+  }
+
+  #[test]
+  fn searching_hides_the_now_playing_panel_and_gives_the_results_its_width() {
+    let mut app = app_with_now_playing(160, 50);
+    let with_panel = compute_main_layout(&app).unwrap();
+
+    app.push_navigation_stack(RouteId::Search, ActiveBlock::SearchResultBlock);
+    let results = compute_main_layout(&app).unwrap();
+    assert_eq!(results.now_playing, None);
+    assert_eq!(
+      results.content.width,
+      with_panel.content.width + with_panel.now_playing.unwrap().width
+    );
+
+    app.set_current_route_state(Some(ActiveBlock::Input), None);
+    assert_eq!(compute_main_layout(&app).unwrap().now_playing, None);
+    assert_eq!(
+      now_playing_hidden_reason(&app, results.content.width),
+      Some(NowPlayingHidden::Searching)
+    );
+  }
+
+  #[test]
+  fn a_narrow_terminal_leaves_the_now_playing_panel_out() {
+    let app = app_with_now_playing(100, 40);
+    let width = content_width_without_now_playing(&app).unwrap();
+
+    assert_eq!(compute_main_layout(&app).unwrap().now_playing, None);
+    assert_eq!(
+      now_playing_hidden_reason(&app, width),
+      Some(NowPlayingHidden::TooNarrow)
+    );
+  }
+
+  #[test]
+  fn the_now_playing_panel_width_is_clamped_and_leaves_the_content_room() {
+    assert_eq!(now_playing_panel_width(200), Some(NOW_PLAYING_MAX_WIDTH));
+    assert_eq!(now_playing_panel_width(100), Some(30));
+    assert_eq!(now_playing_panel_width(89), None);
+    assert_eq!(
+      now_playing_panel_width(u16::MAX),
+      Some(NOW_PLAYING_MAX_WIDTH),
+      "a huge width does not overflow"
+    );
   }
 }

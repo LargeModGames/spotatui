@@ -1,6 +1,5 @@
 //! Frontend-neutral, serializable UI messages. Add English fields first; each
 //! translated instance inherits untranslated fields from its English instance.
-//! Chinese tables follow in stacked translation PRs; missing areas use English.
 pub mod gui;
 pub mod help;
 mod locale;

@@ -2,6 +2,9 @@ use super::*;
 
 #[derive(Clone, Copy)]
 pub enum DisplayDomain {
+  /// The GUI window layout; first, so a page has it before the route draws the frame.
+  #[cfg_attr(not(feature = "gui"), allow(dead_code))]
+  PaneLayout,
   Route,
   Status,
   Source,
@@ -48,6 +51,7 @@ pub enum DisplayDomain {
 #[cfg_attr(feature = "gui", derive(serde::Serialize))]
 #[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub struct DisplayRevisions {
+  pane_layout: u64,
   route: u64,
   status: u64,
   source: u64,
@@ -77,7 +81,8 @@ pub struct DisplayRevisions {
 
 impl DisplayDomain {
   /// Every domain, in declaration order.
-  pub const ALL: [DisplayDomain; 25] = [
+  pub const ALL: [DisplayDomain; 26] = [
+    DisplayDomain::PaneLayout,
     DisplayDomain::Route,
     DisplayDomain::Status,
     DisplayDomain::Source,
@@ -109,6 +114,7 @@ impl DisplayDomain {
 impl DisplayRevisions {
   pub(super) fn bump(&mut self, domain: DisplayDomain) {
     let slot = match domain {
+      DisplayDomain::PaneLayout => &mut self.pane_layout,
       DisplayDomain::Route => &mut self.route,
       DisplayDomain::Status => &mut self.status,
       DisplayDomain::Source => &mut self.source,
@@ -141,6 +147,7 @@ impl DisplayRevisions {
   #[cfg(any(test, feature = "gui"))]
   pub fn get(&self, domain: DisplayDomain) -> u64 {
     match domain {
+      DisplayDomain::PaneLayout => self.pane_layout,
       DisplayDomain::Route => self.route,
       DisplayDomain::Status => self.status,
       DisplayDomain::Source => self.source,

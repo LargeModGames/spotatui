@@ -41,6 +41,10 @@ pub struct PopupStrings {
   pub no_editable_playlists: &'static str,
   pub collaborative_playlist_template: &'static str,
   pub playlist_picker_controls_template: &'static str,
+  pub playlist_picker_search_prompt: &'static str,
+  pub playlist_picker_search_edit_hint: &'static str,
+  pub playlist_picker_search_hint_template: &'static str,
+  pub no_matching_playlists_template: &'static str,
   pub mirror_playlist: &'static str,
   pub selected_playlist: &'static str,
   pub mirror_onto_template: &'static str,
@@ -67,6 +71,9 @@ pub struct PopupStrings {
   pub exit_yes_no: &'static str,
   pub exit_controls: &'static str,
   pub exit_title: &'static str,
+  pub sort_playlists: &'static str,
+  pub sort_spotify: &'static str,
+  pub sort_recently_played: &'static str,
   pub sort_tracks: &'static str,
   pub sort_albums: &'static str,
   pub sort_artists: &'static str,
@@ -121,6 +128,19 @@ pub struct PopupStrings {
   pub unknown_artist: &'static str,
   pub create_results_title: &'static str,
   pub added_tracks_title_template: &'static str,
+  pub soloist_pair_title: &'static str,
+  pub soloist_pair_open: &'static str,
+  pub soloist_pair_pick_template: &'static str,
+  pub soloist_pair_waiting: &'static str,
+  pub soloist_pair_close: &'static str,
+  pub soloist_offer_title: &'static str,
+  pub soloist_offer_body: &'static str,
+  pub soloist_offer_step_download: &'static str,
+  pub soloist_offer_step_key: &'static str,
+  pub soloist_offer_step_engine: &'static str,
+  pub soloist_offer_set_up: &'static str,
+  pub soloist_offer_not_now: &'static str,
+  pub soloist_offer_controls: &'static str,
 }
 
 pub const EN: PopupStrings = PopupStrings {
@@ -162,6 +182,10 @@ pub const EN: PopupStrings = PopupStrings {
   no_editable_playlists: "No editable playlists available",
   collaborative_playlist_template: "{name} - {owner} (collab)",
   playlist_picker_controls_template: "Enter add/open | q cancel | {down}/{up} or arrows move | H/M/L jump",
+  playlist_picker_search_prompt: "Search: ",
+  playlist_picker_search_edit_hint: "  Enter: apply  Esc: clear",
+  playlist_picker_search_hint_template: "{key} search playlists",
+  no_matching_playlists_template: "No playlists match \"{query}\"",
   mirror_playlist: "Mirror Playlist",
   selected_playlist: "Selected playlist",
   mirror_onto_template: "Mirror \"{name}\" onto:",
@@ -188,6 +212,9 @@ pub const EN: PopupStrings = PopupStrings {
   exit_yes_no: "Press Y for Yes or N for No",
   exit_controls: "[ENTER = Yes, ESC = No]",
   exit_title: " Confirm Exit ",
+  sort_playlists: "Sort Playlists",
+  sort_spotify: "Spotify",
+  sort_recently_played: "Recently played",
   sort_tracks: "Sort Tracks",
   sort_albums: "Sort Albums",
   sort_artists: "Sort Artists",
@@ -242,6 +269,19 @@ pub const EN: PopupStrings = PopupStrings {
   unknown_artist: "Unknown",
   create_results_title: "Results (Enter to add)",
   added_tracks_title_template: "Added ({count}) — d=remove, Enter=create",
+  soloist_pair_title: "Pair spotatui with Spotify",
+  soloist_pair_open: "1. Open Spotify on a computer on this network.",
+  soloist_pair_pick_template: "2. In its device menu, pick '{name}'.",
+  soloist_pair_waiting: "Waiting for Spotify…",
+  soloist_pair_close: "Close",
+  soloist_offer_title: "Play through Soloist?",
+  soloist_offer_body: "Spotify refuses librespot the audio keys for these tracks, as it does for some accounts. Soloist, Spotify's own player, can play them. It needs Premium. In Settings:",
+  soloist_offer_step_download: "1. Soloist Path: Download from Spotify.",
+  soloist_offer_step_key: "2. Soloist API Key: Get a key, then enter it.",
+  soloist_offer_step_engine: "3. Playback Engine: Soloist.",
+  soloist_offer_set_up: "Set up Soloist",
+  soloist_offer_not_now: "Not now",
+  soloist_offer_controls: "Enter: open Settings   Esc: not now",
 };
 
 // Keep ..EN so new English fields compile before their translations are added.
@@ -286,6 +326,10 @@ pub const ZH_HANS: PopupStrings = PopupStrings {
   collaborative_playlist_template: "{name} - {owner}（协作）",
   playlist_picker_controls_template:
     "Enter 添加/打开 | q 取消 | {down}/{up} 或方向键移动 | H/M/L 跳转",
+  playlist_picker_search_prompt: "搜索：",
+  playlist_picker_search_edit_hint: "  Enter：应用  Esc：清除",
+  playlist_picker_search_hint_template: "{key} 搜索播放列表",
+  no_matching_playlists_template: "没有匹配“{query}”的播放列表",
   mirror_playlist: "镜像播放列表",
   selected_playlist: "所选播放列表",
   mirror_onto_template: "将“{name}”镜像到：",
@@ -312,6 +356,9 @@ pub const ZH_HANS: PopupStrings = PopupStrings {
   exit_yes_no: "按 Y 确认，按 N 取消",
   exit_controls: "[ENTER = 确认，ESC = 取消]",
   exit_title: " 确认退出 ",
+  sort_playlists: "歌单排序",
+  sort_spotify: "Spotify",
+  sort_recently_played: "最近播放",
   sort_tracks: "曲目排序",
   sort_albums: "专辑排序",
   sort_artists: "艺人排序",
@@ -366,6 +413,19 @@ pub const ZH_HANS: PopupStrings = PopupStrings {
   unknown_artist: "未知",
   create_results_title: "结果（Enter 添加）",
   added_tracks_title_template: "已添加（{count}）— d=移除，Enter=创建",
+  soloist_offer_body: "Spotify 拒绝向 librespot 提供这些曲目的音频密钥，部分账号会遇到这种情况。Spotify 自家的播放器 Soloist 可以播放，但需要 Premium。请在设置中：",
+  soloist_offer_controls: "Enter：打开设置   Esc：暂不",
+  soloist_offer_not_now: "暂不",
+  soloist_offer_set_up: "配置 Soloist",
+  soloist_offer_step_download: "1. Soloist 路径：从 Spotify 下载。",
+  soloist_offer_step_engine: "3. 播放引擎：Soloist。",
+  soloist_offer_step_key: "2. Soloist API 密钥：获取密钥，然后填入。",
+  soloist_offer_title: "通过 Soloist 播放？",
+  soloist_pair_close: "关闭",
+  soloist_pair_open: "1. 在同一网络的电脑上打开 Spotify。",
+  soloist_pair_pick_template: "2. 在它的设备菜单中选择“{name}”。",
+  soloist_pair_title: "将 spotatui 与 Spotify 配对",
+  soloist_pair_waiting: "正在等待 Spotify…",
   ..EN
 };
 
@@ -411,6 +471,10 @@ pub const ZH_HANT: PopupStrings = PopupStrings {
   collaborative_playlist_template: "{name} - {owner}（協作）",
   playlist_picker_controls_template:
     "Enter 加入/開啟 | q 取消 | {down}/{up} 或方向鍵移動 | H/M/L 跳轉",
+  playlist_picker_search_prompt: "搜尋：",
+  playlist_picker_search_edit_hint: "  Enter：套用  Esc：清除",
+  playlist_picker_search_hint_template: "{key} 搜尋播放清單",
+  no_matching_playlists_template: "沒有符合「{query}」的播放清單",
   mirror_playlist: "鏡像播放清單",
   selected_playlist: "所選播放清單",
   mirror_onto_template: "將「{name}」鏡像到：",
@@ -437,6 +501,9 @@ pub const ZH_HANT: PopupStrings = PopupStrings {
   exit_yes_no: "按 Y 確認，按 N 取消",
   exit_controls: "[ENTER = 確認，ESC = 取消]",
   exit_title: " 確認結束 ",
+  sort_playlists: "播放清單排序",
+  sort_spotify: "Spotify",
+  sort_recently_played: "最近播放",
   sort_tracks: "曲目排序",
   sort_albums: "專輯排序",
   sort_artists: "藝人排序",
@@ -491,8 +558,28 @@ pub const ZH_HANT: PopupStrings = PopupStrings {
   unknown_artist: "未知",
   create_results_title: "結果（Enter 加入）",
   added_tracks_title_template: "已加入（{count}）— d=移除，Enter=建立",
+  soloist_offer_body: "Spotify 拒絕向 librespot 提供這些曲目的音訊金鑰，部分帳號會遇到這種情況。Spotify 自家的播放器 Soloist 可以播放，但需要 Premium。請在設定中：",
+  soloist_offer_controls: "Enter：開啟設定   Esc：暫不",
+  soloist_offer_not_now: "暫不",
+  soloist_offer_set_up: "設定 Soloist",
+  soloist_offer_step_download: "1. Soloist 路徑：從 Spotify 下載。",
+  soloist_offer_step_engine: "3. 播放引擎：Soloist。",
+  soloist_offer_step_key: "2. Soloist API 金鑰：取得金鑰，然後填入。",
+  soloist_offer_title: "透過 Soloist 播放？",
+  soloist_pair_close: "關閉",
+  soloist_pair_open: "1. 在同一網路的電腦上開啟 Spotify。",
+  soloist_pair_pick_template: "2. 在它的裝置選單中選擇「{name}」。",
+  soloist_pair_title: "將 spotatui 與 Spotify 配對",
+  soloist_pair_waiting: "正在等待 Spotify…",
   ..EN
 };
+
+#[cfg(any(feature = "tui", feature = "gui", test))]
+impl PopupStrings {
+  pub fn soloist_pair_pick(&self, name: &str) -> String {
+    super::format_template(self.soloist_pair_pick_template, &[("name", name)])
+  }
+}
 
 #[cfg(any(feature = "tui", test))]
 impl PopupStrings {
@@ -537,6 +624,14 @@ impl PopupStrings {
       self.playlist_picker_controls_template,
       &[("down", down), ("up", up)],
     )
+  }
+
+  pub fn playlist_picker_search_hint(&self, key: &str) -> String {
+    super::format_template(self.playlist_picker_search_hint_template, &[("key", key)])
+  }
+
+  pub fn no_matching_playlists(&self, query: &str) -> String {
+    super::format_template(self.no_matching_playlists_template, &[("query", query)])
   }
 
   pub fn mirror_onto(&self, name: &str) -> String {
@@ -600,6 +695,7 @@ impl PopupStrings {
       SortField::Duration => self.sort_duration,
       SortField::Album => self.sort_album,
       SortField::ReleaseDate => self.sort_release_date,
+      SortField::RecentlyPlayed => self.sort_recently_played,
     }
   }
 }

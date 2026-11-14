@@ -44,7 +44,7 @@ jobs:
           # whenever a feature is added there, or the release build becomes the
           # first place a break shows up.
           - name: all-sources
-            args: "--locked --no-default-features --features telemetry,tui,streaming,discord-rpc,cover-art,self-update,scripting,mcp-server,ai-dj,audio-viz,mpris,local-files,subsonic,internet-radio,youtube,qobuz"
+            args: "--locked --no-default-features --features telemetry,tui,streaming,discord-rpc,cover-art,self-update,scripting,mcp-server,ai-dj,audio-viz,audio-viz-cpal,mpris,local-files,subsonic,internet-radio,youtube,qobuz,soloist"
           # `mcp-server` and `ai-dj` are two front doors on the same `dj-core`
           # implementation, and each has to build without the other: the
           # field-level `#[cfg(feature = "ai-dj")]` on `DjState::setup` exists
@@ -77,24 +77,25 @@ jobs:
           # frontend.
           - name: gui
             args: "--locked --no-default-features --features telemetry,gui,streaming,discord-rpc,self-update,scripting,mcp-server,mpris,local-files,subsonic,internet-radio,youtube,qobuz,audio-viz,audio-viz-cpal"
+          # The Soloist engine with both frontends: the GUI `owns_sound` arm and
+          # the TUI badge. all-sources carries `soloist` without `gui`.
+          - name: soloist
+            args: "--locked --no-default-features --features telemetry,tui,gui,streaming,discord-rpc,self-update,scripting,mcp-server,mpris,local-files,subsonic,internet-radio,youtube,qobuz,audio-viz,audio-viz-cpal,soloist"
     env:
       RUSTFLAGS: "-C linker-features=-lld"
     steps:
-      - uses: actions/checkout@master
-      - uses: actions-rs/toolchain@v1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: stable
-          profile: minimal
-          override: true
       - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y -qq pkg-config libssl-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libpipewire-0.3-dev libspa-0.2-dev libasound2-dev
-      - uses: Swatinem/rust-cache@v2
-      - uses: actions-rs/cargo@v1
-        with:
-          command: check
-          args: ${{ matrix.args }}
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - run: cargo check $ARGS
+        env:
+          ARGS: ${{ matrix.args }}
 
   test:
     name: Test Suite (${{ matrix.name }})
@@ -107,7 +108,7 @@ jobs:
           - name: default
             args: "--locked"
           - name: all-sources
-            args: "--locked --no-default-features --features telemetry,tui,streaming,discord-rpc,cover-art,self-update,scripting,mcp-server,ai-dj,audio-viz,mpris,local-files,subsonic,internet-radio,youtube,qobuz"
+            args: "--locked --no-default-features --features telemetry,tui,streaming,discord-rpc,cover-art,self-update,scripting,mcp-server,ai-dj,audio-viz,audio-viz-cpal,mpris,local-files,subsonic,internet-radio,youtube,qobuz,soloist"
           # See the check job for why the two single-door DJ legs exist.
           - name: mcp-only
             args: "--locked --no-default-features --features telemetry,tui,mcp-server"
@@ -121,24 +122,25 @@ jobs:
           # See the check job for why the gui leg exists.
           - name: gui
             args: "--locked --no-default-features --features telemetry,gui,streaming,discord-rpc,self-update,scripting,mcp-server,mpris,local-files,subsonic,internet-radio,youtube,qobuz,audio-viz,audio-viz-cpal"
+          # The Soloist engine with both frontends: the GUI `owns_sound` arm and
+          # the TUI badge. all-sources carries `soloist` without `gui`.
+          - name: soloist
+            args: "--locked --no-default-features --features telemetry,tui,gui,streaming,discord-rpc,self-update,scripting,mcp-server,mpris,local-files,subsonic,internet-radio,youtube,qobuz,audio-viz,audio-viz-cpal,soloist"
     env:
       RUSTFLAGS: "-C linker-features=-lld"
     steps:
-      - uses: actions/checkout@master
-      - uses: actions-rs/toolchain@v1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: stable
-          profile: minimal
-          override: true
       # These dependencies are required for `clipboard` and the audio backends.
       - run: |
           sudo apt-get update
           sudo apt-get install -y -qq pkg-config libssl-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libpipewire-0.3-dev libspa-0.2-dev libasound2-dev
-      - uses: Swatinem/rust-cache@v2
-      - uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: ${{ matrix.args }}
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - run: cargo test $ARGS
+        env:
+          ARGS: ${{ matrix.args }}
       # The gui leg's test run regenerates the TypeScript bindings; any
       # difference from the committed files (new, changed or deleted) fails.
       - name: TypeScript bindings match the Rust types
@@ -160,21 +162,24 @@ jobs:
     env:
       RUSTFLAGS: "-C linker-features=-lld"
     steps:
-      - uses: actions/checkout@master
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
+          toolchain: stable
           components: llvm-tools-preview
       - run: |
           sudo apt-get update
           sudo apt-get install -y -qq pkg-config libssl-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libpipewire-0.3-dev libspa-0.2-dev libasound2-dev
-      - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@cargo-llvm-cov
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: taiki-e/install-action@db07720855ab1f9adf78d37929621da20c5775a4 # cargo-llvm-cov
+        with:
+          tool: cargo-llvm-cov
       - name: Run tests with coverage
-        run: cargo llvm-cov --locked --no-default-features --features telemetry,tui,streaming,discord-rpc,cover-art,self-update,scripting,mcp-server,ai-dj,audio-viz,mpris,local-files,subsonic,internet-radio,youtube,qobuz --lcov --output-path lcov.info
+        run: cargo llvm-cov --locked --no-default-features --features telemetry,tui,streaming,discord-rpc,cover-art,self-update,scripting,mcp-server,ai-dj,audio-viz,audio-viz-cpal,mpris,local-files,subsonic,internet-radio,youtube,qobuz --lcov --output-path lcov.info
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v7
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           files: lcov.info
           fail_ci_if_error: false
@@ -185,18 +190,13 @@ jobs:
     runs-on: ubuntu-latest
     needs: prepare
     steps:
-      - uses: actions/checkout@master
-      - uses: actions-rs/toolchain@v1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: stable
-          profile: minimal
-          override: true
           components: rustfmt
-      - uses: Swatinem/rust-cache@v2
-      - uses: actions-rs/cargo@v1
-        with:
-          command: fmt
-          args: --all -- --check
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - run: cargo fmt --all -- --check
 
   clippy:
     name: Clippy (${{ matrix.name }})
@@ -209,7 +209,7 @@ jobs:
           - name: default
             args: "--locked"
           - name: all-sources
-            args: "--locked --no-default-features --features telemetry,tui,streaming,discord-rpc,cover-art,self-update,scripting,mcp-server,ai-dj,audio-viz,mpris,local-files,subsonic,internet-radio,youtube,qobuz"
+            args: "--locked --no-default-features --features telemetry,tui,streaming,discord-rpc,cover-art,self-update,scripting,mcp-server,ai-dj,audio-viz,audio-viz-cpal,mpris,local-files,subsonic,internet-radio,youtube,qobuz,soloist"
           # See the check job for why the two single-door DJ legs exist.
           - name: mcp-only
             args: "--locked --no-default-features --features telemetry,tui,mcp-server"
@@ -226,25 +226,26 @@ jobs:
           # See the check job for why the gui leg exists.
           - name: gui
             args: "--locked --no-default-features --features telemetry,gui,streaming,discord-rpc,self-update,scripting,mcp-server,mpris,local-files,subsonic,internet-radio,youtube,qobuz,audio-viz,audio-viz-cpal"
+          # The Soloist engine with both frontends: the GUI `owns_sound` arm and
+          # the TUI badge. all-sources carries `soloist` without `gui`.
+          - name: soloist
+            args: "--locked --no-default-features --features telemetry,tui,gui,streaming,discord-rpc,self-update,scripting,mcp-server,mpris,local-files,subsonic,internet-radio,youtube,qobuz,audio-viz,audio-viz-cpal,soloist"
     env:
       RUSTFLAGS: "-C linker-features=-lld"
     steps:
-      - uses: actions/checkout@master
-      - uses: actions-rs/toolchain@v1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: stable
-          profile: minimal
-          override: true
           components: clippy
       - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y -qq pkg-config libssl-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libpipewire-0.3-dev libspa-0.2-dev libasound2-dev
-      - uses: Swatinem/rust-cache@v2
-      - uses: actions-rs/cargo@v1
-        with:
-          command: clippy
-          args: ${{ matrix.args }} -- -D warnings
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - run: cargo clippy $ARGS -- -D warnings
+        env:
+          ARGS: ${{ matrix.args }}
 
   # macOS is the one platform the eight Linux legs above cannot speak for: it
   # picks a different playback backend (portaudio, not alsa/rodio), a different
@@ -268,15 +269,16 @@ jobs:
     runs-on: macos-latest
     needs: prepare
     env:
-      FEATURES: "telemetry,tui,streaming,discord-rpc,cover-art,self-update,scripting,mcp-server,ai-dj,audio-viz-cpal,portaudio-backend,macos-media,local-files,subsonic,internet-radio,youtube,qobuz,apple-music"
+      FEATURES: "telemetry,tui,streaming,discord-rpc,cover-art,self-update,scripting,mcp-server,ai-dj,audio-viz-cpal,portaudio-backend,macos-media,local-files,subsonic,internet-radio,youtube,qobuz,soloist,apple-music"
     steps:
-      - uses: actions/checkout@master
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
+          toolchain: stable
           components: clippy
       - name: Install system dependencies
         run: brew install openssl@3 portaudio
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Check
         run: cargo check --locked --no-default-features --features "$FEATURES"
       - name: Clippy

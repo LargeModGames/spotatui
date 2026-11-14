@@ -29,6 +29,6 @@ pub mod relay;
 pub mod server;
 pub mod status;
 
-pub use control::{clear_handshake, spawn_listener};
+pub use control::{clear_handshake, remove_stale_handshake, spawn_listener};
 pub use relay::run as run_relay;
 pub use status::run as run_status;

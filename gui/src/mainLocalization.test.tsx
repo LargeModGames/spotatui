@@ -31,6 +31,7 @@ const episode: EpisodeInfo = {
   resume_point: { fully_played: false, resume_position_ms: 60000 },
 };
 const lists: SourcePlaylists = {
+  playlist_sidebar_order: "spotify",
   spotify: [],
   local: [],
   subsonic: [],
@@ -42,6 +43,7 @@ const lists: SourcePlaylists = {
   saved_albums: [],
   saved_albums_has_more: false,
   followed_artists: [],
+  followed_artists_has_more: false,
   saved_shows: [],
   saved_shows_has_more: false,
   saved_show_ids: [],
@@ -123,6 +125,7 @@ describe("main additions in the shared languages", () => {
       const html = renderToStaticMarkup(
         <PodcastPage
           s={s}
+          view={{}}
           id="show"
           name="節目 {count}"
           show={{
@@ -142,6 +145,8 @@ describe("main additions in the shared languages", () => {
               has_more: false,
             },
           }}
+          statusRev={0}
+          statusError={false}
           playingUri={episode.uri}
           active
           open={noop}
@@ -223,6 +228,7 @@ describe("main additions in the shared languages", () => {
       const html = renderToStaticMarkup(
         <RadioPage
           s={s}
+          view={{}}
           id="seed"
           name="{name} 歌"
           table={null}
@@ -237,7 +243,7 @@ describe("main additions in the shared languages", () => {
       );
       expect(html).toContain(fmt(s.song_radio_named, { name: "{name} 歌" }));
       expect(html).toContain(s.song_radio);
-
+      expect(html).not.toContain("Song radio");
       const recent = renderToStaticMarkup(
         <RecentlyPlayed
           s={s}
@@ -262,12 +268,17 @@ describe("main additions in the shared languages", () => {
         expect(localized.map((x) => x.value)).toEqual(
           english.map((x) => x.value),
         );
+        expect(localized.every((x, i) => x.label !== english[i].label)).toBe(
+          true,
+        );
       }
     }
     expect(sortOptions(EN)[2]).toEqual({
       value: "name:desc",
       label: "Title (Z-A)",
     });
+    expect(sortOptions(ZH_HANS)[2].label).toBe("标题（Z-A）");
+    expect(sortOptions(ZH_HANT)[2].label).toBe("標題（Z-A）");
   });
 
   it("reports a clipboard failure in the selected language", async () => {

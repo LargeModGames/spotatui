@@ -257,20 +257,7 @@ impl App {
         )
       };
     #[cfg(not(target_os = "android"))]
-    match (playing_now, self.keepawake.is_some()) {
-      (true, false) => {
-        self.keepawake = keepawake::Builder::default()
-          .idle(true)
-          .sleep(true)
-          .display(true)
-          .reason("Playing music")
-          .app_name("spotatui")
-          .create()
-          .ok();
-      }
-      (false, true) => self.keepawake = None,
-      _ => {}
-    }
+    self.keepawake.request(playing_now);
 
     // Music's last reported position, advanced while it plays.
     if self.apple_music_owns_playback() {

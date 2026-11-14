@@ -1,4 +1,6 @@
 use crate::core::app::{setting_requirement, App, SettingItem, SettingValue, SettingsCategory};
+use crate::core::user_config::key_to_config_string;
+use crate::tui::event::Key;
 use crate::tui::fuzzy::fuzzy_match;
 use crate::tui::theme::{EmphasisExt, ThemeExt};
 use crate::tui::ui::popups::highlighted_spans;
@@ -9,6 +11,7 @@ use ratatui::{
   widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Tabs},
   Frame,
 };
+use std::cell::Cell;
 
 const UNSAVED_PROMPT_WIDTH: u16 = 58;
 const UNSAVED_PROMPT_HEIGHT: u16 = 9;
@@ -35,6 +38,9 @@ pub fn settings_layout(area: Rect) -> [Rect; 3] {
 /// ranges of its name the query covered (empty when the row only survived on
 /// its config id).
 pub type FilteredSetting = (usize, Vec<(usize, usize)>);
+
+/// Presses the selected row's button; global `jump_to_context` keeps the key on other rows.
+pub const BUTTON_KEY: Key = Key::Char('o');
 
 /// Rows that survive the active filter, best match first. With no filter this
 /// is every row in schema order.
@@ -116,7 +122,7 @@ pub fn draw_settings(f: &mut Frame<'_>, app: &App) {
   let [tabs_area, list_area, help_area] = settings_layout(f.area());
 
   draw_category_tabs(f, app, tabs_area);
-  draw_settings_list(f, app, list_area);
+  draw_settings_list(f, app, list_area, &app.view.settings_scroll_offset);
   draw_settings_help(f, app, help_area);
 
   if app.view.settings_unsaved_prompt_visible {
@@ -149,7 +155,7 @@ fn draw_category_tabs(f: &mut Frame<'_>, app: &App, area: Rect) {
   f.render_widget(tabs, area);
 }
 
-fn draw_settings_list(f: &mut Frame<'_>, app: &App, area: Rect) {
+fn draw_settings_list(f: &mut Frame<'_>, app: &App, area: Rect, scroll_offset: &Cell<usize>) {
   let visible = filtered_settings(app);
   let items: Vec<ListItem> = visible
     .iter()
@@ -258,6 +264,20 @@ fn draw_settings_list(f: &mut Frame<'_>, app: &App, area: Rect) {
           Style::default().fg(app.user_config.theme.inactive.into()),
         ));
       }
+      if let Some((label, busy)) = app
+        .setting_button_label(&setting.id)
+        .filter(|_| is_selected)
+      {
+        let text = if busy {
+          format!("  {label}")
+        } else {
+          format!("  [{}] {label}", key_to_config_string(&BUTTON_KEY))
+        };
+        spans.push(Span::styled(
+          text,
+          Style::default().fg(app.user_config.theme.hint.into()),
+        ));
+      }
 
       ListItem::new(Line::from(spans))
     })
@@ -294,6 +314,9 @@ fn draw_settings_list(f: &mut Frame<'_>, app: &App, area: Rect) {
     items
   };
 
+  let visible_rows = area.height.saturating_sub(2) as usize;
+  let max_offset = items.len().saturating_sub(visible_rows);
+
   let list = List::new(items)
     .block(
       Block::default()
@@ -316,6 +339,10 @@ fn draw_settings_list(f: &mut Frame<'_>, app: &App, area: Rect) {
     );
 
   let mut state = ListState::default();
+  let offset = scroll_offset.get().min(max_offset);
+
+  *state.offset_mut() = offset;
+
   // The list renders the filtered view, so the highlight is a position in it,
   // not the index into `settings_items` the rest of the screen works with.
   state.select(
@@ -325,6 +352,7 @@ fn draw_settings_list(f: &mut Frame<'_>, app: &App, area: Rect) {
   );
 
   f.render_stateful_widget(list, area, &mut state);
+  scroll_offset.set(state.offset());
 }
 
 fn format_terminal_input_caps(app: &App) -> String {
@@ -566,6 +594,67 @@ mod tests {
       "{rebound_rendered}"
     );
     assert!(!rebound_rendered.contains("Esc/q"), "{rebound_rendered}");
+  }
+
+  #[cfg(feature = "soloist")]
+  #[test]
+  fn only_the_selected_soloist_path_row_names_its_download_key() {
+    let row = |id: &str, name: &str| SettingItem {
+      id: id.to_string(),
+      name: name.to_string(),
+      description: String::new(),
+      value: SettingValue::String(String::new()),
+    };
+    let mut app = filtered_app("", false);
+    app.spotify_connected = true;
+    app.settings_items = vec![
+      row("behavior.soloist_path", "Soloist Path"),
+      row("behavior.ytdlp_path", "yt-dlp Path"),
+    ];
+    app.view.settings_selected_index = 0;
+    let selected = rendered(&app);
+    assert!(selected.contains("[o] Download from Spotify"), "{selected}");
+    app.view.settings_selected_index = 1;
+    assert!(!rendered(&app).contains("Download from Spotify"));
+  }
+
+  #[test]
+  fn settings_scroll_offset_survives_frames_and_clamps_when_the_list_shrinks() {
+    let mut app = App::default();
+    app.settings_items = (0..10)
+      .map(|index| SettingItem {
+        id: format!("behavior.test_{index}"),
+        name: format!("Setting {index}"),
+        description: String::new(),
+        value: SettingValue::Number(index),
+      })
+      .collect();
+    // Row 6 is already visible in the five-row viewport at offset 4, so
+    // selecting it must not make the next frame recalculate the offset.
+    app.view.settings_selected_index = 6;
+    app.view.settings_scroll_offset.set(4);
+
+    let mut terminal = Terminal::new(TestBackend::new(WIDTH, 7)).unwrap();
+    for frame in 1..=2 {
+      terminal
+        .draw(|f| {
+          draw_settings_list(f, &app, f.area(), &app.view.settings_scroll_offset);
+        })
+        .unwrap();
+      assert_eq!(
+        app.view.settings_scroll_offset.get(),
+        4,
+        "offset changed on frame {frame}"
+      );
+    }
+
+    app.settings_items.truncate(7);
+    terminal
+      .draw(|f| {
+        draw_settings_list(f, &app, f.area(), &app.view.settings_scroll_offset);
+      })
+      .unwrap();
+    assert_eq!(app.view.settings_scroll_offset.get(), 2);
   }
 
   fn rendered(app: &App) -> String {

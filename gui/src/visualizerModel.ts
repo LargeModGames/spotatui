@@ -10,8 +10,8 @@ export const VISUALIZER_SETTING = "behavior.player_bar_visualizer";
 const MODES: VisualizerMode[] = ["Off", "Spectrum", "Waveform"];
 
 /** A frame and when it arrived (a `performance.now()` value). */
-export interface Frame {
-  payload: VisualizerFrame;
+export interface Frame<P = VisualizerFrame> {
+  payload: P;
   at: number;
 }
 
@@ -40,7 +40,7 @@ export function isEmptySpace(target: Element | null): boolean {
 /** Lower than this, a bar or a cap is at rest. */
 const REST = 0.01;
 /** A longer gap, such as a hidden tab, moves the bars as this one does. */
-const LONGEST_STEP = 0.25;
+export const LONGEST_STEP = 0.25;
 /** A frame older than this no longer counts as sound. */
 export const STALE_MS = 200;
 
@@ -118,7 +118,7 @@ export function barColours(accent: string, ceiling: number): Rgb[] {
   return [vivid(0), vivid(1 / 6)];
 }
 
-function parseHex(hex: string): Rgb {
+export function parseHex(hex: string): Rgb {
   const value = /^#?([0-9a-f]{6})$/i.exec(hex.trim())?.[1] ?? "f0a83a";
   return [0, 2, 4].map((at) => parseInt(value.slice(at, at + 2), 16)) as Rgb;
 }
@@ -224,7 +224,7 @@ export function sample({ stops, space }: Gradient, t: number): Rgb {
   return mixIn(space, stops[index], stops[index + 1], at - index);
 }
 
-function rgba([r, g, b]: Rgb, alpha: number): string {
+export function rgba([r, g, b]: Rgb, alpha = 1): string {
   return `rgb(${r} ${g} ${b} / ${alpha})`;
 }
 

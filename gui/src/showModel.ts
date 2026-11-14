@@ -78,6 +78,8 @@ export interface EpisodePager {
   land(showId: string, length: number): void;
   /** Whether LoadMore should go out for this page now. */
   ask(page: PodcastPage): boolean;
+  /** Let the list on screen ask again, after a fetch that failed. */
+  retry(): void;
 }
 
 export function episodePager(): EpisodePager {
@@ -97,6 +99,9 @@ export function episodePager(): EpisodePager {
       asked = true;
       return true;
     },
+    retry() {
+      asked = false;
+    },
   };
 }
 
@@ -111,4 +116,11 @@ export function showLink(id: string): string {
 
 export function episodeLink(id: string): string {
   return `https://open.spotify.com/episode/${id}`;
+}
+
+/** The show the channel holds for navigation: only one whose episodes landed, so back to a failed show fetches again. */
+export function heldShowId(
+  page: PodcastPage | null | undefined,
+): string | null {
+  return page?.loaded ? page.show.id : null;
 }

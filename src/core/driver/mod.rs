@@ -97,7 +97,7 @@ fn request_track_lyrics(
 /// Local files carry embedded artwork read straight from the file (no URL), so
 /// they take a dedicated `LocalFile` request. Every other source that can supply
 /// art (Spotify album art, YouTube thumbnail, Subsonic getCoverArt) surfaces it
-/// as `snapshot.metadata.image_url`. `None` means the current track has no art
+/// through `cover_fetch_url`. `None` means the current track has no art
 /// to show (e.g. internet radio, or a Spotify item without images).
 #[cfg(feature = "art-decode")]
 fn cover_art_request_for(
@@ -115,14 +115,7 @@ fn cover_art_request_for(
       path,
     });
   }
-  #[cfg(not(feature = "local-files"))]
-  let _ = app;
-
-  snapshot
-    .metadata
-    .image_url
-    .clone()
-    .map(CoverArtRequest::Url)
+  crate::infra::media_metadata::cover_fetch_url(app, snapshot).map(CoverArtRequest::Url)
 }
 
 /// Per-tick inputs only the frontend can supply.
@@ -146,8 +139,9 @@ pub struct TickEnv {
 pub enum VizNeed {
   /// cava's bands, as many as the frontend's geometry fits, into `App::spectrum_data`.
   Bars(usize),
-  /// Only the capture: the frontend reads `Driver::recent_audio`, analyses it
-  /// itself and closes a failed capture to try again; no status message.
+  /// Only the capture: the frontend reads `Driver::recent_audio` or
+  /// `Driver::spectrum` itself and closes a failed capture to try again; no
+  /// status message.
   #[cfg_attr(not(feature = "gui"), allow(dead_code))]
   Samples,
 }
@@ -175,6 +169,9 @@ pub struct Driver {
   /// Last track the shared detector fired lyrics for, so the lookup re-fires
   /// only on an actual track change rather than every tick.
   last_track_identity: Option<TrackIdentity>,
+  /// The item and position the last tick saw, so "Up next" refreshes on every
+  /// playback transition, a repeated track included.
+  last_playback_mark: plan::PlaybackMark,
   play_counter: play_count::PlayCounter,
   /// Cache key (URL / file URI) of the cover art last requested, so the
   /// per-tick cover-art evaluation dispatches a fetch only when the resolved
@@ -262,6 +259,7 @@ impl Driver {
       mpris_state: presence::MprisState::default(),
       window_title: presence::WindowTitleState::default(),
       last_track_identity: None,
+      last_playback_mark: plan::PlaybackMark::default(),
       play_counter: play_count::PlayCounter::default(),
       #[cfg(feature = "art-decode")]
       last_cover_art_key: None,
@@ -376,6 +374,20 @@ impl Driver {
           }
         }
       }
+
+      // "Up next" follows every playback transition, including the same
+      // track starting again, which leaves the lyrics identity unchanged.
+      let mark = snapshot
+        .as_ref()
+        .map_or_else(plan::PlaybackMark::default, |snapshot| plan::PlaybackMark {
+          uri: snapshot.item_uri.clone(),
+          progress_ms: snapshot.progress_ms,
+        });
+      if plan::playback_transition(&self.last_playback_mark, &mark) {
+        app.request_up_next();
+      }
+      self.last_playback_mark = mark;
+      app.follow_up_next(snapshot.as_ref().and_then(|s| s.item_id.as_deref()));
 
       // Cover art is re-evaluated EVERY tick against the desired image key,
       // NOT latched to the identity change. With native streaming the
@@ -733,7 +745,6 @@ impl Driver {
     // the (paused) librespot position below clobber it. Music's position was
     // set by `update_on_tick`.
     #[allow(unused_mut)]
-    #[cfg_attr(not(feature = "streaming"), allow(unused_variables))]
     let mut source_owns_playback = app.apple_music_owns_playback();
     // The native queue slot owns the sink when playing a decoded track; read
     // progress from its player first (it may share the suspended context's
@@ -825,6 +836,9 @@ impl Driver {
     }
     self.session_was_present = has_session;
 
+    // Only the native position below reads the flag.
+    #[cfg(not(feature = "streaming"))]
+    let _ = source_owns_playback;
     #[cfg(feature = "streaming")]
     if !source_owns_playback && app.is_streaming_active {
       if let Some(position_ms) = app.native_position_ms(env.now) {
@@ -845,7 +859,7 @@ impl Driver {
       Some(need) => {
         // Built at the count we are about to ask for, so the first frame
         // does not immediately throw the fresh cavacore plan away. Samples
-        // alone need the smallest plan.
+        // start at the smallest plan; `Driver::spectrum` sizes it later.
         let desired_bars = match need {
           VizNeed::Bars(bars) => bars,
           VizNeed::Samples => 2,
@@ -885,6 +899,14 @@ impl Driver {
   #[cfg_attr(not(feature = "gui"), allow(dead_code))]
   pub fn recent_audio(&self) -> Option<audio::RecentAudio> {
     self.audio_capture.current()?.recent_audio()
+  }
+
+  /// cava's next frame from the open capture at `bars` bands, for a frontend
+  /// that asked for `VizNeed::Samples` and draws the terminal's styles.
+  #[cfg(any(feature = "audio-viz", feature = "audio-viz-cpal"))]
+  #[cfg_attr(not(feature = "gui"), allow(dead_code))]
+  pub fn spectrum(&self, bars: usize) -> Option<audio::SpectrumData> {
+    self.audio_capture.current()?.get_spectrum(bars)
   }
 
   /// The one-shot startup dispatch, fired by the frontend right after its

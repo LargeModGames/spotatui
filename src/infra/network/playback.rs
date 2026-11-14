@@ -474,12 +474,21 @@ async fn native_can_claim_player_command(network: &Network) -> bool {
       .is_some_and(|p| p.is_available())
       || app.native_backend_pending
       || app.native_activation_pending
+      // Soloist is the device: a retry on the saved device must never pick another one.
+      || app.soloist_engine_installed()
   }
   #[cfg(not(feature = "streaming"))]
   {
     let _ = network;
     false
   }
+}
+
+/// The Soloist link, when a Spotify command goes to Soloist over its WebSocket.
+#[cfg(feature = "soloist")]
+async fn soloist_target(network: &Network) -> Option<Arc<crate::infra::soloist::SoloistLink>> {
+  let app = network.app.lock().await;
+  app.soloist_link().filter(|_| app.soloist_is_target())
 }
 
 /// The saved device to retry a player command on, or `None` to surface the
@@ -1301,12 +1310,14 @@ impl PlaybackNetwork for Network {
         {
           c.is_playing = false;
         }
-
         if !stale_api_item_for_native {
           // Cover art (Spotify album/episode image) is fetched by the shared
           // track-change detector in `core/driver/`, from the snapshot's image URL.
           app.current_playback_context = Some(c);
           app.set_spotify_context_name(context_name);
+          // Soloist's WebSocket is newer than the cluster the poll read.
+          #[cfg(feature = "soloist")]
+          app.overlay_soloist_snapshot(true);
         }
 
         // Update is_streaming_active based on whether the current device matches native streaming
@@ -1529,6 +1540,18 @@ impl PlaybackNetwork for Network {
       self.app.lock().await.release_decoded_sink_claim();
     }
     if decoded_source_owns_playback(self).await {
+      return;
+    }
+    #[cfg(feature = "soloist")]
+    let soloist = soloist_target(self).await;
+    // A restored Soloist is paused and inactive: activate it, then play.
+    #[cfg(feature = "soloist")]
+    if let (Some(link), None, None, None) = (&soloist, &context_id, &uris, offset) {
+      use crate::infra::soloist::protocol::Command;
+      if !link.snapshot().is_active {
+        link.send(Command::Activate);
+      }
+      link.send(Command::Play);
       return;
     }
     // A handed-off device holds no track: a bare resume pulls the last playback
@@ -1860,8 +1883,17 @@ impl PlaybackNetwork for Network {
     }
 
     let body = api_playback_body(context_id.as_ref(), uris.as_deref(), offset);
+    // WS `play` takes no offset, so Soloist starts go over connect-state, aimed at its id.
+    #[cfg(feature = "soloist")]
+    let query: Vec<(&str, String)> = soloist
+      .iter()
+      .map(|link| ("device_id", link.device_id().to_string()))
+      .collect();
+    #[cfg(not(feature = "soloist"))]
+    let query: Vec<(&str, String)> = Vec::new();
     let result =
-      player_command_with_saved_device_retry(self, Method::PUT, "me/player/play", &[], body).await;
+      player_command_with_saved_device_retry(self, Method::PUT, "me/player/play", &query, body)
+        .await;
 
     match result {
       Ok(_) => {
@@ -2164,6 +2196,12 @@ impl PlaybackNetwork for Network {
     if decoded_source_owns_playback(self).await {
       return;
     }
+    #[cfg(feature = "soloist")]
+    if let Some(link) = soloist_target(self).await {
+      self.app.lock().await.pending_start_playback = None;
+      link.pause();
+      return;
+    }
     #[cfg(feature = "streaming")]
     {
       let mut app = self.app.lock().await;
@@ -2224,6 +2262,11 @@ impl PlaybackNetwork for Network {
       app.pending_start_playback = None;
       app.native_load_watchdog = None;
     }
+    #[cfg(feature = "soloist")]
+    if let Some(link) = soloist_target(self).await {
+      link.send(crate::infra::soloist::protocol::Command::SkipNext);
+      return;
+    }
     #[cfg(feature = "streaming")]
     if let PlaybackBackend::Native(player) = symmetric_playback_backend(self).await {
       player.next();
@@ -2252,6 +2295,11 @@ impl PlaybackNetwork for Network {
       app.pending_start_playback = None;
       app.native_load_watchdog = None;
     }
+    #[cfg(feature = "soloist")]
+    if let Some(link) = soloist_target(self).await {
+      link.send(crate::infra::soloist::protocol::Command::SkipPrev);
+      return;
+    }
     #[cfg(feature = "streaming")]
     if let PlaybackBackend::Native(player) = symmetric_playback_backend(self).await {
       player.prev();
@@ -2273,6 +2321,21 @@ impl PlaybackNetwork for Network {
 
   async fn force_previous_track(&mut self) {
     if decoded_source_owns_playback(self).await {
+      return;
+    }
+    #[cfg(feature = "soloist")]
+    if let Some(link) = soloist_target(self).await {
+      use crate::infra::soloist::protocol::Command;
+      link.send(Command::SkipPrev);
+      // The second skip_prev moves back once the position reset to 0, off the pump.
+      let app = Arc::clone(&self.app);
+      tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        let app = app.lock().await;
+        if app.soloist_is_target() && app.is_current_soloist(&link) {
+          link.send(Command::SkipPrev);
+        }
+      });
       return;
     }
     #[cfg(feature = "streaming")]
@@ -2338,6 +2401,13 @@ impl PlaybackNetwork for Network {
     if decoded_source_owns_playback(self).await {
       return;
     }
+    #[cfg(feature = "soloist")]
+    if let Some(link) = soloist_target(self).await {
+      link.send(crate::infra::soloist::protocol::Command::Seek(
+        position_ms.into(),
+      ));
+      return;
+    }
     #[cfg(feature = "streaming")]
     if let PlaybackBackend::Native(player) = symmetric_playback_backend(self).await {
       player.seek(position_ms);
@@ -2365,6 +2435,18 @@ impl PlaybackNetwork for Network {
 
   async fn shuffle(&mut self, shuffle_state: bool) {
     if decoded_source_owns_playback(self).await {
+      return;
+    }
+    #[cfg(feature = "soloist")]
+    if let Some(link) = soloist_target(self).await {
+      link.send(crate::infra::soloist::protocol::Command::SetShuffle(
+        shuffle_state,
+      ));
+      let mut app = self.app.lock().await;
+      app.runtime_state.shuffle_enabled = shuffle_state;
+      app.schedule_state_save(crate::core::state::PersistedRuntimeState::shuffle_enabled(
+        shuffle_state,
+      ));
       return;
     }
     #[cfg(feature = "streaming")]
@@ -2416,9 +2498,16 @@ impl PlaybackNetwork for Network {
     if decoded_source_owns_playback(self).await {
       return;
     }
+    #[cfg(feature = "soloist")]
+    if let Some(link) = soloist_target(self).await {
+      for command in crate::infra::soloist::protocol::repeat_commands(repeat_state) {
+        link.send(command);
+      }
+      return;
+    }
     #[cfg(feature = "streaming")]
     if let PlaybackBackend::Native(player) = symmetric_playback_backend(self).await {
-      let _ = player.set_repeat(repeat_state);
+      let _ = player.set_repeat_mode(repeat_state);
       let mut app = self.app.lock().await;
       app.set_native_recovery_repeat(repeat_state);
       if let Some(ctx) = &mut app.current_playback_context {
@@ -2465,6 +2554,14 @@ impl PlaybackNetwork for Network {
   /// the API last reported.
   async fn change_volume(&mut self, volume: u8) {
     if decoded_source_owns_playback(self).await {
+      return;
+    }
+    #[cfg(feature = "soloist")]
+    if let Some(link) = soloist_target(self).await {
+      link.set_volume(volume.min(100));
+      let mut app = self.app.lock().await;
+      app.is_volume_change_in_flight = false;
+      app.last_dispatched_volume = Some(volume);
       return;
     }
     #[cfg(feature = "streaming")]
@@ -2907,6 +3004,8 @@ impl PlaybackNetwork for Network {
         let mut app = self.app.lock().await;
         let strings = app.strings();
         app.set_status_message(strings.status.infra.queue_added.to_string(), 3);
+        // The now playing panel lists the queue: show the new item now.
+        app.request_up_next();
       }
       Err(e) => {
         #[cfg(feature = "streaming")]

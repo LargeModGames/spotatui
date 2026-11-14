@@ -349,6 +349,13 @@ pub enum IoEvent {
   /// auth.
   #[cfg(feature = "art-decode")]
   FetchCoverArt(crate::core::art::CoverArtRequest),
+  /// Download the official Soloist build for this system from Spotify (the
+  /// Soloist Path row's button). Needs no Spotify login.
+  #[cfg(feature = "soloist")]
+  DownloadSoloist,
+  /// Stop Soloist, then start the engine the settings name (a new engine or API key).
+  #[cfg(feature = "soloist")]
+  ApplyPlaybackEngine,
   /// A DJ tool call that needs the live Spotify client, plus the channel to
   /// answer on.
   ///
@@ -454,6 +461,23 @@ struct Deferred {
   owner: PlaybackOwner,
 }
 
+/// The transports a Soloist target serves over its WebSocket, with no Spotify request.
+#[cfg(feature = "soloist")]
+fn soloist_ws_transport(io_event: &IoEvent) -> bool {
+  matches!(
+    io_event,
+    IoEvent::PausePlayback
+      | IoEvent::StartPlayback(None, None, None)
+      | IoEvent::NextTrack
+      | IoEvent::PreviousTrack
+      | IoEvent::ForcePreviousTrack
+      | IoEvent::Seek(_)
+      | IoEvent::ChangeVolume(_)
+      | IoEvent::Shuffle(_)
+      | IoEvent::Repeat(_)
+  )
+}
+
 /// Whether `queued`, the owner at deferral time, still holds the sink under
 /// `now`. librespot and an external device are one Spotify owner: a poll can
 /// flip between them inside one window.
@@ -500,6 +524,13 @@ impl Network {
   fn event_bypasses_spotify_auth(io_event: &IoEvent) -> bool {
     #[cfg(feature = "art-decode")]
     if matches!(io_event, IoEvent::FetchCoverArt(_)) {
+      return true;
+    }
+    #[cfg(feature = "soloist")]
+    if matches!(
+      io_event,
+      IoEvent::DownloadSoloist | IoEvent::ApplyPlaybackEngine
+    ) {
       return true;
     }
     #[cfg(feature = "streaming")]
@@ -588,6 +619,13 @@ impl Network {
     }
     #[cfg(feature = "art-decode")]
     if matches!(io_event, IoEvent::FetchCoverArt(_)) {
+      return true;
+    }
+    #[cfg(feature = "soloist")]
+    if matches!(
+      io_event,
+      IoEvent::DownloadSoloist | IoEvent::ApplyPlaybackEngine
+    ) {
       return true;
     }
     #[cfg(feature = "ai-dj")]
@@ -984,12 +1022,14 @@ impl Network {
       IoEvent::ToggleNativeShuffleSession(_)
       | IoEvent::ReshuffleNativeShuffleLap
       | IoEvent::ResumeNativeShuffleSession(_, _) => {}
-      IoEvent::IncrementGlobalSongCount => {
+      // A build without `telemetry` never contacts the counter, whatever config.yml says.
+      IoEvent::IncrementGlobalSongCount if cfg!(feature = "telemetry") => {
         self.increment_global_song_count().await;
       }
-      IoEvent::FetchGlobalSongCount => {
+      IoEvent::FetchGlobalSongCount if cfg!(feature = "telemetry") => {
         self.fetch_global_song_count().await;
       }
+      IoEvent::IncrementGlobalSongCount | IoEvent::FetchGlobalSongCount => {}
       IoEvent::FetchAnnouncements => {
         self.fetch_announcements().await;
       }
@@ -999,6 +1039,14 @@ impl Network {
       #[cfg(feature = "art-decode")]
       IoEvent::FetchCoverArt(request) => {
         self.fetch_cover_art(request).await;
+      }
+      #[cfg(feature = "soloist")]
+      IoEvent::DownloadSoloist => {
+        crate::infra::soloist::download::run(std::sync::Arc::clone(&self.app)).await;
+      }
+      #[cfg(feature = "soloist")]
+      IoEvent::ApplyPlaybackEngine => {
+        crate::infra::soloist::startup::apply_engine(std::sync::Arc::clone(&self.app)).await;
       }
       #[cfg(any(feature = "mcp-server", feature = "ai-dj"))]
       IoEvent::DjToolCall(payload) => {
@@ -1180,6 +1228,11 @@ impl Network {
     let Some(left) = left else {
       return Some(io_event);
     };
+    // These go to Soloist over its loopback WebSocket, never to Spotify's servers.
+    #[cfg(feature = "soloist")]
+    if soloist_ws_transport(&io_event) && self.app.lock().await.soloist_is_target() {
+      return Some(io_event);
+    }
     if !self.defers_rate_limited {
       tokio::time::sleep(left).await;
       return Some(io_event);
@@ -1518,6 +1571,7 @@ impl Network {
           guests: Vec::new(),
           control_mode,
           host_name: "Host".to_string(),
+          host_state_at: None,
         }));
       }
       Err(e) => {
@@ -1576,6 +1630,7 @@ impl Network {
           guests: Vec::new(),
           control_mode: sync::ControlMode::default(),
           host_name: String::new(),
+          host_state_at: None,
         }));
       }
       Err(e) => {
@@ -1614,7 +1669,7 @@ impl Network {
       let _ = session;
       // Publish only what a guest can follow: the same owner rule as the
       // command relay, and a Spotify URI (a native `spotify:local:` track has none).
-      let followable = if party_yields_to_local_playback(&app) {
+      let followable = if app.party_yields_to_local_playback() {
         None
       } else {
         crate::infra::media_metadata::current_playback_snapshot(&app).and_then(|snapshot| {
@@ -1712,10 +1767,16 @@ impl Network {
             session.code = code;
           }
         }
-        sync::SyncMessage::JoinedRoom { host_name } => {
+        sync::SyncMessage::JoinedRoom {
+          host_name,
+          control_mode,
+        } => {
           let mut app = self.app.lock().await;
           if let Some(session) = app.party_session_mut() {
             session.host_name = host_name;
+            if let Some(mode) = control_mode {
+              session.control_mode = sync::ControlMode::from_wire(&mode);
+            }
           }
         }
         sync::SyncMessage::GuestJoined { name } => {
@@ -1741,10 +1802,7 @@ impl Network {
         sync::SyncMessage::SetControlMode { control_mode } => {
           let mut app = self.app.lock().await;
           if let Some(session) = app.party_session_mut() {
-            session.control_mode = match control_mode.as_str() {
-              "shared_control" => sync::ControlMode::SharedControl,
-              _ => sync::ControlMode::HostOnly,
-            };
+            session.control_mode = sync::ControlMode::from_wire(&control_mode);
           }
         }
         // Only the newest host state in a drain counts: each earlier one
@@ -1807,10 +1865,11 @@ impl Network {
     let follows_host = matches!(
       app.party_session(),
       Some(s) if s.role == sync::PartyRole::Guest
-    ) && !party_yields_to_local_playback(&app);
+    ) && !app.party_yields_to_local_playback();
     if !follows_host {
       return;
     }
+    app.note_host_state();
 
     // Latency compensation: estimate how much time passed since the host sent this state
     let now = sync::now_ms();
@@ -1874,10 +1933,12 @@ impl Network {
 
   async fn handle_incoming_playback_command(&mut self, action: sync::PlaybackAction) {
     let mut app = self.app.lock().await;
+    // The relay enforces the mode too, but a host must not trust that.
     let relays = matches!(
       app.party_session(),
       Some(s) if s.role == sync::PartyRole::Host
-    ) && !party_yields_to_local_playback(&app);
+        && s.control_mode == sync::ControlMode::SharedControl
+    ) && !app.party_yields_to_local_playback();
     if !relays {
       return;
     }
@@ -1890,6 +1951,7 @@ impl Network {
       sync::PlaybackAction::Pause => app.dispatch(IoEvent::PausePlayback),
       sync::PlaybackAction::NextTrack => app.dispatch(IoEvent::NextTrack),
       sync::PlaybackAction::PrevTrack => app.dispatch(IoEvent::PreviousTrack),
+      sync::PlaybackAction::ForcePrevTrack => app.dispatch(IoEvent::ForcePreviousTrack),
       sync::PlaybackAction::Seek { position_ms } => {
         if let Ok(position_ms) = u32::try_from(position_ms) {
           app.dispatch(IoEvent::Seek(position_ms));
@@ -1905,16 +1967,6 @@ impl Network {
     // Queued behind the command on the serial pump; the 2 s tick repeats it.
     app.dispatch(IoEvent::SyncPlayback);
   }
-}
-
-/// The party follows Spotify transport only. Coarser than the transport
-/// guard on purpose: a queued Spotify track keeps librespot, but a guest must
-/// not drive the host's queue slot. A parked native backend has no Spotify
-/// playback to relay or follow.
-fn party_yields_to_local_playback(app: &App) -> bool {
-  app.apple_music_owns_playback()
-    || app.playback_owner().owns_local_sink()
-    || app.native_parked_here()
 }
 
 /// Keep diagnostics and the CLI byte-identical while giving the UI a localized context.
@@ -2588,6 +2640,7 @@ mod tests {
       guests: Vec::new(),
       control_mode: sync::ControlMode::HostOnly,
       host_name: "Host".to_string(),
+      host_state_at: None,
     }
   }
 
@@ -2706,6 +2759,7 @@ mod tests {
   async fn an_oversized_party_seek_is_dropped() {
     let (app, rx) = app_with_a_session();
     let mut network = party_network(&app, sync::PartyRole::Host).await;
+    share_control(&app).await;
 
     relay(
       &mut network,
@@ -2741,10 +2795,25 @@ mod tests {
     assert!(rx.try_recv().is_err());
   }
 
+  async fn share_control(app: &Arc<Mutex<App>>) {
+    app.lock().await.party_session_mut().unwrap().control_mode = sync::ControlMode::SharedControl;
+  }
+
+  #[tokio::test]
+  async fn a_host_only_party_ignores_a_guest_command() {
+    let (app, rx) = app_with_a_session();
+    let mut network = party_network(&app, sync::PartyRole::Host).await;
+
+    relay(&mut network, guest_pause()).await;
+
+    assert!(rx.try_recv().is_err());
+  }
+
   #[tokio::test]
   async fn a_host_relays_a_guest_command_then_broadcasts() {
     let (app, rx) = app_with_a_session();
     let mut network = party_network(&app, sync::PartyRole::Host).await;
+    share_control(&app).await;
 
     relay(&mut network, guest_pause()).await;
 
@@ -2766,6 +2835,7 @@ mod tests {
     assert!(rx.try_recv().is_err());
 
     app.lock().await.party_session_mut().unwrap().role = sync::PartyRole::Host;
+    share_control(&app).await;
     relay(&mut network, guest_pause()).await;
     assert!(rx.try_recv().is_err());
   }
@@ -2816,12 +2886,7 @@ mod tests {
     .expect("reading the table must release the lock before writing status");
     assert_eq!(
       app.lock().await.status_message(),
-      Some(
-        crate::core::i18n::ZH_HANT
-          .status
-          .infra
-          .spotify_not_connected
-      )
+      Some("Spotify 未連線。請按 `d` 並選擇 Spotify 登入。")
     );
     {
       let mut app = app.lock().await;
@@ -2831,12 +2896,7 @@ mod tests {
     network.start_party(sync::ControlMode::HostOnly).await;
     assert_eq!(
       app.lock().await.status_message(),
-      Some(
-        crate::core::i18n::ZH_HANS
-          .status
-          .infra
-          .spotify_not_connected
-      )
+      Some("Spotify 未连接。请按 `d` 并选择 Spotify 登录。")
     );
     app.lock().await.use_english_messages();
     network.start_party(sync::ControlMode::HostOnly).await;

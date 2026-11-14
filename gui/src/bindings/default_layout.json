@@ -1,0 +1,19 @@
+{
+  "tree": {
+    "axis": "horizontal",
+    "percent": 75,
+    "first": "main",
+    "second": "now_playing"
+  },
+  "floating": [],
+  "bars": [
+    {
+      "bar": "top",
+      "edge": "top"
+    },
+    {
+      "bar": "player",
+      "edge": "bottom"
+    }
+  ]
+}

@@ -61,7 +61,14 @@ export const Settings = memo(function Settings({
                   {row.description}
                 </span>
               </div>
-              <SettingControl s={s} row={row} send={send} />
+              {row.button ? (
+                <div className="setting-controls">
+                  <SettingControl s={s} row={row} send={send} />
+                  <RowButton row={row} send={send} />
+                </div>
+              ) : (
+                <SettingControl s={s} row={row} send={send} />
+              )}
             </div>
           ))}
         </section>
@@ -135,6 +142,28 @@ export function UpdateRow({
         </button>
       )}
     </div>
+  );
+}
+
+/** A row's one button; it is off while its work runs. */
+export function RowButton({
+  row,
+  send,
+}: {
+  row: SettingRow;
+  send: (action: Action) => void;
+}) {
+  if (!row.button) return null;
+  return (
+    <button
+      type="button"
+      className="update-button"
+      disabled={row.button.busy}
+      aria-describedby={`${row.id}-about`}
+      onClick={() => send({ PressSettingButton: { id: row.id } })}
+    >
+      {row.button.label}
+    </button>
   );
 }
 

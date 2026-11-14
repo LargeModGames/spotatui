@@ -65,43 +65,17 @@ button:disabled {
   opacity: 0.4;
 }
 
+/* The frame: Shell.tsx sets the grid from where the bars sit (barsModel.ts). */
 .shell {
   display: grid;
-  grid-template-areas:
-    "top top top"
-    "left main right"
-    "player player player";
-  grid-template-rows: 64px minmax(0, 1fr) 72px;
-  grid-template-columns: 280px minmax(0, 1fr) 320px;
   gap: 8px;
   height: 100vh;
-  padding: 0 8px;
   box-sizing: border-box;
   background: var(--frame);
 }
 
-.shell.no-right {
-  grid-template-areas:
-    "top top"
-    "left main"
-    "player player";
-  grid-template-columns: 280px minmax(0, 1fr);
-}
-
 .shell > .topbar {
   grid-area: top;
-}
-
-.shell > .library-panel {
-  grid-area: left;
-}
-
-.shell > .main-view {
-  grid-area: main;
-}
-
-.shell > .right-panel {
-  grid-area: right;
 }
 
 .shell > .playerbar {
@@ -110,7 +84,8 @@ button:disabled {
 
 .library-panel,
 .main-view,
-.right-panel {
+.right-panel,
+.pane-slot:not(.main-slot) > * {
   min-height: 0;
   overflow: hidden;
   border-radius: var(--radius);
@@ -121,26 +96,15 @@ button:disabled {
   display: grid;
 }
 
-/* Below this width the right panel opens over the main view; Shell.tsx has the width too. */
-@media (max-width: 1100px) {
-  .shell,
-  .shell.no-right {
-    grid-template-areas:
-      "top top"
-      "left main"
-      "player player";
-    grid-template-columns: 240px minmax(0, 1fr);
-  }
-
-  .shell > .right-panel {
-    position: fixed;
-    top: 72px;
-    right: 8px;
-    bottom: 88px;
-    z-index: 15;
-    width: min(320px, calc(100vw - 32px));
-    box-shadow: 0 8px 32px rgb(0 0 0 / 60%);
-  }
+/* Below the wide width (`WIDE` in Shell.tsx) the side panel opens over the main view. */
+.right-panel {
+  position: fixed;
+  top: 72px;
+  right: 8px;
+  bottom: 88px;
+  z-index: 15;
+  width: min(320px, calc(100vw - 32px));
+  box-shadow: 0 8px 32px rgb(0 0 0 / 60%);
 }
 
 .screens,
@@ -151,6 +115,7 @@ button:disabled {
 }
 
 .screen {
+  position: relative;
   grid-area: 1 / 1;
   overflow-y: auto;
 }
@@ -389,6 +354,29 @@ button:disabled {
 .transcript {
   padding: 16px;
   white-space: pre-wrap;
+}
+
+.onboarding-question {
+  max-width: 560px;
+}
+
+.onboarding-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.onboarding-actions button {
+  height: 40px;
+  padding: 0 20px;
+  border: none;
+  border-radius: 20px;
+  font-weight: 700;
+  background: var(--hover);
+}
+
+.onboarding-actions .onboarding-primary {
+  background: var(--accent);
+  color: var(--accent-ink);
 }
 
 @media (prefers-reduced-motion: reduce) {

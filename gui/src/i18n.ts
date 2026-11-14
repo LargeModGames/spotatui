@@ -1,9 +1,11 @@
 import type { GuiStrings } from "./bindings/GuiStrings";
+import type { ScreenStrings } from "./bindings/ScreenStrings";
 import type { Source } from "./bindings/Source";
 import tables from "./bindings/strings.json";
 export const EN: GuiStrings = tables.EN.gui;
 export const ZH_HANS: GuiStrings = tables.ZH_HANS.gui;
 export const ZH_HANT: GuiStrings = tables.ZH_HANT.gui;
+export const SCREENS_EN: ScreenStrings = tables.EN.screens;
 export type { GuiStrings };
 
 /** One pass: braces in user-supplied names are never interpreted as placeholders. */

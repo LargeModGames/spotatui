@@ -3,7 +3,10 @@ import type { ClientMessage } from "./bindings/ClientMessage";
 import type { OnboardingView } from "./bindings/OnboardingView";
 import type { ServerMessage } from "./bindings/ServerMessage";
 import type { WelcomePayload } from "./bindings/WelcomePayload";
-import { applyChannel, type Channels } from "./store";
+import { applyChannel, type ChannelMessage, type Channels } from "./store";
+import { sourceOf } from "./format";
+import type { ScreenFrame } from "./bindings/ScreenFrame";
+import type { ScreenFeed } from "./screenModel";
 import type { Frame } from "./visualizerModel";
 
 const TOKEN_KEY = "spotatui.token";
@@ -60,7 +63,8 @@ function playingOf(channels: Channels): Playing {
   return { uri: item?.uri ?? null, playing: item?.is_playing ?? false };
 }
 
-function shownAt(
+/** The position at `now`; null before the first tick. */
+export function shownAt(
   position: Position | null,
   playing: boolean,
   now: number,
@@ -135,11 +139,16 @@ export class Connection {
     changelog: null,
   };
   private socket: Socket | null = null;
+  private unsentLayout: ClientMessage | null = null;
   /** The last item the playback channel named, kept across a blank update. */
   private lastUri: string | null = null;
   private readonly listeners = new Set<() => void>();
   /** Visualizer frames skip the state: dozens a second must not re-render the page. */
   private readonly viewers = new Set<(frame: Frame) => void>();
+  private readonly screenViewers = new Set<
+    (frame: Frame<ScreenFrame>) => void
+  >();
+  private screenBars = 0;
   private code: string | null;
   private readonly open: Open;
   private readonly storage: Pick<Storage, "getItem" | "setItem">;
@@ -178,7 +187,11 @@ export class Connection {
 
   send(message: ClientMessage): void {
     // A socket that is still connecting throws on send; the server hello marks it open.
-    if (!this.state.connected) return;
+    // A layout is state, not a command: the last one waits for the next hello.
+    if (!this.state.connected) {
+      if (message.type === "pane_layout") this.unsentLayout = message;
+      return;
+    }
     this.socket?.send(JSON.stringify(message));
   }
 
@@ -207,6 +220,29 @@ export class Connection {
     };
   };
 
+  /** The visualizer screen's frames; the server sends them while one listens and a count is known. */
+  readonly screen: ScreenFeed = {
+    watch: (listener) => {
+      this.screenViewers.add(listener);
+      if (this.screenViewers.size === 1) this.askScreen();
+      return () => {
+        this.screenViewers.delete(listener);
+        if (this.screenViewers.size === 0)
+          this.send({ type: "visualizer_screen", bars: null });
+      };
+    },
+    bars: (count) => {
+      if (count === this.screenBars) return;
+      this.screenBars = count;
+      if (this.screenViewers.size > 0) this.askScreen();
+    },
+  };
+
+  private askScreen(): void {
+    if (this.screenBars > 0)
+      this.send({ type: "visualizer_screen", bars: this.screenBars });
+  }
+
   /** Asks the server for the changelog; the answer lands in `changelog`. */
   askChangelog = (): void => this.send({ type: "changelog" });
 
@@ -228,10 +264,20 @@ export class Connection {
         });
         // The server keeps the ask per socket, so a new socket asks again.
         if (this.viewers.size > 0) this.send({ type: "visualizer", on: true });
+        if (this.screenViewers.size > 0) this.askScreen();
+        if (this.unsentLayout) {
+          this.send(this.unsentLayout);
+          this.unsentLayout = null;
+        }
         return;
       case "visualizer": {
         const frame = { payload: message.payload, at: this.now() };
         this.viewers.forEach((viewer) => viewer(frame));
+        return;
+      }
+      case "visualizer_screen": {
+        const frame = { payload: message.payload, at: this.now() };
+        this.screenViewers.forEach((viewer) => viewer(frame));
         return;
       }
       case "welcome":
@@ -260,7 +306,10 @@ export class Connection {
         });
       }
       default: {
-        const channels = applyChannel(this.state.channels, message);
+        const channels = applyChannel(
+          this.state.channels,
+          this.withServerCover(message),
+        );
         const before = {
           uri: this.lastUri,
           playing: playingOf(this.state.channels).playing,
@@ -279,6 +328,19 @@ export class Connection {
         });
       }
     }
+  }
+
+  /** A Subsonic cover URL carries the login, so the server leaves it out and the page asks `/cover`. */
+  private withServerCover(message: ChannelMessage): ChannelMessage {
+    if (message.kind !== "playback") return message;
+    const item = message.payload.item;
+    if (!item?.uri || item.image_url || sourceOf(item.uri) !== "Subsonic")
+      return message;
+    const image_url = this.coverSrc(item.uri);
+    return {
+      ...message,
+      payload: { ...message.payload, item: { ...item, image_url } },
+    };
   }
 
   /** A drop after hello retries; a close before hello (refused, or spotatui has exited) ends the page. */

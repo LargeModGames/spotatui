@@ -30,6 +30,8 @@ const SYNC_BASE_URL_ENV_KEY: &str = "SPOTATUI_SYNC_BASE_URL";
 const MAX_INTERVAL_MS: u64 = 5_000;
 const REPLAY_RESET_THRESHOLD_MS: u128 = 15_000;
 const REPLAY_PREVIOUS_PROGRESS_FLOOR_MS: u128 = 30_000;
+/// Longer than a stale start: one playback poll at the default 5 s plus a collector tick.
+const REPLAY_MIN_LISTENED_MS: u64 = 10_000;
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -574,18 +576,28 @@ pub fn spawn_history_collector(app: Arc<Mutex<App>>) -> HistoryCollectorHandle {
     // Streak cache: load the full history once, then keep per-day totals
     // updated incrementally from the records this collector appends (avoids
     // re-reading the ever-growing listens file after every track).
-    let mut day_totals: Option<BTreeMap<NaiveDate, u64>> =
-      match tokio::task::spawn_blocking(load_listens).await {
-        Ok(Ok(listens)) => Some(qualified_day_totals(&listens)),
-        Ok(Err(error)) => {
-          log::warn!("failed to load listens for streak cache: {}", error);
-          None
-        }
-        Err(error) => {
-          log::warn!("streak cache task failed: {}", error);
-          None
-        }
-      };
+    let mut day_totals: Option<BTreeMap<NaiveDate, u64>> = match tokio::task::spawn_blocking(|| {
+      let listens = load_listens()?;
+      Ok::<_, anyhow::Error>((
+        qualified_day_totals(&listens),
+        latest_playlist_listens(&listens),
+      ))
+    })
+    .await
+    {
+      Ok(Ok((totals, playlist_listens))) => {
+        app.lock().await.set_playlist_last_listens(playlist_listens);
+        Some(totals)
+      }
+      Ok(Err(error)) => {
+        log::warn!("failed to load listens for streak cache: {}", error);
+        None
+      }
+      Err(error) => {
+        log::warn!("streak cache task failed: {}", error);
+        None
+      }
+    };
     if let Some(totals) = &day_totals {
       app.lock().await.listening_streaks = Some(streaks_from_day_totals(totals));
     }
@@ -689,7 +701,11 @@ pub fn spawn_history_collector(app: Arc<Mutex<App>>) -> HistoryCollectorHandle {
 
       match collector.observe(snapshot) {
         Ok(Some(record)) => {
-          app.lock().await.record_session_play(session_play(&record));
+          {
+            let mut app = app.lock().await;
+            app.record_playlist_listen(&record);
+            app.record_session_play(session_play(&record));
+          }
           if record.qualified {
             if let Some(totals) = &mut day_totals {
               let date = record.ended_at.with_timezone(&Local).date_naive();
@@ -899,6 +915,21 @@ pub fn load_listens() -> Result<Vec<ListenRecord>> {
   Ok(listens)
 }
 
+fn latest_playlist_listens(listens: &[ListenRecord]) -> crate::core::sort::PlaylistLastListens {
+  let mut latest = crate::core::sort::PlaylistLastListens::new();
+  for record in listens {
+    if let Some(uri) = record
+      .context_uri
+      .as_deref()
+      .filter(|uri| uri.starts_with("spotify:playlist:"))
+    {
+      let last = latest.entry(uri.to_string()).or_insert(record.ended_at);
+      *last = (*last).max(record.ended_at);
+    }
+  }
+  latest
+}
+
 impl HistoryCollector {
   /// Returns the listen record appended to the history file, if any.
   fn observe(&mut self, snapshot: Option<PlaybackSnapshot>) -> Result<Option<ListenRecord>> {
@@ -930,8 +961,11 @@ impl HistoryCollector {
         }
         let should_roll = self.current.as_ref().is_some_and(|current| {
           current.identity != identity
-            || (current.last_progress_ms > REPLAY_PREVIOUS_PROGRESS_FLOOR_MS
-              && snapshot.progress_ms + REPLAY_RESET_THRESHOLD_MS < current.last_progress_ms)
+            || is_replay(
+              current.listened_ms,
+              current.last_progress_ms,
+              snapshot.progress_ms,
+            )
         });
 
         if should_roll {
@@ -970,6 +1004,13 @@ impl HistoryCollector {
     append_listen_record(&record)?;
     Ok(Some(record))
   }
+}
+
+/// Only a session heard for a while can replay, so a stale end position never splits a stub off.
+fn is_replay(listened_ms: u64, last_progress_ms: u128, progress_ms: u128) -> bool {
+  listened_ms > REPLAY_MIN_LISTENED_MS
+    && last_progress_ms > REPLAY_PREVIOUS_PROGRESS_FLOOR_MS
+    && progress_ms + REPLAY_RESET_THRESHOLD_MS < last_progress_ms
 }
 
 impl SessionIdentity {
@@ -2839,10 +2880,11 @@ async fn sync_history_to_cloud_with_client(
     return Ok(());
   }
 
+  let upload: Vec<ListenRecord> = new_listens.into_iter().map(without_local_paths).collect();
   let response = client
     .post(resolve_sync_url(CLOUD_SYNC_PATH))
     .header("Authorization", format!("Bearer {}", sync_token))
-    .json(&new_listens)
+    .json(&upload)
     .send()
     .await?;
 
@@ -2853,7 +2895,7 @@ async fn sync_history_to_cloud_with_client(
     tokio::task::spawn_blocking(move || write_sync_offset(&path, next_offset)).await??;
     log::info!(
       "successfully synchronized listening history to cloud ({} tracks)",
-      new_listens.len()
+      upload.len()
     );
   } else {
     let status = response.status();
@@ -2867,6 +2909,23 @@ async fn sync_history_to_cloud_with_client(
   }
 
   Ok(())
+}
+
+/// `record` without a `file:` URI, which is an absolute path with the user name in it.
+fn without_local_paths(mut record: ListenRecord) -> ListenRecord {
+  use crate::core::queue::{queue_item_source, QueueItemSource};
+  let local = |uri: &Option<String>| {
+    uri
+      .as_deref()
+      .is_some_and(|uri| queue_item_source(uri) == QueueItemSource::LocalFile)
+  };
+  if local(&record.item_uri) {
+    record.item_uri = None;
+  }
+  if local(&record.context_uri) {
+    record.context_uri = None;
+  }
+  record
 }
 
 pub async fn sync_history_to_cloud(sync_token: &str) -> Result<()> {
@@ -2900,6 +2959,65 @@ mod tests {
       source: HistoryPlaybackSource::NativeContext,
       image_url: None,
     }
+  }
+
+  #[test]
+  fn sidebar_playlist_order_uses_latest_listen_context_and_keeps_unplayed_rootlist_tail() {
+    use crate::core::sort::{sort_playlist_slots, SidebarPlaylistOrder};
+    use crate::core::test_helpers::playlist_info;
+    let record = |day, context: Option<&str>| ListenRecord {
+      context_uri: context.map(str::to_string),
+      ..record_at(day, 1_000, false)
+    };
+    // File order and track identity are irrelevant; only playlist contexts count.
+    let listens = vec![
+      record(23, Some("spotify:playlist:p2")),
+      record(21, Some("spotify:playlist:p1")),
+      record(20, Some("spotify:playlist:p2")),
+      record(29, Some("spotify:album:p0")),
+      record(30, None),
+    ];
+    let latest = latest_playlist_listens(&listens);
+    assert_eq!(latest.len(), 2);
+    assert_eq!(latest["spotify:playlist:p2"], listens[0].ended_at);
+    let playlists: Vec<_> = (0..5)
+      .map(|i| playlist_info(&format!("p{i}"), &format!("P{i}"), "me", false))
+      .collect();
+    let mut rootlist: Vec<_> = playlists.iter().collect();
+    sort_playlist_slots(
+      &mut rootlist,
+      SidebarPlaylistOrder::RecentlyPlayed,
+      &latest,
+      |playlist| Some(*playlist),
+    );
+    assert_eq!(
+      rootlist.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
+      ["P2", "P1", "P0", "P3", "P4"]
+    );
+
+    let mut app = App::default();
+    app.set_playlist_last_listens(latest);
+    let newest = record(28, Some("spotify:playlist:p1"));
+    app.record_playlist_listen(&newest);
+    // An older incremental record never replaces the latest timestamp.
+    app.record_playlist_listen(&listens[1]);
+    app.record_playlist_listen(&listens[3]);
+    // Exercise the collector-to-display path as well as the pure function.
+    *app.all_playlists_mut() = playlists;
+    *app.playlist_folder_items_mut() = (0..5)
+      .map(|index| crate::core::app::PlaylistFolderItem::Playlist {
+        index,
+        current_id: 0,
+      })
+      .collect();
+    app.apply(crate::core::action::Action::Sort {
+      context: crate::core::sort::SortContext::SidebarPlaylists,
+      field: crate::core::sort::SortField::RecentlyPlayed,
+    });
+    assert!(matches!(
+      app.get_playlist_display_item_at(1),
+      Some(crate::core::app::PlaylistFolderItem::Playlist { index: 1, .. })
+    ));
   }
 
   #[test]
@@ -3182,6 +3300,37 @@ mod tests {
     assert_eq!(current.started_at, started_at, "the listen was rolled");
     assert_eq!(current.title, "Real Title");
     assert_eq!(current.artists, ["Real Artist"]);
+  }
+
+  #[test]
+  fn a_new_track_sampled_at_the_old_end_position_is_not_a_replay() {
+    let uri = "subsonic:track:42";
+    let mut collector = HistoryCollector::default();
+    for _ in 0..3 {
+      let mut stale = subsonic_snapshot(uri, "Next", &["Artist"]);
+      stale.progress_ms = 200_000;
+      collector.observe(Some(stale)).unwrap();
+    }
+    let started_at = Utc.with_ymd_and_hms(2026, 5, 1, 12, 0, 0).unwrap();
+    collector.current.as_mut().unwrap().started_at = started_at;
+
+    let mut fresh = subsonic_snapshot(uri, "Next", &["Artist"]);
+    fresh.progress_ms = 1_000;
+    collector.observe(Some(fresh)).unwrap();
+
+    assert_eq!(collector.current.as_ref().unwrap().started_at, started_at);
+  }
+
+  #[test]
+  fn only_a_drop_after_a_real_listen_is_a_replay() {
+    assert!(is_replay(120_000, 120_000, 1_000));
+    assert!(is_replay(25_000, 70_000, 1_000), "a short first listen");
+    assert!(!is_replay(6_000, 200_000, 1_000), "a stale start");
+    assert!(
+      !is_replay(120_000, 20_000, 1_000),
+      "below the progress floor"
+    );
+    assert!(!is_replay(120_000, 120_000, 110_000), "a small step back");
   }
 
   #[test]
@@ -3545,6 +3694,22 @@ mod tests {
   }
 
   #[test]
+  fn a_local_file_path_stays_out_of_the_cloud_upload() {
+    let mut record = record_at(3, 60_000, true);
+    record.item_uri = Some("file:///home/alice/Music/a.flac".to_string());
+    record.context_uri = Some("file:///home/alice/Music".to_string());
+    let line = serde_json::to_string(&without_local_paths(record)).unwrap();
+    assert!(!line.contains("alice"), "{line}");
+
+    let mut record = record_at(3, 60_000, true);
+    record.item_uri = Some("spotify:track:abc".to_string());
+    assert_eq!(
+      without_local_paths(record).item_uri.as_deref(),
+      Some("spotify:track:abc")
+    );
+  }
+
+  #[test]
   fn the_cover_url_stays_out_of_the_listens_file() {
     let mut record = record_at(3, 60_000, true);
     record.image_url = Some("https://i.scdn.co/image/abc".to_string());
@@ -3754,7 +3919,15 @@ mod tests {
       assert_eq!(tracks[0].uri, english[0].uri);
       assert_eq!(tracks[0].value, 3_720_000);
     }
-
+    assert_eq!(
+      aggregate_top_tracks_with(&records, 10, &ZH_HANS)[0].detail,
+      "2 次播放 · 1 小时 2 分钟"
+    );
+    assert_eq!(
+      aggregate_top_artists_with(&records, 10, &ZH_HANT)[0].detail,
+      "曲目播放 2 次 · 1 小時 2 分鐘"
+    );
     assert_eq!(period_label(RecapPeriod::Year), "This Year");
+    assert_eq!(period_label_with(RecapPeriod::Year, &ZH_HANT), "今年");
   }
 }

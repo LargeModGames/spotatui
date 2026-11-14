@@ -30,7 +30,7 @@ impl App {
     self.display_revisions.bump(DisplayDomain::Session);
   }
 
-  #[cfg(any(test, feature = "gui"))]
+  #[cfg(feature = "gui")]
   pub(crate) fn session_plays(&self) -> &[SessionPlay] {
     &self.session_plays
   }

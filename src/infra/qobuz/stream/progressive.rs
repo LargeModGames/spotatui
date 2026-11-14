@@ -6,13 +6,15 @@
 //! part. `stream-download` writes the bytes into the session's tempfile
 //! ([`TempfileStorage`]), blocks the decoder's reads until they exist, and
 //! stops the download when the reader is dropped. The session keeps the
-//! `NamedTempFile`, so the finished file outlives the reader (repeat-one).
+//! `NamedTempFile`, so a finished file outlives the reader (repeat-one); a
+//! dropped reader leaves it partial, and [`Completion`] tells the two apart.
 
 use std::convert::Infallible;
 use std::fs::File;
 use std::future::Future;
 use std::io::{self, BufReader};
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::task::{Context, Poll};
 use std::time::Duration;
@@ -21,7 +23,7 @@ use anyhow::{anyhow, Context as _, Result};
 use bytes::Bytes;
 use futures::Stream;
 use reqwest::Client;
-use stream_download::source::SourceStream;
+use stream_download::source::{SourceStream, StreamOutcome};
 use stream_download::storage::StorageProvider;
 use stream_download::{Settings, StreamDownload};
 use tempfile::NamedTempFile;
@@ -46,6 +48,9 @@ pub type TrackReader = StreamDownload<TempfileStorage>;
 /// The error of a segment that ran out of attempts. The reader only reports a
 /// failed download, so the caller reads the cause here.
 pub type Failure = Arc<OnceLock<String>>;
+
+/// Set once every byte of the track is in the tempfile.
+pub type Completion = Arc<AtomicBool>;
 
 /// Start the download into `file` and return the decoder's reader.
 pub async fn open(stream: SegmentStream, file: &NamedTempFile) -> Result<TrackReader> {
@@ -104,6 +109,7 @@ pub struct SegmentStream {
   in_flight: Option<JoinHandle<Result<Bytes>>>,
   attempts: u32,
   failure: Failure,
+  complete: Completion,
 }
 
 impl SegmentStream {
@@ -135,11 +141,16 @@ impl SegmentStream {
       in_flight: None,
       attempts: 0,
       failure: Failure::default(),
+      complete: Completion::default(),
     }
   }
 
   pub fn failure(&self) -> Failure {
     Arc::clone(&self.failure)
+  }
+
+  pub fn completion(&self) -> Completion {
+    Arc::clone(&self.complete)
   }
 
   fn chunk_count(&self) -> usize {
@@ -279,6 +290,14 @@ impl SourceStream for SegmentStream {
 
   fn supports_seek(&self) -> bool {
     true
+  }
+
+  /// `stream-download` reports `Ok` only after it filled every skipped range.
+  async fn on_finish(&mut self, result: io::Result<()>, outcome: StreamOutcome) -> io::Result<()> {
+    if result.is_ok() && matches!(outcome, StreamOutcome::Completed) {
+      self.complete.store(true, Ordering::Release);
+    }
+    result
   }
 }
 
@@ -483,5 +502,56 @@ mod tests {
     assert!(result.is_err());
     let cause = failure.get().expect("the failure is recorded");
     assert!(cause.contains("segment 2 returned HTTP 404"), "got {cause}");
+  }
+
+  async fn read_all_and_wait(stream: SegmentStream, tmp: &NamedTempFile) -> io::Result<Vec<u8>> {
+    let mut reader = open(stream, tmp).await.unwrap();
+    let (result, reader) = tokio::task::spawn_blocking(move || {
+      let mut out = Vec::new();
+      let result = reader.read_to_end(&mut out).map(|_| out);
+      (result, reader)
+    })
+    .await
+    .unwrap();
+    // The reader stays alive here, so this waits for the download task's end.
+    reader.handle().wait_for_completion().await;
+    result
+  }
+
+  #[tokio::test]
+  async fn a_fully_read_track_marks_its_file_complete() {
+    let (segments, expected) = fixture_track();
+    let stream = fixture_stream(segments).await;
+    let complete = stream.completion();
+    let tmp = NamedTempFile::new().unwrap();
+    assert_eq!(read_all_and_wait(stream, &tmp).await.unwrap(), expected);
+    assert!(complete.load(Ordering::Acquire));
+  }
+
+  #[tokio::test]
+  async fn a_failed_download_is_never_complete() {
+    let (mut segments, _) = fixture_track();
+    segments.pop();
+    let stream = fixture_stream(segments).await;
+    let complete = stream.completion();
+    let tmp = NamedTempFile::new().unwrap();
+    assert!(read_all_and_wait(stream, &tmp).await.is_err());
+    assert!(!complete.load(Ordering::Acquire));
+  }
+
+  #[tokio::test]
+  async fn a_reader_dropped_mid_download_leaves_the_file_incomplete() {
+    let (segments, expected) = fixture_track();
+    // A client with no timeout, so the stalled segment 1 never arrives.
+    let template = serve_with(segments, Some(1)).await;
+    let http = Client::new();
+    let init = fetch_init(&http, &template).await.unwrap();
+    let stream = SegmentStream::new(http, template, KEY, &init);
+    let complete = stream.completion();
+    let tmp = NamedTempFile::new().unwrap();
+    drop(open(stream, &tmp).await.unwrap());
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(!complete.load(Ordering::Acquire));
+    assert_ne!(std::fs::read(tmp.path()).unwrap(), expected);
   }
 }

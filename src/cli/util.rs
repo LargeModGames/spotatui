@@ -166,6 +166,8 @@ pub enum FormatType {
   /// CLI paths (current-playback item, search results).
   TrackInfo(Box<crate::core::plugin_api::TrackInfo>),
   Episode(Box<FullEpisode>),
+  /// Domain episode (a podcast episode inside a playlist).
+  EpisodeInfo(Box<crate::core::plugin_api::EpisodeInfo>),
   /// Domain variants — used by search results and other migrated paths.
   AlbumInfo(Box<crate::core::plugin_api::AlbumInfo>),
   ArtistInfo(Box<crate::core::plugin_api::ArtistInfo>),
@@ -234,6 +236,15 @@ impl Format {
           Self::Uri(uri),
         ]
       }
+      FormatType::EpisodeInfo(e) => {
+        // A playlist's episode may come without its show's name; an empty one
+        // renders as `None` (no %h value), not a blank show.
+        let mut values = vec![Self::Track(e.name), Self::Uri(e.uri.unwrap_or_default())];
+        if !e.show_name.is_empty() {
+          values.insert(0, Self::Show(e.show_name));
+        }
+        values
+      }
       FormatType::AlbumInfo(a) => {
         let joined_artists = a
           .artists
@@ -268,13 +279,14 @@ impl Format {
   // Is there a better way?
   pub fn inner(&self, conf: UserConfig) -> String {
     match self {
-      Self::Album(s) => s.clone(),
-      Self::Artist(s) => s.clone(),
-      Self::Playlist(s) => s.clone(),
-      Self::Track(s) => s.clone(),
-      Self::Show(s) => s.clone(),
-      Self::Uri(s) => s.clone(),
-      Self::Device(s) => s.clone(),
+      // Catalogue names reach the terminal, where an escape sequence would act.
+      Self::Album(s)
+      | Self::Artist(s)
+      | Self::Playlist(s)
+      | Self::Track(s)
+      | Self::Show(s)
+      | Self::Uri(s)
+      | Self::Device(s) => s.chars().filter(|c| !c.is_control()).collect(),
       // Because this match statements
       // needs to return a &String, I have to do it this way
       Self::Volume(s) => s.to_string(),
@@ -368,6 +380,12 @@ pub fn render_format(format: &str, values: &[Format], conf: &UserConfig) -> Stri
 mod tests {
   use super::*;
   use crate::core::plugin_api::ShowInfo;
+
+  #[test]
+  fn a_catalogue_name_loses_its_control_characters() {
+    let track = Format::Track("Song\x1b]0;owned\x07\nNext".to_string());
+    assert_eq!(track.inner(UserConfig::new()), "Song]0;ownedNext");
+  }
 
   #[test]
   fn a_playlist_name_containing_a_placeholder_is_printed_verbatim() {

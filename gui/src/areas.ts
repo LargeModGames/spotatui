@@ -1,4 +1,7 @@
 import { EN, type GuiStrings } from "./i18n";
+import type { PaneChord } from "./bindings/PaneChord";
+import type { PaneKeys } from "./bindings/PaneKeys";
+import type { WindowEdge } from "./bindings/WindowEdge";
 import type { Page } from "./nav";
 
 /** The pages that digit keys open, in key order. */
@@ -11,6 +14,7 @@ export const areas = (
   { area: "session", label: s.session, key: "4" },
   { area: "stats", label: s.stats, key: "5" },
   { area: "party", label: s.party, key: "6" },
+  { area: "visualizer", label: s.visualizer, key: "7" },
 ];
 export const AREAS = areas();
 
@@ -49,6 +53,44 @@ export interface ShellKey {
   /** The target acts on space by itself: a button, a link or a slider. */
   interactive: boolean;
   overlay: boolean;
+  /** `KeyboardEvent.code`: the key's place, the same under Option on macOS. */
+  code: string;
+  alt: boolean;
+  ctrl: boolean;
+  shift: boolean;
+}
+
+export type PaneCommand = "detach" | "close" | "reset" | { focus: WindowEdge };
+
+/** A key press with any modifier held. */
+export const modified = (event: {
+  altKey: boolean;
+  ctrlKey: boolean;
+  metaKey: boolean;
+  shiftKey: boolean;
+}) => event.altKey || event.ctrlKey || event.metaKey || event.shiftKey;
+
+/** The pane key from `config.yml` that a press matches; never while typing or under an overlay. */
+export function paneKey(
+  press: ShellKey,
+  keys: PaneKeys | null,
+): PaneCommand | null {
+  if (!keys || press.handled || press.composing) return null;
+  if (press.typing || press.overlay) return null;
+  const is = (chord: PaneChord | null) =>
+    chord !== null &&
+    chord.code === press.code &&
+    chord.alt === press.alt &&
+    chord.ctrl === press.ctrl &&
+    chord.shift === press.shift;
+  if (is(keys.detach)) return "detach";
+  if (is(keys.close)) return "close";
+  if (is(keys.reset)) return "reset";
+  if (is(keys.focus_left)) return { focus: "left" };
+  if (is(keys.focus_right)) return { focus: "right" };
+  if (is(keys.focus_up)) return { focus: "top" };
+  if (is(keys.focus_down)) return { focus: "bottom" };
+  return null;
 }
 
 /** What a key does on the whole page; null leaves it to the browser. Screen keys run first. */

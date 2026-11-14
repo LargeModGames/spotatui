@@ -7,6 +7,21 @@ use crate::core::user_config::StartupBehavior;
 #[cfg(feature = "streaming")]
 pub(super) mod launch;
 
+/// Soloist runs only when it is compiled in and Spotify ships a build for this CPU.
+#[cfg(all(feature = "streaming", any(feature = "tui", feature = "gui")))]
+pub(super) fn effective_engine(
+  setting: crate::core::user_config::PlaybackEngine,
+  soloist_compiled: bool,
+  intel_mac: bool,
+) -> crate::core::user_config::PlaybackEngine {
+  use crate::core::user_config::PlaybackEngine;
+  if setting == PlaybackEngine::Soloist && soloist_compiled && !intel_mac {
+    PlaybackEngine::Soloist
+  } else {
+    PlaybackEngine::Librespot
+  }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 enum StartupDeviceEvent {
   Transfer {
@@ -30,6 +45,7 @@ fn startup_device_decision(
   saved_device_id: Option<String>,
   devices_snapshot: Option<&[rspotify::model::device::Device]>,
   native_device_name: &str,
+  native_id: &str,
   strings: &crate::core::i18n::Strings,
 ) -> StartupDeviceDecision {
   if startup_behavior != StartupBehavior::Play {
@@ -43,7 +59,8 @@ fn startup_device_decision(
     Some(saved_device_id) => {
       if let Some(devices) = devices_snapshot {
         let mut saved_device_available = false;
-        let mut native_device_id = None;
+        let mut by_id = None;
+        let mut by_name = None;
 
         for device in devices {
           if device.id.as_ref() == Some(&saved_device_id) {
@@ -51,10 +68,15 @@ fn startup_device_decision(
             break;
           }
 
-          if native_device_id.is_none() && device.name.eq_ignore_ascii_case(native_device_name) {
-            native_device_id = device.id.clone();
+          if by_id.is_none() && device.id.as_deref() == Some(native_id) {
+            by_id = device.id.clone();
+          }
+          if by_name.is_none() && device.name.eq_ignore_ascii_case(native_device_name) {
+            by_name = device.id.clone();
           }
         }
+        // Another device can carry the native name; the id is exact.
+        let native_device_id = by_id.or(by_name);
 
         if saved_device_available {
           Some(StartupDeviceEvent::Transfer {
@@ -152,6 +174,7 @@ mod tests {
       saved_device_id,
       devices_snapshot,
       NATIVE_NAME,
+      NATIVE_ID,
       &crate::core::i18n::EN,
     )
     .event
@@ -254,6 +277,7 @@ mod tests {
       Some(EXTERNAL_ID.to_string()),
       Some(&devices),
       NATIVE_NAME,
+      NATIVE_ID,
       &crate::core::i18n::EN,
     );
 
@@ -271,6 +295,26 @@ mod tests {
   }
 
   #[test]
+  fn play_with_unavailable_saved_device_picks_the_native_id_over_a_row_with_its_name() {
+    let devices = vec![
+      device("leftover-device", NATIVE_NAME),
+      device(NATIVE_ID, NATIVE_NAME),
+    ];
+
+    assert_eq!(
+      startup_device_event(
+        StartupBehavior::Play,
+        Some(EXTERNAL_ID.to_string()),
+        Some(&devices)
+      ),
+      Some(StartupDeviceEvent::Transfer {
+        device_id: NATIVE_ID.to_string(),
+        persist_device_id: false,
+      })
+    );
+  }
+
+  #[test]
   fn play_with_unavailable_saved_device_auto_selects_native_without_persisting() {
     let devices = vec![device("other-device", "Other speaker")];
 
@@ -279,6 +323,7 @@ mod tests {
       Some(EXTERNAL_ID.to_string()),
       Some(&devices),
       NATIVE_NAME,
+      NATIVE_ID,
       &crate::core::i18n::EN,
     );
 
@@ -302,6 +347,7 @@ mod tests {
       Some(EXTERNAL_ID.to_string()),
       None,
       NATIVE_NAME,
+      NATIVE_ID,
       &crate::core::i18n::EN,
     );
 
@@ -313,5 +359,35 @@ mod tests {
       })
     );
     assert_eq!(decision.status_message, None);
+  }
+}
+
+#[cfg(all(test, feature = "streaming", any(feature = "tui", feature = "gui")))]
+mod engine_tests {
+  use super::effective_engine;
+  use crate::core::user_config::PlaybackEngine;
+
+  #[test]
+  fn effective_engine_falls_back_when_soloist_is_not_compiled() {
+    assert_eq!(
+      effective_engine(PlaybackEngine::Soloist, false, false),
+      PlaybackEngine::Librespot
+    );
+    assert_eq!(
+      effective_engine(PlaybackEngine::Soloist, true, false),
+      PlaybackEngine::Soloist
+    );
+  }
+
+  #[test]
+  fn effective_engine_picks_librespot_on_an_intel_mac() {
+    assert_eq!(
+      effective_engine(PlaybackEngine::Soloist, true, true),
+      PlaybackEngine::Librespot
+    );
+    assert_eq!(
+      effective_engine(PlaybackEngine::Librespot, true, false),
+      PlaybackEngine::Librespot
+    );
   }
 }
