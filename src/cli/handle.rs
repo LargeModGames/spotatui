@@ -98,7 +98,7 @@ pub async fn handle_matches(
     cli.set_device(d.to_string()).await?;
   }
 
-  // Evalute the subcommand
+  // Evaluate the subcommand
   let output = match cmd.as_str() {
     "playback" => {
       let format = matches.get_one::<String>("format").unwrap();
