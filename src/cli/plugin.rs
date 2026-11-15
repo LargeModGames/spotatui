@@ -885,13 +885,20 @@ mod tests {
     assert_eq!(error.to_string(), "no plugin named 'missing' is installed");
   }
 
+  /// Runs git on a fixture repo, ignoring a caller's GIT_DIR (set inside git hooks)
+  /// and a global commit signing setting.
   fn git(dir: &Path, args: &[&str]) -> String {
     let out = ProcessCommand::new("git")
+      .env_remove("GIT_DIR")
+      .env_remove("GIT_WORK_TREE")
+      .env_remove("GIT_INDEX_FILE")
       .args([
         "-c",
         "user.name=test",
         "-c",
         "user.email=test@example.invalid",
+        "-c",
+        "commit.gpgSign=false",
       ])
       .arg("-C")
       .arg(dir)
