@@ -885,13 +885,29 @@ mod tests {
     assert_eq!(error.to_string(), "no plugin named 'missing' is installed");
   }
 
-  /// Runs git on a fixture repo, ignoring a caller's GIT_DIR (set inside git hooks)
-  /// and a global commit signing setting.
+  /// Whether the git fixture tests can run. The Nix build runs the tests without
+  /// git, so they are skipped there. A GIT_DIR, GIT_WORK_TREE or GIT_INDEX_FILE
+  /// from the caller (git sets them inside hooks) would make `update_plugins`
+  /// fetch and reset the caller's repository, so the tests stop before any git
+  /// command runs.
+  fn can_run_git_fixtures() -> bool {
+    if ensure_git().is_err() {
+      return false;
+    }
+    let inherited: Vec<&str> = ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"]
+      .into_iter()
+      .filter(|name| std::env::var_os(name).is_some())
+      .collect();
+    assert!(
+      inherited.is_empty(),
+      "unset {inherited:?} to run the plugin update tests: git would act on the caller's repository"
+    );
+    true
+  }
+
+  /// Runs git on a fixture repo, ignoring a global commit signing setting.
   fn git(dir: &Path, args: &[&str]) -> String {
     let out = ProcessCommand::new("git")
-      .env_remove("GIT_DIR")
-      .env_remove("GIT_WORK_TREE")
-      .env_remove("GIT_INDEX_FILE")
       .args([
         "-c",
         "user.name=test",
@@ -920,8 +936,7 @@ mod tests {
 
   #[test]
   fn plugin_update_with_a_failed_git_update_returns_an_error() {
-    // The Nix build runs the tests without git.
-    if ensure_git().is_err() {
+    if !can_run_git_fixtures() {
       return;
     }
     let dir = tempfile::tempdir().unwrap();
@@ -942,7 +957,7 @@ mod tests {
 
   #[test]
   fn plugin_update_records_the_plugins_that_updated_when_another_fails() {
-    if ensure_git().is_err() {
+    if !can_run_git_fixtures() {
       return;
     }
     let dir = tempfile::tempdir().unwrap();
@@ -976,6 +991,7 @@ mod tests {
 
   #[test]
   fn plugin_update_skips_a_plugin_missing_on_disk_without_failing() {
+    // Only `git --version` runs here: the plugin folder is missing.
     if ensure_git().is_err() {
       return;
     }
