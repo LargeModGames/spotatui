@@ -280,11 +280,6 @@ impl CliApp {
   }
 
   pub async fn seek(&mut self, seconds_str: String) -> Result<()> {
-    let seconds = match seconds_str.parse::<i32>() {
-      Ok(s) => s.unsigned_abs(),
-      Err(_) => return Err(anyhow!("failed to convert seconds to i32")),
-    };
-
     let (current_pos, duration) = {
       self
         .net
@@ -309,20 +304,8 @@ impl CliApp {
       }
     };
 
-    // Convert secs to ms
-    let ms = seconds * 1000;
-    // Calculate new positon
-    let position_to_seek = if seconds_str.starts_with('+') {
-      current_pos + ms
-    } else if seconds_str.starts_with('-') {
-      // Jump to the beginning if the position_to_seek would be
-      // negative, must be checked before the calculation to avoid
-      // an 'underflow'
-      current_pos.saturating_sub(ms)
-    } else {
-      // Absolute value of the track
-      seconds * 1000
-    };
+    let position_to_seek = seek_target(&seconds_str, current_pos)
+      .ok_or_else(|| anyhow!("`{seconds_str}` is not a number of whole seconds"))?;
 
     // Check if position_to_seek is greater than duration (next track)
     if position_to_seek > duration {
@@ -833,11 +816,31 @@ fn playable_format_type(item: PlayableInfo) -> FormatType {
   }
 }
 
+/// Where `--seek` lands, in milliseconds: `+N` moves forward from `current_pos`,
+/// `-N` moves back (stopping at the start) and a plain `N` is a position in the
+/// track. A huge value saturates instead of wrapping, so a forward seek past the
+/// end still compares greater than the duration and skips to the next track.
+/// `None` when the text is not whole seconds.
+fn seek_target(seconds_str: &str, current_pos: u32) -> Option<u32> {
+  let ms = seconds_str
+    .parse::<i32>()
+    .ok()?
+    .unsigned_abs()
+    .saturating_mul(1000);
+  Some(if seconds_str.starts_with('+') {
+    current_pos.saturating_add(ms)
+  } else if seconds_str.starts_with('-') {
+    current_pos.saturating_sub(ms)
+  } else {
+    ms
+  })
+}
+
 #[cfg(test)]
 mod tests {
   use super::{
     device_id_by_name, first_result_uri, parse_query_limit, parse_track_limit,
-    playable_format_type, playlist_items_total, random_offset, SearchResult, Type,
+    playable_format_type, playlist_items_total, random_offset, seek_target, SearchResult, Type,
   };
   use crate::cli::util::{render_format, Format};
   use crate::core::plugin_api::{EpisodeInfo, PlayableInfo};
@@ -847,6 +850,22 @@ mod tests {
   fn a_track_limit_has_no_page_ceiling() {
     assert_eq!(parse_track_limit("1").unwrap(), 1);
     assert_eq!(parse_track_limit("500").unwrap(), 500);
+  }
+
+  #[test]
+  fn seek_target_saturates_instead_of_overflowing() {
+    // 4294968 s is 4_294_968_000 ms, just past u32::MAX.
+    assert_eq!(seek_target("4294968", 5_000), Some(u32::MAX));
+    assert_eq!(seek_target("+4294968", 5_000), Some(u32::MAX));
+    assert_eq!(seek_target("-4294968", 5_000), Some(0));
+    assert_eq!(seek_target("-2147483648", 5_000), Some(0));
+    assert_eq!(seek_target("+2147483647", u32::MAX), Some(u32::MAX));
+    // Normal values still land where they did before.
+    assert_eq!(seek_target("+10", 5_000), Some(15_000));
+    assert_eq!(seek_target("-10", 25_000), Some(15_000));
+    assert_eq!(seek_target("-10", 4_000), Some(0));
+    assert_eq!(seek_target("10", 99_000), Some(10_000));
+    assert_eq!(seek_target("ten", 5_000), None);
   }
 
   #[test]

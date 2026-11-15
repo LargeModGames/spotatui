@@ -22,6 +22,22 @@ Example: spotatui pb -s -f 'playing on %d at %v%'",
     )
 }
 
+/// Refuses a `--seek` value that is not whole seconds, so it fails before boot.
+/// The text comes back unchanged because `CliApp::seek` reads the direction from
+/// its first character: `+` forwards, `-` backwards, no sign for a position.
+fn parse_seek_seconds(value: &str) -> Result<String, String> {
+  let digits = value
+    .strip_prefix(|c| c == '+' || c == '-')
+    .unwrap_or(value);
+  let is_whole = !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit());
+  if is_whole && value.parse::<i32>().is_ok() {
+    return Ok(value.to_string());
+  }
+  Err(format!(
+    "`{value}` is not a number of whole seconds: expected a value like +10, -10 or 10"
+  ))
+}
+
 /// Refuses a URI `play --uri` cannot start, so it fails before boot.
 fn parse_spotify_uri(uri: &str) -> Result<String, String> {
   const OTHER_SOURCES: [&str; 6] = [
@@ -210,6 +226,7 @@ two songs back, you can use `spotatui pb -ppp` and so on.",
         .long("seek")
         .value_name("±SECONDS")
         .allow_hyphen_values(true)
+        .value_parser(parse_seek_seconds)
         .help("Jumps SECONDS forwards (+) or backwards (-)")
         .long_help(
           "For example: `spotatui pb --seek +10` jumps ten seconds forwards, `spotatui pb --seek -10` ten \
@@ -490,6 +507,29 @@ specify it.",
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn playback_seek_accepts_signed_and_absolute_seconds() {
+    for value in ["+10", "-10", "10", "0", "-2147483648", "+2147483647"] {
+      let matches = playback_subcommand()
+        .try_get_matches_from(["playback", "--seek", value])
+        .unwrap();
+      assert_eq!(matches.get_one::<String>("seek").unwrap(), value);
+    }
+  }
+
+  #[test]
+  fn playback_seek_refuses_a_value_that_is_not_whole_seconds() {
+    for value in ["ten", "1.5", "+", "-", "", "+-5", "5s", "99999999999"] {
+      let error = playback_subcommand()
+        .try_get_matches_from(["playback", "--seek", value])
+        .unwrap_err();
+      assert!(
+        error.to_string().contains("whole seconds"),
+        "{value}: {error}"
+      );
+    }
+  }
 
   #[test]
   fn play_uri_accepts_the_spotify_kinds_it_can_start() {
