@@ -17,11 +17,11 @@
 
 **桌面应用**
 
-![spotatui 桌面应用：专辑页面，然后是可视化器、同步歌词和封面艺术的分栏视图](.github/demo-desktop.gif)
+![spotatui 桌面应用：专辑页面，然后是可视化、同步歌词和封面的分栏视图](.github/demo-desktop.gif)
 
 **终端应用**
 
-![终端中的 spotatui：一张专辑、封面艺术、同步歌词和五种可视化器样式](.github/demo.gif)
+![终端中的 spotatui：一张专辑、封面、同步歌词和五种可视化样式](.github/demo.gif)
 
 <!-- START doctoc generated TOC please keep comment here to allow auto update -->
 <!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
@@ -43,14 +43,14 @@
 
 ## 关于
 
-spotatui 是一个拥有两个前端的音乐播放器：桌面应用和终端应用。它们共享同一个登录、同一份配置和同一份收听历史。Spotify 是可选的一一它是七种音源之一。
+spotatui 是一个拥有两个前端的音乐播放器：桌面应用和终端应用。它们共享同一个登录、同一份配置和同一份收听历史。Spotify 是可选的——它是七种音源之一。
 
-- 同步歌词，以及实时音频可视化器。
+- 同步歌词，以及实时音频可视化。
 - 一个可以混合不同音源曲目的播放队列。
 - [播放列表同步](docs/playlist-sync.md)：把一份播放列表镜像到 Spotify、Qobuz、Subsonic 或 YouTube。
 - [Lua 插件](PLUGINS.md)：命令、按键、弹窗和主题。
 - 应用内置 [AI DJ](docs/ai-dj.md)，或者让你的编程代理通过 [MCP](docs/mcp-setup.md) 当 DJ。
-- 带统计和可分享年度回顾的本地收听历史。
+- 本地收听历史，附带统计和可分享的年度回顾。
 - 用于播放、搜索和播放列表的 [CLI](docs/cli.md)。
 
 **Spotify 需要 Premium。** spotatui 用自己的内置客户端登录，所以你不需要开发者应用，也不需要 client ID。
@@ -59,7 +59,7 @@ spotatui 最初是 [spotify-tui](https://github.com/Rigellute/spotify-tui) 的�
 
 ## 安装
 
-Spotify 是可选的：本地文件、网络电台和 YouTube 无需账户即可使用，Subsonic/Navidrome 和 Qobuz 则需要相应的账户。
+Spotify 是可选的：本地文件、网络电台和 YouTube 无需账号即可使用，Subsonic/Navidrome 和 Qobuz 则需要相应的账号。
 
 **桌面应用**
 
@@ -82,7 +82,7 @@ Spotify 是可选的：本地文件、网络电台和 YouTube 无需账户即可
 
 Homebrew、Nix、Void、`.deb` 包以及从源码构建都在[安装指南](docs/installation.md)中。
 
-- **不同构建的功能：** 预编译的终端二进制包含所有音源、MCP 服务器和 AI DJ。`cargo install` 只构建 Spotify，除非你添加[这些 feature](docs/installation.md#which-build-has-which-features)；Nix flake 也只构建 Spotify。
+- **不同构建的功能：** 预编译的终端二进制包含所有音源、MCP 服务器和 AI DJ。`cargo install` 只构建 Spotify，除非你添加[这些功能（features）](docs/installation.md#which-build-has-which-features)；Nix flake 也只构建 Spotify。
 - **更新：** 终端应用会自动更新。如果它是由包管理器安装的，请设置 `behavior.disable_auto_update: true`。参见[更新](docs/installation.md#updating)。
 
 ## 快速上手
@@ -92,7 +92,7 @@ Homebrew、Nix、Void、`.deb` 包以及从源码构建都在[安装指南](docs
 然后：
 
 - `?` 列出所有按键。
-- `/` 搜索。用方向键选择 **Songs** 面板，按 `Enter` 进入，再按 `Enter` 播放一首歌。
+- `/` 搜索。用方向键选择 **歌曲** 面板，按 `Enter` 进入，再按 `Enter` 播放一首歌。
 - `d` 切换音源和设备。
 - `z` 把一首歌加入队列，`Shift+Q` 打开队列。
 - `spotatui --help` 显示 [CLI](docs/cli.md)。
@@ -101,24 +101,24 @@ Homebrew、Nix、Void、`.deb` 包以及从源码构建都在[安装指南](docs
 
 | 音源 | 你需要 |
 |---|---|
-| **Spotify** | 一个 Premium 账户 |
+| **Spotify** | 一个 Premium 账号 |
 | **本地文件** | 一个音乐文件夹 |
-| **Subsonic / Navidrome** | 一个服务器账户 |
+| **Subsonic / Navidrome** | 一个服务器账号 |
 | **网络电台** | 什么都不需要（来自 [radio-browser.info](https://www.radio-browser.info) 的 30k+ 电台） |
 | **YouTube** | `PATH` 中有 [yt-dlp](https://github.com/yt-dlp/yt-dlp) |
-| **Qobuz** | 一个付费 Qobuz 账户 |
-| **Apple Music** | macOS 和「音乐」App |
+| **Qobuz** | 一个付费 Qobuz 账号 |
+| **Apple Music** | macOS 和“音乐”App |
 
-本地文件、Subsonic、网络电台、YouTube 和 Qobuz 通过 spotatui 自己的音频引擎播放。Apple Music 在「音乐」App 中播放，spotatui 充当它的遥控器。每种音源的设置见[配置](docs/configuration.md)。
+本地文件、Subsonic、网络电台、YouTube 和 Qobuz 通过 spotatui 自己的音频引擎播放。Apple Music 在“音乐”App 中播放，spotatui 充当它的遥控器。每种音源的设置见[配置](docs/configuration.md)。
 
-Spotify 在 spotatui 本身中播放，也可以在任意 Spotify Connect 设备上播放，或在你网络中的 Cast 和 Connect 音箱上播放。参见 [Spotify 在哪里播放](docs/native-streaming.md#where-spotify-plays)。对于无损音频，或原生串流无法播放的账户，spotatui 可以运行 Spotify 自己的播放器：参见 [Soloist](docs/soloist.md)。
+Spotify 在 spotatui 本身中播放，也可以在任意 Spotify Connect 设备上播放，或在你网络中的 Cast 和 Connect 音箱上播放。参见 [Spotify 在哪里播放](docs/native-streaming.md#where-spotify-plays)。对于无损音频，或原生流媒体无法播放的账号，spotatui 可以运行 Spotify 自己的播放器：参见 [Soloist](docs/soloist.md)。
 
 ## 了解更多
 
 | 你想 | 阅读 |
 |---|---|
 | 用其他方式安装，或从源码构建 | [安装](docs/installation.md) |
-| 修改设置、按键或主题 | [配置](docs/configuration.md)、[按键绑定](docs/keybindings.md)、[主题](docs/themes.md) |
+| 修改设置、按键或主题 | [配置](docs/configuration.md)、[快捷键](docs/keybindings.md)、[主题](docs/themes.md) |
 | 从 shell 控制 spotatui | [CLI](docs/cli.md) |
 | 编写或安装 Lua 插件 | [PLUGINS.md](PLUGINS.md)、[脚本 API](docs/scripting.md) |
 | 让 AI 挑选音乐 | [AI DJ](docs/ai-dj.md)、[MCP 设置](docs/mcp-setup.md) |
@@ -290,4 +290,4 @@ Windows 发布文件由 GitHub 托管 runner 上的[发布工作流](.github/wor
 
 <!-- ALL-CONTRIBUTORS-LIST:END -->
 
-This project follows the [all-contributors](https://github.com/all-contributors/all-contributors) specification. Contributions of any kind welcome!
+本项目遵循 [all-contributors](https://github.com/all-contributors/all-contributors) 规范。欢迎任何形式的贡献！

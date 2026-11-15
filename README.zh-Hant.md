@@ -17,11 +17,11 @@
 
 **桌面應用程式**
 
-![spotatui 桌面應用程式：專輯頁面，然後是視覺化器、同步歌詞和封面藝術的分欄檢視](.github/demo-desktop.gif)
+![spotatui 桌面應用程式：專輯頁面，然後是視覺化、同步歌詞和封面的分欄檢視](.github/demo-desktop.gif)
 
 **終端機應用程式**
 
-![終端機中的 spotatui：一張專輯、封面藝術、同步歌詞和五種視覺化器樣式](.github/demo.gif)
+![終端機中的 spotatui：一張專輯、封面、同步歌詞和五種視覺化樣式](.github/demo.gif)
 
 <!-- START doctoc generated TOC please keep comment here to allow auto update -->
 <!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
@@ -45,12 +45,12 @@
 
 spotatui 是一個擁有兩個前端的音樂播放器：桌面應用程式和終端機應用程式。它們共用同一組登入、同一份設定和同一份收聽紀錄。Spotify 是選擇性的——它是七種音源之一。
 
-- 同步歌詞，以及即時音訊視覺化器。
+- 同步歌詞，以及即時音訊視覺化。
 - 一個可以混合不同音源曲目的播放佇列。
 - [播放清單同步](docs/playlist-sync.md)：把一份播放清單鏡像到 Spotify、Qobuz、Subsonic 或 YouTube。
 - [Lua 外掛](PLUGINS.md)：指令、按鍵、彈出視窗和主題。
 - 應用程式內建 [AI DJ](docs/ai-dj.md)，或者讓你的程式代理透過 [MCP](docs/mcp-setup.md) 當 DJ。
-- 帶統計和可分享年度回顧的本機收聽紀錄。
+- 本機收聽紀錄，附帶統計和可分享的年度回顧。
 - 用於播放、搜尋和播放清單的 [CLI](docs/cli.md)。
 
 **Spotify 需要 Premium。** spotatui 用自己的內建用戶端登入，所以你不需要開發者應用程式，也不需要 client ID。
@@ -59,7 +59,7 @@ spotatui 最初是 [spotify-tui](https://github.com/Rigellute/spotify-tui) 的�
 
 ## 安裝
 
-Spotify 是選擇性的：本機檔案、網路電台和 YouTube 無需帳戶即可使用，Subsonic/Navidrome 和 Qobuz 則需要相應的帳戶。
+Spotify 是選擇性的：本機檔案、網路電台和 YouTube 無需帳號即可使用，Subsonic/Navidrome 和 Qobuz 則需要相應的帳號。
 
 **桌面應用程式**
 
@@ -82,7 +82,7 @@ Spotify 是選擇性的：本機檔案、網路電台和 YouTube 無需帳戶即
 
 Homebrew、Nix、Void、`.deb` 套件以及從原始碼建置都在[安裝指南](docs/installation.md)中。
 
-- **不同建置的功能：** 預編譯的終端機二進位檔包含所有音源、MCP 伺服器和 AI DJ。`cargo install` 只建置 Spotify，除非你加入[這些 feature](docs/installation.md#which-build-has-which-features)；Nix flake 也只建置 Spotify。
+- **不同建置的功能：** 預編譯的終端機二進位檔包含所有音源、MCP 伺服器和 AI DJ。`cargo install` 只建置 Spotify，除非你加入[這些功能（features）](docs/installation.md#which-build-has-which-features)；Nix flake 也只建置 Spotify。
 - **更新：** 終端機應用程式會自動更新。如果它是由套件管理員安裝的，請設定 `behavior.disable_auto_update: true`。參見[更新](docs/installation.md#updating)。
 
 ## 快速開始
@@ -92,7 +92,7 @@ Homebrew、Nix、Void、`.deb` 套件以及從原始碼建置都在[安裝指南
 然後：
 
 - `?` 列出所有按鍵。
-- `/` 搜尋。用方向鍵選擇 **Songs** 面板，按 `Enter` 進入，再按 `Enter` 播放一首歌。
+- `/` 搜尋。用方向鍵選擇 **歌曲** 面板，按 `Enter` 進入，再按 `Enter` 播放一首歌。
 - `d` 切換音源和裝置。
 - `z` 把一首歌加入佇列，`Shift+Q` 開啟佇列。
 - `spotatui --help` 顯示 [CLI](docs/cli.md)。
@@ -101,24 +101,24 @@ Homebrew、Nix、Void、`.deb` 套件以及從原始碼建置都在[安裝指南
 
 | 音源 | 你需要 |
 |---|---|
-| **Spotify** | 一個 Premium 帳戶 |
+| **Spotify** | 一個 Premium 帳號 |
 | **本機檔案** | 一個音樂資料夾 |
-| **Subsonic / Navidrome** | 一個伺服器帳戶 |
+| **Subsonic / Navidrome** | 一個伺服器帳號 |
 | **網路電台** | 什麼都不需要（來自 [radio-browser.info](https://www.radio-browser.info) 的 30k+ 電台） |
 | **YouTube** | `PATH` 中有 [yt-dlp](https://github.com/yt-dlp/yt-dlp) |
-| **Qobuz** | 一個付費 Qobuz 帳戶 |
+| **Qobuz** | 一個付費 Qobuz 帳號 |
 | **Apple Music** | macOS 和「音樂」App |
 
 本機檔案、Subsonic、網路電台、YouTube 和 Qobuz 透過 spotatui 自己的音訊引擎播放。Apple Music 在「音樂」App 中播放，spotatui 充當它的遙控器。每種音源的設定見[設定](docs/configuration.md)。
 
-Spotify 在 spotatui 本身中播放，也可以在任意 Spotify Connect 裝置上播放，或在你網路中的 Cast 和 Connect 音箱上播放。參見 [Spotify 在哪裡播放](docs/native-streaming.md#where-spotify-plays)。對於無損音訊，或原生串流無法播放的帳戶，spotatui 可以執行 Spotify 自己的播放器：參見 [Soloist](docs/soloist.md)。
+Spotify 在 spotatui 本身中播放，也可以在任意 Spotify Connect 裝置上播放，或在你網路中的 Cast 和 Connect 音箱上播放。參見 [Spotify 在哪裡播放](docs/native-streaming.md#where-spotify-plays)。對於無損音訊，或原生串流無法播放的帳號，spotatui 可以執行 Spotify 自己的播放器：參見 [Soloist](docs/soloist.md)。
 
 ## 了解更多
 
 | 你想 | 閱讀 |
 |---|---|
 | 用其他方式安裝，或從原始碼建置 | [安裝](docs/installation.md) |
-| 修改設定、按鍵或主題 | [設定](docs/configuration.md)、[按鍵綁定](docs/keybindings.md)、[主題](docs/themes.md) |
+| 修改設定、按鍵或主題 | [設定](docs/configuration.md)、[快速鍵](docs/keybindings.md)、[主題](docs/themes.md) |
 | 從 shell 控制 spotatui | [CLI](docs/cli.md) |
 | 撰寫或安裝 Lua 外掛 | [PLUGINS.md](PLUGINS.md)、[腳本 API](docs/scripting.md) |
 | 讓 AI 挑選音樂 | [AI DJ](docs/ai-dj.md)、[MCP 設定](docs/mcp-setup.md) |
@@ -290,4 +290,4 @@ Windows 發行檔案由 GitHub 託管的 runner 上的[發行工作流程](.gith
 
 <!-- ALL-CONTRIBUTORS-LIST:END -->
 
-This project follows the [all-contributors](https://github.com/all-contributors/all-contributors) specification. Contributions of any kind welcome!
+本專案遵循 [all-contributors](https://github.com/all-contributors/all-contributors) 規範。歡迎任何形式的貢獻！

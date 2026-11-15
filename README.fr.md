@@ -290,4 +290,4 @@ Tous ceux qui ont aidé, avec ou sans code. Pour figurer sur cette liste, voir [
 
 <!-- ALL-CONTRIBUTORS-LIST:END -->
 
-This project follows the [all-contributors](https://github.com/all-contributors/all-contributors) specification. Contributions of any kind welcome!
+Ce projet suit la spécification [all-contributors](https://github.com/all-contributors/all-contributors). Les contributions de toute nature sont les bienvenues !
