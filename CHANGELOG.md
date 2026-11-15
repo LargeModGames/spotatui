@@ -12,6 +12,7 @@
 
 ### Fixed
 
+- **YouTube view counts just below the next unit round up to that unit**: a count such as 999,999 views showed as `1000.0K views` and 999,999,999 as `1000.0M views`, because the unit was chosen before the value was rounded to one decimal. They now show as `1.0M views` and `1.0B views`; other counts look the same as before ([#1016](https://github.com/LargeModGames/spotatui/issues/1016)).
 - **Text Emphasis off no longer bolds the selected row**: with `behavior.enable_text_emphasis: false`, the highlighted row in every list and table keeps its reversed colors but is no longer drawn bold ([#822](https://github.com/LargeModGames/spotatui/issues/822)).
 - **The recap share card shows the cover again**: the recap page asked Apple's iTunes search for the cover of your top track from the browser, and the browser blocked the answer, so the card and the downloaded picture always showed the placeholder. spotatui now does the lookup when it makes the recap, with the same title and artist, and keeps the placeholder when the lookup fails or you are offline.
 - **A misspelled default sort direction warns instead of sorting ascending**: a `default_sort_*` setting with a direction other than `asc` or `desc`, such as `name:dsc` or `name:DESC`, sorted the screen by name from A to Z and logged nothing. It now warns at config load and falls back to the default order, like a misspelled field ([#1021](https://github.com/LargeModGames/spotatui/issues/1021)).
