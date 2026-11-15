@@ -250,6 +250,7 @@ fn update_plugins(config_dir: &Path, name: Option<&String>) -> Result<()> {
   }
 
   let mut changed = false;
+  let mut failed = 0;
   for target in targets {
     let dir = plugins_dir.join(&target.name);
     if !dir.is_dir() {
@@ -281,12 +282,19 @@ fn update_plugins(config_dir: &Path, name: Option<&String>) -> Result<()> {
           );
         }
       }
-      Err(e) => println!("  {}: update failed: {e}", target.name),
+      Err(e) => {
+        eprintln!("  {}: update failed: {e}", target.name);
+        failed += 1;
+      }
     }
   }
 
+  // Record the plugins that did update even when others failed.
   if changed {
     save_lock(&lock_path, &lock)?;
+  }
+  if failed > 0 {
+    bail!("{failed} plugin(s) failed to update");
   }
   Ok(())
 }
@@ -875,5 +883,100 @@ mod tests {
     let error = remove_plugin(dir.path(), "missing").unwrap_err();
 
     assert_eq!(error.to_string(), "no plugin named 'missing' is installed");
+  }
+
+  fn git(dir: &Path, args: &[&str]) -> String {
+    let out = ProcessCommand::new("git")
+      .args([
+        "-c",
+        "user.name=test",
+        "-c",
+        "user.email=test@example.invalid",
+      ])
+      .arg("-C")
+      .arg(dir)
+      .args(args)
+      .output()
+      .unwrap();
+    assert!(out.status.success(), "git {args:?} failed");
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+  }
+
+  fn locked(name: &str, rev: &str) -> LockedPlugin {
+    LockedPlugin {
+      name: name.into(),
+      repo: format!("owner/{name}"),
+      url: format!("https://example.invalid/{name}.git"),
+      rev: rev.into(),
+    }
+  }
+
+  #[test]
+  fn plugin_update_with_a_failed_git_update_returns_an_error() {
+    // The Nix build runs the tests without git.
+    if ensure_git().is_err() {
+      return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let plugin_dir = dir.path().join("plugins").join("broken");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    // No `origin` remote, so `git fetch origin HEAD` fails without the network.
+    git(&plugin_dir, &["init", "-q"]);
+    let mut lock = PluginLock::default();
+    lock.upsert(locked("broken", "abcdef1"));
+    save_lock(&lock_path(dir.path()), &lock).unwrap();
+
+    let all = update_plugins(dir.path(), None).unwrap_err();
+    let one = update_plugins(dir.path(), Some(&"broken".to_string())).unwrap_err();
+
+    assert_eq!(all.to_string(), "1 plugin(s) failed to update");
+    assert_eq!(one.to_string(), "1 plugin(s) failed to update");
+  }
+
+  #[test]
+  fn plugin_update_records_the_plugins_that_updated_when_another_fails() {
+    if ensure_git().is_err() {
+      return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let origin = dir.path().join("origin");
+    std::fs::create_dir_all(&origin).unwrap();
+    git(&origin, &["init", "-q"]);
+    git(&origin, &["commit", "-q", "--allow-empty", "-m", "one"]);
+    let plugins_dir = dir.path().join("plugins");
+    std::fs::create_dir_all(&plugins_dir).unwrap();
+    git(
+      &plugins_dir,
+      &["clone", "-q", origin.to_str().unwrap(), "good"],
+    );
+    let old_rev = git(&plugins_dir.join("good"), &["rev-parse", "HEAD"]);
+    git(&origin, &["commit", "-q", "--allow-empty", "-m", "two"]);
+    let new_rev = git(&origin, &["rev-parse", "HEAD"]);
+    std::fs::create_dir_all(plugins_dir.join("broken")).unwrap();
+    git(&plugins_dir.join("broken"), &["init", "-q"]);
+    let mut lock = PluginLock::default();
+    lock.upsert(locked("good", &old_rev));
+    lock.upsert(locked("broken", "abcdef1"));
+    save_lock(&lock_path(dir.path()), &lock).unwrap();
+
+    let error = update_plugins(dir.path(), None).unwrap_err();
+
+    assert_eq!(error.to_string(), "1 plugin(s) failed to update");
+    let saved = load_lock(&lock_path(dir.path())).unwrap();
+    let good = saved.plugins.iter().find(|p| p.name == "good").unwrap();
+    assert_eq!(good.rev, new_rev);
+  }
+
+  #[test]
+  fn plugin_update_skips_a_plugin_missing_on_disk_without_failing() {
+    if ensure_git().is_err() {
+      return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let mut lock = PluginLock::default();
+    lock.upsert(locked("gone", "abcdef1"));
+    save_lock(&lock_path(dir.path()), &lock).unwrap();
+
+    assert!(update_plugins(dir.path(), None).is_ok());
   }
 }
