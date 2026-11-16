@@ -41,8 +41,6 @@ pub use stream::cmaf::StreamQuality;
 /// live from `player`, like the Subsonic twin.
 pub struct QobuzPlaybackState {
   pub player: Arc<LocalPlayer>,
-  /// Source handle, reused to download each track on Next/advance.
-  pub source: Arc<QobuzSource>,
   /// The playing listing's tracks in order; the playbar reads `tracks[index]`.
   pub tracks: Vec<TrackInfo>,
   pub index: usize,

@@ -490,6 +490,14 @@ pub struct App {
   visualizer_look: crate::core::visualizer_look::VisualizerLook,
   /// The decoded-source list whose rows landed in the track table.
   source_table_uri: Option<String>,
+  /// The decoded-source list last opened in the track table, with the epoch of
+  /// that open: its rows land only while no other list opened.
+  #[cfg_attr(not(feature = "qobuz"), allow(dead_code))]
+  source_table_request: Option<(String, u64)>,
+  /// The source and query of the last search request; an older answer that
+  /// arrives late is not shown.
+  #[cfg_attr(not(feature = "qobuz"), allow(dead_code))]
+  search_request: Option<(Source, String)>,
   track_table_view: TrackTableView,
   /// Period shown on the Stats screen
   pub stats_period: RecapPeriod,

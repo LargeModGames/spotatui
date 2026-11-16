@@ -1,7 +1,7 @@
 ### The `core/app/` module folder
 
 `App` was one 10,920-line file; it is now 37 files. The struct stays **flat** - all
-171 fields declared once in `src/core/app/mod.rs` (27 of them feature-gated), plus
+173 fields declared once in `src/core/app/mod.rs` (27 of them feature-gated), plus
 the 81 presentation fields grouped in `App.view` - and its ~270 methods are split
 across 36 sibling modules by concern, each with its own `impl App` block. The
 boundaries are organizational, not architectural.

@@ -158,11 +158,6 @@ fn secret_from_seed(seed: &str, info: &str, extras: &str) -> Result<String> {
 
 static RESOLVED: tokio::sync::OnceCell<QobuzBundleCache> = tokio::sync::OnceCell::const_new();
 
-/// Whether [`resolve_constants`] already succeeded in this process.
-pub fn constants_resolved() -> bool {
-  RESOLVED.get().is_some()
-}
-
 /// Resolve the constants once per process: env, then the cached version, then a scrape.
 pub async fn resolve_constants(
   http: &Client,
@@ -265,6 +260,9 @@ fn token_slot() -> &'static std::sync::Mutex<Option<String>> {
   TOKEN.get_or_init(|| std::sync::Mutex::new(load_token()))
 }
 
+/// Moves on every login change: work that began under another login is stale.
+pub(super) static TOKEN_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// The token in use: loaded once from env or file, replaced by [`set_token`].
 pub fn current_token() -> Option<String> {
   token_slot().lock().map(|t| t.clone()).unwrap_or(None)
@@ -274,6 +272,7 @@ pub fn current_token() -> Option<String> {
 pub fn set_token(token: Option<String>) {
   if let Ok(mut slot) = token_slot().lock() {
     *slot = token;
+    TOKEN_EPOCH.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
   }
 }
 

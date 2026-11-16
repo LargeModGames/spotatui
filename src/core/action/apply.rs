@@ -86,32 +86,36 @@ impl App {
       Action::RefreshQueue => self.dispatch_without_spinner(IoEvent::GetQueue),
       Action::RefreshDevices => self.dispatch_without_spinner(IoEvent::GetDevicesSilent),
       Action::Search(query) => {
+        self.begin_search(crate::core::source::Source::Spotify, &query);
         let country = self.get_user_country();
         self.dispatch(IoEvent::GetSearchResults(query, country));
       }
-      Action::SearchActiveSource(query) => match self.active_source {
-        crate::core::source::Source::Subsonic => {
-          self.dispatch(IoEvent::GetSubsonicSearchResults(query));
+      Action::SearchActiveSource(query) => {
+        self.begin_search(self.active_source, &query);
+        match self.active_source {
+          crate::core::source::Source::Subsonic => {
+            self.dispatch(IoEvent::GetSubsonicSearchResults(query));
+          }
+          crate::core::source::Source::Radio => {
+            self.dispatch(IoEvent::GetRadioSearchResults(query));
+          }
+          crate::core::source::Source::YouTube => {
+            self.dispatch(IoEvent::GetYouTubeSearchResults(query));
+          }
+          crate::core::source::Source::Qobuz => {
+            self.dispatch(IoEvent::GetQobuzSearchResults(query));
+          }
+          crate::core::source::Source::AppleMusic => {
+            self.browse_apple_music(crate::infra::apple_music::Browse::Search(query));
+          }
+          // Spotify and Local both land on the Web API search, exactly like
+          // the search input's if-chain (which has no Local branch).
+          crate::core::source::Source::Spotify | crate::core::source::Source::Local => {
+            let country = self.get_user_country();
+            self.dispatch(IoEvent::GetSearchResults(query, country));
+          }
         }
-        crate::core::source::Source::Radio => {
-          self.dispatch(IoEvent::GetRadioSearchResults(query));
-        }
-        crate::core::source::Source::YouTube => {
-          self.dispatch(IoEvent::GetYouTubeSearchResults(query));
-        }
-        crate::core::source::Source::Qobuz => {
-          self.dispatch(IoEvent::GetQobuzSearchResults(query));
-        }
-        crate::core::source::Source::AppleMusic => {
-          self.browse_apple_music(crate::infra::apple_music::Browse::Search(query));
-        }
-        // Spotify and Local both land on the Web API search, exactly like
-        // the search input's if-chain (which has no Local branch).
-        crate::core::source::Source::Spotify | crate::core::source::Source::Local => {
-          let country = self.get_user_country();
-          self.dispatch(IoEvent::GetSearchResults(query, country));
-        }
-      },
+      }
       Action::SearchPlaylistTracks { playlist_id, query } => {
         self.pending_playlist_track_search = Some(query.clone());
         self.set_status_message(self.strings().status.app.playlist_searching(&query), 60);

@@ -179,6 +179,26 @@ fn reopen_due(attempts: u8, since_last: Option<Duration>) -> bool {
 pub struct PreparedStream(Box<dyn rodio::Source + Send>);
 
 impl LocalPlayer {
+  /// An empty player for queue-state tests, with no system audio device.
+  #[cfg(all(test, feature = "qobuz"))]
+  pub(crate) fn without_device() -> Self {
+    let (player, _output) = Player::new();
+    let (keepalive, _rx) = mpsc::channel();
+    Self {
+      sink: Mutex::new(Sink {
+        player: Arc::new(player),
+        _keepalive: keepalive,
+        lost: Arc::new(AtomicBool::new(false)),
+        device_name: None,
+      }),
+      volume_percent: AtomicU8::new(100),
+      device_check: Mutex::new(None),
+      reopen: Mutex::new(ReopenState::default()),
+      stage_generation: AtomicU64::new(0),
+      stage_transition: Mutex::new(()),
+    }
+  }
+
   /// Open the default audio output device and return a ready player.
   ///
   /// **Blocking:** waits for the audio thread to open the device. Call once at
