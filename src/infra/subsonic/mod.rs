@@ -61,11 +61,14 @@ const WRITE_CHUNK: usize = 50;
 /// serial IoEvent pump.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Overall per-request cap covering connect + body. `fetch`/`download_track` are
-/// awaited inline on the pump, so a server that connects then stalls the body
-/// (e.g. behind a proxy) must not wedge transport for every source forever.
-/// Applies per request, so it also bounds each streamed download below.
+/// Total deadline for JSON API requests, including connection and body reads.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Maximum time without incoming data, including during audio downloads.
+const READ_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Longer deadline for audio downloads that could exceed the API timeout.
+const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
 // ---------------------------------------------------------------------------
 // SubsonicPlaybackState
@@ -157,19 +160,15 @@ pub struct SubsonicSource {
 /// otherwise every Subsonic action pays a fresh TLS handshake (same pattern
 /// as `shared_http_client` on the Spotify path).
 ///
-/// A bare `Client::new()` has no timeouts: a server that connects then
-/// stalls the body wedges the serial IoEvent pump permanently, killing
-/// transport for every source. Bound both the handshake and the whole
-/// request. `.timeout()` applies per request, so it also caps the streamed
-/// download in `download_track` (each chunk read must make progress within
-/// the window) without needing a separate wrapper there.
+/// Bound connection establishment and stalled reads. Each request also sets
+/// a total deadline so a response that trickles in eventually times out.
 fn shared_subsonic_client() -> Client {
   static SUBSONIC_HTTP_CLIENT: std::sync::OnceLock<Client> = std::sync::OnceLock::new();
   SUBSONIC_HTTP_CLIENT
     .get_or_init(|| {
       Client::builder()
         .connect_timeout(CONNECT_TIMEOUT)
-        .timeout(REQUEST_TIMEOUT)
+        .read_timeout(READ_TIMEOUT)
         .build()
         // Falls back to a default (untimed) client only if TLS init fails, which
         // would break every other request in the app too.
@@ -256,6 +255,7 @@ impl SubsonicSource {
     let body = self
       .http
       .get(url)
+      .timeout(REQUEST_TIMEOUT)
       .send()
       .await
       .map_err(reqwest::Error::without_url)
@@ -318,15 +318,27 @@ impl SubsonicSource {
   ///
   /// Streaming (rather than buffering the whole body with `.bytes()`) avoids a
   /// multi-hundred-MB RAM spike per track change for large lossless FLAC or
-  /// audiobook files — the server default is the original file. The client's
-  /// overall `.timeout()` still bounds the whole download.
+  /// audiobook files. The total deadline covers the response body as well as
+  /// connection and headers. Some playback paths wait for this on the pump.
   ///
   /// Async (reqwest), so it must be awaited **without** holding `App`'s lock.
   pub async fn download_track(&self, track_id: &str, dest: &std::path::Path) -> Result<()> {
+    self
+      .download_track_with_timeout(track_id, dest, DOWNLOAD_TIMEOUT)
+      .await
+  }
+
+  async fn download_track_with_timeout(
+    &self,
+    track_id: &str,
+    dest: &std::path::Path,
+    timeout: Duration,
+  ) -> Result<()> {
     let url = self.stream_url(track_id);
     let response = self
       .http
       .get(&url)
+      .timeout(timeout)
       .send()
       .await
       .map_err(reqwest::Error::without_url)
@@ -1459,5 +1471,101 @@ mod tests {
     server.await.unwrap();
     assert!(format!("{err:#}").contains("500"), "{err:#}");
     assert_no_login(&err);
+  }
+
+  async fn serve_slow_response(
+    chunks: usize,
+    delay: Duration,
+  ) -> (String, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+      let (mut stream, _) = listener.accept().await.unwrap();
+      let mut reader = BufReader::new(&mut stream);
+      let mut line = String::new();
+      while reader.read_line(&mut line).await.unwrap() != 0 && line != "\r\n" {
+        line.clear();
+      }
+      let length = chunks * b"ID3".len();
+      stream
+        .write_all(
+          format!("HTTP/1.1 200 OK\r\ncontent-length: {length}\r\nconnection: close\r\n\r\n")
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+      for index in 0..chunks {
+        if index > 0 {
+          tokio::time::sleep(delay).await;
+        }
+        if stream.write_all(b"ID3").await.is_err() {
+          break;
+        }
+      }
+    });
+    (base, server)
+  }
+
+  #[tokio::test]
+  async fn a_subsonic_download_can_finish_after_the_api_deadline() {
+    let (base, server) = serve_slow_response(17, Duration::from_secs(2)).await;
+    let source = SubsonicSource::new(base, "alice", "private-password");
+    let dest = tempfile::NamedTempFile::new().unwrap();
+    tokio::time::timeout(
+      REQUEST_TIMEOUT + Duration::from_secs(10),
+      source.download_track("42", dest.path()),
+    )
+    .await
+    .expect("a progressing download should finish")
+    .unwrap();
+    server.await.unwrap();
+    assert_eq!(std::fs::read(dest.path()).unwrap(), b"ID3".repeat(17));
+  }
+
+  #[tokio::test]
+  async fn a_subsonic_download_times_out_when_the_body_stalls() {
+    let (base, server) = serve_slow_response(2, READ_TIMEOUT + Duration::from_secs(10)).await;
+    let source = SubsonicSource::new(base, "alice", "private-password");
+    let dest = tempfile::NamedTempFile::new().unwrap();
+    let error = tokio::time::timeout(
+      READ_TIMEOUT + Duration::from_secs(5),
+      source.download_track("42", dest.path()),
+    )
+    .await
+    .expect("a stalled download should hit the read timeout")
+    .unwrap_err();
+    server.abort();
+    assert!(error.downcast_ref::<reqwest::Error>().unwrap().is_timeout());
+    assert_no_login(&error);
+  }
+
+  #[tokio::test]
+  async fn a_subsonic_download_times_out_even_when_the_body_trickles() {
+    let (base, server) = serve_slow_response(40, Duration::from_millis(40)).await;
+    let source = SubsonicSource::new(base, "alice", "private-password");
+    let dest = tempfile::NamedTempFile::new().unwrap();
+    // Use a short total timeout on the same request path as normal downloads.
+    let error = source
+      .download_track_with_timeout("42", dest.path(), Duration::from_millis(400))
+      .await
+      .unwrap_err();
+    server.abort();
+    assert!(error.downcast_ref::<reqwest::Error>().unwrap().is_timeout());
+    let bytes = std::fs::read(dest.path()).unwrap().len();
+    assert!((4..120).contains(&bytes), "unexpected byte count: {bytes}");
+    assert_no_login(&error);
+  }
+
+  #[tokio::test]
+  async fn a_subsonic_api_call_times_out_even_when_the_body_trickles() {
+    let (base, server) = serve_slow_response(40, Duration::from_secs(1)).await;
+    let source = SubsonicSource::new(base, "alice", "private-password");
+    let error = tokio::time::timeout(REQUEST_TIMEOUT + Duration::from_secs(5), source.ping())
+      .await
+      .expect("short API calls should keep their total timeout")
+      .unwrap_err();
+    server.abort();
+    assert!(error.downcast_ref::<reqwest::Error>().unwrap().is_timeout());
+    assert_no_login(&error);
   }
 }

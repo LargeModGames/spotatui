@@ -1,0 +1,1 @@
+- **Slow Subsonic downloads get more time**. Audio transfers now have up to ten minutes to finish, with a 30-second read stall limit. Other Subsonic requests still have a 30-second total deadline.
