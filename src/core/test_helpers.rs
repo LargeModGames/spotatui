@@ -16,6 +16,44 @@ use rspotify::model::{
 };
 use std::collections::HashMap;
 
+/// Run one test in a child with a temporary HOME and XDG directories. Returns
+/// true in the child; the parent verifies its result and returns false.
+pub fn in_isolated_process(test_name: &str, config_home: &str) -> bool {
+  const CHILD: &str = "SPOTATUI_ISOLATED_TEST";
+  if std::env::var(CHILD).as_deref() == Ok(test_name) {
+    return true;
+  }
+  let dir = tempfile::tempdir().unwrap();
+  let home = dir.path().join("home");
+  let temp = dir.path().join("tmp");
+  std::fs::create_dir(&home).unwrap();
+  std::fs::create_dir(&temp).unwrap();
+  // Do not mutate the environment of the shared, multithreaded test process.
+  let output = std::process::Command::new(std::env::current_exe().unwrap())
+    .args(["--exact", test_name, "--nocapture"])
+    .env(CHILD, test_name)
+    .env("HOME", home)
+    .env("TMPDIR", temp)
+    .env("XDG_CONFIG_HOME", dir.path().join(config_home))
+    .env("XDG_STATE_HOME", dir.path().join("state"))
+    .env("XDG_CACHE_HOME", dir.path().join("cache"))
+    .env("XDG_DATA_HOME", dir.path().join("data"))
+    .env(
+      "SPOTATUI_LAST_SESSION_PATH",
+      dir.path().join("last_session.yml"),
+    )
+    .env("SPOTATUI_SKIP_UPDATE", "1")
+    .output()
+    .unwrap();
+  let stdout = String::from_utf8_lossy(&output.stdout);
+  assert!(
+    output.status.success() && stdout.contains("1 passed; 0 failed"),
+    "{stdout}\n{}",
+    String::from_utf8_lossy(&output.stderr)
+  );
+  false
+}
+
 /// A queue-slot [`TrackInfo`] with only its `uri` and `name` set.
 #[cfg(feature = "streaming")]
 pub fn queued_track(uri: &str, name: &str) -> TrackInfo {

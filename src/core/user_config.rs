@@ -154,11 +154,13 @@ pub fn parse_update_delay_secs(value: &str) -> Result<u64, String> {
     ("s", 1_u64, "seconds"),
   ] {
     if let Some(amount) = value.strip_suffix(suffix) {
-      return amount
+      let amount = amount
         .trim()
         .parse::<u64>()
-        .map(|v| v * multiplier)
-        .map_err(|_| format!("Invalid {label} value"));
+        .map_err(|_| format!("Invalid {label} value"))?;
+      return amount
+        .checked_mul(multiplier)
+        .ok_or_else(|| format!("Invalid {label} value: delay is too large"));
     }
   }
 
@@ -182,6 +184,15 @@ pub fn format_update_delay_secs(secs: u64) -> String {
 
 pub(crate) fn default_app_config_dir() -> Option<PathBuf> {
   crate::core::paths::app_config_dir()
+}
+
+fn config_paths_in(app_config_dir: PathBuf) -> Result<UserConfigPaths> {
+  // Restrict only the app directory, which can hold plaintext credentials.
+  // Its parent (for example ~/.config) is shared with other applications.
+  crate::core::paths::ensure_private_dir(&app_config_dir)?;
+  Ok(UserConfigPaths {
+    config_file_path: app_config_dir.join(FILE_NAME),
+  })
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -1556,35 +1567,7 @@ impl UserConfig {
   pub fn get_or_build_paths(&mut self) -> Result<()> {
     match default_app_config_dir() {
       Some(app_config_dir) => {
-        let home_config_dir = app_config_dir
-          .parent()
-          .ok_or_else(|| anyhow!("Invalid app config directory"))?;
-
-        if !home_config_dir.exists() {
-          fs::create_dir(home_config_dir)?;
-        }
-
-        if !app_config_dir.exists() {
-          fs::create_dir(&app_config_dir)?;
-        }
-
-        // Restrict the app's own config directory (holds config.yml, which
-        // carries the Subsonic password and party sync_token in cleartext,
-        // plus the Spotify token cache) to owner-only. Never touch
-        // `home_config_dir` (`~/.config`) — that's shared with every other
-        // application on the system.
-        #[cfg(unix)]
-        {
-          use std::os::unix::fs::PermissionsExt;
-          fs::set_permissions(&app_config_dir, fs::Permissions::from_mode(0o700))?;
-        }
-
-        let config_file_path = &app_config_dir.join(FILE_NAME);
-
-        let paths = UserConfigPaths {
-          config_file_path: config_file_path.to_path_buf(),
-        };
-        self.path_to_config = Some(paths);
+        self.path_to_config = Some(config_paths_in(app_config_dir)?);
         Ok(())
       }
       None => Err(anyhow!("No $HOME directory found for client config")),
@@ -2961,6 +2944,102 @@ fn resolve_table_specs(
 
 #[cfg(test)]
 mod tests {
+  #[test]
+  fn config_directory_failures_include_the_path_and_preserve_a_blocking_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let blocker = dir.path().join("not-a-directory");
+    std::fs::write(&blocker, "keep").unwrap();
+    for path in [blocker.clone(), blocker.join("config").join("spotatui")] {
+      let error = super::config_paths_in(path.clone()).err().unwrap();
+      assert!(
+        error.to_string().contains(&path.display().to_string()),
+        "{error}"
+      );
+      assert_eq!(std::fs::read_to_string(&blocker).unwrap(), "keep");
+    }
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn creating_config_paths_restricts_only_the_app_directory() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let parent = dir.path().join("config");
+    std::fs::create_dir(&parent).unwrap();
+    std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    super::config_paths_in(parent.join("spotatui")).unwrap();
+
+    assert_eq!(
+      std::fs::metadata(&parent).unwrap().permissions().mode() & 0o777,
+      0o755
+    );
+    assert_eq!(
+      std::fs::metadata(parent.join("spotatui"))
+        .unwrap()
+        .permissions()
+        .mode()
+        & 0o777,
+      0o700
+    );
+  }
+
+  #[test]
+  fn default_config_paths_create_missing_parent_directories() {
+    if !crate::core::test_helpers::in_isolated_process(
+      "core::user_config::tests::default_config_paths_create_missing_parent_directories",
+      "missing/parents/config",
+    ) {
+      return;
+    }
+    let mut config = super::UserConfig::new();
+    config.get_or_build_paths().unwrap();
+    assert!(config
+      .path_to_config
+      .as_ref()
+      .unwrap()
+      .config_file_path
+      .parent()
+      .unwrap()
+      .is_dir());
+  }
+
+  #[test]
+  fn update_delay_rejects_overflow_without_panicking() {
+    for (suffix, multiplier) in [("d", 86400), ("h", 3600), ("m", 60)] {
+      let max = u64::MAX / multiplier;
+      assert_eq!(
+        super::parse_update_delay_secs(&format!("{max}{suffix}")),
+        Ok(max * multiplier)
+      );
+      let error = super::parse_update_delay_secs(&format!("{}{suffix}", max + 1))
+        .expect_err("overflow must be rejected");
+      assert!(error.contains("too large"), "{error}");
+    }
+    assert_eq!(
+      super::parse_update_delay_secs(&u64::MAX.to_string()),
+      Ok(u64::MAX)
+    );
+    assert_eq!(
+      super::parse_update_delay_secs(&format!("{}s", u64::MAX)),
+      Ok(u64::MAX)
+    );
+    let too_many_digits = (u128::from(u64::MAX) + 1).to_string();
+    assert!(super::parse_update_delay_secs(&too_many_digits).is_err());
+    assert!(super::parse_update_delay_secs(&format!("{too_many_digits}d")).is_err());
+  }
+
+  #[test]
+  fn an_overflowing_configured_update_delay_returns_a_load_error() {
+    let behavior: super::BehaviorConfigString =
+      serde_yaml::from_str(&format!("auto_update_delay: '{}d'", u64::MAX)).unwrap();
+    let error = super::UserConfig::new()
+      .load_behaviorconfig(behavior)
+      .unwrap_err();
+    assert!(error.to_string().contains("Invalid auto-update delay"));
+    assert!(error.to_string().contains("too large"));
+  }
+
   #[test]
   fn removed_visualizer_styles_deserialize_as_cava() {
     use super::VisualizerStyle;

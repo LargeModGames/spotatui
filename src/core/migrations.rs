@@ -414,9 +414,11 @@ fn write_behavior_keys(path: &Path, config: Option<Value>, keys: Mapping) -> Res
   let map = config
     .as_mapping_mut()
     .ok_or_else(|| anyhow!("{} is not a YAML mapping", path.display()))?;
-  let behavior = map
-    .entry(yaml_key("behavior"))
-    .or_insert_with(|| Value::Mapping(Mapping::new()))
+  let behavior = map.entry(yaml_key("behavior")).or_insert(Value::Null);
+  if behavior.is_null() {
+    *behavior = Value::Mapping(Mapping::new());
+  }
+  let behavior = behavior
     .as_mapping_mut()
     .ok_or_else(|| anyhow!("`behavior` in {} is not a YAML mapping", path.display()))?;
   behavior.extend(keys);
@@ -808,6 +810,26 @@ behavior:
       persisted,
     );
     (dir, result, behavior, runtime)
+  }
+
+  #[test]
+  fn legacy_client_settings_fill_a_null_behavior_mapping() {
+    let (dir, result, behavior, _) = client_migration(
+      "streaming_device_name: Desk\ndevice_id: saved-device\n",
+      Some("behavior:\n  # streaming_bitrate: 320\ntheme:\n  preset: Dracula\n"),
+      &PersistedRuntimeState::default(),
+    );
+    let patch = result.unwrap();
+    assert_eq!(patch.spotify_device_id.as_deref(), Some("saved-device"));
+    assert_eq!(behavior.streaming_device_name, "Desk");
+    let config: Value =
+      serde_yaml::from_str(&std::fs::read_to_string(dir.path().join("config.yml")).unwrap())
+        .unwrap();
+    assert_eq!(
+      config["behavior"]["streaming_device_name"].as_str(),
+      Some("Desk")
+    );
+    assert_eq!(config["theme"]["preset"].as_str(), Some("Dracula"));
   }
 
   #[test]

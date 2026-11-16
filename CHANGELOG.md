@@ -12,6 +12,10 @@
 
 ### Fixed
 
+- The first-run source setup still appears after CLI subcommands or an interrupted first launch. Existing installations with a state file, its recovery backup or legacy `client.yml` keep their completed setup. Starting with `--reconfigure-auth` completes source setup before the Spotify login, as picking Spotify does.
+- The global song counter answer is saved when `behavior:` is empty or null, and commented-out answers no longer suppress the question. Legacy streaming settings also migrate into an empty `behavior:` section.
+- Missing parent directories under `XDG_CONFIG_HOME` are created on launch, and directory errors include the path.
+- Auto-update delays that overflow the seconds conversion are rejected with an error instead of panicking or wrapping.
 - **Text Emphasis off no longer bolds the selected row**: with `behavior.enable_text_emphasis: false`, the highlighted row in every list and table keeps its reversed colors but is no longer drawn bold ([#822](https://github.com/LargeModGames/spotatui/issues/822)).
 - **The recap share card shows the cover again**: the recap page asked Apple's iTunes search for the cover of your top track from the browser, and the browser blocked the answer, so the card and the downloaded picture always showed the placeholder. spotatui now does the lookup when it makes the recap, with the same title and artist, and keeps the placeholder when the lookup fails or you are offline.
 - **A misspelled default sort direction warns instead of sorting ascending**: a `default_sort_*` setting with a direction other than `asc` or `desc`, such as `name:dsc` or `name:DESC`, sorted the screen by name from A to Z and logged nothing. It now warns at config load and falls back to the default order, like a misspelled field ([#1021](https://github.com/LargeModGames/spotatui/issues/1021)).

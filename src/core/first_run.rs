@@ -48,9 +48,18 @@ fn save_config_or_warn(user_config: &UserConfig, onboarding: &dyn Onboarding) ->
   }
 }
 
-/// A first run has neither a `state.yml` nor the `client.yml` older releases wrote.
+/// Explicit completion wins. Only an absent marker uses the upgrade rule: a
+/// state file, its recovery backup or an old `client.yml` means setup is done.
+/// A state file written before the picker carries an explicit `false` instead.
 pub(crate) fn is_first_run(state_path: &Path, legacy_client_path: Option<&Path>) -> bool {
-  !state_path.exists() && !legacy_client_path.is_some_and(Path::exists)
+  let Ok(state) = crate::core::state::load(state_path) else {
+    return false;
+  };
+  !state.first_run_complete.unwrap_or_else(|| {
+    state_path.exists()
+      || state_path.with_extension("yml.bak").exists()
+      || legacy_client_path.is_some_and(Path::exists)
+  })
 }
 
 /// Run the interactive first-run source picker; the caller checks
@@ -64,7 +73,7 @@ pub async fn run_first_run_picker(
 ) -> Result<bool> {
   let options = compiled_in_sources();
   let Some(&first) = options.first() else {
-    end_first_run(user_config, runtime_state, state_path, onboarding)?;
+    complete_first_run(user_config, runtime_state, state_path, onboarding)?;
     return Ok(false);
   };
   let selections = if options.len() == 1 {
@@ -86,22 +95,26 @@ pub async fn run_first_run_picker(
   .await
 }
 
-fn end_first_run(
+pub(crate) fn complete_first_run(
   user_config: &UserConfig,
-  runtime_state: &RuntimeState,
+  runtime_state: &mut RuntimeState,
   state_path: Option<&Path>,
   onboarding: &dyn Onboarding,
 ) -> Result<()> {
   // The global song counter opt-in is asked before this picker runs, so the
   // user's choice already sits on `user_config`; save_config persists it here.
-  // The active source is runtime state, and its file marks the first run done.
+  // Save the active source and completion together, after source setup finishes.
   save_config_or_warn(user_config, onboarding);
   if let Some(state_path) = state_path {
     crate::core::state::save(
       state_path,
-      &PersistedRuntimeState::active_source(runtime_state.active_source),
+      &PersistedRuntimeState {
+        first_run_complete: Some(true),
+        ..PersistedRuntimeState::active_source(runtime_state.active_source)
+      },
     )?;
   }
+  runtime_state.first_run_complete = true;
   Ok(())
 }
 
@@ -118,7 +131,6 @@ async fn apply_selections(
   let active = selections[0];
 
   runtime_state.active_source = active;
-  end_first_run(user_config, runtime_state, state_path, onboarding)?;
 
   // Collect credentials / check prerequisites for each chosen free source.
   for source in &selections {
@@ -126,6 +138,7 @@ async fn apply_selections(
       configure_source(*source, user_config, onboarding).await?;
     }
   }
+  complete_first_run(user_config, runtime_state, state_path, onboarding)?;
 
   if spotify_selected {
     if selections.len() > 1 {
@@ -420,7 +433,99 @@ mod tests {
   }
 
   #[test]
-  fn only_a_launch_with_neither_file_is_a_first_run() {
+  fn saving_initial_runtime_state_keeps_the_first_run_pending() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = dir.path().join("state.yml");
+
+    crate::core::state::save(&state, &RuntimeState::default().to_persisted()).unwrap();
+
+    assert!(is_first_run(&state, None));
+  }
+
+  #[test]
+  fn an_incomplete_first_run_marker_takes_precedence_over_a_saved_source() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = dir.path().join("state.yml");
+    let client = dir.path().join("client.yml");
+    std::fs::write(&client, "client_id: old\n").unwrap();
+    std::fs::write(state.with_extension("yml.bak"), "old state\n").unwrap();
+    std::fs::write(
+      &state,
+      "active_source: Spotify\nfirst_run_complete: false\n",
+    )
+    .unwrap();
+
+    assert!(is_first_run(&state, Some(&client)));
+  }
+
+  #[test]
+  fn a_legacy_state_file_without_a_marker_or_source_keeps_setup_complete() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = dir.path().join("state.yml");
+    for contents in ["", "volume_percent: 42\n"] {
+      std::fs::write(&state, contents).unwrap();
+      assert!(!is_first_run(&state, None));
+    }
+    std::fs::write(&state, "first_run_complete: true\n").unwrap();
+    assert!(!is_first_run(&state, None));
+  }
+
+  #[test]
+  fn a_recovered_state_file_keeps_setup_complete() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = dir.path().join("state.yml");
+    let corrupt = "volume_percent: 300\n";
+    std::fs::write(&state, corrupt).unwrap();
+
+    assert!(!is_first_run(&state, None));
+    crate::core::state::save(&state, &PersistedRuntimeState::volume_percent(42)).unwrap();
+
+    assert_eq!(
+      std::fs::read_to_string(state.with_extension("yml.bak")).unwrap(),
+      corrupt
+    );
+    assert_eq!(
+      crate::core::state::load(&state).unwrap(),
+      PersistedRuntimeState::volume_percent(42)
+    );
+    assert!(!is_first_run(&state, None));
+  }
+
+  #[test]
+  fn a_state_backup_keeps_setup_complete_when_the_replacement_is_missing() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = dir.path().join("state.yml");
+    std::fs::write(state.with_extension("yml.bak"), "volume_percent: 300\n").unwrap();
+
+    assert!(!state.exists());
+    assert!(!is_first_run(&state, None));
+  }
+
+  #[cfg(feature = "subsonic")]
+  #[tokio::test]
+  async fn interrupted_source_configuration_keeps_the_first_run_pending() {
+    let dir = tempfile::tempdir().unwrap();
+    let state_path = dir.path().join("state.yml");
+    let mut user_config = user_config_in(dir.path());
+    let mut runtime_state = RuntimeState::default();
+    crate::core::state::save(&state_path, &runtime_state.to_persisted()).unwrap();
+
+    assert!(apply_selections(
+      vec![Source::Subsonic],
+      &mut user_config,
+      &mut runtime_state,
+      Some(&state_path),
+      &ScriptedOnboarding::with_answers(&[]),
+    )
+    .await
+    .is_err());
+
+    assert!(is_first_run(&state_path, None));
+    assert!(!runtime_state.first_run_complete);
+  }
+
+  #[test]
+  fn legacy_installs_with_a_client_or_saved_source_keep_their_completed_setup() {
     let dir = tempfile::tempdir().unwrap();
     let state = dir.path().join("state.yml");
     let client = dir.path().join("client.yml");
@@ -464,6 +569,13 @@ mod tests {
 
     assert!(log_in);
     assert_eq!(runtime_state.active_source, Source::Spotify);
+    assert!(runtime_state.first_run_complete);
+    assert_eq!(
+      crate::core::state::load(&state_path)
+        .unwrap()
+        .first_run_complete,
+      Some(true)
+    );
     assert!(!is_first_run(&state_path, None));
   }
 
