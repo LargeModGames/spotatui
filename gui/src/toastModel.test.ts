@@ -11,6 +11,7 @@ const status = (
   is_error: message !== null,
   soloist_pairing: null,
   soloist_offer: null,
+  recap_prompt: null,
 });
 
 describe("toastView", () => {

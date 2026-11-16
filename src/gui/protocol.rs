@@ -463,6 +463,21 @@ pub(crate) struct StatusPayload {
   soloist_pairing: Option<SoloistPairingGuide>,
   /// The offer to set up Soloist to show in a modal.
   soloist_offer: Option<SoloistOffer>,
+  /// The monthly or year recap that waits for an answer, to show in a modal.
+  recap_prompt: Option<RecapPrompt>,
+}
+
+/// The page answers with `OpenRecap`, `DismissRecapPrompt` or `DisableRecapPrompt`.
+#[derive(Serialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
+pub(crate) struct RecapPrompt {
+  title: String,
+  ready: String,
+  listens: String,
+  browser: &'static str,
+  open: &'static str,
+  later: &'static str,
+  disable: &'static str,
 }
 
 #[derive(Serialize)]
@@ -1077,6 +1092,19 @@ fn channel_message(
             ],
             set_up: strings.soloist_offer_set_up,
             not_now: strings.soloist_offer_not_now,
+          }
+        }),
+        recap_prompt: app.recap_prompt().map(|prompt| {
+          let strings = &app.strings().popups;
+          let (title, ready, listens) = strings.recap_lines(prompt.year, prompt.listens);
+          RecapPrompt {
+            title: title.trim().to_string(),
+            ready,
+            listens,
+            browser: strings.recap_browser,
+            open: strings.recap_open,
+            later: strings.recap_later,
+            disable: strings.recap_disable,
           }
         }),
       },
@@ -2236,6 +2264,51 @@ mod tests {
       &action_frame(Action::AnswerSoloistOffer { set_up: false }),
     );
     assert!(pushed(&answered, "status")["payload"]["soloist_offer"].is_null());
+  }
+
+  #[test]
+  fn the_status_channel_carries_the_recap_prompt_until_the_page_answers_it() {
+    use crate::core::app::{RecapPromptState, RouteId};
+    let prompt = |year| RecapPromptState {
+      path: std::path::PathBuf::from("recap.html"),
+      listens: 42,
+      year,
+    };
+    let (mut app, _rx) = app();
+    let home = app.get_current_route().id.clone();
+    let before = app.display_revisions();
+    app.show_recap_prompt(prompt(None));
+    let status = pushed(&diff(&before, &app, Language::En), "status");
+    assert_eq!(
+      status["payload"]["recap_prompt"],
+      serde_json::json!({
+        "title": "Monthly Recap",
+        "ready": "Your monthly listening recap is ready! 🎉",
+        "listens": "42 listens made it into your 30-day recap.",
+        "browser": "Open it in the browser to view and download your share card.",
+        "open": "Open",
+        "later": "Later",
+        "disable": "Don't show this again",
+      })
+    );
+
+    let later = apply_from_page(&mut app, &action_frame(Action::DismissRecapPrompt));
+    assert!(pushed(&later, "status")["payload"]["recap_prompt"].is_null());
+    assert_eq!(app.get_current_route().id, home);
+
+    let before = app.display_revisions();
+    app.show_recap_prompt(prompt(Some(2026)));
+    let year = &pushed(&diff(&before, &app, Language::En), "status")["payload"]["recap_prompt"];
+    assert_eq!(year["title"], "2026 Recap");
+    assert_eq!(year["listens"], "42 listens made it into your 2026 recap.");
+
+    // A page that opened over the popup stays when the popup closes.
+    app.push_navigation_stack(RouteId::Settings, crate::core::app::ActiveBlock::Settings);
+    let closed = apply_from_page(&mut app, &action_frame(Action::DismissRecapPrompt));
+    assert!(pushed(&closed, "status")["payload"]["recap_prompt"].is_null());
+    assert_eq!(app.get_current_route().id, RouteId::Settings);
+    app.pop_navigation_stack();
+    assert_eq!(app.get_current_route().id, home);
   }
 
   fn apply_from_page(app: &mut App, text: &str) -> Vec<ServerMessage> {

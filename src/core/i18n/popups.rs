@@ -64,6 +64,9 @@ pub struct PopupStrings {
   pub recap_year_ready: &'static str,
   pub recap_year_listens_template: &'static str,
   pub recap_year_title: &'static str,
+  pub recap_open: &'static str,
+  pub recap_later: &'static str,
+  pub recap_disable: &'static str,
   pub community_pinned: &'static str,
   pub community_details: &'static str,
   pub community_add: &'static str,
@@ -208,6 +211,9 @@ pub const EN: PopupStrings = PopupStrings {
   recap_year_ready: "Your {year} listening recap is ready! 🎉",
   recap_year_listens_template: "{count} listens made it into your {year} recap.",
   recap_year_title: " {year} Recap ",
+  recap_open: "Open",
+  recap_later: "Later",
+  recap_disable: "Don't show this again",
   community_pinned: "📌 spotatui community playlist pinned",
   community_details: "The \"spotatui community\" playlist is now pinned to the top of your Spotify playlists.",
   community_add: "Add songs to it any time with the /queue command in the spotatui Discord.",
@@ -355,6 +361,9 @@ pub const ZH_HANS: PopupStrings = PopupStrings {
   recap_year_ready: "你的 {year} 年度听歌回顾已生成！🎉",
   recap_year_listens_template: "你的 {year} 年回顾收录了 {count} 次播放。",
   recap_year_title: " {year} 年度回顾 ",
+  recap_open: "打开",
+  recap_later: "稍后",
+  recap_disable: "不再提示",
   community_pinned: "📌 spotatui 社区播放列表已置顶",
   community_details: "“spotatui community”播放列表已置顶于你的 Spotify 播放列表。",
   community_add: "随时可在 spotatui Discord 中使用 /queue 命令添加歌曲。",
@@ -503,6 +512,9 @@ pub const ZH_HANT: PopupStrings = PopupStrings {
   recap_year_ready: "你的 {year} 年度聆聽回顧已產生！🎉",
   recap_year_listens_template: "你的 {year} 年回顧收錄了 {count} 次播放。",
   recap_year_title: " {year} 年度回顧 ",
+  recap_open: "開啟",
+  recap_later: "稍後",
+  recap_disable: "不再提示",
   community_pinned: "📌 spotatui 社群播放清單已置頂",
   community_details: "「spotatui community」播放清單已置頂於你的 Spotify 播放清單。",
   community_add: "隨時可在 spotatui Discord 中使用 /queue 指令加入歌曲。",
@@ -591,6 +603,44 @@ impl PopupStrings {
   pub fn soloist_pair_pick(&self, name: &str) -> String {
     super::format_template(self.soloist_pair_pick_template, &[("name", name)])
   }
+
+  pub fn recap_listens(&self, count: usize) -> String {
+    super::format_template(
+      self.recap_listens_template,
+      &[("count", &count.to_string())],
+    )
+  }
+
+  pub fn recap_year_ready(&self, year: i32) -> String {
+    super::format_template(self.recap_year_ready, &[("year", &year.to_string())])
+  }
+
+  pub fn recap_year_listens(&self, year: i32, count: usize) -> String {
+    super::format_template(
+      self.recap_year_listens_template,
+      &[("year", &year.to_string()), ("count", &count.to_string())],
+    )
+  }
+
+  pub fn recap_year_title(&self, year: i32) -> String {
+    super::format_template(self.recap_year_title, &[("year", &year.to_string())])
+  }
+
+  /// The title, the ready line and the listens line of the monthly or the year recap popup.
+  pub fn recap_lines(&self, year: Option<i32>, listens: usize) -> (String, String, String) {
+    match year {
+      Some(year) => (
+        self.recap_year_title(year),
+        self.recap_year_ready(year),
+        self.recap_year_listens(year, listens),
+      ),
+      None => (
+        self.recap_title.to_string(),
+        self.recap_ready.to_string(),
+        self.recap_listens(listens),
+      ),
+    }
+  }
 }
 
 #[cfg(any(feature = "tui", test))]
@@ -659,28 +709,6 @@ impl PopupStrings {
 
   pub fn announcement_more(&self, url: &str) -> String {
     super::format_template(self.announcement_more_template, &[("url", url)])
-  }
-
-  pub fn recap_listens(&self, count: usize) -> String {
-    super::format_template(
-      self.recap_listens_template,
-      &[("count", &count.to_string())],
-    )
-  }
-
-  pub fn recap_year_ready(&self, year: i32) -> String {
-    super::format_template(self.recap_year_ready, &[("year", &year.to_string())])
-  }
-
-  pub fn recap_year_listens(&self, year: i32, count: usize) -> String {
-    super::format_template(
-      self.recap_year_listens_template,
-      &[("year", &year.to_string()), ("count", &count.to_string())],
-    )
-  }
-
-  pub fn recap_year_title(&self, year: i32) -> String {
-    super::format_template(self.recap_year_title, &[("year", &year.to_string())])
   }
 
   pub fn party_code_length(&self, count: usize) -> String {
