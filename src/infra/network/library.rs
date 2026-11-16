@@ -38,7 +38,6 @@ use librespot_metadata::{
 #[cfg(feature = "streaming")]
 use percent_encoding::percent_decode_str;
 
-
 // Spotify's `me/library` endpoints (contains, save, remove) accept at most 40
 // uris per request; anything larger fails with a 400 "Too many uris".
 const LIBRARY_CONTAINS_MAX_URIS: usize = 40;
