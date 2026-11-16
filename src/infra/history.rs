@@ -1,4 +1,5 @@
 use crate::core::app::{ActiveBlock, App, RecapPromptState, SessionPlay};
+use crate::core::source::Source;
 use crate::infra::media_metadata::{
   tracking_playback_snapshot, PlaybackItemKind, PlaybackSnapshot, PlaybackSource,
 };
@@ -17,6 +18,7 @@ use tokio::task::{JoinHandle, JoinSet};
 const HISTORY_SUBDIR: &str = "history";
 const LISTENS_FILE_NAME: &str = "listens.jsonl";
 const LAST_RECAP_FILE_NAME: &str = "last_recap_at.txt";
+const LAST_YEAR_RECAP_FILE_NAME: &str = "last_year_recap.txt";
 const LAST_SYNCED_FILE_NAME: &str = "last_synced_at.txt";
 const SYNC_BASE_URL: &str = "https://spotatui.com";
 const CLOUD_SYNC_PATH: &str = "/api/sync";
@@ -786,7 +788,17 @@ async fn perform_auto_recap_check(app: &Arc<Mutex<App>>) {
   };
 
   let now = Utc::now();
-  if !auto_recap_is_due(fs::read_to_string(&path).ok().as_deref(), now.timestamp()) {
+  let year_path = history_state_file_path(LAST_YEAR_RECAP_FILE_NAME).ok();
+  let year = year_recap_due(
+    year_path
+      .as_ref()
+      .and_then(|path| fs::read_to_string(path).ok())
+      .as_deref(),
+    now.with_timezone(&Local).date_naive(),
+  );
+  if year.is_none()
+    && !auto_recap_is_due(fs::read_to_string(&path).ok().as_deref(), now.timestamp())
+  {
     return;
   }
 
@@ -795,49 +807,85 @@ async fn perform_auto_recap_check(app: &Arc<Mutex<App>>) {
     Err(_) => return,
   };
 
-  perform_auto_recap_check_with(app, path, output_path, now, export_history_recap_with).await;
+  let offer = AutoRecap {
+    stamp_path: path,
+    year: year.zip(year_path),
+    output_path,
+    now,
+  };
+  perform_auto_recap_check_with(app, offer, export_history_recap_with).await;
+}
+
+/// The year whose recap the December prompt offers: only in December, and only once a year.
+fn year_recap_due(last_year_recap: Option<&str>, today: NaiveDate) -> Option<i32> {
+  let offered = last_year_recap.and_then(|content| content.trim().parse::<i32>().ok());
+  (today.month() == 12 && offered != Some(today.year())).then(|| today.year())
+}
+
+/// One automatic recap: the monthly one, or the year one with the file that records its year.
+struct AutoRecap {
+  stamp_path: PathBuf,
+  year: Option<(i32, PathBuf)>,
+  output_path: PathBuf,
+  now: DateTime<Utc>,
 }
 
 async fn perform_auto_recap_check_with(
   app: &Arc<Mutex<App>>,
-  path: PathBuf,
-  output_path: PathBuf,
-  now: DateTime<Utc>,
+  offer: AutoRecap,
   export: impl FnOnce(RecapPeriod, &Path, &crate::core::i18n::Strings) -> Result<usize> + Send + 'static,
 ) {
+  let AutoRecap {
+    stamp_path: path,
+    year,
+    output_path,
+    now,
+  } = offer;
+  let period = match year {
+    Some(_) => RecapPeriod::Year,
+    None => RecapPeriod::ThirtyDays,
+  };
   let strings = app.lock().await.strings();
   // The export reads and renders the whole history file; keep it off the
   // runtime worker threads.
   let export_path = output_path.clone();
-  let result =
-    tokio::task::spawn_blocking(move || export(RecapPeriod::ThirtyDays, &export_path, strings))
-      .await
-      .map_err(anyhow::Error::from)
-      .and_then(|result| result);
+  let result = tokio::task::spawn_blocking(move || export(period, &export_path, strings))
+    .await
+    .map_err(anyhow::Error::from)
+    .and_then(|result| result);
 
   match result {
     Ok(count) => {
       if count > 0 {
+        // The year recap also counts as this month's, so the two popups never follow each other.
         if let Err(e) = fs::write(&path, now.timestamp().to_string()) {
           log::warn!("failed to write last recap timestamp: {}", e);
         }
+        if let Some((year, year_path)) = &year {
+          if let Err(e) = fs::write(year_path, year.to_string()) {
+            log::warn!("failed to write the year of the last year recap: {}", e);
+          }
+        }
+        let year = year.map(|(year, _)| year);
 
         let mut app_guard = app.lock().await;
         if app_guard.get_current_route().active_block == ActiveBlock::Input {
           // Never steal keystrokes from an input field; fall back to a status
           // message instead of the popup.
           let strings = app_guard.strings();
+          let path = output_path.display().to_string();
           app_guard.set_status_message(
-            strings
-              .status
-              .infra
-              .monthly_recap_ready(&output_path.display().to_string(), count),
+            match year {
+              Some(year) => strings.status.infra.year_recap_ready(year, &path, count),
+              None => strings.status.infra.monthly_recap_ready(&path, count),
+            },
             10,
           );
         } else {
           app_guard.show_recap_prompt(RecapPromptState {
             path: output_path,
             listens: count,
+            year,
           });
         }
       }
@@ -868,7 +916,18 @@ pub fn export_history_recap_with(
     RecapPeriod::All
   };
   let alt_filtered = filter_listens_for_period(&listens, alt_period);
-  let html = render_history_recap_html_with(period, &filtered, alt_period, &alt_filtered, strings);
+  let covers = [
+    top_track_cover(&filtered, strings, COVER_SEARCH_URL),
+    top_track_cover(&alt_filtered, strings, COVER_SEARCH_URL),
+  ];
+  let html = render_history_recap_html_with(
+    period,
+    &filtered,
+    alt_period,
+    &alt_filtered,
+    covers,
+    strings,
+  );
 
   if let Some(parent) = output_path.parent() {
     fs::create_dir_all(parent)?;
@@ -1205,11 +1264,12 @@ fn in_period<Tz: TimeZone>(record: &ListenRecord, period: RecapPeriod, now: &Dat
 
 /// The raw (unescaped) values the share card shows for one period.
 struct CardData {
-  period: RecapPeriod,
+  badge: String,
   track_title: String,
   track_artist: String,
   top_artist: String,
   top_album: String,
+  sources: String,
   plays: usize,
   time: String,
 }
@@ -1225,8 +1285,7 @@ impl CardData {
       aggregate_top_tracks_with(listens, 1, strings).first(),
       aggregate_top_artists_with(listens, 1, strings).first(),
       aggregate_top_albums_with(listens, 1, strings).first(),
-      listens.len(),
-      listens.iter().map(|record| record.listened_ms).sum(),
+      listens,
       strings,
     )
   }
@@ -1237,10 +1296,11 @@ impl CardData {
     top_track: Option<&RankedEntry>,
     top_artist: Option<&RankedEntry>,
     top_album: Option<&RankedEntry>,
-    plays: usize,
-    total_ms: u64,
+    listens: &[ListenRecord],
     strings: &crate::core::i18n::Strings,
   ) -> Self {
+    let plays = listens.len();
+    let total_ms: u64 = listens.iter().map(|record| record.listened_ms).sum();
     let top_track_raw = top_track
       .map(|entry| entry.display.as_str())
       .unwrap_or(strings.recap.no_data);
@@ -1255,7 +1315,7 @@ impl CardData {
     };
 
     Self {
-      period,
+      badge: card_badge(period, listens, strings),
       track_title,
       track_artist,
       top_artist: top_artist
@@ -1266,24 +1326,146 @@ impl CardData {
         .map(|entry| entry.display.as_str())
         .unwrap_or(strings.recap.no_data)
         .to_string(),
+      sources: source_shares(listens, strings),
       plays,
       time: format_duration_with(total_ms, strings),
     }
   }
 
   /// Render as a JS object literal for the recap page's inline script.
-  fn to_js_object(&self, strings: &crate::core::i18n::Strings) -> String {
+  fn to_js_object(&self, cover: Option<&str>) -> String {
     format!(
-      "{{ period: {}, track: {}, artist: {}, topArtist: {}, topAlbum: {}, plays: {}, time: {} }}",
-      js_string(period_label_with(self.period, strings)),
+      "{{ period: {}, track: {}, artist: {}, topArtist: {}, topAlbum: {}, sources: {}, plays: {}, time: {}, cover: {} }}",
+      js_string(&self.badge),
       js_string(&self.track_title),
       js_string(&self.track_artist),
       js_string(&self.top_artist),
       js_string(&self.top_album),
+      js_string(&self.sources),
       self.plays,
       js_string(&self.time),
+      cover.map_or_else(|| "null".to_string(), js_string),
     )
   }
+}
+
+/// The badge of a card: the year for the year recap, the period name for the others.
+fn card_badge(
+  period: RecapPeriod,
+  listens: &[ListenRecord],
+  strings: &crate::core::i18n::Strings,
+) -> String {
+  let year = listens
+    .iter()
+    .map(|record| record.ended_at.with_timezone(&Local).year())
+    .max();
+  match (period, year) {
+    (RecapPeriod::Year, Some(year)) => year.to_string(),
+    _ => period_label_with(period, strings).to_string(),
+  }
+}
+
+/// The service a listen came from, by the scheme of its URI.
+fn listen_source(record: &ListenRecord) -> Option<Source> {
+  let (scheme, _) = record.item_uri.as_deref()?.split_once(':')?;
+  Some(match scheme {
+    "spotify" => Source::Spotify,
+    "file" => Source::Local,
+    "subsonic" => Source::Subsonic,
+    "radio" => Source::Radio,
+    "youtube" => Source::YouTube,
+    "qobuz" => Source::Qobuz,
+    "applemusic" => Source::AppleMusic,
+    _ => return None,
+  })
+}
+
+/// The three services with the most listens and their share, such as "Spotify 79% · Qobuz 21%".
+fn source_shares(listens: &[ListenRecord], strings: &crate::core::i18n::Strings) -> String {
+  let mut counts: Vec<(Source, usize)> = Vec::new();
+  for source in listens.iter().filter_map(listen_source) {
+    match counts.iter_mut().find(|(known, _)| *known == source) {
+      Some((_, count)) => *count += 1,
+      None => counts.push((source, 1)),
+    }
+  }
+  let total: usize = counts.iter().map(|(_, count)| count).sum();
+  if total == 0 {
+    return strings.recap.no_data.to_string();
+  }
+  counts.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
+  counts
+    .iter()
+    .take(3)
+    .map(|(source, count)| {
+      let label = strings.sidebar.source_label(*source);
+      match count * 100 / total {
+        0 => format!("{label} <1%"),
+        percent => format!("{label} {percent}%"),
+      }
+    })
+    .collect::<Vec<_>>()
+    .join(" · ")
+}
+
+const COVER_SEARCH_URL: &str = "https://itunes.apple.com/search";
+const COVER_LOOKUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(4);
+
+/// The search term for a cover: the title without its bracketed notes, then the artist.
+fn cover_search_term(title: &str, artist: &str) -> String {
+  let mut clean = String::with_capacity(title.len());
+  let mut closer = None;
+  for c in title.chars() {
+    match (closer, c) {
+      (Some(end), c) if c == end => closer = None,
+      (Some(_), _) => {}
+      (None, '(') => closer = Some(')'),
+      (None, '[') => closer = Some(']'),
+      (None, c) => clean.push(c),
+    }
+  }
+  format!("{} {}", clean.trim(), artist.trim())
+    .trim()
+    .to_string()
+}
+
+/// The cover of the most played track of `listens`, from the song search at `search_url`.
+/// The browser cannot ask for it: the search sends no CORS header to a page.
+fn top_track_cover(
+  listens: &[ListenRecord],
+  strings: &crate::core::i18n::Strings,
+  search_url: &str,
+) -> Option<String> {
+  let top = aggregate_top_tracks_with(listens, 1, strings);
+  let (title, artist) = split_track_display(&top.first()?.display);
+  let term = cover_search_term(title, artist);
+  let search_url = search_url.to_string();
+  // Its own thread: the blocking client cannot run on an async runtime thread.
+  std::thread::spawn(move || lookup_cover_url(&search_url, &term))
+    .join()
+    .ok()
+    .flatten()
+}
+
+fn lookup_cover_url(search_url: &str, term: &str) -> Option<String> {
+  let found: serde_json::Value = reqwest::blocking::Client::builder()
+    .timeout(COVER_LOOKUP_TIMEOUT)
+    .build()
+    .ok()?
+    .get(search_url)
+    .query(&[("term", term), ("limit", "1"), ("entity", "song")])
+    .send()
+    .ok()?
+    .json()
+    .ok()?;
+  let url = found
+    .get("results")?
+    .get(0)?
+    .get("artworkUrl100")?
+    .as_str()?;
+  url
+    .starts_with("https://")
+    .then(|| url.replace("100x100bb", "600x600bb"))
 }
 
 #[cfg(test)]
@@ -1298,6 +1480,7 @@ fn render_history_recap_html(
     listens,
     alt_period,
     alt_listens,
+    [None, None],
     &crate::core::i18n::EN,
   )
 }
@@ -1307,6 +1490,7 @@ fn render_history_recap_html_with(
   listens: &[ListenRecord],
   alt_period: RecapPeriod,
   alt_listens: &[ListenRecord],
+  covers: [Option<String>; 2],
   strings: &crate::core::i18n::Strings,
 ) -> String {
   let top_tracks = aggregate_top_tracks_with(listens, 5, strings);
@@ -1322,8 +1506,7 @@ fn render_history_recap_html_with(
     top_tracks.first(),
     top_artists.first(),
     top_albums.first(),
-    listens.len(),
-    listens.iter().map(|record| record.listened_ms).sum(),
+    listens,
     strings,
   );
   let alt_card = CardData::from_listens(alt_period, alt_listens, strings);
@@ -1425,7 +1608,7 @@ fn render_history_recap_html_with(
     }}
     .card-wrapper {{
       width: 440px;
-      height: 660px;
+      height: 726px;
       display: flex;
       justify-content: center;
       align-items: center;
@@ -1434,20 +1617,20 @@ fn render_history_recap_html_with(
     @media (max-width: 480px) {{
       .card-wrapper {{
         transform: scale(0.8);
-        height: 528px;
+        height: 581px;
         margin-bottom: -40px;
       }}
     }}
     @media (max-width: 380px) {{
       .card-wrapper {{
         transform: scale(0.68);
-        height: 448px;
+        height: 494px;
         margin-bottom: -80px;
       }}
     }}
     .share-card {{
       width: 440px;
-      height: 660px;
+      height: 726px;
       background: var(--card-gradient);
       border: 1px solid rgba(29, 185, 84, 0.22);
       border-radius: 28px;
@@ -1858,7 +2041,7 @@ fn render_history_recap_html_with(
 
             <div class="card-header">
               <span class="card-brand">spota<span style="color:var(--accent)">tui</span></span>
-              <span id="card-period" class="period-badge">{title}</span>
+              <span id="card-period" class="period-badge">{card_badge}</span>
             </div>
             
             <div class="cover-container">
@@ -1893,11 +2076,15 @@ fn render_history_recap_html_with(
                 <span class="stat-label">{top_album}</span>
                 <span id="card-top-album" class="stat-value">{top_album_title}</span>
               </div>
+              <div class="stat-pill full-width">
+                <span class="stat-label">{sources}</span>
+                <span id="card-sources" class="stat-value">{sources_value}</span>
+              </div>
             </div>
             
             <div class="card-footer">
               <span class="card-footer-left">{generated_by}<strong>spotatui</strong></span>
-              <span class="card-footer-right">github.com/LargeModGames/spotatui</span>
+              <span class="card-footer-right">spotatui.com</span>
             </div>
           </div>
         </div>
@@ -1956,8 +2143,8 @@ fn render_history_recap_html_with(
     // requested period first, the toggle alternative second.
     const CARDS = [{card_js}, {alt_card_js}];
     let activeCard = 0;
-    // Cover-art URL per card: undefined = not fetched yet, null = none found.
-    const coverUrls = [undefined, undefined];
+    // Cover-art URL per card, found by spotatui when it made the recap; null = none found.
+    const coverUrls = [CARDS[0].cover, CARDS[1].cover];
 
     function showCoverPlaceholder() {{
       document.getElementById('cover-art-img').style.display = 'none';
@@ -1986,37 +2173,6 @@ fn render_history_recap_html_with(
       }}
     }}
 
-    function loadCoverFor(index) {{
-      if (coverUrls[index] !== undefined) {{
-        applyCover(index);
-        return;
-      }}
-      const card = CARDS[index];
-      if (!card.track || card.track === {no_data_js}) {{
-        coverUrls[index] = null;
-        applyCover(index);
-        return;
-      }}
-      // Clean parentheses or bracket noise for high search precision
-      const cleanTitle = card.track.replace(/\([^)]*\)/g, '').replace(/\[[^\]]*\]/g, '').trim();
-      const query = encodeURIComponent(`${{cleanTitle}} ${{card.artist}}`);
-      const url = `https://itunes.apple.com/search?term=${{query}}&limit=1&entity=song`;
-
-      fetch(url)
-        .then(res => res.json())
-        .then(data => {{
-          coverUrls[index] = (data.results && data.results.length > 0)
-            ? data.results[0].artworkUrl100.replace('100x100bb', '600x600bb')
-            : null;
-          if (activeCard === index) applyCover(index);
-        }})
-        .catch(err => {{
-          console.error('Error fetching cover art:', err);
-          coverUrls[index] = null;
-          if (activeCard === index) applyCover(index);
-        }});
-    }}
-
     function setActiveCard(index) {{
       activeCard = index;
       const card = CARDS[index];
@@ -2029,11 +2185,12 @@ fn render_history_recap_html_with(
       document.getElementById('card-time').textContent = card.time;
       document.getElementById('card-top-artist').textContent = card.topArtist;
       document.getElementById('card-top-album').textContent = card.topAlbum;
-      loadCoverFor(index);
+      document.getElementById('card-sources').textContent = card.sources;
+      applyCover(index);
     }}
 
     document.addEventListener('DOMContentLoaded', () => {{
-      loadCoverFor(0);
+      applyCover(0);
     }});
 
     // ── Share-card renderer ────────────────────────────────────────────────
@@ -2041,7 +2198,7 @@ fn render_history_recap_html_with(
     // deterministic output, works offline.
     const CANVAS_SCALE = 3;
     const CARD_W = 440;
-    const CARD_H = 660;
+    const CARD_H = 726;
     const ACCENT = '#1db954';
     const TEXT = '#f1f5f9';
     const MUTED = '#94a3b8';
@@ -2192,21 +2349,22 @@ fn render_history_recap_html_with(
       drawStatPill(ctx, 32 + pillW + 12, 424, pillW, 54, {listening_time_js}, card.time);
       drawStatPill(ctx, 32, 490, CARD_W - 64, 54, {top_artist_js}, card.topArtist);
       drawStatPill(ctx, 32, 556, CARD_W - 64, 54, {top_album_js}, card.topAlbum);
+      drawStatPill(ctx, 32, 622, CARD_W - 64, 54, {sources_js}, card.sources);
 
       // Footer
       ctx.strokeStyle = 'rgba(255, 255, 255, 0.04)';
       ctx.beginPath();
-      ctx.moveTo(32, 622);
-      ctx.lineTo(CARD_W - 32, 622);
+      ctx.moveTo(32, 688);
+      ctx.lineTo(CARD_W - 32, 688);
       ctx.stroke();
       ctx.textAlign = 'left';
       ctx.fillStyle = MUTED;
       ctx.font = '400 11px "Plus Jakarta Sans", sans-serif';
-      ctx.fillText({generated_by_product_js}, 32, 642);
+      ctx.fillText({generated_by_product_js}, 32, 708);
       ctx.textAlign = 'right';
       ctx.fillStyle = ACCENT;
       ctx.font = '400 11px "JetBrains Mono", monospace';
-      ctx.fillText('github.com/LargeModGames/spotatui', CARD_W - 32, 642);
+      ctx.fillText('spotatui.com', CARD_W - 32, 708);
       ctx.restore();
 
       // Card border on top of everything
@@ -2278,9 +2436,9 @@ fn render_history_recap_html_with(
     listening_time_js = js_single_string(strings.recap.listening_time),
     top_artist_js = js_single_string(strings.recap.top_artist),
     top_album_js = js_single_string(strings.recap.top_album),
+    sources_js = js_single_string(strings.recap.sources),
     generated_by_product_js = js_single_string(strings.recap.generated_by_product),
     render_failed_js = js_single_string(strings.recap.render_failed),
-    no_data_js = js_single_string(strings.recap.no_data),
     language = escape_html(strings.recap.language),
     title = escape_html(period_label_with(period, strings)),
     summary = escape_html(if listens.is_empty() {
@@ -2295,8 +2453,11 @@ fn render_history_recap_html_with(
     top_track_artist = escape_html(&card.track_artist),
     top_artist_name = escape_html(&card.top_artist),
     top_album_title = escape_html(&card.top_album),
-    card_js = card.to_js_object(strings),
-    alt_card_js = alt_card.to_js_object(strings),
+    sources = escape_html(strings.recap.sources),
+    sources_value = escape_html(&card.sources),
+    card_badge = escape_html(&card.badge),
+    card_js = card.to_js_object(covers[0].as_deref()),
+    alt_card_js = alt_card.to_js_object(covers[1].as_deref()),
     top_tracks_html = render_ranked_entries(&top_tracks, strings.recap.no_tracks, true),
     top_artists_html = render_ranked_entries(&top_artists, strings.recap.no_artists, false),
     top_albums_html = render_ranked_entries(&top_albums, strings.recap.no_albums, false),
@@ -3734,11 +3895,11 @@ mod tests {
   #[test]
   fn english_recap_html_keeps_the_original_bytes() {
     let html = render_history_recap_html(RecapPeriod::All, &[], RecapPeriod::ThirtyDays, &[]);
-    // FNV-1a of the complete pre-localization empty export, including JS and CSS.
+    // FNV-1a of the complete empty English export, including JS and CSS.
     let hash = html.bytes().fold(0xcbf29ce484222325u64, |hash, byte| {
       (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
     });
-    assert_eq!(hash, 0x1b2a30a5f7841662);
+    assert_eq!(hash, 0x7de5edea84d0cf66);
   }
 
   #[test]
@@ -3760,6 +3921,7 @@ mod tests {
       &[],
       RecapPeriod::ThirtyDays,
       &[],
+      [None, None],
       &strings,
     );
     assert!(html.contains("<p>回顾</p>"));
@@ -3848,6 +4010,153 @@ mod tests {
     assert!(html.contains("plays: 2,"));
   }
 
+  fn record_from(uri: Option<&str>) -> ListenRecord {
+    let mut record = record_at(3, 60_000, true);
+    record.item_uri = uri.map(str::to_string);
+    record
+  }
+
+  #[test]
+  fn the_card_names_the_three_services_with_the_most_listens() {
+    let mut listens: Vec<ListenRecord> = (0..150)
+      .map(|_| record_from(Some("spotify:track:a")))
+      .collect();
+    listens.extend((0..48).map(|_| record_from(Some("qobuz:track:1"))));
+    listens.extend((0..2).map(|_| record_from(Some("youtube:video:x"))));
+    listens.push(record_from(Some("file:///music/a.flac")));
+    listens.push(record_from(Some("dlna:item:9")));
+    listens.push(record_from(None));
+
+    assert_eq!(
+      source_shares(&listens, &crate::core::i18n::EN),
+      "Spotify 74% · Qobuz 23% · YouTube <1%"
+    );
+  }
+
+  #[test]
+  fn the_card_shows_no_data_for_listens_without_a_known_service() {
+    assert_eq!(source_shares(&[], &crate::core::i18n::EN), "No data");
+    assert_eq!(
+      source_shares(&[record_from(None)], &crate::core::i18n::EN),
+      "No data"
+    );
+  }
+
+  #[test]
+  fn the_year_card_shows_the_year_and_the_others_the_period_name() {
+    let listens = [record_at(3, 60_000, true)];
+    let strings = &crate::core::i18n::EN;
+
+    assert_eq!(card_badge(RecapPeriod::Year, &listens, strings), "2026");
+    assert_eq!(card_badge(RecapPeriod::Year, &[], strings), "This Year");
+    assert_eq!(
+      card_badge(RecapPeriod::ThirtyDays, &listens, strings),
+      "Last 30 Days"
+    );
+  }
+
+  #[test]
+  fn the_share_card_has_the_sources_and_the_site_in_the_page_and_on_the_canvas() {
+    let listens = [record_at(3, 60_000, true)];
+    let html = render_history_recap_html(RecapPeriod::Year, &listens, RecapPeriod::All, &listens);
+
+    assert!(html.contains(r#"<span id="card-sources" class="stat-value">Spotify 100%</span>"#));
+    assert!(html.contains(r#"sources: "Spotify 100%""#));
+    assert!(html.contains("54, 'Sources', card.sources);"));
+    assert!(html.contains(r#"<span id="card-period" class="period-badge">2026</span>"#));
+    assert!(html.contains(r#"period: "2026", track:"#));
+    assert!(html.contains(r#"<span class="card-footer-right">spotatui.com</span>"#));
+    assert!(html.contains("ctx.fillText('spotatui.com', CARD_W - 32, 708);"));
+    // The page card, its wrapper and the canvas share one height.
+    assert_eq!(html.matches("height: 726px;").count(), 2);
+    assert!(html.contains("const CARD_H = 726;"));
+    assert!(!html.contains("660"));
+    assert!(!html.contains("github.com/LargeModGames"));
+  }
+
+  #[test]
+  fn the_cover_search_term_drops_bracketed_notes() {
+    assert_eq!(
+      cover_search_term("Firestone (feat. Conrad Sewell) [Live]", "Kygo"),
+      "Firestone Kygo"
+    );
+    assert_eq!(cover_search_term("Plain", ""), "Plain");
+  }
+
+  /// Answers one HTTP request with `body` and returns the request line it got.
+  fn serve_once(body: &'static str) -> (String, std::thread::JoinHandle<String>) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/search", listener.local_addr().unwrap());
+    let server = std::thread::spawn(move || {
+      let (mut stream, _) = listener.accept().unwrap();
+      let mut request = [0u8; 2048];
+      let read = stream.read(&mut request).unwrap();
+      write!(
+        stream,
+        "HTTP/1.1 200 OK\r\nContent-Type: text/javascript\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(),
+        body
+      )
+      .unwrap();
+      String::from_utf8_lossy(&request[..read])
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .to_string()
+    });
+    (url, server)
+  }
+
+  #[test]
+  fn the_recap_card_gets_the_cover_of_the_top_track_from_the_search() {
+    let (url, server) = serve_once(
+      r#"{"resultCount":1,"results":[{"artworkUrl100":"https://img.test/a/100x100bb.jpg"}]}"#,
+    );
+    let mut record = record_at(20, 120_000, true);
+    record.title = "Song (Radio Edit)".to_string();
+
+    let cover = top_track_cover(&[record], &crate::core::i18n::EN, &url);
+
+    assert_eq!(cover.as_deref(), Some("https://img.test/a/600x600bb.jpg"));
+    assert_eq!(
+      server.join().unwrap(),
+      "GET /search?term=Song+Artist&limit=1&entity=song HTTP/1.1"
+    );
+  }
+
+  #[test]
+  fn the_recap_card_has_no_cover_when_the_search_finds_nothing() {
+    let (url, server) = serve_once(r#"{"resultCount":0,"results":[]}"#);
+
+    let cover = top_track_cover(
+      &[record_at(20, 120_000, true)],
+      &crate::core::i18n::EN,
+      &url,
+    );
+
+    assert_eq!(cover, None);
+    server.join().unwrap();
+    assert_eq!(top_track_cover(&[], &crate::core::i18n::EN, &url), None);
+  }
+
+  #[test]
+  fn the_recap_page_takes_the_cover_from_the_card_data() {
+    let records = [record_at(20, 120_000, true)];
+    let html = render_history_recap_html_with(
+      RecapPeriod::All,
+      &records,
+      RecapPeriod::ThirtyDays,
+      &[],
+      [Some("https://img.test/a/600x600bb.jpg".to_string()), None],
+      &crate::core::i18n::EN,
+    );
+
+    assert!(html.contains(r#"cover: "https://img.test/a/600x600bb.jpg" }"#));
+    assert!(html.contains("cover: null }"));
+    assert!(html.contains("const coverUrls = [CARDS[0].cover, CARDS[1].cover];"));
+    assert!(!html.contains("fetch("));
+  }
+
   #[test]
   fn js_string_round_trips_special_characters() {
     assert_eq!(js_string("plain"), r#""plain""#);
@@ -3869,15 +4178,25 @@ mod tests {
       let app = Arc::new(Mutex::new(state));
       perform_auto_recap_check_with(
         &app,
-        stamp.clone(),
-        output.clone(),
-        Utc::now(),
+        AutoRecap {
+          stamp_path: stamp.clone(),
+          year: None,
+          output_path: output.clone(),
+          now: Utc::now(),
+        },
         move |period, path, active| {
           assert!(std::ptr::eq(active, strings));
           assert_eq!(period, RecapPeriod::ThirtyDays);
           fs::write(
             path,
-            render_history_recap_html_with(period, &[], RecapPeriod::All, &[], active),
+            render_history_recap_html_with(
+              period,
+              &[],
+              RecapPeriod::All,
+              &[],
+              [None, None],
+              active,
+            ),
           )?;
           Ok(1)
         },
@@ -3888,6 +4207,73 @@ mod tests {
       assert!(stamp.exists());
       assert!(app.lock().await.recap_prompt().is_some());
     }
+  }
+
+  #[test]
+  fn the_year_recap_is_offered_once_in_december() {
+    let day = |year, month, day| NaiveDate::from_ymd_opt(year, month, day).unwrap();
+
+    assert_eq!(year_recap_due(None, day(2026, 11, 30)), None);
+    assert_eq!(year_recap_due(None, day(2026, 12, 1)), Some(2026));
+    assert_eq!(year_recap_due(Some("2025"), day(2026, 12, 31)), Some(2026));
+    assert_eq!(
+      year_recap_due(Some("not a year"), day(2026, 12, 5)),
+      Some(2026)
+    );
+    assert_eq!(year_recap_due(Some("2026\n"), day(2026, 12, 5)), None);
+    assert_eq!(year_recap_due(Some("2026"), day(2027, 1, 1)), None);
+  }
+
+  #[tokio::test]
+  async fn the_december_recap_covers_the_year_and_records_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let output = dir.path().join("recap.html");
+    let stamp = dir.path().join("last-recap");
+    let year_stamp = dir.path().join("last-year-recap");
+    let app = Arc::new(Mutex::new(App::default()));
+
+    perform_auto_recap_check_with(
+      &app,
+      AutoRecap {
+        stamp_path: stamp.clone(),
+        year: Some((2026, year_stamp.clone())),
+        output_path: output.clone(),
+        now: Utc::now(),
+      },
+      |period, _, _| {
+        assert_eq!(period, RecapPeriod::Year);
+        Ok(321)
+      },
+    )
+    .await;
+
+    assert_eq!(fs::read_to_string(&year_stamp).unwrap(), "2026");
+    assert!(stamp.exists());
+    let app = app.lock().await;
+    let prompt = app.recap_prompt().unwrap();
+    assert_eq!((prompt.year, prompt.listens), (Some(2026), 321));
+  }
+
+  #[tokio::test]
+  async fn an_empty_year_recap_is_not_offered_and_stays_due() {
+    let dir = tempfile::tempdir().unwrap();
+    let year_stamp = dir.path().join("last-year-recap");
+    let app = Arc::new(Mutex::new(App::default()));
+
+    perform_auto_recap_check_with(
+      &app,
+      AutoRecap {
+        stamp_path: dir.path().join("last-recap"),
+        year: Some((2026, year_stamp.clone())),
+        output_path: dir.path().join("recap.html"),
+        now: Utc::now(),
+      },
+      |_, _, _| Ok(0),
+    )
+    .await;
+
+    assert!(!year_stamp.exists());
+    assert!(app.lock().await.recap_prompt().is_none());
   }
 
   #[test]

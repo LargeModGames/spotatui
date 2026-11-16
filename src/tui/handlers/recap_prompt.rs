@@ -25,6 +25,7 @@ mod tests {
     app.show_recap_prompt(RecapPromptState {
       path: PathBuf::from("recap.html"),
       listens: 42,
+      year: None,
     });
     app
   }

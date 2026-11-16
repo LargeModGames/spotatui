@@ -3984,6 +3984,25 @@ fn dismiss_announcement_persists_it_as_seen_and_shows_the_next_until_none_is_lef
 }
 
 #[test]
+fn an_announcement_dismissed_under_the_recap_popup_leaves_no_prompt_frame() {
+  let (mut app, _rx, _dir) = announcement_app();
+  let depth = app.navigation_depth();
+  app.show_recap_prompt(crate::core::app::RecapPromptState {
+    path: std::path::PathBuf::from("recap.html"),
+    listens: 1,
+    year: None,
+  });
+
+  for id in ["first", "second"] {
+    app.apply(Action::DismissAnnouncement { id: id.to_string() });
+  }
+  assert_eq!(app.get_current_route().id, RouteId::RecapPrompt);
+  app.apply(Action::DismissRecapPrompt);
+
+  assert_eq!(app.navigation_depth(), depth - 1);
+}
+
+#[test]
 fn dismiss_announcement_with_an_id_that_is_not_active_changes_nothing() {
   let (mut app, _rx, dir) = announcement_app();
   let rev = app.display_revisions().get(DisplayDomain::Announcement);

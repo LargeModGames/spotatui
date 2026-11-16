@@ -206,13 +206,16 @@ fn remove_plugin(config_dir: &Path, name: &str) -> Result<()> {
   let dest = config_dir.join("plugins").join(name);
 
   let was_tracked = lock.remove(name);
-  let existed_on_disk = dest.is_dir();
+  let is_dir = dest.is_dir();
+  let is_lua_file = dest.is_file() && dest.extension().and_then(|x| x.to_str()) == Some("lua");
 
-  if !was_tracked && !existed_on_disk {
+  if !was_tracked && !is_dir && !is_lua_file {
     bail!("no plugin named '{name}' is installed");
   }
-  if existed_on_disk {
+  if is_dir {
     std::fs::remove_dir_all(&dest).with_context(|| format!("removing {}", dest.display()))?;
+  } else if is_lua_file {
+    std::fs::remove_file(&dest).with_context(|| format!("removing {}", dest.display()))?;
   }
   if was_tracked {
     save_lock(&lock_path, &lock)?;
@@ -807,5 +810,70 @@ mod tests {
     );
 
     let _ = std::fs::remove_dir_all(&dir);
+  }
+
+  #[test]
+  fn plugin_remove_deletes_a_single_file_plugin() {
+    let dir = tempfile::tempdir().unwrap();
+    let plugins_dir = dir.path().join("plugins");
+    std::fs::create_dir_all(&plugins_dir).unwrap();
+    let file = plugins_dir.join("flat.lua");
+    std::fs::write(&file, "-- single-file plugin").unwrap();
+
+    let listed = untracked_plugins(&plugins_dir, &[]);
+    assert_eq!(listed, vec!["flat.lua"]);
+    remove_plugin(dir.path(), &listed[0]).unwrap();
+
+    assert!(!file.exists());
+  }
+
+  #[test]
+  fn plugin_remove_keeps_a_loose_file_that_is_not_lua() {
+    let dir = tempfile::tempdir().unwrap();
+    let plugins_dir = dir.path().join("plugins");
+    std::fs::create_dir_all(&plugins_dir).unwrap();
+    let file = plugins_dir.join("notes.txt");
+    std::fs::write(&file, "keep this file").unwrap();
+
+    let error = remove_plugin(dir.path(), "notes.txt").unwrap_err();
+
+    assert_eq!(
+      error.to_string(),
+      "no plugin named 'notes.txt' is installed"
+    );
+    assert_eq!(std::fs::read_to_string(file).unwrap(), "keep this file");
+  }
+
+  #[test]
+  fn plugin_remove_deletes_a_tracked_directory_plugin() {
+    let dir = tempfile::tempdir().unwrap();
+    let plugin_dir = dir.path().join("plugins").join("folder");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    std::fs::write(plugin_dir.join("main.lua"), "-- directory plugin").unwrap();
+    let mut lock = PluginLock::default();
+    lock.upsert(LockedPlugin {
+      name: "folder".into(),
+      repo: "owner/folder".into(),
+      url: "https://example.invalid/folder.git".into(),
+      rev: "abcdef1".into(),
+    });
+    save_lock(&lock_path(dir.path()), &lock).unwrap();
+
+    remove_plugin(dir.path(), "folder").unwrap();
+
+    assert!(!plugin_dir.exists());
+    assert!(load_lock(&lock_path(dir.path()))
+      .unwrap()
+      .plugins
+      .is_empty());
+  }
+
+  #[test]
+  fn plugin_remove_reports_a_missing_plugin() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let error = remove_plugin(dir.path(), "missing").unwrap_err();
+
+    assert_eq!(error.to_string(), "no plugin named 'missing' is installed");
   }
 }

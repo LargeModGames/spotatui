@@ -14,6 +14,7 @@ describe("Toast", () => {
       api_error: "Spotify refused the request",
       soloist_pairing: null,
       soloist_offer: null,
+      recap_prompt: null,
     });
     expect(html).toContain(
       '<div class="sr-only" role="alert">Spotify refused the request</div>',
@@ -30,6 +31,7 @@ describe("Toast", () => {
         api_error: null,
         soloist_pairing: null,
         soloist_offer: null,
+        recap_prompt: null,
       }),
     ).toContain('<div class="toast error"><span>No device</span>');
     const empty = toast(null);

@@ -120,6 +120,8 @@ spotatui history recap --period 30d --output recap.html
 | `--period <PERIOD>` | `7d`, `30d` (default), `month`, `year` or `all` |
 | `-o, --output <PATH>` | Output file (default `spotatui-recap.html`) |
 
+For the covers on the share card, spotatui sends the title and the artist of two top tracks to Apple's iTunes search when it makes the recap: the top track of the period you asked for, and the top track of the other period on the card (All Time, or Last 30 Days for an All Time recap). Without a network, the card keeps a placeholder.
+
 ## `mcp`
 
 The MCP server for coding agents (mcp-server builds, which include every prebuilt terminal binary; the desktop app has no `spotatui mcp`). `spotatui mcp` is the stdio server an agent starts; `spotatui mcp status` checks the setup and exits non-zero when it is not ready (`--json` for machine-readable output). See [MCP setup](mcp-setup.md).
