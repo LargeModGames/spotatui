@@ -13,8 +13,8 @@ use std::path::{Path, PathBuf};
 
 const FILE_NAME: &str = "playlist_sync.yml";
 
-/// Environment override for the playlist-sync file location (used by tests, and
-/// available to users who keep their state elsewhere).
+/// Environment override for users who keep their state elsewhere.
+/// Ignored in tests, which pass temporary paths directly.
 pub const PATH_ENV: &str = "SPOTATUI_PLAYLIST_SYNC_PATH";
 
 /// The schema this build writes, and the highest it can read.
@@ -85,7 +85,7 @@ impl PlaylistSyncFile {
 /// `<state dir>/playlist_sync.yml`.
 pub fn default_path() -> Result<PathBuf> {
   default_path_with(
-    std::env::var(PATH_ENV).ok(),
+    crate::core::paths::path_override(PATH_ENV).and_then(|value| value.into_string().ok()),
     crate::core::paths::app_state_dir(),
   )
 }

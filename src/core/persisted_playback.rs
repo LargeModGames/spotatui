@@ -52,8 +52,8 @@ pub struct PersistedSession {
   pub queue: Vec<TrackInfo>,
 }
 
-/// Environment override for the session file location (used by tests, and
-/// available to users who keep their config elsewhere).
+/// Environment override for users who keep their session elsewhere.
+/// Ignored in tests, which pass temporary paths directly.
 pub const PATH_ENV: &str = "SPOTATUI_LAST_SESSION_PATH";
 
 /// A snapshot of the non-Spotify playback session, enough to resume it on the
@@ -129,7 +129,9 @@ pub enum PersistedPlayback {
 /// Location of the session file: `$SPOTATUI_LAST_SESSION_PATH` when set, else
 /// `<state dir>/last_session.yml`.
 pub fn default_session_path() -> Result<PathBuf> {
-  if let Ok(path) = std::env::var(PATH_ENV) {
+  if let Some(path) =
+    crate::core::paths::path_override(PATH_ENV).and_then(|value| value.into_string().ok())
+  {
     return Ok(PathBuf::from(path));
   }
   crate::core::paths::app_state_dir()
