@@ -1001,7 +1001,7 @@ pub const EN: InfraStatusStrings = InfraStatusStrings {
   spotify_rate_wait: "Spotify rate limit: waiting {seconds}s",
   spotify_pair: "Log in to Spotify: open {url} and confirm the code {code}",
   recap_created: "Listening recap generated at {path} ({count} listens)",
-  history_failed: "failed to load listening history: {error}",
+  history_failed: "Failed to load listening history: {error}",
   recap_failed: "Failed to generate recap: {error}",
   party_start_failed: "Failed to start party: {error}",
   party_join_failed: "Failed to join party: {error}",

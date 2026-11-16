@@ -157,3 +157,23 @@ fn the_soloist_quality_choices_read_in_the_language_without_changing_the_stored_
   assert_eq!(ZH_HANS.settings.option_label(id, "Very high"), "极高");
   assert_eq!(ZH_HANT.settings.option_label(id, "Lossless"), "無損");
 }
+
+#[test]
+fn english_status_messages_start_with_a_capital_letter_and_spell_id_in_capitals() {
+  let app = EN.status.app;
+  for message in [
+    app.dj_keep_brain.to_owned(),
+    app.clipboard_set_failed("x"),
+    EN.status.infra.history_failed("x"),
+  ] {
+    assert!(message.starts_with(char::is_uppercase), "{message}");
+  }
+  for message in [
+    app.queued_no_album,
+    app.playing_no_artist,
+    app.queued_no_artist,
+    app.playback_device_no_id,
+  ] {
+    assert!(message.contains("ID") && !message.contains(" id"), "{message}");
+  }
+}
