@@ -1,0 +1,1 @@
+- Slow Subsonic and other source playlist loads now leave newer track lists in place.

@@ -86,7 +86,7 @@ mod tests {
     handler(Key::Enter, &mut app);
 
     match rx.try_recv() {
-      Ok(IoEvent::GetLocalTracks(uri)) => assert_eq!(uri, "file:///music/second"),
+      Ok(IoEvent::GetLocalTracks(uri, _)) => assert_eq!(uri, "file:///music/second"),
       _ => panic!("expected GetLocalTracks for the selected folder"),
     }
   }

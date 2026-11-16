@@ -240,6 +240,11 @@ impl QobuzSource {
     }
   }
 
+  /// The login token this source sends.
+  pub(super) fn token(&self) -> &str {
+    &self.token
+  }
+
   #[cfg(test)]
   fn with_base(base: impl Into<String>) -> Self {
     QobuzSource {
