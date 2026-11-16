@@ -174,6 +174,9 @@ fn english_status_messages_start_with_a_capital_letter_and_spell_id_in_capitals(
     app.queued_no_artist,
     app.playback_device_no_id,
   ] {
-    assert!(message.contains("ID") && !message.contains(" id"), "{message}");
+    assert!(
+      message.contains("ID") && !message.contains(" id"),
+      "{message}"
+    );
   }
 }
