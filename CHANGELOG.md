@@ -4,6 +4,7 @@
 
 ### Added
 
+- **Pin playlists in your library**: press `t` on a Spotify sidebar playlist, or choose Pin to top in the GUI's Your Library menu. Pins are saved on this computer and stay below the community playlist, in pin order, ahead of folders and the chosen sidebar sort. A complete refresh removes missing pins only for the account that created them. The new default key reserves `t` from plugin commands; rebind `pin_playlist` to keep an existing plugin on `t` ([#863](https://github.com/LargeModGames/spotatui/issues/863)).
 - **A recap of the year in December**: from 1 December the terminal app offers the recap of the whole year once, in the popup that offers the monthly recap. The year popup also counts as that month's, and `enable_monthly_recap_prompt: false` turns both off. `spotatui history recap --period year` makes the same recap on any day.
 - **The recap popup in the desktop app and the browser GUI**: when the monthly recap or the December recap of the year is ready, the GUI now shows it in a dialog with Open, Later and Don't show this again. Before, only the terminal app showed the popup.
 - **The recap share card shows where you listened**: a Sources line names the three services with the most plays and their share, such as "Spotify 78% · Qobuz 21% · YouTube <1%", from the history spotatui already keeps. The card of the year recap shows the year in its badge, and the card footer names `spotatui.com`.

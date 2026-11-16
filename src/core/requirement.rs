@@ -35,6 +35,8 @@ pub enum Requirement {
   Capability(Capability),
   /// The browse scope must be this source; for Spotify, with a session.
   Source(Source),
+  /// Only the browse scope, with no login needed for local library state.
+  BrowseSource(Source),
   /// Met when any one is met; unmet, it reports the first one.
   AnyOf(&'static [Requirement]),
 }
@@ -106,6 +108,13 @@ pub fn availability(
         Availability::Available
       }
     }
+    Requirement::BrowseSource(required) => {
+      if source == required {
+        Availability::Available
+      } else {
+        Availability::OnlyForSource(required)
+      }
+    }
     Requirement::AnyOf(options) => options
       .iter()
       .map(|option| availability(*option, source, spotify_connected))
@@ -122,6 +131,23 @@ pub fn availability(
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn local_library_state_needs_the_browse_source_without_a_session() {
+    for source in Source::ALL {
+      for connected in [false, true] {
+        assert_eq!(
+          availability(
+            Requirement::BrowseSource(Source::Spotify),
+            source,
+            connected
+          )
+          .is_available(),
+          source == Source::Spotify,
+        );
+      }
+    }
+  }
 
   #[test]
   fn no_requirement_is_always_available() {

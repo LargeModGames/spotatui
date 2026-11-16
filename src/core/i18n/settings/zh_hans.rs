@@ -197,6 +197,8 @@ pub const ZH_HANS: SettingsStrings = SettingsStrings {
   keys_remove_from_queue_description: "从队列中移除所选曲目",
   keys_like_track_name: "喜欢曲目",
   keys_like_track_description: "切换当前播放曲目或单集的收藏状态",
+  keys_pin_playlist_name: "置顶/取消置顶播放列表",
+  keys_pin_playlist_description: "在此设备上置顶或取消置顶侧栏选中的 Spotify 播放列表",
   keys_generate_recap_name: "生成听歌回顾",
   keys_generate_recap_description: "生成并打开听歌回顾 HTML 卡片（统计页使用所选时间段，其他页面使用 30 天）",
   keys_copy_song_url_name: "复制歌曲 URL",

@@ -14,6 +14,9 @@ pub struct AppStatusStrings {
 
   pub loading_playlist: &'static str,
   pub community_pin_hidden: &'static str,
+  pub playlist_pinned: &'static str,
+  pub playlist_unpinned: &'static str,
+  pub playlist_pin_limit: &'static str,
   pub native_disconnected: &'static str,
   pub native_reconnecting: &'static str,
   pub native_request_expired: &'static str,
@@ -145,6 +148,9 @@ pub const EN: AppStatusStrings = AppStatusStrings {
 
   loading_playlist: "Loading playlist…",
   community_pin_hidden: "Community playlist pin hidden (re-enable in Settings)",
+  playlist_pinned: "Pinned {name}",
+  playlist_unpinned: "Unpinned {name}",
+  playlist_pin_limit: "You can pin up to {max} playlists",
   native_disconnected: "Native streaming disconnected; attempting recovery.",
   native_reconnecting: "Reconnecting native streaming…",
   native_request_expired: "Playback request expired during native recovery.",
@@ -279,6 +285,9 @@ pub const ZH_HANS: AppStatusStrings = AppStatusStrings {
 
   loading_playlist: "正在加载播放列表…",
   community_pin_hidden: "已隐藏社区播放列表置顶（可在设置中重新开启）",
+  playlist_pinned: "已置顶 {name}",
+  playlist_unpinned: "已取消置顶 {name}",
+  playlist_pin_limit: "最多可置顶 {max} 个播放列表",
   native_disconnected: "内置播放已断开，正在尝试恢复。",
   native_reconnecting: "正在重新连接内置播放…",
   native_request_expired: "等待内置播放恢复时，播放请求已过期。",
@@ -414,6 +423,9 @@ pub const ZH_HANT: AppStatusStrings = AppStatusStrings {
 
   loading_playlist: "正在載入播放清單…",
   community_pin_hidden: "已隱藏社群播放清單置頂（可在設定中重新開啟）",
+  playlist_pinned: "已置頂 {name}",
+  playlist_unpinned: "已取消置頂 {name}",
+  playlist_pin_limit: "最多可置頂 {max} 個播放清單",
   native_disconnected: "內建串流已中斷，正在嘗試恢復。",
   native_reconnecting: "正在重新連線內建串流…",
   native_request_expired: "播放要求在內建串流恢復期間已過期。",
@@ -557,6 +569,15 @@ impl AppStatusStrings {
   }
   pub fn audio_backend_failed(&self, error: &str) -> String {
     super::format_template(self.audio_backend_failed, &[("error", error)])
+  }
+  pub fn playlist_pinned(&self, name: &str) -> String {
+    super::format_template(self.playlist_pinned, &[("name", name)])
+  }
+  pub fn playlist_unpinned(&self, name: &str) -> String {
+    super::format_template(self.playlist_unpinned, &[("name", name)])
+  }
+  pub fn playlist_pin_limit(&self, max: usize) -> String {
+    super::format_template(self.playlist_pin_limit, &[("max", &max.to_string())])
   }
   pub fn friend_code_copied(&self, code: &str) -> String {
     crate::core::i18n::format_template(self.friend_code_copied, &[("code", code)])

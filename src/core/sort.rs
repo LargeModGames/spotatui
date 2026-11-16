@@ -221,6 +221,47 @@ impl SidebarPlaylistOrder {
 /// maintained as the history collector appends records.
 pub type PlaylistLastListens = BTreeMap<String, DateTime<Utc>>;
 
+/// Loaded pins, in pin order, without unknown or duplicate URIs.
+pub fn present_pins(pins: &[String], known: impl Fn(&str) -> bool) -> Vec<&str> {
+  let mut seen = std::collections::HashSet::new();
+  pins
+    .iter()
+    .map(String::as_str)
+    .filter(|uri| known(uri) && seen.insert(*uri))
+    .collect()
+}
+
+/// Lift pins above the ordinary order, removing their original root rows.
+pub fn pinned_first<T>(mut pinned: Vec<T>, rest: Vec<T>, is_pinned: impl Fn(&T) -> bool) -> Vec<T> {
+  pinned.extend(rest.into_iter().filter(|item| !is_pinned(item)));
+  pinned
+}
+
+#[cfg(test)]
+mod pin_tests {
+  use super::*;
+
+  #[test]
+  fn present_pins_keeps_pin_order_and_drops_unknown_and_duplicate_uris() {
+    let pins = ["b", "gone", "a", "b"].map(String::from);
+    assert_eq!(
+      present_pins(&pins, |uri| ["a", "b"].contains(&uri)),
+      ["b", "a"]
+    );
+  }
+
+  #[test]
+  fn pinned_first_prepends_pins_and_removes_them_from_the_rest() {
+    assert_eq!(
+      pinned_first(vec!["b", "a"], vec!["a", "folder", "b", "c"], |item| [
+        "a", "b"
+      ]
+      .contains(item)),
+      ["b", "a", "folder", "c"]
+    );
+  }
+}
+
 /// Reorder only playlist slots at one folder level. Folders, back rows and pins
 /// keep their positions. Stable ties (including never-played playlists) keep the
 /// rootlist order supplied by the caller, in either frontend.

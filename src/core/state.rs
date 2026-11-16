@@ -3,7 +3,7 @@
 //! This is the machine-owned counterpart to `config.yml`. It holds values that
 //! change as the app runs, or data the app manages directly, so ordinary config
 //! edits do not churn every time volume, source, pane sizes, announcements, or
-//! radio stations change.
+//! radio stations or playlist pins change.
 
 use crate::core::{
   gui_layout::GuiLayout,
@@ -14,9 +14,28 @@ use crate::core::{
 };
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::{
+  collections::BTreeMap,
+  path::{Path, PathBuf},
+};
 
 const FILE_NAME: &str = "state.yml";
+pub(crate) const MAX_PINNED_PLAYLISTS: usize = 100;
+
+/// A pin patch would exceed the latest saved list's capacity.
+#[derive(Debug)]
+pub(crate) struct PlaylistPinLimitReached;
+
+impl std::fmt::Display for PlaylistPinLimitReached {
+  fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    write!(
+      formatter,
+      "You can pin up to {MAX_PINNED_PLAYLISTS} playlists"
+    )
+  }
+}
+
+impl std::error::Error for PlaylistPinLimitReached {}
 
 /// One saved internet-radio station: a display name plus the direct stream URL.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -56,6 +75,10 @@ pub struct RuntimeState {
   pub shuffle_enabled: bool,
   pub active_source: Source,
   pub playlist_sidebar_order: SidebarPlaylistOrder,
+  /// Locally pinned Spotify playlist URIs, in the order they were pinned.
+  pub pinned_playlists: Vec<String>,
+  /// Account that created each pin. Missing ownership never permits pruning.
+  pub playlist_pin_accounts: BTreeMap<String, String>,
   pub seen_announcement_ids: Vec<String>,
   pub dismissed_announcements: Vec<String>,
   pub sidebar_width_percent: u8,
@@ -79,6 +102,8 @@ impl Default for RuntimeState {
       shuffle_enabled: false,
       active_source: Source::default(),
       playlist_sidebar_order: SidebarPlaylistOrder::Spotify,
+      pinned_playlists: Vec::new(),
+      playlist_pin_accounts: BTreeMap::new(),
       seen_announcement_ids: Vec::new(),
       dismissed_announcements: Vec::new(),
       sidebar_width_percent: 20,
@@ -107,6 +132,12 @@ impl RuntimeState {
     }
     if let Some(playlist_sidebar_order) = state.playlist_sidebar_order {
       self.playlist_sidebar_order = playlist_sidebar_order;
+    }
+    if let Some(pinned_playlists) = &state.pinned_playlists {
+      self.pinned_playlists = sanitized_pins(pinned_playlists);
+    }
+    if let Some(accounts) = &state.playlist_pin_accounts {
+      self.playlist_pin_accounts = sanitized_pin_accounts(accounts, &self.pinned_playlists);
     }
     if let Some(seen_announcement_ids) = &state.seen_announcement_ids {
       self.seen_announcement_ids = sanitized_ids(seen_announcement_ids);
@@ -150,6 +181,11 @@ impl RuntimeState {
       shuffle_enabled: Some(self.shuffle_enabled),
       active_source: Some(self.active_source),
       playlist_sidebar_order: Some(self.playlist_sidebar_order),
+      pinned_playlists: Some(sanitized_pins(&self.pinned_playlists)),
+      playlist_pin_accounts: Some(sanitized_pin_accounts(
+        &self.playlist_pin_accounts,
+        &self.pinned_playlists,
+      )),
       seen_announcement_ids: Some(sanitized_ids(&self.seen_announcement_ids)),
       dismissed_announcements: Some(sanitized_ids(&self.dismissed_announcements)),
       sidebar_width_percent: Some(self.sidebar_width_percent.min(100)),
@@ -251,6 +287,10 @@ pub struct PersistedRuntimeState {
   )]
   pub playlist_sidebar_order: Option<SidebarPlaylistOrder>,
   #[serde(skip_serializing_if = "Option::is_none")]
+  pub pinned_playlists: Option<Vec<String>>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub playlist_pin_accounts: Option<BTreeMap<String, String>>,
+  #[serde(skip_serializing_if = "Option::is_none")]
   pub seen_announcement_ids: Option<Vec<String>>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub dismissed_announcements: Option<Vec<String>>,
@@ -308,6 +348,15 @@ impl PersistedRuntimeState {
   pub fn playlist_sidebar_order(playlist_sidebar_order: SidebarPlaylistOrder) -> Self {
     Self {
       playlist_sidebar_order: Some(playlist_sidebar_order),
+      ..Default::default()
+    }
+  }
+
+  /// Add one pin. Save immediately so a delayed patch cannot undo an unpin.
+  pub fn pinned_playlist(uri: &str) -> Self {
+    let pins = sanitized_pins(&[uri.to_string()]);
+    Self {
+      pinned_playlists: (!pins.is_empty()).then_some(pins),
       ..Default::default()
     }
   }
@@ -405,6 +454,8 @@ impl PersistedRuntimeState {
       && self.shuffle_enabled.is_none()
       && self.active_source.is_none()
       && self.playlist_sidebar_order.is_none()
+      && self.pinned_playlists.is_none()
+      && self.playlist_pin_accounts.is_none()
       && self.seen_announcement_ids.is_none()
       && self.dismissed_announcements.is_none()
       && self.sidebar_width_percent.is_none()
@@ -530,6 +581,52 @@ fn load_for_save(path: &Path) -> Result<PersistedRuntimeState> {
 pub fn save(path: &Path, state: &PersistedRuntimeState) -> Result<()> {
   let mut merged = load_for_save(path)?;
   merge_state_patch(&mut merged, state);
+  if let Some(pins) = &state.pinned_playlists {
+    let accepted = merged.pinned_playlists.as_deref().unwrap_or(&[]);
+    if sanitized_pins(pins)
+      .iter()
+      .any(|uri| !accepted.contains(uri))
+    {
+      return Err(PlaylistPinLimitReached.into());
+    }
+  }
+  write_state(path, &merged)
+}
+
+/// Remove one pin from the latest saved list.
+pub fn save_removing_pinned_playlist(path: &Path, uri: &str) -> Result<()> {
+  save_removing_pinned_playlists(path, &[uri.to_string()], None)
+}
+
+/// Remove a batch in one sparse update. Pruning must still own each saved pin.
+pub fn save_removing_pinned_playlists(
+  path: &Path,
+  uris: &[String],
+  account: Option<&str>,
+) -> Result<()> {
+  let mut merged = load_for_save(path)?;
+  let accounts = merged.playlist_pin_accounts.as_ref();
+  let removed: Vec<_> = uris
+    .iter()
+    .filter(|uri| {
+      account.is_none_or(|account| {
+        accounts
+          .and_then(|accounts| accounts.get(uri.as_str()))
+          .is_some_and(|owner| owner == account)
+      })
+    })
+    .collect();
+  if let Some(pins) = &mut merged.pinned_playlists {
+    pins.retain(|pin| !removed.iter().any(|uri| pin == uri.trim()));
+    *pins = sanitized_pins(pins);
+  } else {
+    merged.pinned_playlists = Some(Vec::new());
+  }
+  if let Some(accounts) = &mut merged.playlist_pin_accounts {
+    for uri in removed {
+      accounts.remove(uri.trim());
+    }
+  }
   write_state(path, &merged)
 }
 
@@ -563,6 +660,10 @@ fn sanitized_persisted_state(state: &PersistedRuntimeState) -> PersistedRuntimeS
     shuffle_enabled: state.shuffle_enabled,
     active_source: state.active_source,
     playlist_sidebar_order: state.playlist_sidebar_order,
+    pinned_playlists: state.pinned_playlists.as_deref().map(sanitized_pins),
+    playlist_pin_accounts: state.playlist_pin_accounts.as_ref().map(|accounts| {
+      sanitized_pin_accounts(accounts, state.pinned_playlists.as_deref().unwrap_or(&[]))
+    }),
     seen_announcement_ids: state.seen_announcement_ids.as_deref().map(sanitized_ids),
     dismissed_announcements: state.dismissed_announcements.as_deref().map(sanitized_ids),
     sidebar_width_percent: state.sidebar_width_percent.map(|width| width.min(100)),
@@ -598,6 +699,21 @@ fn merge_state_patch(merged: &mut PersistedRuntimeState, patch: &PersistedRuntim
   }
   if let Some(playlist_sidebar_order) = patch.playlist_sidebar_order {
     merged.playlist_sidebar_order = Some(playlist_sidebar_order);
+  }
+  if let Some(pinned_playlists) = &patch.pinned_playlists {
+    let pins = merged.pinned_playlists.get_or_insert_with(Vec::new);
+    pins.extend(pinned_playlists.iter().cloned());
+    *pins = sanitized_pins(pins);
+  }
+  if let Some(accounts) = &patch.playlist_pin_accounts {
+    let owners = merged
+      .playlist_pin_accounts
+      .get_or_insert_with(BTreeMap::new);
+    for (uri, account) in
+      sanitized_pin_accounts(accounts, merged.pinned_playlists.as_deref().unwrap_or(&[]))
+    {
+      owners.entry(uri).or_insert(account);
+    }
   }
   if let Some(seen_announcement_ids) = &patch.seen_announcement_ids {
     merged.seen_announcement_ids = Some(merged_ids(
@@ -644,6 +760,21 @@ fn merge_state_patch(merged: &mut PersistedRuntimeState, patch: &PersistedRuntim
   if let Some(device_id) = sanitized_device_id(patch.spotify_device_id.as_deref()) {
     merged.spotify_device_id = Some(device_id);
   }
+}
+
+fn sanitized_pin_accounts(
+  accounts: &BTreeMap<String, String>,
+  pins: &[String],
+) -> BTreeMap<String, String> {
+  sanitized_pins(pins)
+    .into_iter()
+    .filter_map(|uri| {
+      accounts
+        .get(&uri)
+        .filter(|account| !account.trim().is_empty())
+        .map(|account| (uri, account.clone()))
+    })
+    .collect()
 }
 
 fn deserialize_playlist_sidebar_order<'de, D>(
@@ -700,6 +831,25 @@ fn sanitized_device_id(device_id: Option<&str>) -> Option<String> {
     .map(str::trim)
     .filter(|id| !id.is_empty())
     .map(str::to_string)
+}
+
+pub(crate) fn sanitized_pins(pins: &[String]) -> Vec<String> {
+  let mut seen = std::collections::HashSet::new();
+  pins
+    .iter()
+    .filter_map(|uri| {
+      let uri = uri.trim();
+      let id = uri.strip_prefix("spotify:playlist:")?;
+      if id.is_empty() || !id.bytes().all(|byte| byte.is_ascii_alphanumeric()) {
+        return None;
+      }
+      if !seen.insert(uri.to_string()) {
+        return None;
+      }
+      Some(uri.to_string())
+    })
+    .take(MAX_PINNED_PLAYLISTS)
+    .collect()
 }
 
 fn sanitized_ids(ids: &[String]) -> Vec<String> {
@@ -1040,6 +1190,508 @@ mod tests {
   }
 
   #[test]
+  fn pinned_playlists_round_trip_in_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.yml");
+    let runtime = RuntimeState {
+      pinned_playlists: vec![
+        "spotify:playlist:second".to_string(),
+        "spotify:playlist:first".to_string(),
+      ],
+      playlist_pin_accounts: [
+        ("spotify:playlist:second".into(), "account-b".into()),
+        ("spotify:playlist:first".into(), "account-a".into()),
+      ]
+      .into(),
+      ..Default::default()
+    };
+
+    save(&path, &runtime.to_persisted()).unwrap();
+
+    let loaded = load(&path).unwrap();
+    assert_eq!(
+      loaded.pinned_playlists,
+      Some(runtime.pinned_playlists.clone())
+    );
+    let mut restored = RuntimeState::default();
+    restored.apply_persisted(&loaded);
+    assert_eq!(restored, runtime);
+  }
+
+  #[test]
+  fn pin_accounts_merge_without_reassigning_another_accounts_pin() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.yml");
+    let mut first = PersistedRuntimeState::pinned_playlist("spotify:playlist:first");
+    first.playlist_pin_accounts =
+      Some([("spotify:playlist:first".into(), "account-a".into())].into());
+    save(&path, &first).unwrap();
+    let mut second = PersistedRuntimeState::pinned_playlist("spotify:playlist:second");
+    second.playlist_pin_accounts = Some(
+      [
+        ("spotify:playlist:first".into(), "account-b".into()),
+        ("spotify:playlist:second".into(), "account-b".into()),
+        ("spotify:playlist:notpinned".into(), "account-b".into()),
+      ]
+      .into(),
+    );
+    save(&path, &second).unwrap();
+    assert_eq!(
+      load(&path).unwrap().playlist_pin_accounts.unwrap(),
+      [
+        ("spotify:playlist:first".into(), "account-a".into()),
+        ("spotify:playlist:second".into(), "account-b".into()),
+      ]
+      .into()
+    );
+  }
+
+  #[test]
+  fn batch_pruning_rechecks_pin_accounts_and_preserves_other_saved_changes() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.yml");
+    let pins: Vec<String> = ["first", "second", "other", "unknown"]
+      .map(|id| format!("spotify:playlist:{id}"))
+      .into();
+    save(
+      &path,
+      &PersistedRuntimeState {
+        pinned_playlists: Some(pins.clone()),
+        playlist_pin_accounts: Some(
+          [
+            (pins[0].clone(), "account-a".into()),
+            (pins[1].clone(), "account-a".into()),
+            (pins[2].clone(), "account-b".into()),
+          ]
+          .into(),
+        ),
+        volume_percent: Some(73),
+        ..Default::default()
+      },
+    )
+    .unwrap();
+    // Another instance removes and re-pins a URI under B after A's snapshot.
+    save_removing_pinned_playlist(&path, &pins[1]).unwrap();
+    let mut repinned = PersistedRuntimeState::pinned_playlist(&pins[1]);
+    repinned.playlist_pin_accounts = Some([(pins[1].clone(), "account-b".into())].into());
+    save(&path, &repinned).unwrap();
+    save_removing_pinned_playlists(&path, &pins, Some("account-a")).unwrap();
+    let saved = load(&path).unwrap();
+    assert_eq!(
+      saved.pinned_playlists.unwrap(),
+      [pins[2].clone(), pins[3].clone(), pins[1].clone()]
+    );
+    assert_eq!(
+      saved.playlist_pin_accounts.unwrap(),
+      [
+        (pins[1].clone(), "account-b".into()),
+        (pins[2].clone(), "account-b".into()),
+      ]
+      .into()
+    );
+    assert_eq!(saved.volume_percent, Some(73));
+  }
+
+  #[test]
+  fn a_pin_patch_appends_to_pins_written_by_another_instance() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.yml");
+    save(
+      &path,
+      &PersistedRuntimeState::pinned_playlist("spotify:playlist:first"),
+    )
+    .unwrap();
+    let mut stale_runtime = RuntimeState::default();
+    stale_runtime.apply_persisted(&load(&path).unwrap());
+
+    save(
+      &path,
+      &PersistedRuntimeState::pinned_playlist("spotify:playlist:second"),
+    )
+    .unwrap();
+    save(&path, &PersistedRuntimeState::volume_percent(73)).unwrap();
+
+    stale_runtime
+      .pinned_playlists
+      .push("spotify:playlist:third".to_string());
+    save(
+      &path,
+      &PersistedRuntimeState::pinned_playlist(&stale_runtime.pinned_playlists[1]),
+    )
+    .unwrap();
+    save(
+      &path,
+      &PersistedRuntimeState::pinned_playlist("spotify:playlist:first"),
+    )
+    .unwrap();
+
+    let loaded = load(&path).unwrap();
+    assert_eq!(loaded.volume_percent, Some(73));
+    assert_eq!(
+      loaded.pinned_playlists.unwrap(),
+      [
+        "spotify:playlist:first",
+        "spotify:playlist:second",
+        "spotify:playlist:third"
+      ]
+    );
+  }
+
+  #[test]
+  fn a_stale_instance_cannot_add_a_pin_after_another_instance_fills_the_limit() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.yml");
+    save(
+      &path,
+      &PersistedRuntimeState {
+        volume_percent: Some(42),
+        active_source: Some(Source::Radio),
+        shuffle_enabled: Some(true),
+        pinned_playlists: Some(
+          (0..99)
+            .map(|id| format!("spotify:playlist:pin{id}"))
+            .collect(),
+        ),
+        radio_stations: Some(vec![RadioStationConfig {
+          name: "Alpha".to_string(),
+          url: "https://example.test/alpha".to_string(),
+        }]),
+        ..Default::default()
+      },
+    )
+    .unwrap();
+    let mut stale_runtime = RuntimeState::default();
+    stale_runtime.apply_persisted(&load(&path).unwrap());
+    assert_eq!(stale_runtime.pinned_playlists.len(), 99);
+
+    // A second instance fills the last slot and updates an unrelated field.
+    let mut other_instance = PersistedRuntimeState::pinned_playlist("spotify:playlist:pin99");
+    other_instance.volume_percent = Some(73);
+    save(&path, &other_instance).unwrap();
+    let full_state = load(&path).unwrap();
+    assert_eq!(full_state.pinned_playlists.as_ref().unwrap().len(), 100);
+    assert_eq!(full_state.volume_percent, Some(73));
+    let saved_bytes = std::fs::read(&path).unwrap();
+
+    stale_runtime
+      .pinned_playlists
+      .push("spotify:playlist:pin100".to_string());
+    let mut patch = PersistedRuntimeState::pinned_playlist(&stale_runtime.pinned_playlists[99]);
+    patch.volume_percent = Some(11);
+    patch.active_source = Some(Source::Local);
+    let error = save(&path, &patch).unwrap_err();
+
+    assert!(error.downcast_ref::<PlaylistPinLimitReached>().is_some());
+    assert_eq!(std::fs::read(&path).unwrap(), saved_bytes);
+    assert_eq!(load(&path).unwrap(), full_state);
+  }
+
+  #[test]
+  fn a_partially_accepted_pin_batch_is_rejected_without_writing() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.yml");
+    save(
+      &path,
+      &PersistedRuntimeState {
+        pinned_playlists: Some(
+          (0..99)
+            .map(|id| format!("spotify:playlist:pin{id}"))
+            .collect(),
+        ),
+        ..Default::default()
+      },
+    )
+    .unwrap();
+    let saved_bytes = std::fs::read(&path).unwrap();
+
+    let error = save(
+      &path,
+      &PersistedRuntimeState {
+        pinned_playlists: Some(vec![
+          "spotify:playlist:pin99".to_string(),
+          "spotify:playlist:pin100".to_string(),
+        ]),
+        ..Default::default()
+      },
+    )
+    .unwrap_err();
+
+    assert!(error.downcast_ref::<PlaylistPinLimitReached>().is_some());
+    assert_eq!(std::fs::read(&path).unwrap(), saved_bytes);
+  }
+
+  #[test]
+  fn a_full_pin_list_accepts_existing_empty_invalid_and_absent_pin_patches() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.yml");
+    let pins: Vec<_> = (0..100)
+      .map(|id| format!("spotify:playlist:pin{id}"))
+      .collect();
+    save(
+      &path,
+      &PersistedRuntimeState {
+        pinned_playlists: Some(pins.clone()),
+        ..Default::default()
+      },
+    )
+    .unwrap();
+
+    for incoming in [
+      Some(vec![
+        " spotify:playlist:pin0 ".to_string(),
+        "spotify:playlist:pin0".to_string(),
+      ]),
+      Some(Vec::new()),
+      Some(vec![
+        " ".to_string(),
+        "spotify:playlist:".to_string(),
+        "spotify:track:other".to_string(),
+      ]),
+      None,
+    ] {
+      save(
+        &path,
+        &PersistedRuntimeState {
+          pinned_playlists: incoming,
+          volume_percent: Some(42),
+          ..Default::default()
+        },
+      )
+      .unwrap();
+      let loaded = load(&path).unwrap();
+      assert_eq!(loaded.pinned_playlists.as_ref(), Some(&pins));
+      assert_eq!(loaded.volume_percent, Some(42));
+    }
+  }
+
+  #[test]
+  fn an_immediate_pin_then_unpin_stays_removed_after_later_saves() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.yml");
+    save(
+      &path,
+      &PersistedRuntimeState::pinned_playlist("spotify:playlist:first"),
+    )
+    .unwrap();
+    save(
+      &path,
+      &PersistedRuntimeState::pinned_playlist("spotify:playlist:second"),
+    )
+    .unwrap();
+
+    save_removing_pinned_playlist(&path, "spotify:playlist:first").unwrap();
+    save(&path, &PersistedRuntimeState::volume_percent(42)).unwrap();
+    save(
+      &path,
+      &PersistedRuntimeState::pinned_playlist("spotify:playlist:third"),
+    )
+    .unwrap();
+    assert_eq!(
+      load(&path).unwrap().pinned_playlists.unwrap(),
+      ["spotify:playlist:second", "spotify:playlist:third"]
+    );
+
+    // Explicitly pinning it again moves it to the end of the block.
+    save(
+      &path,
+      &PersistedRuntimeState::pinned_playlist("spotify:playlist:first"),
+    )
+    .unwrap();
+    assert_eq!(
+      load(&path).unwrap().pinned_playlists.unwrap(),
+      [
+        "spotify:playlist:second",
+        "spotify:playlist:third",
+        "spotify:playlist:first"
+      ]
+    );
+  }
+
+  #[test]
+  fn save_removing_pinned_playlist_removes_only_that_uri() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.yml");
+    let yaml = "volume_percent: 55\n\
+      pinned_playlists: [spotify:playlist:first, spotify:playlist:second, spotify:playlist:third]\n\
+      radio_stations: [{name: Alpha, url: 'https://example.test/alpha'}]\n";
+    std::fs::write(&path, yaml).unwrap();
+
+    save_removing_pinned_playlist(&path, " spotify:playlist:second ").unwrap();
+
+    let mut expected: serde_yaml::Value = serde_yaml::from_str(yaml).unwrap();
+    expected["pinned_playlists"] =
+      serde_yaml::to_value(["spotify:playlist:first", "spotify:playlist:third"]).unwrap();
+    let actual: serde_yaml::Value =
+      serde_yaml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(actual, expected);
+  }
+
+  #[test]
+  fn pins_are_sanitized_on_load() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.yml");
+    let mut pins = [
+      " spotify:playlist:first ",
+      "spotify:playlist:first",
+      "",
+      " ",
+      "spotify:playlist:",
+      "spotify:album:album",
+      "local:playlist:local",
+      "https://open.spotify.com/playlist/playlist",
+      "spotify:playlist:bad id",
+      "spotify:playlist:id:tracks",
+      "spotify:playlist:id?query",
+      "spotify:playlist:播放列表",
+    ]
+    .map(str::to_string)
+    .to_vec();
+    pins.extend((0..105).map(|id| format!("spotify:playlist:pin{id}")));
+    std::fs::write(
+      &path,
+      serde_yaml::to_string(&PersistedRuntimeState {
+        volume_percent: Some(42),
+        pinned_playlists: Some(pins),
+        ..Default::default()
+      })
+      .unwrap(),
+    )
+    .unwrap();
+
+    let loaded = load(&path).unwrap();
+    let mut expected = vec!["spotify:playlist:first".to_string()];
+    expected.extend((0..99).map(|id| format!("spotify:playlist:pin{id}")));
+    assert_eq!(loaded.volume_percent, Some(42));
+    assert_eq!(loaded.pinned_playlists.as_ref().unwrap().len(), 100);
+    assert_eq!(loaded.pinned_playlists, Some(expected));
+  }
+
+  #[test]
+  fn pins_are_sanitized_when_applied_snapshotted_and_merged() {
+    let pins = [
+      " spotify:playlist:first ",
+      "spotify:track:other",
+      "spotify:playlist:first",
+    ]
+    .map(str::to_string)
+    .to_vec();
+    let persisted = PersistedRuntimeState {
+      pinned_playlists: Some(pins.clone()),
+      ..Default::default()
+    };
+    let expected = Some(vec!["spotify:playlist:first".to_string()]);
+    let mut runtime = RuntimeState::default();
+    runtime.apply_persisted(&persisted);
+    assert_eq!(runtime.pinned_playlists, ["spotify:playlist:first"]);
+
+    runtime.pinned_playlists = pins;
+    assert_eq!(runtime.to_persisted().pinned_playlists, expected);
+    let mut merged = PersistedRuntimeState::default();
+    merged.merge_patch(&persisted);
+    assert_eq!(merged.pinned_playlists, expected);
+
+    runtime.apply_persisted(&PersistedRuntimeState::default());
+    assert!(!runtime.pinned_playlists.is_empty());
+    runtime.apply_persisted(&PersistedRuntimeState {
+      pinned_playlists: Some(Vec::new()),
+      ..Default::default()
+    });
+    assert!(runtime.pinned_playlists.is_empty());
+  }
+
+  #[test]
+  fn pin_patches_are_sparse_and_do_not_clear_existing_pins() {
+    let patch = PersistedRuntimeState::pinned_playlist(" spotify:playlist:first ");
+    assert!(!patch.is_empty());
+    assert_eq!(
+      patch,
+      PersistedRuntimeState {
+        pinned_playlists: Some(vec!["spotify:playlist:first".to_string()]),
+        ..Default::default()
+      }
+    );
+    for uri in ["", " ", "spotify:playlist:", "spotify:track:other"] {
+      assert!(PersistedRuntimeState::pinned_playlist(uri).is_empty());
+    }
+
+    let mut merged = patch;
+    merged.merge_patch(&PersistedRuntimeState {
+      pinned_playlists: Some(Vec::new()),
+      ..Default::default()
+    });
+    assert_eq!(merged.pinned_playlists.unwrap(), ["spotify:playlist:first"]);
+  }
+
+  #[test]
+  fn pin_patch_merges_keep_the_first_hundred_uris() {
+    let expected: Vec<_> = (0..100)
+      .map(|id| format!("spotify:playlist:pin{id}"))
+      .collect();
+    let mut merged = PersistedRuntimeState {
+      pinned_playlists: Some(expected.clone()),
+      ..Default::default()
+    };
+    merged.merge_patch(&PersistedRuntimeState::pinned_playlist(
+      "spotify:playlist:extra",
+    ));
+    assert_eq!(merged.pinned_playlists, Some(expected));
+  }
+
+  #[test]
+  fn an_old_state_file_without_pins_loads_empty() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.yml");
+    std::fs::write(&path, "volume_percent: 42\n").unwrap();
+
+    let loaded = load(&path).unwrap();
+    assert_eq!(loaded.pinned_playlists, None);
+    let mut runtime = RuntimeState::default();
+    runtime.apply_persisted(&loaded);
+    assert_eq!(runtime.volume_percent, 42);
+    assert!(runtime.pinned_playlists.is_empty());
+  }
+
+  #[test]
+  fn pruning_pins_removes_only_requested_uris_from_the_latest_state() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.yml");
+    for uri in [
+      "spotify:playlist:kept",
+      "spotify:playlist:stale1",
+      "spotify:playlist:stale2",
+    ] {
+      save(&path, &PersistedRuntimeState::pinned_playlist(uri)).unwrap();
+    }
+    // Another instance pins a playlist after the prune caller loaded its list.
+    save(
+      &path,
+      &PersistedRuntimeState::pinned_playlist("spotify:playlist:added"),
+    )
+    .unwrap();
+    for uri in ["spotify:playlist:stale1", "spotify:playlist:stale2"] {
+      save_removing_pinned_playlist(&path, uri).unwrap();
+    }
+    save(&path, &PersistedRuntimeState::shuffle_enabled(true)).unwrap();
+
+    let loaded = load(&path).unwrap();
+    assert_eq!(loaded.shuffle_enabled, Some(true));
+    assert_eq!(
+      loaded.pinned_playlists.unwrap(),
+      ["spotify:playlist:kept", "spotify:playlist:added"]
+    );
+  }
+
+  #[test]
+  fn removing_an_absent_pin_is_idempotent() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.yml");
+    for _ in 0..2 {
+      save_removing_pinned_playlist(&path, "spotify:playlist:absent").unwrap();
+      assert_eq!(load(&path).unwrap().pinned_playlists, Some(Vec::new()));
+    }
+  }
+
+  #[test]
   fn state_round_trips_all_runtime_attributes() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("spotatui").join("state.yml");
@@ -1048,6 +1700,8 @@ mod tests {
       shuffle_enabled: Some(true),
       active_source: Some(Source::Radio),
       playlist_sidebar_order: Some(SidebarPlaylistOrder::RecentlyPlayed),
+      pinned_playlists: Some(vec!["spotify:playlist:first".to_string()]),
+      playlist_pin_accounts: Some([("spotify:playlist:first".into(), "account-a".into())].into()),
       seen_announcement_ids: Some(vec!["a".to_string(), "b".to_string()]),
       dismissed_announcements: Some(vec!["old".to_string()]),
       sidebar_width_percent: Some(25),

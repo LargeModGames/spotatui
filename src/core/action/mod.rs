@@ -192,6 +192,11 @@ pub enum Action {
   /// Delete a local `youtube:playlist:` playlist; Spotify playlists leave
   /// through [`Action::UnfollowPlaylist`].
   DeletePlaylist(String),
+  /// Pin or unpin a Spotify sidebar playlist locally, by URI.
+  SetPlaylistPinned {
+    uri: String,
+    pinned: bool,
+  },
   /// Open the picker that mirrors the highlighted sidebar playlist onto another source.
   OpenPlaylistSyncPicker,
   /// The picker's Enter: create the mirror playlist on `Source`, link it, and sync it.
