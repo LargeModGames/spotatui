@@ -240,6 +240,9 @@ native streaming fast paths (librespot) when the native player is active.
 - `spotatui.shuffle(on)` - set shuffle to the desired state. No-op if already in that state.
 - `spotatui.search(query)` - run a search and open the Search screen.
 - `spotatui.notify(msg, ttl_secs?)` - show a status message (default ttl 4 seconds).
+  The duration is scaled by `behavior.status_message_ttl_percent` and rounded to the
+  nearest second. The result is clamped between one second and the in-app Spotify
+  login timeout (currently 300 seconds).
 - `spotatui.set_repeat(mode)` - set repeat to `"off"`, `"track"` or `"context"` (named
   `set_repeat` because `repeat` is a Lua reserved word).
 - `spotatui.cycle_repeat()` - cycle repeat exactly like the repeat keybinding (keeps the

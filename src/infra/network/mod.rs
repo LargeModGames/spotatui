@@ -17,7 +17,7 @@ pub mod utils;
 #[cfg(test)]
 use crate::core::app::SPOTIFY_NOT_CONNECTED_STATUS;
 use crate::core::app::{App, PlaybackOwner};
-use crate::core::auth::SpotifyLogin;
+use crate::core::auth::{SpotifyLogin, LOGIN_TIMEOUT};
 use crate::core::plugin_api::{ShowInfo, TrackInfo};
 use crate::core::source::Source;
 use anyhow::anyhow;
@@ -27,9 +27,6 @@ use rspotify::model::{
 };
 use rspotify::prelude::Id;
 use std::sync::Arc;
-
-/// How long the in-app login waits for the approval in the browser.
-const LOGIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 use tokio::sync::Mutex;
 // Re-export traits
 use self::library::LibraryNetwork;

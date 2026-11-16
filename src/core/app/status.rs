@@ -30,6 +30,10 @@ const API_ERROR_TTL: Duration = Duration::from_secs(60);
 /// `status_message_ttl_percent` scaling.
 const API_ERROR_HANDOFF_TTL_SECS: u64 = 8;
 
+/// Bound status deadlines while keeping the Spotify login prompt visible for
+/// the full wait at the default scale.
+const MAX_STATUS_TTL_SECS: u64 = crate::core::auth::LOGIN_TIMEOUT.as_secs();
+
 impl App {
   #[allow(dead_code)]
   pub fn enqueue_announcements(&mut self, announcements: Vec<Announcement>) {
@@ -241,12 +245,12 @@ impl App {
   }
 
   /// Scale a status-message TTL by `status_message_ttl_percent` (default 100
-  /// == 1.0×). Applied here at the single sink so the ~66 call sites keep
-  /// their relative per-severity TTLs.
+  /// == 1.0×). Applied at the shared sink so callers keep their relative
+  /// per-severity TTLs up to the login timeout.
   fn scaled_status_ttl(&self, ttl_secs: u64) -> u64 {
-    let pct = self.user_config.behavior.status_message_ttl_percent as u64;
-    // round to nearest, never zero.
-    ((ttl_secs * pct + 50) / 100).max(1)
+    let pct = u64::from(self.user_config.behavior.status_message_ttl_percent);
+    let rounded = ttl_secs.saturating_mul(pct).saturating_add(50) / 100;
+    rounded.clamp(1, MAX_STATUS_TTL_SECS)
   }
 
   /// Record an error and raise the `RouteId::Error` frame the terminal
@@ -307,6 +311,54 @@ impl App {
 mod tests {
   use super::*;
   use crate::core::app::test_support::*;
+
+  #[test]
+  fn status_ttls_round_to_nearest_second_and_clamp_after_scaling() {
+    let mut app = make_app_simple();
+    let limit = crate::core::auth::LOGIN_TIMEOUT.as_secs();
+    for (ttl, percent, expected) in [
+      (0, 100, 1),
+      (1, 10, 1),
+      (5, 25, 1),
+      (6, 25, 2),
+      (4, 100, 4),
+      (4, 250, 10),
+      (limit + 1, 100, limit),
+      (limit, 100, limit),
+      (2 * limit, 50, limit),
+      (limit, 1000, limit),
+      (u64::MAX / 100, 100, limit),
+    ] {
+      app.user_config.behavior.status_message_ttl_percent = percent;
+      assert_eq!(
+        app.scaled_status_ttl(ttl),
+        expected,
+        "{ttl} seconds at {percent}%"
+      );
+    }
+  }
+
+  #[test]
+  fn notification_actions_cap_overflowing_status_lifetimes() {
+    use crate::core::action::Action;
+
+    let limit = crate::core::auth::LOGIN_TIMEOUT;
+    for (action, is_error) in [
+      (Action::Notify("message".into(), u64::MAX), false),
+      (Action::NotifyError("message".into(), u64::MAX), true),
+    ] {
+      let mut app = make_app_simple();
+      let before = Instant::now();
+      app.apply(action);
+      let after = Instant::now();
+
+      assert_eq!(app.status_message(), Some("message"));
+      assert_eq!(app.status_message_is_error(), is_error);
+      let expires_at = app.status_message_expires_at.unwrap();
+      assert!(expires_at >= before + limit);
+      assert!(expires_at <= after + limit);
+    }
+  }
 
   // --- status message priority tests ---
 
