@@ -13,7 +13,7 @@ use log::{debug, info, warn};
 use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::process::{Child, Command as ProcessCommand};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
-use tokio::sync::{oneshot, Mutex, Notify};
+use tokio::sync::{oneshot, Mutex, MutexGuard, Notify};
 use tokio_tungstenite::tungstenite::Message;
 
 use super::auth::ApiKey;
@@ -26,6 +26,7 @@ use crate::core::app::App;
 use crate::core::user_config::StartupBehavior;
 
 pub struct Config {
+  pub generation: u64,
   pub path: PathBuf,
   pub device_name: String,
   pub key: ApiKey,
@@ -55,17 +56,19 @@ fn shared() -> &'static Arc<Shared> {
 const CHILD_PID: &str = ".spotatui-child.pid";
 const STALE_FILES: [&str; 3] = ["ws.addr", "ws.port", "soloist.pid"];
 const START_BUDGET: Duration = Duration::from_secs(20);
+const CONNECT_BUDGET: Duration = Duration::from_secs(3);
 const OFFLINE_AFTER: Duration = Duration::from_secs(15);
+/// How long a running child gets to exit after its socket closes, and to flush its last log lines.
+const EXIT_GRACE: Duration = Duration::from_secs(1);
 #[cfg(windows)]
 pub(super) const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 pub fn start(app: Arc<Mutex<App>>, config: Config) {
   let shared = shared().clone();
-  if shared.shutting_down.load(Ordering::SeqCst) {
+  if shared.shutting_down.load(Ordering::SeqCst) || shared.running.swap(true, Ordering::SeqCst) {
     return;
   }
   clear_stale_stop(&shared);
-  shared.running.store(true, Ordering::SeqCst);
   let (done_tx, done_rx) = oneshot::channel();
   if let Ok(mut done) = shared.done.lock() {
     *done = Some(done_rx);
@@ -101,7 +104,10 @@ fn shutdown_commands(is_active: bool, status: Status) -> Vec<Command> {
 
 /// Release playback if Soloist owns it, and stop the child, waiting at most `timeout`.
 pub async fn stop(timeout: Duration) {
-  let shared = shared();
+  stop_on(shared(), timeout).await;
+}
+
+async fn stop_on(shared: &Shared, timeout: Duration) {
   shared.shutting_down.store(true, Ordering::SeqCst);
   let link = shared.link.lock().ok().and_then(|link| link.clone());
   if let Some(link) = link {
@@ -113,8 +119,25 @@ pub async fn stop(timeout: Duration) {
   }
   shared.stop.notify_one();
   let done = shared.done.lock().ok().and_then(|mut done| done.take());
+  if let Some(mut done) = done {
+    if tokio::time::timeout(timeout, &mut done).await.is_err() {
+      // Still running: keep the signal for `wait_stopped`.
+      if let Ok(mut slot) = shared.done.lock() {
+        slot.get_or_insert(done);
+      }
+    }
+  }
+}
+
+/// Wait, without a limit, until a supervisor a timed-out `stop` left behind has exited.
+pub async fn wait_stopped() {
+  wait_stopped_on(shared()).await;
+}
+
+async fn wait_stopped_on(shared: &Shared) {
+  let done = shared.done.lock().ok().and_then(|mut done| done.take());
   if let Some(done) = done {
-    let _ = tokio::time::timeout(timeout, done).await;
+    let _ = done.await;
   }
 }
 
@@ -131,8 +154,35 @@ enum Outcome {
   Restart { reactivate: bool },
 }
 
-async fn notify(app: &Arc<Mutex<App>>, notice: Notice) {
-  app.lock().await.soloist_notice(notice);
+async fn current_app<'a>(
+  app: &'a Mutex<App>,
+  config: &Config,
+  shared: &Shared,
+) -> Option<MutexGuard<'a, App>> {
+  let app = app.lock().await;
+  (!shared.shutting_down.load(Ordering::SeqCst) && app.is_current_soloist_start(config.generation))
+    .then_some(app)
+}
+
+async fn notify(app: &Mutex<App>, config: &Config, shared: &Shared, notice: Notice) {
+  if let Some(mut app) = current_app(app, config, shared).await {
+    app.soloist_notice(notice);
+  }
+}
+
+/// `notify` for a child with an installed link: only while that link is still the App's.
+async fn notify_link(
+  app: &Mutex<App>,
+  config: &Config,
+  shared: &Shared,
+  link: &Arc<SoloistLink>,
+  notice: Notice,
+) {
+  if let Some(mut app) = current_app(app, config, shared).await {
+    if app.is_current_soloist(link) {
+      app.soloist_notice(notice);
+    }
+  }
 }
 
 async fn supervise(app: &Arc<Mutex<App>>, config: &Config, shared: &Shared) {
@@ -140,53 +190,48 @@ async fn supervise(app: &Arc<Mutex<App>>, config: &Config, shared: &Shared) {
   let mut retried_dir = false;
   let mut reactivate = false;
   let mut first_login = true;
-  loop {
-    if shared.shutting_down.load(Ordering::SeqCst) {
-      break;
+  let failure = loop {
+    if current_app(app, config, shared).await.is_none() {
+      return;
     }
     match run_once(app, config, shared, reactivate, &mut first_login).await {
       Outcome::Restart { reactivate: again } => reactivate = again,
-      Outcome::Fatal(notice) => {
-        app.lock().await.soloist_failed(Some(notice));
-        break;
-      }
+      Outcome::Fatal(notice) => break notice,
       Outcome::Exited(exit) => {
         reactivate = false;
         match exit {
-          Exit::Stopped => break,
-          Exit::Expired => {
-            app.lock().await.soloist_failed(Some(Notice::Expired));
-            break;
-          }
+          Exit::Stopped => return,
+          Exit::Expired => break Notice::Expired,
           Exit::DataDirInUse if !retried_dir => {
             retried_dir = true;
             clear_orphan(config).await;
           }
-          Exit::DataDirInUse => {
-            app.lock().await.soloist_failed(Some(Notice::DirInUse));
-            break;
-          }
+          Exit::DataDirInUse => break Notice::DirInUse,
           Exit::Crashed(code) => {
             warn!("soloist: exited with {code:?}");
             let now = Instant::now();
             exits.push(now);
             let Some(delay) = process::restart_delay(&exits, now) else {
-              app.lock().await.soloist_failed(Some(Notice::KeepsExiting));
-              break;
+              break Notice::KeepsExiting;
             };
             {
-              let mut app = app.lock().await;
+              let Some(mut app) = current_app(app, config, shared).await else {
+                return;
+              };
               app.soloist_starting();
               app.soloist_notice(Notice::Restarting);
             }
             tokio::select! {
               _ = tokio::time::sleep(delay) => {}
-              _ = shared.stop.notified() => break,
+              _ = shared.stop.notified() => return,
             }
           }
         }
       }
     }
+  };
+  if let Some(mut app) = current_app(app, config, shared).await {
+    app.soloist_failed(Some(failure));
   }
 }
 
@@ -380,17 +425,61 @@ async fn terminate(child: &mut Child) {
 struct Seen {
   another_session: bool,
   expired: bool,
+  bad_key: bool,
+  /// Soloist is logged in now; a logout clears it.
   logged_in: bool,
+  /// This child's first login ran its one-time steps.
+  login_handled: bool,
   pairing_shown: bool,
   expiry_warned: bool,
 }
 
 impl Seen {
-  fn note(&mut self, event: &LogEvent) {
+  /// The login state an event reports; after a logout the pairing prompt may show again.
+  fn auth(&mut self, logged_in: bool) {
+    if logged_in {
+      self.logged_in = true;
+    } else if std::mem::take(&mut self.logged_in) {
+      self.pairing_shown = false;
+    }
+  }
+
+  fn note(&mut self, event: &LogEvent) -> Option<Notice> {
     match event {
       LogEvent::AnotherSession => self.another_session = true,
       LogEvent::Expired => self.expired = true,
+      LogEvent::WaitingForLogin if !self.logged_in && !self.pairing_shown => {
+        self.pairing_shown = true;
+        return Some(Notice::NotPaired);
+      }
+      LogEvent::LoginFailed if !self.bad_key => {
+        self.bad_key = true;
+        return Some(Notice::BadKey);
+      }
+      LogEvent::ExpiresIn { count, unit } if !self.expiry_warned && expires_soon(*count, unit) => {
+        self.expiry_warned = true;
+        return Some(Notice::ExpiresSoon {
+          count: *count,
+          unit: unit.clone(),
+        });
+      }
       _ => {}
+    }
+    None
+  }
+
+  fn startup_failure(
+    &self,
+    status: Option<std::io::Result<std::process::ExitStatus>>,
+    shared: &Shared,
+  ) -> Outcome {
+    match status.map(|status| self.exit(status, shared)) {
+      // A rejected key stays rejected on a restart; after a login the key was not the cause.
+      Some(Exit::Crashed(_)) if self.bad_key && !self.logged_in => Outcome::Fatal(Notice::BadKey),
+      Some(exit) => Outcome::Exited(exit),
+      None if self.expired => Outcome::Fatal(Notice::Expired),
+      None if self.bad_key => Outcome::Fatal(Notice::BadKey),
+      None => Outcome::Fatal(Notice::NoWebSocket),
     }
   }
 
@@ -464,6 +553,44 @@ fn seed_new_accounts(data_dir: &Path, quality: u8, before: &BTreeSet<String>) ->
   Some(fresh.iter().any(|user| !before.contains(user)))
 }
 
+/// After the child exited (or was stopped): read the log lines its pipes still hold, until
+/// they close or `until`, then classify the exit and only then publish the notices, so a
+/// busy App lock cannot cut the tail short.
+#[allow(clippy::too_many_arguments)]
+async fn classify_tail(
+  app: &Mutex<App>,
+  config: &Config,
+  shared: &Shared,
+  link: Option<&Arc<SoloistLink>>,
+  seen: &mut Seen,
+  log_rx: &mut UnboundedReceiver<LogEvent>,
+  status: Option<std::io::Result<std::process::ExitStatus>>,
+  until: tokio::time::Instant,
+  pending: Option<Notice>,
+) -> Outcome {
+  let mut notices: Vec<Notice> = pending.into_iter().collect();
+  let drained = tokio::select! {
+    biased;
+    _ = shared.stop.notified() => false,
+    _ = tokio::time::timeout_at(until, async {
+      while let Some(event) = log_rx.recv().await {
+        notices.extend(seen.note(&event));
+      }
+    }) => true,
+  };
+  if !drained {
+    return Outcome::Exited(Exit::Stopped);
+  }
+  let outcome = seen.startup_failure(status, shared);
+  for notice in notices {
+    match link {
+      Some(link) => notify_link(app, config, shared, link, notice).await,
+      None => notify(app, config, shared, notice).await,
+    }
+  }
+  outcome
+}
+
 async fn run_once(
   app: &Arc<Mutex<App>>,
   config: &Config,
@@ -507,55 +634,109 @@ async fn run_once(
     ));
   }
   if let Some(stderr) = child.stderr.take() {
-    tokio::spawn(drain(stderr, log_tx, config.key.expose().to_string()));
+    tokio::spawn(drain(
+      stderr,
+      log_tx.clone(),
+      config.key.expose().to_string(),
+    ));
   }
+  drop(log_tx);
 
   let mut seen = Seen::default();
-  let mut device_id = None;
-  let mut port = None;
+  let mut pending_notice = None;
   let deadline = tokio::time::Instant::now() + START_BUDGET;
-  while device_id.is_none() || port.is_none() {
-    tokio::select! {
-      event = log_rx.recv() => match event {
-        Some(event) => {
-          seen.note(&event);
-          match event {
-            LogEvent::Ready { device_id: id } => device_id = Some(id),
-            LogEvent::WsListening { port: listening } => port = Some(listening),
-            _ => {}
-          }
-        }
-        None => break,
-      },
-      status = child.wait() => return Outcome::Exited(seen.exit(status, shared)),
-      _ = tokio::time::sleep_until(deadline) => break,
-      _ = shared.stop.notified() => {
-        terminate(&mut child).await;
-        return Outcome::Exited(Exit::Stopped);
+  let connecting = async {
+    let mut device_id = None;
+    let mut port = None;
+    let mut logs_open = true;
+    let file_endpoint = || id_and_port_from_files(&config.data_dir, pid);
+    let (file_id, file_port) = loop {
+      if device_id.is_some() && port.is_some() {
+        break file_endpoint();
       }
+      tokio::select! {
+        biased;
+        _ = tokio::time::sleep_until(deadline) => break file_endpoint(),
+        event = log_rx.recv(), if logs_open => match event {
+          Some(event) => {
+            if let Some(notice) = seen.note(&event) {
+              // A child exit can cancel this wait for the App lock.
+              pending_notice = Some(notice.clone());
+              notify(app, config, shared, notice).await;
+              pending_notice = None;
+            }
+            match event {
+              LogEvent::Ready { device_id: id } => device_id = Some(id),
+              LogEvent::WsListening { port: listening } => port = Some(listening),
+              _ => {}
+            }
+          }
+          None => {
+            logs_open = false;
+            let files = file_endpoint();
+            if device_id.as_ref().or(files.0.as_ref()).is_some() && port.or(files.1).is_some() {
+              break files;
+            }
+          }
+        },
+      }
+    };
+    if device_id.is_some() && file_id.is_some() && device_id != file_id {
+      warn!("soloist: the device id in the log and in .device_id disagree");
     }
-  }
-  let (file_id, file_port) = id_and_port_from_files(&config.data_dir, pid);
-  if device_id.is_some() && file_id.is_some() && device_id != file_id {
-    warn!("soloist: the device id in the log and in .device_id disagree");
-  }
-  let (Some(device_id), Some(port)) = (device_id.or(file_id), port.or(file_port)) else {
-    terminate(&mut child).await;
-    return Outcome::Fatal(Notice::NoWebSocket);
+    let (device_id, port) = (device_id.or(file_id)?, port.or(file_port)?);
+    let socket = tokio::time::timeout(CONNECT_BUDGET, connect(port))
+      .await
+      .ok()??;
+    Some((device_id, port, socket))
   };
-  let Some(socket) = connect(port).await else {
-    terminate(&mut child).await;
-    return Outcome::Fatal(Notice::NoWebSocket);
+  let result = tokio::select! {
+    biased;
+    _ = shared.stop.notified() => {
+      terminate(&mut child).await;
+      return Outcome::Exited(Exit::Stopped);
+    }
+    status = child.wait() => Err(status),
+    socket = connecting => Ok(socket),
+  };
+  let (device_id, port, socket) = match result {
+    Ok(Some(connected)) => connected,
+    failure => {
+      let status = failure.err().or_else(|| child.try_wait().transpose());
+      if status.is_none() {
+        terminate(&mut child).await;
+      }
+      // The pipe readers can still have the final error after wait completes.
+      let drain_until = deadline.max(tokio::time::Instant::now() + Duration::from_millis(100));
+      return classify_tail(
+        app,
+        config,
+        shared,
+        None,
+        &mut seen,
+        &mut log_rx,
+        status,
+        drain_until,
+        pending_notice,
+      )
+      .await;
+    }
   };
   info!("soloist: running, WebSocket on port {port}");
   let (sink, mut stream) = socket.split();
   let (command_tx, command_rx) = mpsc::unbounded_channel();
   let link = Arc::new(SoloistLink::new(device_id, command_tx));
-  let writer = tokio::spawn(write_commands(sink, command_rx, Arc::downgrade(&link)));
-  if let Ok(mut slot) = shared.link.lock() {
-    *slot = Some(link.clone());
+  {
+    let Some(mut app) = current_app(app, config, shared).await else {
+      terminate(&mut child).await;
+      return Outcome::Exited(Exit::Stopped);
+    };
+    if let Ok(mut slot) = shared.link.lock() {
+      *slot = Some(link.clone());
+    }
+    app.install_soloist_link(link.clone());
   }
-  app.lock().await.install_soloist_link(link.clone());
+  let writer = tokio::spawn(write_commands(sink, command_rx, Arc::downgrade(&link)));
   if reactivate {
     link.send(Command::Activate);
   }
@@ -574,17 +755,10 @@ async fn run_once(
           log_open = false;
           continue;
         };
-        seen.note(&event);
+        if let Some(notice) = seen.note(&event) {
+          notify_link(app, config, shared, &link, notice).await;
+        }
         match event {
-          LogEvent::WaitingForLogin if !seen.pairing_shown => {
-            seen.pairing_shown = true;
-            notify(app, Notice::NotPaired).await;
-          }
-          LogEvent::LoginFailed => notify(app, Notice::BadKey).await,
-          LogEvent::ExpiresIn { count, unit } if !seen.expiry_warned && expires_soon(count, &unit) => {
-            seen.expiry_warned = true;
-            notify(app, Notice::ExpiresSoon { count, unit }).await;
-          }
           LogEvent::AverageBitrate(bitrate) => quality.bitrate = Some(bitrate),
           LogEvent::Codec(codec) => quality.codec = Some(codec),
           LogEvent::SampleRate(rate) => {
@@ -597,7 +771,9 @@ async fn run_once(
               info!("soloist: streaming {}", measured.label());
               let previous = link.quality();
               link.set_quality(measured.clone());
-              app.lock().await.note_soloist_quality(&link, previous, &measured);
+              if let Some(mut app) = current_app(app, config, shared).await {
+                app.note_soloist_quality(&link, previous, &measured);
+              }
             }
           }
           _ => {}
@@ -612,16 +788,27 @@ async fn run_once(
             debug!("soloist: command refused: {message}");
           }
           let logged_in = matches!(event, Event::Auth { logged_in: true, .. } | Event::State(_));
-          app.lock().await.apply_soloist_event(&link, &event);
-          if logged_in && !seen.logged_in {
-            seen.logged_in = true;
-            offline_pending = false;
-            seed_watch = true;
-            if std::mem::take(first_login) {
-              app
-                .lock()
-                .await
-                .soloist_logged_in(config.startup_behavior, config.startup_shuffle);
+          if logged_in || matches!(event, Event::Auth { logged_in: false, .. }) {
+            seen.auth(logged_in);
+          }
+          {
+            let current = current_app(app, config, shared)
+              .await
+              .filter(|app| app.is_current_soloist(&link));
+            let Some(mut app) = current else {
+              // A superseded or stopping child writes nothing to the App, but a device
+              // change must still cancel its queued pause or deactivation.
+              link.apply(&event);
+              continue;
+            };
+            app.apply_soloist_event(&link, &event);
+            if logged_in && !seen.login_handled {
+              seen.login_handled = true;
+              offline_pending = false;
+              seed_watch = true;
+              if std::mem::take(first_login) {
+                app.soloist_logged_in(config.startup_behavior, config.startup_shuffle);
+              }
             }
           }
           if seed_watch {
@@ -632,7 +819,7 @@ async fn run_once(
           }
           let snapshot = link.snapshot();
           if seed_restart && !snapshot.status.is_playing() {
-            notify(app, Notice::RestartingForQuality).await;
+            notify_link(app, config, shared, &link, Notice::RestartingForQuality).await;
             terminate(&mut child).await;
             break Outcome::Restart { reactivate: snapshot.is_active };
           }
@@ -640,14 +827,54 @@ async fn run_once(
         Some(Ok(_)) => {}
         Some(Err(_)) | None => {
           warn!("soloist: the WebSocket closed");
-          terminate(&mut child).await;
-          break Outcome::Exited(Exit::Crashed(None));
+          // An exiting child closes the socket first: give it a moment to exit by itself.
+          let status = tokio::select! {
+            biased;
+            _ = shared.stop.notified() => {
+              terminate(&mut child).await;
+              break Outcome::Exited(Exit::Stopped);
+            }
+            status = tokio::time::timeout(EXIT_GRACE, child.wait()) => match status {
+              Ok(status) => status,
+              Err(_) => {
+                terminate(&mut child).await;
+                child.wait().await
+              }
+            },
+          };
+          let until = tokio::time::Instant::now() + EXIT_GRACE;
+          break classify_tail(
+            app,
+            config,
+            shared,
+            Some(&link),
+            &mut seen,
+            &mut log_rx,
+            Some(status),
+            until,
+            None,
+          )
+          .await;
         }
       },
-      status = child.wait() => break Outcome::Exited(seen.exit(status, shared)),
+      status = child.wait() => {
+        let until = tokio::time::Instant::now() + EXIT_GRACE;
+        break classify_tail(
+          app,
+          config,
+          shared,
+          Some(&link),
+          &mut seen,
+          &mut log_rx,
+          Some(status),
+          until,
+          None,
+        )
+        .await;
+      }
       _ = tokio::time::sleep_until(offline_at), if offline_pending => {
         offline_pending = false;
-        notify(app, Notice::Offline).await;
+        notify_link(app, config, shared, &link, Notice::Offline).await;
       }
       _ = shared.stop.notified() => {
         terminate(&mut child).await;
@@ -803,5 +1030,521 @@ mod tests {
       "{prefs}"
     );
     assert_eq!(seed_new_accounts(dir.path(), 5, &before), Some(false));
+  }
+
+  #[cfg(unix)]
+  fn fake_soloist(dir: &Path, body: &str) -> Config {
+    use std::os::unix::fs::PermissionsExt;
+
+    let path = dir.join("soloist");
+    std::fs::write(
+      &path,
+      format!("#!/bin/sh\nwhile [ \"$1\" != -D ]; do shift; done\ndata=$2\n{body}\n"),
+    )
+    .unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    test_config(path, dir)
+  }
+
+  fn test_config(path: PathBuf, dir: &Path) -> Config {
+    Config {
+      generation: 0,
+      path,
+      device_name: "spotatui".to_string(),
+      key: super::super::auth::key_with(Some("test-key".to_string()), None).unwrap(),
+      data_dir: dir.join("data"),
+      cache_dir: dir.join("cache"),
+      quality: 5,
+      initial_volume: 50,
+      startup_behavior: None,
+      startup_shuffle: false,
+    }
+  }
+
+  fn fake_config() -> Config {
+    test_config(PathBuf::from("soloist"), Path::new("unused"))
+  }
+
+  #[cfg(unix)]
+  async fn wait_until(mut ready: impl AsyncFnMut() -> bool) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+      while !ready().await {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+      }
+    })
+    .await
+    .expect("the mock Soloist did not reach the expected state");
+  }
+
+  #[cfg(unix)]
+  #[tokio::test]
+  async fn startup_classifies_a_child_that_closes_its_logs_before_exiting() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = fake_soloist(
+      dir.path(),
+      "exec 1>&- 2>&-\ntouch \"$data/closed\"\n\
+       while [ ! -f \"$data/release\" ]; do sleep 0.01; done\nexit 10",
+    );
+    let app = Arc::new(Mutex::new(App::default()));
+    let shared = Shared::default();
+    let mut first_login = true;
+    let run = run_once(&app, &config, &shared, false, &mut first_login);
+    tokio::pin!(run);
+    tokio::select! {
+      _ = wait_until(async || config.data_dir.join("closed").is_file()) => {}
+      _ = &mut run => panic!("startup ended before the child exited"),
+    }
+    assert!(tokio::time::timeout(Duration::from_millis(100), &mut run)
+      .await
+      .is_err());
+    std::fs::write(config.data_dir.join("release"), "").unwrap();
+
+    let outcome = tokio::time::timeout(Duration::from_secs(5), run)
+      .await
+      .expect("startup did not observe the exit");
+    assert!(matches!(outcome, Outcome::Exited(Exit::Expired)));
+  }
+
+  #[cfg(unix)]
+  #[tokio::test]
+  async fn startup_uses_the_final_log_line_to_classify_a_busy_data_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = fake_soloist(
+      dir.path(),
+      "(sleep 0.15; echo 'another session is running for data directory' >&2) &\nexit 1",
+    );
+    let app = Arc::new(Mutex::new(App::default()));
+    let outcome = run_once(&app, &config, &Shared::default(), false, &mut true).await;
+    assert!(matches!(outcome, Outcome::Exited(Exit::DataDirInUse)));
+  }
+
+  #[cfg(unix)]
+  #[tokio::test]
+  async fn startup_reports_a_rejected_key_from_the_tail_instead_of_restarting() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = fake_soloist(
+      dir.path(),
+      "(sleep 0.15; echo 'login failed' >&2) &\nexit 1",
+    );
+    let app = Arc::new(Mutex::new(App::default()));
+    tokio::time::timeout(
+      Duration::from_secs(2),
+      supervise(&app, &config, &Shared::default()),
+    )
+    .await
+    .expect("a rejected key should end startup");
+    let app = app.lock().await;
+    assert_eq!(
+      app.status_message(),
+      Some(app.strings().status.infra.soloist_bad_key)
+    );
+  }
+
+  #[cfg(unix)]
+  #[tokio::test]
+  async fn startup_shows_expiry_and_pairing_before_the_websocket_is_ready() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = fake_soloist(
+      dir.path(),
+      "echo 'client expires in 3 days'\n\
+       while [ ! -f \"$data/release\" ]; do sleep 0.01; done\n\
+       echo 'waiting for login'\nexec sleep 30",
+    );
+    let app = Arc::new(Mutex::new(App::default()));
+    let shared = Shared::default();
+    let mut first_login = true;
+    let strings = app.lock().await.strings().status.infra;
+    let expected = strings.soloist_expires_soon(3, strings.soloist_expiry_unit("days"));
+    let observe = async {
+      wait_until(async || app.lock().await.status_message() == Some(expected.as_str())).await;
+      std::fs::write(config.data_dir.join("release"), "").unwrap();
+      wait_until(async || app.lock().await.soloist_pairing_device().is_some()).await;
+      shared.stop.notify_one();
+    };
+
+    let (outcome, ()) = tokio::join!(
+      run_once(&app, &config, &shared, false, &mut first_login),
+      observe,
+    );
+    assert!(matches!(outcome, Outcome::Exited(Exit::Stopped)));
+  }
+
+  #[cfg(unix)]
+  #[tokio::test]
+  async fn startup_observes_a_child_exit_during_the_websocket_handshake() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let dir = tempfile::tempdir().unwrap();
+    let config = fake_soloist(
+      dir.path(),
+      &format!(
+        "echo 'ready, device_name=spotatui device_id=test-device'\n\
+         echo 'websocket server listening on 127.0.0.1:{port}'\n\
+         while [ ! -f \"$data/release\" ]; do sleep 0.01; done\nexit 10"
+      ),
+    );
+    let app = Arc::new(Mutex::new(App::default()));
+    let shared = Shared::default();
+    let mut first_login = true;
+    let run = run_once(&app, &config, &shared, false, &mut first_login);
+    tokio::pin!(run);
+    let (_stream, _) = tokio::select! {
+      accepted = tokio::time::timeout(Duration::from_secs(5), listener.accept()) => accepted.unwrap().unwrap(),
+      _ = &mut run => panic!("startup ended before it opened the socket"),
+    };
+    std::fs::write(config.data_dir.join("release"), "").unwrap();
+
+    let outcome = tokio::time::timeout(Duration::from_secs(5), run)
+      .await
+      .expect("startup did not observe the exit");
+    assert!(matches!(outcome, Outcome::Exited(Exit::Expired)));
+  }
+
+  #[cfg(unix)]
+  #[tokio::test]
+  async fn startup_uses_the_current_childs_files_when_the_logs_close() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let dir = tempfile::tempdir().unwrap();
+    let config = fake_soloist(
+      dir.path(),
+      &format!(
+        "echo $$ > \"$data/soloist.pid\"\necho test-device > \"$data/.device_id\"\n\
+         echo {port} > \"$data/ws.port\"\nexec 1>&- 2>&-\nexec sleep 30"
+      ),
+    );
+    let app = Arc::new(Mutex::new(App::default()));
+    let shared = Shared::default();
+    let mut first_login = true;
+    let observe = async {
+      let (stream, _) = listener.accept().await.unwrap();
+      let socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+      wait_until(async || {
+        app
+          .lock()
+          .await
+          .soloist_link()
+          .is_some_and(|link| link.device_id() == "test-device")
+      })
+      .await;
+      shared.stop.notify_one();
+      socket
+    };
+    let (outcome, _socket) = tokio::time::timeout(Duration::from_secs(5), async {
+      tokio::join!(
+        run_once(&app, &config, &shared, false, &mut first_login),
+        observe
+      )
+    })
+    .await
+    .expect("startup did not connect from the current child's files");
+    assert!(matches!(outcome, Outcome::Exited(Exit::Stopped)));
+  }
+
+  #[test]
+  fn a_pairing_log_after_login_does_not_reopen_the_prompt() {
+    let mut seen = Seen {
+      logged_in: true,
+      ..Seen::default()
+    };
+    assert_eq!(seen.note(&LogEvent::WaitingForLogin), None);
+  }
+
+  #[cfg(unix)]
+  #[tokio::test]
+  async fn startup_drops_notices_and_failure_from_a_superseded_child() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = fake_soloist(
+      dir.path(),
+      "touch \"$data/started\"\n\
+       while [ ! -f \"$data/release\" ]; do sleep 0.01; done\n\
+       echo 'waiting for login'\necho 'login failed'\nexit 1",
+    );
+    let app = Arc::new(Mutex::new(App::default()));
+    let shared = Shared::default();
+    let replace = async {
+      wait_until(async || config.data_dir.join("started").is_file()).await;
+      let mut app = app.lock().await;
+      app.begin_soloist_start(None, false);
+      app.set_status_message("new startup", 30);
+      std::fs::write(config.data_dir.join("release"), "").unwrap();
+    };
+    tokio::time::timeout(Duration::from_secs(6), async {
+      tokio::join!(supervise(&app, &config, &shared), replace)
+    })
+    .await
+    .expect("the superseded child did not exit");
+
+    let app = app.lock().await;
+    assert!(app.native_backend_pending);
+    assert_eq!(app.status_message(), Some("new startup"));
+    assert!(app.soloist_pairing_device().is_none());
+  }
+  #[cfg(unix)]
+  fn handshake_script(port: u16, after: &str) -> String {
+    format!(
+      "echo 'ready, device_name=spotatui device_id=test-device'\n\
+       echo 'websocket server listening on 127.0.0.1:{port}'\n{after}"
+    )
+  }
+
+  #[cfg(unix)]
+  async fn accept_soloist(
+    listener: &tokio::net::TcpListener,
+  ) -> tokio_tungstenite::WebSocketStream<tokio::net::TcpStream> {
+    let (stream, _) = listener.accept().await.unwrap();
+    tokio_tungstenite::accept_async(stream).await.unwrap()
+  }
+
+  #[cfg(unix)]
+  #[tokio::test]
+  async fn a_superseded_childs_device_change_still_cancels_its_queued_pause() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let dir = tempfile::tempdir().unwrap();
+    let config = fake_soloist(dir.path(), &handshake_script(port, "exec sleep 30"));
+    let app = Arc::new(Mutex::new(App::default()));
+    let shared = Shared::default();
+    let mut first_login = true;
+    let observe = async {
+      let mut socket = accept_soloist(&listener).await;
+      wait_until(async || app.lock().await.soloist_link().is_some()).await;
+      let link = app.lock().await.soloist_link().unwrap();
+      let device = |active: bool| {
+        Message::Text(format!(r#"{{"type":"device_changed","is_active":{active}}}"#).into())
+      };
+      socket.send(device(true)).await.unwrap();
+      wait_until(async || link.snapshot().is_active).await;
+      // The user saves a new engine: this child is superseded, then the phone takes over.
+      app.lock().await.begin_soloist_start(None, false);
+      socket.send(device(false)).await.unwrap();
+      wait_until(async || !link.snapshot().is_active).await;
+      shared.stop.notify_one();
+      socket
+    };
+    let (outcome, _socket) = tokio::time::timeout(Duration::from_secs(8), async {
+      tokio::join!(
+        run_once(&app, &config, &shared, false, &mut first_login),
+        observe
+      )
+    })
+    .await
+    .expect("the superseded child's link missed the device change");
+    assert!(matches!(outcome, Outcome::Exited(Exit::Stopped)));
+  }
+
+  #[cfg(unix)]
+  #[tokio::test]
+  async fn a_superseded_start_does_not_install_its_link_after_the_handshake() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let dir = tempfile::tempdir().unwrap();
+    let config = fake_soloist(dir.path(), &handshake_script(port, "exec sleep 30"));
+    let app = Arc::new(Mutex::new(App::default()));
+    let shared = Shared::default();
+    let mut first_login = true;
+    let observe = async {
+      let (stream, _) = listener.accept().await.unwrap();
+      app.lock().await.begin_soloist_start(None, false);
+      tokio_tungstenite::accept_async(stream).await.unwrap()
+    };
+    let (outcome, _socket) = tokio::time::timeout(Duration::from_secs(8), async {
+      tokio::join!(
+        run_once(&app, &config, &shared, false, &mut first_login),
+        observe
+      )
+    })
+    .await
+    .expect("the superseded child did not stop");
+    assert!(matches!(outcome, Outcome::Exited(Exit::Stopped)));
+    let app = app.lock().await;
+    assert!(app.soloist_link().is_none());
+    assert!(app.native_backend_pending);
+  }
+
+  #[cfg(unix)]
+  #[tokio::test]
+  async fn an_exit_right_after_the_handshake_is_classified_from_the_tail() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let dir = tempfile::tempdir().unwrap();
+    let config = fake_soloist(
+      dir.path(),
+      &handshake_script(
+        port,
+        "while [ ! -f \"$data/release\" ]; do sleep 0.01; done\n\
+         (sleep 0.15; echo 'login failed' >&2) &\nexit 1",
+      ),
+    );
+    let app = Arc::new(Mutex::new(App::default()));
+    let shared = Shared::default();
+    let mut first_login = true;
+    let observe = async {
+      let socket = accept_soloist(&listener).await;
+      wait_until(async || app.lock().await.soloist_link().is_some()).await;
+      std::fs::write(config.data_dir.join("release"), "").unwrap();
+      socket
+    };
+    let (outcome, _socket) = tokio::time::timeout(Duration::from_secs(8), async {
+      tokio::join!(
+        run_once(&app, &config, &shared, false, &mut first_login),
+        observe
+      )
+    })
+    .await
+    .expect("the child exit was not observed");
+    assert!(matches!(outcome, Outcome::Fatal(Notice::BadKey)));
+  }
+
+  #[cfg(unix)]
+  #[tokio::test]
+  async fn a_socket_closed_by_an_exiting_child_waits_for_its_exit_code() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let dir = tempfile::tempdir().unwrap();
+    let config = fake_soloist(
+      dir.path(),
+      &handshake_script(
+        port,
+        "while [ ! -f \"$data/release\" ]; do sleep 0.01; done\n\
+         echo 'client expired'\nsleep 0.3\nexit 1",
+      ),
+    );
+    let app = Arc::new(Mutex::new(App::default()));
+    let shared = Shared::default();
+    let mut first_login = true;
+    let observe = async {
+      let socket = accept_soloist(&listener).await;
+      wait_until(async || app.lock().await.soloist_link().is_some()).await;
+      std::fs::write(config.data_dir.join("release"), "").unwrap();
+      tokio::time::sleep(Duration::from_millis(100)).await;
+      drop(socket);
+    };
+    let (outcome, ()) = tokio::time::timeout(Duration::from_secs(8), async {
+      tokio::join!(
+        run_once(&app, &config, &shared, false, &mut first_login),
+        observe
+      )
+    })
+    .await
+    .expect("the child exit was not observed");
+    assert!(matches!(outcome, Outcome::Exited(Exit::Expired)));
+  }
+
+  #[cfg(unix)]
+  #[tokio::test]
+  async fn a_notice_from_a_replaced_link_is_dropped() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let dir = tempfile::tempdir().unwrap();
+    let config = fake_soloist(
+      dir.path(),
+      &handshake_script(
+        port,
+        "while [ ! -f \"$data/release\" ]; do sleep 0.01; done\n\
+         echo 'login failed'\ntouch \"$data/said\"\nexec sleep 30",
+      ),
+    );
+    let app = Arc::new(Mutex::new(App::default()));
+    let shared = Shared::default();
+    let mut first_login = true;
+    let observe = async {
+      let socket = accept_soloist(&listener).await;
+      wait_until(async || app.lock().await.soloist_link().is_some()).await;
+      let (other, _rx) = SoloistLink::test_pair("other-device");
+      app.lock().await.install_soloist_link(other);
+      std::fs::write(config.data_dir.join("release"), "").unwrap();
+      wait_until(async || config.data_dir.join("said").is_file()).await;
+      tokio::time::sleep(Duration::from_millis(200)).await;
+      shared.stop.notify_one();
+      socket
+    };
+    let (outcome, _socket) = tokio::time::timeout(Duration::from_secs(8), async {
+      tokio::join!(
+        run_once(&app, &config, &shared, false, &mut first_login),
+        observe
+      )
+    })
+    .await
+    .expect("the child did not stop");
+    assert!(matches!(outcome, Outcome::Exited(Exit::Stopped)));
+    let app = app.lock().await;
+    assert_ne!(
+      app.status_message(),
+      Some(app.strings().status.infra.soloist_bad_key)
+    );
+  }
+
+  #[tokio::test]
+  async fn the_tail_is_classified_before_its_notices_wait_for_the_app() {
+    let app = Arc::new(Mutex::new(App::default()));
+    let config = fake_config();
+    let shared = Shared::default();
+    let (log_tx, mut log_rx) = mpsc::unbounded_channel();
+    log_tx.send(LogEvent::WaitingForLogin).unwrap();
+    log_tx.send(LogEvent::LoginFailed).unwrap();
+    drop(log_tx);
+    let held = app.clone().lock_owned().await;
+    let release = async {
+      tokio::time::sleep(Duration::from_millis(300)).await;
+      drop(held);
+    };
+    let mut seen = Seen::default();
+    let until = tokio::time::Instant::now() + Duration::from_millis(100);
+    let (outcome, ()) = tokio::join!(
+      classify_tail(
+        &app,
+        &config,
+        &shared,
+        None,
+        &mut seen,
+        &mut log_rx,
+        None,
+        until,
+        None
+      ),
+      release,
+    );
+    assert!(matches!(outcome, Outcome::Fatal(Notice::BadKey)));
+  }
+
+  #[test]
+  fn a_logout_lets_the_pairing_prompt_show_again() {
+    let mut seen = Seen::default();
+    assert_eq!(
+      seen.note(&LogEvent::WaitingForLogin),
+      Some(Notice::NotPaired)
+    );
+    seen.auth(true);
+    assert_eq!(seen.note(&LogEvent::WaitingForLogin), None);
+    seen.auth(false);
+    assert_eq!(
+      seen.note(&LogEvent::WaitingForLogin),
+      Some(Notice::NotPaired)
+    );
+  }
+
+  #[tokio::test]
+  async fn a_timed_out_stop_leaves_the_exit_signal_for_wait_stopped() {
+    let shared = Arc::new(Shared::default());
+    let (done_tx, done_rx) = oneshot::channel();
+    *shared.done.lock().unwrap() = Some(done_rx);
+    shared.running.store(true, Ordering::SeqCst);
+    let supervisor = {
+      let shared = shared.clone();
+      tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        shared.running.store(false, Ordering::SeqCst);
+        let _ = done_tx.send(());
+      })
+    };
+
+    stop_on(&shared, Duration::from_millis(20)).await;
+    assert!(shared.running.load(Ordering::SeqCst));
+    tokio::time::timeout(Duration::from_secs(2), wait_stopped_on(&shared))
+      .await
+      .unwrap();
+    assert!(!shared.running.load(Ordering::SeqCst));
+    supervisor.await.unwrap();
   }
 }

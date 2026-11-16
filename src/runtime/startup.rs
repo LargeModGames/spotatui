@@ -619,20 +619,15 @@ pub(super) async fn prepare_frontend(boot: Boot) -> FrontendHandles {
 
   #[cfg(feature = "soloist")]
   if soloist_attempted {
-    app.lock().await.soloist_starting();
-    crate::infra::soloist::startup::deferred_soloist_startup(
-      Arc::clone(&app),
-      crate::infra::soloist::startup::SoloistStart::from_behavior(
-        &user_config.behavior,
-        runtime_state.volume_percent,
-        if restore_playback.is_some() {
-          None
-        } else {
-          Some(initial_startup_behavior)
-        },
-        initial_shuffle_enabled,
-      ),
+    let start = app.lock().await.begin_soloist_start(
+      if restore_playback.is_some() {
+        None
+      } else {
+        Some(initial_startup_behavior)
+      },
+      initial_shuffle_enabled,
     );
+    crate::infra::soloist::startup::deferred_soloist_startup(Arc::clone(&app), start);
   }
 
   let cloned_app = Arc::clone(&app);

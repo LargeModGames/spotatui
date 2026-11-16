@@ -1,0 +1,1 @@
+- **Soloist startup shows the cause of an early exit**: spotatui reads the final log lines before deciding whether to retry or report an expired build, a busy data folder, or a rejected key. Pairing and expiry notices can appear before the connection is ready.
