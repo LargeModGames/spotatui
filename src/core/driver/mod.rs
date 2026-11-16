@@ -728,6 +728,8 @@ impl Driver {
     // down once the stream has actually started producing audio.
     #[cfg(feature = "internet-radio")]
     match app.radio_playback.as_ref() {
+      // The pump is loading the next station into this player.
+      Some(_) if app.radio_retuning() => {}
       Some(radio) => {
         if !radio.player.is_finished() {
           self.radio_stream_started = true;

@@ -1,17 +1,25 @@
 ### Alternative sources (Local / Subsonic / Radio / YouTube / Qobuz)
 
-- Radio tune-in has **three** unbounded steps, all on the serial pump, and all
-  three are capped in `infra/radio/stream.rs`: connect (`CONNECT_TIMEOUT`),
-  response headers (`HEADER_TIMEOUT`), and the format probe (`PROBE_TIMEOUT`).
-  The probe is the subtle one - rodio's symphonia scans for a start-of-stream
-  marker and a live stream never ends, so a codec it does not register scans
-  forever. Its `AdtsReader` claims only MPEG-4 ADTS (`ff f1`), not MPEG-2
-  (`ff f9`), which much European radio uses. On timeout the fix is to call
-  `OpenedStream::cancel` - stopping the *download*, not the reader: a probe
-  waiting for bytes parks inside `read`, so a flag checked between reads is
-  never seen, while cancelling marks the stream done, wakes every waiter, and
-  lets the probe thread and its download go. Only `prepare_stream` runs inside
-  the timed closure: `timeout` abandons a `spawn_blocking` closure but cannot
-  stop it, and the radio player is shared, so a probe that matched just after
-  the deadline would otherwise append the new station to the live sink. The
-  `play_prepared` happens after the timeout check.
+- Connect, headers, playlist bodies, format probing and startup buffering
+  share one 25-second tune-in deadline. Headers and bodies have their own
+  15-second caps, and probing plus buffering have a 10-second cap. Resolve at
+  most one PLS/M3U document. Explicit audio Content-Types win, and bytes read
+  from an ambiguous response are replayed to the decoder if it is audio.
+- Start the format probe as bytes arrive. Then wait for about three seconds
+  of unread audio or 64 KiB of unread raw bytes. Keep ICY metadata and probe
+  reads out of the timed audio target.
+- Symphonia can wait forever for a format it does not register, such as
+  MPEG-2 ADTS AAC. Cancelling the download wakes a probe blocked inside
+  `read`. Keep the sink out of the timed or background work.
+- A full ring parks the stream-download writer until the next read, where it
+  does not see cancellation. Dropping `RadioReader` cancels and reads one
+  already-downloaded chunk to wake it, and the body ends once cancelled, so
+  the connection closes even when nothing reads any more.
+- User tune-in runs on the serial pump. Saved radio can prepare in the
+  background. Only the pump stages or publishes the prepared session. A
+  playback request dispatched after the restore began discards it: the pump
+  drops the pending work, and `finish_radio` compares
+  `App::playback_requests` under the lock before it takes the sink.
+- A station switch keeps the old session in `radio_playback` and sets
+  `App::set_radio_retuning` while the shared player restages, so the tick
+  neither ends the session on the empty sink nor clears `last_session.yml`.

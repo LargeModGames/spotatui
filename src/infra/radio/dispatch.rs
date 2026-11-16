@@ -28,13 +28,13 @@ use tokio::sync::Mutex;
 
 use super::{
   config_station_to_track_info, is_radio_uri, open_radio_stream, stream_url_from_uri,
-  uri_for_stream_url, RadioPlaybackState, RadioSource,
+  RadioPlaybackState, RadioSource,
 };
 use crate::core::app::App;
 use crate::core::plugin_api::TrackInfo;
 use crate::core::source::{Searcher, Source};
 use crate::core::state::merged_radio_stations;
-use crate::infra::audio::LocalPlayer;
+use crate::infra::audio::{LocalPlayer, PreparedStream};
 use crate::infra::network::IoEvent;
 
 /// Intercept events that target the radio source.
@@ -225,9 +225,12 @@ async fn release_other_backends(app: &Arc<Mutex<App>>) {
 /// Reuse the live radio player, or open a fresh output device for one. A
 /// freshly opened player is **not** published to `App` here — the caller
 /// publishes the session only on a successful first play.
-async fn acquire_player(app: &Arc<Mutex<App>>) -> Option<Arc<LocalPlayer>> {
-  if let Some(p) = player(app).await {
-    return Some(p);
+async fn acquire_player(
+  app: &Arc<Mutex<App>>,
+  previous: Option<Arc<LocalPlayer>>,
+) -> Option<Arc<LocalPlayer>> {
+  if let Some(player) = previous {
+    return Some(player);
   }
   match tokio::task::spawn_blocking(LocalPlayer::new).await {
     Ok(Ok(p)) => Some(Arc::new(p)),
@@ -258,177 +261,171 @@ async fn acquire_player(app: &Arc<Mutex<App>>) -> Option<Arc<LocalPlayer>> {
   }
 }
 
-/// Begin playing the station at `uri`, taking over the session.
-async fn start_radio(app: &Arc<Mutex<App>>, uri: &str) {
-  let url = match stream_url_from_uri(uri) {
-    Ok(u) => u.to_string(),
-    Err(_) => {
-      set_error(
-        app,
-        crate::infra::app_strings(app)
-          .await
-          .status
-          .infra
-          .radio_uri_invalid
-          .to_string(),
-      )
-      .await;
+struct PreparedStation {
+  audio: PreparedStream,
+  now_playing: Arc<std::sync::Mutex<Option<String>>>,
+}
+
+enum TuneInError {
+  InvalidUri,
+  Open(anyhow::Error),
+  Prepare(anyhow::Error),
+}
+
+impl TuneInError {
+  fn message(&self, strings: &crate::core::i18n::status_infra::InfraStatusStrings) -> String {
+    let (error, fallback) = match self {
+      Self::InvalidUri => return strings.radio_uri_invalid.to_string(),
+      Self::Open(error) => (error, strings.radio_open_failed(&error.to_string())),
+      Self::Prepare(error) if error.is::<tokio::task::JoinError>() => {
+        (error, strings.radio_task_failed(&error.to_string()))
+      }
+      Self::Prepare(error) => (error, strings.radio_play_failed(&error.to_string())),
+    };
+    error
+      .downcast_ref::<super::stream::RadioOpenError>()
+      .map_or(fallback, |reason| reason.message(strings).to_string())
+  }
+}
+
+pub(crate) struct RadioTuneIn {
+  station: TrackInfo,
+  paused: bool,
+  /// For a startup restore, [`App::playback_requests`] when it began. Any
+  /// playback request dispatched since then wins over the restore.
+  requests: Option<u64>,
+  result: Result<PreparedStation, TuneInError>,
+}
+
+async fn prepare_station(station: &mut TrackInfo) -> Result<PreparedStation, TuneInError> {
+  let url = station
+    .uri
+    .as_deref()
+    .and_then(|uri| stream_url_from_uri(uri).ok())
+    .ok_or(TuneInError::InvalidUri)?;
+  let opened = open_radio_stream(url).await.map_err(TuneInError::Open)?;
+  if let Some(name) = opened.station_name.as_ref().filter(|_| station.name == url) {
+    station.name = name.clone();
+  }
+  let now_playing = Arc::clone(&opened.now_playing);
+  let audio = opened.prepare().await.map_err(TuneInError::Prepare)?;
+  Ok(PreparedStation { audio, now_playing })
+}
+
+/// This may run off the pump for startup restore. It never sees the App or sink.
+/// `requests` is the restore's [`App::playback_requests`] snapshot, `None` for
+/// a tune-in the user asked for.
+pub(crate) async fn prepare_radio(
+  mut station: TrackInfo,
+  paused: bool,
+  requests: Option<u64>,
+) -> RadioTuneIn {
+  let result = prepare_station(&mut station).await;
+  RadioTuneIn {
+    station,
+    paused,
+    requests,
+    result,
+  }
+}
+
+/// Only the serial pump may take the sink and publish a prepared station.
+pub(crate) async fn finish_radio(app: &Arc<Mutex<App>>, tune_in: RadioTuneIn) {
+  let RadioTuneIn {
+    station,
+    paused,
+    requests,
+    result,
+  } = tune_in;
+  let (PreparedStation { audio, now_playing }, previous) = {
+    let mut guard = app.lock().await;
+    // Checked under the lock `App::dispatch` holds, so a request dispatched
+    // before this point always wins, even when the pump took this first.
+    if requests.is_some_and(|requests| requests != guard.playback_requests()) {
       return;
     }
+    let prepared = match result {
+      Ok(prepared) => prepared,
+      Err(error) => {
+        let message = error.message(&guard.strings().status.infra);
+        guard.set_status_message(message, 6);
+        return;
+      }
+    };
+    guard.claim_decoded_sink(Source::Radio);
+    // Keep the old station published, so its session stays saved, while the
+    // tick ignores its briefly empty sink.
+    let previous = guard
+      .radio_playback
+      .as_ref()
+      .map(|session| Arc::clone(&session.player));
+    guard.set_radio_retuning(previous.is_some());
+    (prepared, previous)
   };
-  let mut station = {
-    let guard = app.lock().await;
-    snapshot_station(&guard, uri)
-  };
-
-  // Only one backend owns the device at a time.
-  app.lock().await.claim_decoded_sink(Source::Radio);
   release_other_backends(app).await;
-
-  let Some(player) = acquire_player(app).await else {
+  let Some(player) = acquire_player(app, previous).await else {
+    app.lock().await.release_decoded_sink_claim();
     return;
   };
 
-  // Connect + prefetch off the lock; this can take seconds on a slow network.
-  let opened = match open_radio_stream(&url).await {
-    Ok(o) => o,
-    Err(e) => {
-      set_error(
-        app,
-        crate::infra::app_strings(app)
-          .await
-          .status
-          .infra
-          .radio_open_failed(&e.to_string()),
-      )
-      .await;
-      return;
+  player.set_volume(app.lock().await.runtime_state.volume_percent);
+  let decode_player = Arc::clone(&player);
+  let stage = tokio::task::spawn_blocking(move || {
+    if paused {
+      decode_player.stage_prepared(audio)
+    } else {
+      decode_player.play_prepared(audio)
     }
-  };
-
-  // Count the click for directory-sourced stations (usage-policy nicety).
-  // Fire-and-forget: it must never delay or fail playback.
-  if let Some(uuid) = station.id.clone() {
-    tokio::spawn(async move { RadioSource::new().click(&uuid).await });
-  }
-
-  // A synthetic row (raw URL as name) gets upgraded to the station's
-  // self-reported icy-name.
-  if station.name == url {
-    if let Some(icy_name) = &opened.station_name {
-      station.name = icy_name.clone();
-      station.uri = Some(uri_for_stream_url(&url));
-    }
-  }
-
-  let now_playing = Arc::clone(&opened.now_playing);
-  let (reader, mime, cancel) = (opened.reader, opened.content_type, opened.cancel);
-  // Bound the probe, the last unbounded step of tune-in. It scans for a marker
-  // it recognises and a live stream never ends, so an unsupported codec would
-  // otherwise scan forever — and this is awaited on the serial pump, where that
-  // is not silence but a frozen app. Cancelling on the way out is what lets the
-  // probe thread and its download go, since `spawn_blocking` cannot be aborted.
-  //
-  // Only the *probe* runs in here: `timeout` abandons the closure but cannot
-  // stop it, and `acquire_player` reuses the live radio player. A probe that
-  // matched just after the deadline would otherwise append the new station to
-  // the shared sink — audible under a playbar still naming the old one, with
-  // no transport control reaching it. Preparing decides nothing; the sink is
-  // only touched below, after the deadline has passed.
-  let result = tokio::time::timeout(
-    super::stream::PROBE_TIMEOUT,
-    tokio::task::spawn_blocking(move || LocalPlayer::prepare_stream(reader, mime.as_deref(), None)),
-  )
+  })
   .await;
-
-  let result = match result {
-    Ok(result) => result,
-    Err(_) => {
-      cancel();
-      set_error(
-        app,
-        crate::infra::app_strings(app)
-          .await
-          .status
-          .infra
-          .radio_probe_timeout
-          .to_string(),
-      )
-      .await;
-      return;
-    }
+  let mut guard = app.lock().await;
+  let strings = guard.strings();
+  let error = match stage {
+    Ok(Ok(())) => None,
+    Ok(Err(error)) => Some(strings.status.infra.radio_play_failed(&error.to_string())),
+    Err(error) => Some(strings.status.infra.radio_task_failed(&error.to_string())),
   };
-
-  match result {
-    Ok(Ok(prepared)) => {
-      // The clear inside waits on the audio thread: keep it off the runtime.
-      let decode_player = Arc::clone(&player);
-      match tokio::task::spawn_blocking(move || decode_player.play_prepared(prepared)).await {
-        Ok(Ok(())) => {}
-        Ok(Err(e)) => {
-          set_error(
-            app,
-            crate::infra::app_strings(app)
-              .await
-              .status
-              .infra
-              .radio_play_failed(&e.to_string()),
-          )
-          .await;
-          return;
-        }
-        Err(e) => {
-          set_error(
-            app,
-            crate::infra::app_strings(app)
-              .await
-              .status
-              .infra
-              .radio_task_failed(&e.to_string()),
-          )
-          .await;
-          return;
-        }
-      }
-      let volume = app.lock().await.runtime_state.volume_percent;
-      player.set_volume(volume);
-
-      let display = station.name.clone();
-      let mut guard = app.lock().await;
-      // Publish the session exactly once, now that the stream is decoding.
-      guard.radio_playback = Some(RadioPlaybackState {
-        player,
-        station,
-        now_playing,
-      });
-      {
-        let strings = guard.strings();
-        guard.set_status_message(strings.status.infra.radio_playing(&display), 4)
-      };
+  guard.set_radio_retuning(false);
+  if let Some(error) = error {
+    if guard
+      .radio_playback
+      .as_ref()
+      .is_some_and(|old| old.player.is_finished())
+    {
+      guard.radio_playback = None;
     }
-    Ok(Err(e)) => {
-      set_error(
-        app,
-        crate::infra::app_strings(app)
-          .await
-          .status
-          .infra
-          .radio_play_failed(&e.to_string()),
-      )
-      .await
+    if guard.radio_playback.is_none() {
+      guard.release_decoded_sink_claim();
     }
-    Err(e) => {
-      set_error(
-        app,
-        crate::infra::app_strings(app)
-          .await
-          .status
-          .infra
-          .radio_task_failed(&e.to_string()),
-      )
-      .await
-    }
+    guard.set_status_message(error, 6);
+    return;
   }
+
+  let message = strings.status.infra.radio_playing(&station.name);
+  let directory_id = station.id.clone();
+  guard.radio_playback = Some(RadioPlaybackState {
+    player,
+    station,
+    now_playing,
+  });
+  guard.set_status_message(message, 4);
+  drop(guard);
+
+  if let Some(id) = directory_id {
+    tokio::spawn(async move { RadioSource::new().click(&id).await });
+  }
+}
+
+/// Begin playing the station at `uri`, taking over the session.
+async fn start_radio(app: &Arc<Mutex<App>>, uri: &str) {
+  if stream_url_from_uri(uri).is_err() {
+    let mut guard = app.lock().await;
+    let message = guard.strings().status.infra.radio_uri_invalid.to_string();
+    guard.set_status_message(message, 6);
+    return;
+  }
+  let station = snapshot_station(&*app.lock().await, uri);
+  finish_radio(app, prepare_radio(station, false, None).await).await;
 }
 
 /// End the radio session, releasing the output device. Stopping the sink drops
@@ -457,6 +454,118 @@ mod tests {
   fn test_app() -> App {
     let (tx, _rx) = channel();
     App::new(tx, UserConfig::new(), Some(SystemTime::now()))
+  }
+
+  #[tokio::test]
+  async fn a_failed_tune_in_does_not_take_the_audio_sink() {
+    let app = Arc::new(Mutex::new(test_app()));
+    let start = IoEvent::StartPlayback(Some("radio:not a URL".to_owned()), None, None);
+    assert!(route_radio_event(&app, &start).await);
+    let app = app.lock().await;
+    assert!(app.status_message().is_some());
+    assert!(!app.decoded_sink_claimed());
+    assert!(app.radio_playback.is_none());
+  }
+
+  fn failed_restore(requests: u64) -> RadioTuneIn {
+    RadioTuneIn {
+      station: station_row("radio:http://127.0.0.1:1/live", "Saved FM"),
+      paused: false,
+      requests: Some(requests),
+      result: Err(TuneInError::Open(anyhow::anyhow!("connection refused"))),
+    }
+  }
+
+  #[tokio::test]
+  async fn a_ready_restore_applies_when_nothing_was_requested_since() {
+    let app = Arc::new(Mutex::new(test_app()));
+    let requests = app.lock().await.playback_requests();
+    finish_radio(&app, failed_restore(requests)).await;
+    assert!(app.lock().await.status_message().is_some());
+  }
+
+  /// The pump can take a finished restore before a request that was already
+  /// dispatched. The request still wins, Next included.
+  #[tokio::test]
+  async fn a_request_dispatched_before_a_ready_restore_discards_it() {
+    for request in [
+      IoEvent::NextTrack,
+      IoEvent::StartPlayback(Some("radio:https://example.com/other".into()), None, None),
+    ] {
+      let app = Arc::new(Mutex::new(test_app()));
+      let restore = failed_restore(app.lock().await.playback_requests());
+      app.lock().await.dispatch(request);
+      finish_radio(&app, restore).await;
+      let app = app.lock().await;
+      assert!(app.status_message().is_none());
+      assert!(!app.decoded_sink_claimed());
+    }
+  }
+
+  /// A silent one-second WAV, decodable without a network.
+  fn silent_wav() -> PreparedStream {
+    let samples = 44_100u32;
+    let mut wav = Vec::new();
+    wav.extend(b"RIFF");
+    wav.extend((36 + samples * 2).to_le_bytes());
+    wav.extend(b"WAVEfmt ");
+    wav.extend(16u32.to_le_bytes());
+    wav.extend(1u16.to_le_bytes());
+    wav.extend(1u16.to_le_bytes());
+    wav.extend(44_100u32.to_le_bytes());
+    wav.extend((44_100u32 * 2).to_le_bytes());
+    wav.extend(2u16.to_le_bytes());
+    wav.extend(16u16.to_le_bytes());
+    wav.extend(b"data");
+    wav.extend((samples * 2).to_le_bytes());
+    wav.resize(wav.len() + samples as usize * 2, 0);
+    LocalPlayer::prepare_stream(std::io::Cursor::new(wav), Some("audio/wav"), None).unwrap()
+  }
+
+  /// A switch reuses the old station's player, whose sink is empty for a
+  /// moment. A tick in that window must still see a saved session, or it
+  /// clears `last_session.yml` behind the new station's save.
+  #[tokio::test(flavor = "multi_thread")]
+  #[ignore = "requires an audio output device; plays nothing (paused, silent)"]
+  async fn a_station_switch_keeps_the_old_session_saved_until_the_new_one_plays() {
+    let app = Arc::new(Mutex::new(test_app()));
+    let player = Arc::new(LocalPlayer::new().expect("open default output device"));
+    app.lock().await.radio_playback = Some(RadioPlaybackState {
+      player,
+      station: station_row("radio:https://example.com/old", "Old FM"),
+      now_playing: Arc::default(),
+    });
+    let tune_in = RadioTuneIn {
+      station: station_row("radio:https://example.com/new", "New FM"),
+      paused: true,
+      requests: None,
+      result: Ok(PreparedStation {
+        audio: silent_wav(),
+        now_playing: Arc::default(),
+      }),
+    };
+
+    // The App mutex is fair: the switch queues behind this guard, and this
+    // test's next lock queues behind the switch's first one, so it lands
+    // right after the switch claimed the sink.
+    let guard = app.lock().await;
+    let switch = tokio::spawn({
+      let app = Arc::clone(&app);
+      async move { finish_radio(&app, tune_in).await }
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    drop(guard);
+    {
+      let app = app.lock().await;
+      assert!(app.decoded_sink_claimed(), "the switch has started");
+      assert!(app.has_persistable_session());
+      assert!(app.radio_retuning());
+    }
+    switch.await.unwrap();
+    let app = app.lock().await;
+    assert!(!app.radio_retuning());
+    let session = app.radio_playback.as_ref().expect("new station published");
+    assert_eq!(session.station.name, "New FM");
   }
 
   fn station_row(uri: &str, name: &str) -> TrackInfo {

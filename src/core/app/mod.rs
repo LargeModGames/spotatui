@@ -632,6 +632,15 @@ pub struct App {
   /// a station is one infinite stream.
   #[cfg(feature = "internet-radio")]
   pub radio_playback: Option<crate::infra::radio::RadioPlaybackState>,
+  /// Set while the pump replaces the station in `radio_playback` on the same
+  /// player: the sink is briefly empty, and the session must neither read as
+  /// ended nor drop out of `last_session.yml` before the new station is live.
+  #[cfg(feature = "internet-radio")]
+  radio_retuning: bool,
+  /// Counts the playback requests dispatched through [`App::dispatch`]. A
+  /// startup radio restore notes it when it starts and gives up if it moved.
+  #[cfg(feature = "internet-radio")]
+  playback_requests: u64,
   /// The active YouTube playback session (multi-source, yt-dlp backed), or
   /// `None` when another backend owns playback. Same decoupling contract as
   /// [`subsonic_playback`](Self::subsonic_playback).
@@ -752,6 +761,10 @@ impl App {
   fn try_dispatch(&mut self, action: IoEvent) -> bool {
     // `is_loading` will be set to false again after the async action has finished in network.rs
     self.is_loading = true;
+    #[cfg(feature = "internet-radio")]
+    if action.supersedes_radio_restore() {
+      self.playback_requests += 1;
+    }
     let Some(io_tx) = &self.io_tx else {
       return false;
     };

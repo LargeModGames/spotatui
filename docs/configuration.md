@@ -202,6 +202,12 @@ behavior:
       url: https://ice1.somafm.com/groovesalad-128-mp3
 ```
 
+`url` accepts a direct HTTP(S) audio stream or a simple PLS or M3U playlist. Spotatui uses the first absolute HTTP(S) entry in an M3U, or the lowest numbered HTTP(S) `File` entry in a PLS. Playlists can use CR, LF or CRLF and UTF-16 with a BOM. The body is limited to 64 KiB and 15 seconds. Use a direct stream URL for nested playlists or HLS.
+
+An explicit audio Content-Type takes precedence over a playlist-looking URL. Spotatui inspects the body when the type is ambiguous. Connecting, reading headers and playlists, format detection and the startup cushion share a 25-second deadline; handing the stream to the audio device comes after it. Playback starts after format detection and a cushion of about three seconds of unread audio or 64 KiB of unread stream data, whichever comes first.
+
+For legacy SHOUTcast servers that send an `ICY 200 OK` status line, use a stream endpoint that returns a standard HTTP response.
+
 Stations saved from inside the app are stored in `state.yml`. The sidebar merges configured stations first and app-saved stations second, deduped by stream URL. To remove a configured station, edit `config.yml`; the in-app remove action only removes app-saved stations from `state.yml`.
 
 ## Qobuz
