@@ -16,9 +16,9 @@ use crate::core::plugin_api::TrackInfo;
 use crate::infra::dj::resolve::{self, ResolveReport};
 #[cfg(any(feature = "mcp-server", feature = "ai-dj"))]
 use crate::infra::dj::tools::{queue_needs_spotify, DjToolCall, QueueItem, ToolOutcome};
-#[cfg(any(feature = "mcp-server", feature = "ai-dj"))]
-use crate::infra::dj::MAX_BATCH;
 use crate::infra::dj::{library, DjLibrary, DjLine, DjSuggestion};
+#[cfg(any(feature = "mcp-server", feature = "ai-dj"))]
+use crate::infra::dj::{DjTurn, RefillProgress, TurnKind, MAX_BATCH};
 use crate::infra::network::IoEvent;
 use rspotify::model::track::FullTrack;
 #[cfg(any(feature = "mcp-server", feature = "ai-dj"))]
@@ -129,17 +129,31 @@ fn play_now_source_error(
 /// The tool handlers behind `DjToolCall`, shared by both front doors.
 #[cfg(any(feature = "mcp-server", feature = "ai-dj"))]
 impl Network {
-  async fn queue_resolved_tracks(&self, report: &mut resolve::ResolveReport) -> usize {
+  async fn queue_resolved_tracks(
+    &self,
+    report: &mut resolve::ResolveReport,
+    turn: Option<DjTurn>,
+  ) -> Option<usize> {
     let mut app = self.app.lock().await;
+    if turn.is_some_and(|turn| !turn.is_current(&app)) {
+      return None;
+    }
     // Count before taking the tracks; render and publish with one language lock.
     let summary = report.summary_with(app.strings());
+    let queue_len = app.native_queue.len();
     let accepted = match app.apply(Action::QueueTracks(std::mem::take(&mut report.resolved))) {
       ActionOutcome::Queued { accepted } => accepted,
       ActionOutcome::Applied | ActionOutcome::SettingsSaved { .. } => 0,
     };
-    let message = app.strings().status.infra.dj_status(&summary);
-    app.set_status_message(message, 5);
-    accepted
+    if turn.is_some() && app.dj.turn_kind == TurnKind::Refill {
+      if app.native_queue.len() > queue_len {
+        app.dj.refill_progress = RefillProgress::Queued;
+      }
+    } else {
+      let message = app.strings().status.infra.dj_status(&summary);
+      app.set_status_message(message, 5);
+    }
+    Some(accepted)
   }
 
   /// Answers a call with no Spotify item (`!call.needs_network()`) at once,
@@ -147,9 +161,10 @@ impl Network {
   pub async fn answer_dj_tool_call_without_spotify(
     app: &std::sync::Arc<tokio::sync::Mutex<crate::core::app::App>>,
     call: DjToolCall,
+    turn: Option<DjTurn>,
   ) -> ToolOutcome {
     let mut network = Network::new(None, app);
-    network.dj_tool_outcome(call).await
+    network.dj_tool_outcome(call, turn).await
   }
 
   /// Run a DJ tool call that needs the catalogue, and answer the waiting caller.
@@ -161,6 +176,7 @@ impl Network {
     &mut self,
     call: DjToolCall,
     responder: oneshot::Sender<ToolOutcome>,
+    turn: Option<DjTurn>,
   ) {
     // The caller timed out while the call waited: running it now would queue or
     // play behind its back, and a retry would do it twice.
@@ -168,13 +184,13 @@ impl Network {
       log::debug!("DJ: {} dropped, its caller gave up", call.tool_name());
       return;
     }
-    let outcome = self.dj_tool_outcome(call).await;
+    let outcome = self.dj_tool_outcome(call, turn).await;
     // The receiver is gone if the MCP client hung up mid-call; that is normal,
     // not an error worth surfacing.
     let _ = responder.send(outcome);
   }
 
-  async fn dj_tool_outcome(&mut self, call: DjToolCall) -> ToolOutcome {
+  async fn dj_tool_outcome(&mut self, call: DjToolCall, turn: Option<DjTurn>) -> ToolOutcome {
     // This variant bypasses the generic auth gate so we can say something
     // useful here instead of the caller seeing a dropped channel.
     if call.needs_network() && self.spotify.is_none() {
@@ -187,8 +203,12 @@ impl Network {
         items,
         exclude_owned,
         extra_skip_keys,
-      } => self.dj_queue(items, exclude_owned, extra_skip_keys).await,
-      DjToolCall::PlayNow { uri } => self.dj_play_now(uri).await,
+      } => {
+        self
+          .dj_queue(items, exclude_owned, extra_skip_keys, turn)
+          .await
+      }
+      DjToolCall::PlayNow { uri } => self.dj_play_now(uri, turn).await,
       DjToolCall::GetAlbum { album } => self.dj_album(&album).await,
       DjToolCall::GetArtist { artist } => self.dj_artist(&artist).await,
       DjToolCall::ListDevices => self.dj_devices().await,
@@ -481,6 +501,7 @@ impl Network {
     items: Vec<QueueItem>,
     exclude_owned: bool,
     extra_skip_keys: Vec<String>,
+    turn: Option<DjTurn>,
   ) -> ToolOutcome {
     // Ownership is a Spotify notion: a batch with no Spotify item has nothing the
     // filter could skip, so it pays for no crawl.
@@ -578,7 +599,9 @@ impl Network {
       .map(|track| format!("{} — {}", track.name, track.artists.join(", ")))
       .collect();
 
-    let accepted = self.queue_resolved_tracks(&mut report).await;
+    let Some(accepted) = self.queue_resolved_tracks(&mut report, turn).await else {
+      return ToolOutcome::dropped();
+    };
 
     ToolOutcome::data_localized(
       |strings| {
@@ -618,12 +641,12 @@ impl Network {
   ///
   /// Deliberately not filtered by `exclude_owned`: the caller asked for this
   /// exact track right now, and owning it is not a reason to refuse.
-  async fn dj_play_now(&self, uri: String) -> ToolOutcome {
+  async fn dj_play_now(&self, uri: String, turn: Option<DjTurn>) -> ToolOutcome {
     // Only Spotify URIs can be checked from here. The opaque schemes are minted
     // by their own sources and have no catalogue to look them up in, so they go
     // through with wording that does not overclaim.
     if !uri.starts_with("spotify:track:") {
-      if let Some(error) = self.dj_start_playback(&uri).await {
+      if let Some(error) = self.dj_start_playback(&uri, turn).await {
         return error;
       }
       return ToolOutcome::ok_localized(|strings| strings.status.tools.sent(&uri));
@@ -635,7 +658,7 @@ impl Network {
     };
 
     let label = format!("{} — {}", track.name, track.artists.join(", "));
-    if let Some(error) = self.dj_start_playback(&uri).await {
+    if let Some(error) = self.dj_start_playback(&uri, turn).await {
       return error;
     }
     ToolOutcome::data_localized(
@@ -644,13 +667,16 @@ impl Network {
     )
   }
 
-  async fn dj_start_playback(&self, uri: &str) -> Option<ToolOutcome> {
+  async fn dj_start_playback(&self, uri: &str, turn: Option<DjTurn>) -> Option<ToolOutcome> {
     #[cfg(feature = "qobuz")]
     let qobuz_logged_in =
       !uri.starts_with("qobuz:") || crate::infra::qobuz::auth::current_token().is_some();
     #[cfg(not(feature = "qobuz"))]
     let qobuz_logged_in = false;
     let mut app = self.app.lock().await;
+    if turn.is_some_and(|turn| !turn.is_current(&app)) {
+      return Some(ToolOutcome::dropped());
+    }
     if let Some(error) = play_now_source_error(
       uri,
       app.user_config.behavior.subsonic_url.is_some(),
@@ -1037,13 +1063,13 @@ mod tests {
       .infra
       .dj_status(&report.summary_with(Language::ZhHant.strings()));
     let mut guard = network.app.lock().await;
-    let publish = network.queue_resolved_tracks(&mut report);
+    let publish = network.queue_resolved_tracks(&mut report, None);
     tokio::pin!(publish);
     assert!(futures::poll!(&mut publish).is_pending());
     guard.user_config.behavior.language = Language::ZhHant;
     guard.refresh_language();
     drop(guard);
-    publish.await;
+    assert!(publish.await.is_some());
     assert_eq!(
       network.app.lock().await.status_message(),
       Some(expected.as_str())
@@ -1068,7 +1094,7 @@ mod tests {
     let english = expected(Language::En);
     let traditional = expected(Language::ZhHant);
     let held = network.app.lock().await;
-    let publish = network.queue_resolved_tracks(&mut report);
+    let publish = network.queue_resolved_tracks(&mut report, None);
     let switch = async {
       let mut app = network.app.lock().await;
       let already_published = app.status_message().is_some();
@@ -1150,9 +1176,12 @@ mod tests {
   async fn play_now_without_a_spotify_session_reports_an_error_without_dispatching() {
     let (mut network, events) = network_with_events();
     let outcome = network
-      .dj_tool_outcome(DjToolCall::PlayNow {
-        uri: "spotify:track:abc".into(),
-      })
+      .dj_tool_outcome(
+        DjToolCall::PlayNow {
+          uri: "spotify:track:abc".into(),
+        },
+        None,
+      )
       .await;
 
     assert!(outcome.is_error);
@@ -1178,6 +1207,7 @@ mod tests {
       let outcome = Network::answer_dj_tool_call_without_spotify(
         &network.app,
         DjToolCall::PlayNow { uri: uri.into() },
+        None,
       )
       .await;
 
@@ -1198,6 +1228,7 @@ mod tests {
     let outcome = Network::answer_dj_tool_call_without_spotify(
       &network.app,
       DjToolCall::PlayNow { uri: uri.into() },
+      None,
     )
     .await;
 
@@ -1222,6 +1253,7 @@ mod tests {
       DjToolCall::PlayNow {
         uri: "subsonic:track:1".into(),
       },
+      None,
     )
     .await;
 
@@ -1312,7 +1344,7 @@ mod tests {
         stream.write_all(response.as_bytes()).await.unwrap();
       });
 
-      let outcome = network.dj_play_now(uri.into()).await;
+      let outcome = network.dj_play_now(uri.into(), None).await;
       server.await.unwrap();
       assert_eq!(outcome.is_error, !exists, "{}", outcome.text);
       if exists {
@@ -1344,6 +1376,7 @@ mod tests {
           limit: 5,
         },
         tx,
+        None,
       )
       .await;
     let outcome = rx.await.expect("the responder must always be used");
@@ -1357,7 +1390,9 @@ mod tests {
     let (tx, rx) = oneshot::channel();
     // Needs no network, so it skips the auth check and reaches the catch-all
     // arm, which still answers; the point is that the responder is consumed.
-    network.run_dj_tool_call(DjToolCall::SkipTrack, tx).await;
+    network
+      .run_dj_tool_call(DjToolCall::SkipTrack, tx, None)
+      .await;
     assert!(rx.await.is_ok());
   }
 
@@ -1375,7 +1410,7 @@ mod tests {
   async fn a_batch_with_no_spotify_item_queues_without_a_session_or_a_crawl() {
     let app = Arc::new(Mutex::new(App::default()));
 
-    let outcome = Network::answer_dj_tool_call_without_spotify(&app, local_batch()).await;
+    let outcome = Network::answer_dj_tool_call_without_spotify(&app, local_batch(), None).await;
 
     assert!(!outcome.is_error, "{}", outcome.text);
     assert!(outcome.text.contains("Queued 1"), "{}", outcome.text);
@@ -1396,7 +1431,7 @@ mod tests {
     let (tx, rx) = oneshot::channel();
     drop(rx);
 
-    network.run_dj_tool_call(local_batch(), tx).await;
+    network.run_dj_tool_call(local_batch(), tx, None).await;
 
     assert_eq!(network.app.lock().await.native_queue.len(), 0);
   }
@@ -1478,6 +1513,7 @@ mod tests {
         vec![QueueItem::Uri("spotify:track:abc".to_string())],
         /* exclude_owned */ true,
         Vec::new(),
+        None,
       )
       .await;
     assert!(outcome.is_error);
@@ -1601,7 +1637,7 @@ mod tests {
 #[cfg(feature = "ai-dj")]
 mod in_tui {
   use super::*;
-  use crate::infra::dj::agent::Turn;
+  use crate::infra::dj::agent::{Turn, TurnOutcome};
   use crate::infra::dj::brain::DjBrain;
   use crate::infra::dj::exec::AppExecutor;
   use crate::infra::dj::session;
@@ -1620,22 +1656,39 @@ mod in_tui {
     /// synchronously, so it is on screen while this lane is still waiting on the
     /// brain. See `AskDjRequest::extra_instruction`.
     pub async fn ask_dj(&mut self, request: AskDjRequest) {
-      let outcome = self.run_turn(&request).await;
+      let mut id = DjTurn {
+        generation: request.generation,
+        seq: request.turn_seq,
+      };
+      let outcome = self.run_turn(&request, &mut id).await;
       let mut app = self.app.lock().await;
-      // Whether this turn is still the current one. Read before `finish_turn`
-      // purely for clarity — that call does not touch `turn_seq`.
-      let owned = app.dj.turn_seq == request.turn_seq;
-      // Only if this turn still owns the flag: an abandoned turn finishing would
-      // otherwise clear the flag its replacement had already set, and the refill
-      // tick gates on exactly that flag.
-      app.dj.finish_turn(request.turn_seq);
+      let current = id.is_current(&app);
+      app.dj.finish_turn(id.seq);
+      if !current {
+        return;
+      }
+      let refill = (app.dj.turn_kind == TurnKind::Refill).then_some(app.dj.refill_progress);
+      if refill == Some(RefillProgress::Reset) {
+        return;
+      }
+      let failed_refill = refill == Some(RefillProgress::Waiting);
       match outcome {
         Ok(turn) => {
+          if turn.abandoned {
+            return;
+          }
+          if failed_refill {
+            let reason = turn
+              .tool_error
+              .map(|error| error.display_text(app.language()).to_string());
+            record_empty_refill(&mut app, reason);
+            return;
+          }
           // The listener's words only become the standing auto-queue direction
           // when the turn actually did something. Otherwise "what did I play last
           // week?" would silently steer every later refill. A vibe the model set
           // itself is more considered than the raw sentence, so it wins.
-          if turn.acted && !turn.abandoned && !turn.vibe_set {
+          if turn.acted && !turn.vibe_set {
             if let Some(vibe) = request.vibe_on_success {
               app.dj.vibe = Some(vibe);
               app.dj.bump_revision();
@@ -1644,8 +1697,8 @@ mod in_tui {
           // A refill happens while the listener is on another screen, so the
           // transcript is not a surface they can see. The interactive case is
           // deliberately left transcript-only.
-          if request.must_act && !turn.abandoned {
-            if turn.acted {
+          if request.must_act {
+            if turn.acted || refill == Some(RefillProgress::Queued) {
               let strings = app.strings();
               app.set_status_message(strings.status.infra.dj_topped_up.to_string(), 5);
             } else {
@@ -1661,19 +1714,16 @@ mod in_tui {
         }
         Err(e) => {
           log::warn!("DJ: turn failed: {e}");
-          // Silent when the turn has been superseded. An agent CLI hits its
-          // timeout a minute and a half after the listener moved on, and a
-          // failure toast for a turn they abandoned would land over the
-          // conversation they are now having.
-          if !owned {
-            return;
-          }
           // Naming the backend matters when several are configurable: "DJ error"
           // alone does not say whether to check the CLI or the key.
           let backend = session::build_brain(&app.user_config.behavior)
             .map(|brain| brain.label())
             .unwrap_or("DJ");
           let message = app.strings().status.infra.dj_error(backend, &e.to_string());
+          if failed_refill {
+            record_empty_refill(&mut app, Some(message));
+            return;
+          }
           app.dj.push_line(DjLine::system(message.clone()));
           // A toast, never `handle_error` — that pushes a modal error page over
           // whatever the user was doing.
@@ -1685,7 +1735,8 @@ mod in_tui {
     async fn run_turn(
       &mut self,
       request: &AskDjRequest,
-    ) -> anyhow::Result<crate::infra::dj::agent::TurnOutcome> {
+      id: &mut DjTurn,
+    ) -> anyhow::Result<TurnOutcome> {
       let (brain, io_tx): (DjBrain, _) = {
         let app = self.app.lock().await;
         (
@@ -1701,16 +1752,17 @@ mod in_tui {
       // door's status-bar announcements would be duplicated and misattributed.
       let executor = AppExecutor::silent(Arc::clone(&self.app), io_tx);
 
-      Turn {
+      let mut turn = Turn {
         app: &self.app,
         brain: &brain,
         context: &context,
         executor: &executor,
-        generation: request.generation,
+        id: *id,
         must_act: request.must_act,
-      }
-      .run()
-      .await
+      };
+      let outcome = turn.run().await;
+      *id = turn.id;
+      outcome
     }
 
     /// Service lane: refill the queue because it is running low.
@@ -1718,7 +1770,11 @@ mod in_tui {
       // Cheap early bail before spending a brain call on a stale request.
       {
         let mut app = self.app.lock().await;
-        if app.dj.generation != generation || !app.dj.auto_queue {
+        let id = DjTurn {
+          generation,
+          seq: turn_seq,
+        };
+        if !id.is_current(&app) {
           log::debug!("DJ: dropping a stale top-up (generation {generation})");
           app.dj.finish_turn(turn_seq);
           return;
@@ -1737,6 +1793,21 @@ mod in_tui {
     }
   }
 
+  fn record_empty_refill(app: &mut crate::core::app::App, reason: Option<String>) {
+    if app.dj.failed_refill(std::time::Instant::now()) {
+      let strings = &app.strings().status.infra;
+      let reason = reason.as_deref().unwrap_or(strings.dj_refill_empty);
+      let message = strings.dj_auto_queue_stopped(app.dj.refill_failures as usize, reason);
+      app.dj.push_line(DjLine::system(message.clone()));
+      app.set_error_status_message(message, 8);
+    } else {
+      // Intermediate attempts stay in the transcript. Only the final failure
+      // takes over the status bar, so errors cannot monopolize it on every tick.
+      let reason = reason.unwrap_or_else(|| app.strings().status.infra.dj_refill_empty.into());
+      app.dj.push_line(DjLine::system(reason));
+    }
+  }
+
   /// Whether the queue is low enough to want a refill.
   ///
   /// Free function so the tick can ask without constructing a `Network`.
@@ -1750,13 +1821,114 @@ mod in_tui {
   /// forever. The remote queue's depth is not cheaply observable, so the DJ
   /// waits until the native queue feeds playback again.
   pub fn wants_top_up(queue_len: usize, dj: &DjState, external_spotify_device: bool) -> bool {
-    !external_spotify_device && dj.auto_queue && !dj.thinking && queue_len <= QUEUE_LOW_WATER
+    !external_spotify_device
+      && dj.auto_queue
+      && !dj.thinking
+      && queue_len <= QUEUE_LOW_WATER
+      && dj
+        .refill_retry_at
+        .is_none_or(|at| std::time::Instant::now() >= at)
   }
 
   #[cfg(test)]
   mod tests {
     use super::*;
     use crate::core::app::App;
+
+    #[tokio::test]
+    async fn a_stale_dj_refill_cannot_publish_resolved_tracks() {
+      for replaced in [false, true] {
+        let (network, app) = network_with_app().await;
+        let mut app = app.lock().await;
+        app.dj.auto_queue = true;
+        let turn = DjTurn {
+          generation: app.dj.generation,
+          seq: app.dj.begin_turn(TurnKind::Refill),
+        };
+        let mut report = ResolveReport {
+          resolved: vec![TrackInfo::from(&crate::core::test_helpers::full_track(
+            "0000000000000000000001",
+            "Pick",
+          ))],
+          ..ResolveReport::default()
+        };
+        let publish = network.queue_resolved_tracks(&mut report, Some(turn));
+        tokio::pin!(publish);
+        assert!(futures::poll!(&mut publish).is_pending());
+        if replaced {
+          app.dj.begin_turn(TurnKind::Refill);
+        } else {
+          app.dj.bump_generation();
+        }
+        drop(app);
+
+        assert_eq!(publish.await, None);
+        let app = network.app.lock().await;
+        assert!(app.native_queue.is_empty());
+        assert_eq!(app.dj.refill_progress, RefillProgress::Waiting);
+        assert!(app.status_message().is_none());
+      }
+    }
+
+    #[test]
+    fn dj_shutdown_messages_render_each_reason_in_all_languages() {
+      use crate::core::i18n::Language;
+
+      let tool_error =
+        ToolOutcome::error_localized(|strings| strings.status.tools.catalogue_unavailable);
+      for (language, expected) in [
+        (
+          Language::En,
+          [
+            "DJ auto-queue stopped after 5 failed refills. DJ error (agent CLI): usage limit reached. Re-enable auto-queue to try again.",
+            "DJ auto-queue stopped after 5 failed refills. spotatui has no Spotify session, so the catalogue is unavailable. Log in from the spotatui UI, then try again. Re-enable auto-queue to try again.",
+            "DJ auto-queue stopped after 5 failed refills. No tracks were queued. Re-enable auto-queue to try again.",
+          ],
+        ),
+        (
+          Language::ZhHans,
+          [
+            "DJ 自动补充队列连续 5 次失败，已关闭。DJ 错误（agent CLI）：usage limit reached。请重新开启自动补充队列以重试。",
+            "DJ 自动补充队列连续 5 次失败，已关闭。spotatui 尚未登录 Spotify，无法访问曲库。请在 spotatui 界面中登录后重试。请重新开启自动补充队列以重试。",
+            "DJ 自动补充队列连续 5 次失败，已关闭。这次未加入任何曲目。请重新开启自动补充队列以重试。",
+          ],
+        ),
+        (
+          Language::ZhHant,
+          [
+            "DJ 自動補充佇列連續 5 次失敗，已關閉。DJ 錯誤（agent CLI）：usage limit reached。請重新開啟自動補充佇列以重試。",
+            "DJ 自動補充佇列連續 5 次失敗，已關閉。spotatui 尚未登入 Spotify，無法存取曲庫。請在 spotatui 介面中登入後重試。請重新開啟自動補充佇列以重試。",
+            "DJ 自動補充佇列連續 5 次失敗，已關閉。這次未加入任何曲目。請重新開啟自動補充佇列以重試。",
+          ],
+        ),
+      ] {
+        let strings = &language.strings().status.infra;
+        let reasons = [
+          Some(strings.dj_error("agent CLI", "usage limit reached")),
+          Some(tool_error.display_text(language).to_string()),
+          None,
+        ];
+        for (reason, expected) in reasons.into_iter().zip(expected) {
+          let mut app = App::default();
+          app.user_config.behavior.language = language;
+          app.refresh_language();
+          app.dj.auto_queue = true;
+          record_empty_refill(&mut app, reason.clone());
+          assert_eq!(
+            app.dj.transcript.last().unwrap().text,
+            reason.as_deref().unwrap_or(strings.dj_refill_empty),
+          );
+          assert!(app.status_message().is_none());
+
+          app.dj.refill_failures = crate::infra::dj::REFILL_FAILURE_LIMIT - 1;
+          record_empty_refill(&mut app, reason);
+          assert!(!app.dj.auto_queue);
+          assert_eq!(app.status_message(), Some(expected));
+          assert!(app.status_message_is_error());
+          assert_eq!(app.dj.transcript.last().unwrap().text, expected);
+        }
+      }
+    }
 
     /// A `Network` with no Spotify client, plus the `App` it shares.
     async fn network_with_app() -> (Network, std::sync::Arc<tokio::sync::Mutex<App>>) {
@@ -1836,6 +2008,248 @@ mod in_tui {
         app.status_message_is_error(),
         "and it is reported as a failure"
       );
+    }
+
+    #[cfg(unix)]
+    fn refill_stub(
+      body: &str,
+    ) -> (
+      Network,
+      std::sync::mpsc::Receiver<IoEvent>,
+      tempfile::TempDir,
+    ) {
+      let stub = tempfile::tempdir().unwrap();
+      let path = stub.path().join("fake-agent");
+      std::fs::write(
+        &path,
+        format!("cat >/dev/null\necho run >> \"$(dirname \"$0\")/calls\"\n{body}\n"),
+      )
+      .unwrap();
+      let (tx, rx) = std::sync::mpsc::channel();
+      let mut config = crate::core::user_config::UserConfig::new();
+      config.behavior.dj_backend = "agent_cli".into();
+      // The shell reads the script. Direct exec can fail if a concurrent fork
+      // inherited a writable descriptor for the file.
+      config.behavior.dj_agent_command = vec!["/bin/sh".into(), path.to_string_lossy().into()];
+      config.behavior.dj_agent_prompt_via = Some("stdin".into());
+      let app = Arc::new(tokio::sync::Mutex::new(App::new(tx, config, None)));
+      (Network::new(None, &app), rx, stub)
+    }
+
+    #[cfg(unix)]
+    async fn failed_refill_waits_before_retrying(body: &str, expected_calls: usize, reason: &str) {
+      let (mut service, rx, stub) = refill_stub(body);
+      let app = Arc::clone(&service.app);
+      app.lock().await.dj.auto_queue = true;
+      let mut spotify_lane = Network::new(None, &app);
+      for attempt in 1..=crate::infra::dj::REFILL_FAILURE_LIMIT {
+        let (generation, turn_seq) = {
+          let mut app = app.lock().await;
+          assert!(wants_top_up(0, &app.dj, false));
+          let seq = app.dj.begin_turn(crate::infra::dj::TurnKind::Refill);
+          (app.dj.generation, seq)
+        };
+        let tools = async {
+          loop {
+            while let Ok(event) = rx.try_recv() {
+              if let IoEvent::DjToolCall(call) = event {
+                let (call, responder, turn) = *call;
+                spotify_lane.run_dj_tool_call(call, responder, turn).await;
+              }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+          }
+        };
+        tokio::select! {
+          () = service.dj_top_up(generation, turn_seq) => {},
+          () = tools => unreachable!(),
+          () = tokio::time::sleep(std::time::Duration::from_secs(10)) => panic!("fake refill timed out"),
+        }
+        let calls = std::fs::read_to_string(stub.path().join("calls")).unwrap();
+        assert_eq!(calls.lines().count(), expected_calls * usize::from(attempt));
+        let mut app = app.lock().await;
+        assert!(app.native_queue.is_empty());
+        assert!(!app.dj.thinking);
+        assert_eq!(app.dj.refill_failures, attempt);
+        assert!(app
+          .dj
+          .transcript
+          .iter()
+          .any(|line| line.text.contains(reason)));
+        assert!(
+          !wants_top_up(0, &app.dj, false),
+          "a failed refill must not launch another agent on the next tick"
+        );
+        if attempt < crate::infra::dj::REFILL_FAILURE_LIMIT {
+          assert!(app.dj.auto_queue);
+          assert!(
+            !app.status_message_is_error(),
+            "only stopping raises an error toast"
+          );
+          // Advance the deadline rather than sleeping through the backoff.
+          app.dj.refill_retry_at = Some(std::time::Instant::now());
+        } else {
+          assert!(!app.dj.auto_queue);
+          let status = app.status_message().unwrap();
+          assert!(status.contains("auto-queue stopped"), "{status}");
+          assert!(status.contains(reason), "{status}");
+          assert!(app.status_message_is_error());
+          assert_eq!(
+            app
+              .dj
+              .transcript
+              .iter()
+              .filter(|line| line.text.contains("auto-queue stopped"))
+              .count(),
+            1
+          );
+        }
+      }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn dj_auto_queue_backs_off_when_the_agent_cli_hits_its_usage_limit() {
+      failed_refill_waits_before_retrying(
+        "echo 'usage limit reached' >&2; exit 1",
+        1,
+        "usage limit reached",
+      )
+      .await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn dj_auto_queue_backs_off_when_title_queueing_has_no_spotify_session() {
+      failed_refill_waits_before_retrying(
+        r#"echo '{"tool_calls":[{"name":"queue_tracks","arguments":{"tracks":[{"title":"Nightcall","artist":"Kavinsky"}]}}]}'"#,
+        crate::infra::dj::agent::MAX_STEPS_MUST_ACT,
+        "no Spotify session",
+      )
+      .await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn dj_auto_queue_backs_off_when_nothing_matches_or_only_the_vibe_changes() {
+      failed_refill_waits_before_retrying(
+        r#"echo '{"say":"No matches.","tool_calls":[]}'"#,
+        1,
+        "No tracks were queued",
+      )
+      .await;
+      failed_refill_waits_before_retrying(
+        r#"echo '{"tool_calls":[{"name":"set_dj_vibe","arguments":{"vibe":"quiet"}}]}'"#,
+        crate::infra::dj::agent::MAX_STEPS_MUST_ACT,
+        "No tracks were queued",
+      )
+      .await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_stale_dj_refill_failure_leaves_newer_retry_and_progress_state_untouched() {
+      let failures = crate::infra::dj::REFILL_FAILURE_LIMIT - 1;
+      for (action, expected_failures, replacement) in [
+        (Action::SetDjVibe(Some("quiet".into())), failures, false),
+        (Action::ToggleDjAutoQueue, 0, true),
+        (Action::ClearQueue, 0, false),
+      ] {
+        let (mut network, _events, stub) = refill_stub(
+          r#"
+        touch "$(dirname "$0")/ready"
+        while [ ! -e "$(dirname "$0")/release" ]; do sleep 0.01; done
+        echo 'usage limit reached' >&2
+        exit 1
+      "#,
+        );
+        let app = Arc::clone(&network.app);
+        let seq = {
+          let mut app = app.lock().await;
+          app.dj.auto_queue = true;
+          app.dj.refill_failures = failures;
+          app.dj.begin_turn(crate::infra::dj::TurnKind::Refill)
+        };
+        let listener = async {
+          while !stub.path().join("ready").exists() {
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+          }
+          let mut app = app.lock().await;
+          app.apply(action);
+          if replacement {
+            app.apply(Action::ToggleDjAutoQueue);
+            app.dj.step = Some((1, 2));
+          }
+          std::fs::write(stub.path().join("release"), b"").unwrap();
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+          tokio::join!(network.dj_top_up(0, seq), listener);
+        })
+        .await
+        .unwrap();
+        let app = app.lock().await;
+        assert!(app.dj.auto_queue);
+        assert_eq!(
+          app.dj.thinking, replacement,
+          "only a replacement keeps the progress flag"
+        );
+        assert_eq!(app.dj.step, replacement.then_some((1, 2)));
+        assert_eq!(app.dj.refill_failures, expected_failures);
+        assert_eq!(app.dj.refill_retry_at, None);
+        assert!(!app.status_message_is_error());
+      }
+    }
+
+    #[cfg(all(unix, feature = "local-files"))]
+    #[tokio::test]
+    async fn a_successful_dj_refill_resets_the_failure_count_and_delay() {
+      for fail_followup in [false, true] {
+        let queue = r#"echo '{"tool_calls":[{"name":"queue_tracks","arguments":{"tracks":[{"uri":"file:///dj-test.flac"}]}}]}'"#;
+        let body = if fail_followup {
+          format!(
+            r#"
+            if [ "$(wc -l < "$(dirname "$0")/calls")" -gt 1 ]; then
+              echo 'usage limit reached' >&2
+              exit 1
+            fi
+            {queue}
+          "#
+          )
+        } else {
+          queue.to_string()
+        };
+        let (mut network, _events, _stub) = refill_stub(&body);
+        let app = Arc::clone(&network.app);
+        let seq = {
+          let mut app = app.lock().await;
+          app.dj.auto_queue = true;
+          app.dj.failed_refill(std::time::Instant::now());
+          app.dj.begin_turn(crate::infra::dj::TurnKind::Refill)
+        };
+        network.dj_top_up(0, seq).await;
+        let app = app.lock().await;
+        let expected = if fail_followup {
+          1
+        } else {
+          crate::infra::dj::agent::MAX_STEPS_MUST_ACT
+        };
+        assert_eq!(app.native_queue.len(), expected);
+        assert_eq!(app.dj.refill_failures, 0);
+        assert_eq!(app.dj.refill_retry_at, None);
+        assert!(app.dj.auto_queue);
+        assert!(!app.dj.thinking);
+        if fail_followup {
+          assert!(app
+            .status_message()
+            .unwrap()
+            .contains("usage limit reached"));
+        } else {
+          assert_eq!(
+            app.status_message(),
+            Some(app.strings().status.infra.dj_topped_up)
+          );
+        }
+      }
     }
 
     #[test]

@@ -1,0 +1,1 @@
+- **DJ auto-queue backs off after a failed refill.** Retries wait 5, 10, 20, then 30 seconds. After five consecutive refills add no tracks, auto-queue turns off and shows the cause.

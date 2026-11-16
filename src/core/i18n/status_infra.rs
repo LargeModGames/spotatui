@@ -244,7 +244,10 @@ pub struct InfraStatusStrings {
   pub dj_library_failed: &'static str,
   pub dj_topped_up: &'static str,
   pub dj_nothing_queued: &'static str,
+  pub dj_refill_empty: &'static str,
+  pub dj_refill_reason: &'static str,
   pub dj_error: &'static str,
+  pub dj_auto_queue_stopped: &'static str,
   pub dj_steps_exhausted: &'static str,
   pub history_plays: &'static str,
   pub history_track_hits: &'static str,
@@ -791,6 +794,18 @@ impl InfraStatusStrings {
   pub fn dj_error(&self, backend: &str, error: &str) -> String {
     super::format_template(self.dj_error, &[("backend", backend), ("error", error)])
   }
+  pub fn dj_auto_queue_stopped(&self, count: usize, reason: &str) -> String {
+    let reason = reason.trim_end();
+    let reason = if reason.ends_with(['.', '!', '?', '。', '！', '？']) {
+      reason.to_string()
+    } else {
+      super::format_template(self.dj_refill_reason, &[("reason", reason)])
+    };
+    super::format_template(
+      self.dj_auto_queue_stopped,
+      &[("count", &count.to_string()), ("reason", &reason)],
+    )
+  }
   pub fn dj_steps_exhausted(&self, count: usize) -> String {
     super::format_template(self.dj_steps_exhausted, &[("count", &count.to_string())])
   }
@@ -1122,7 +1137,10 @@ pub const EN: InfraStatusStrings = InfraStatusStrings {
   dj_status: "DJ: {summary}",
   dj_library_failed: "DJ: could not read your playlists ({error}); recommending unfiltered",
   dj_topped_up: "DJ: topped up the queue",
+  dj_auto_queue_stopped: "DJ auto-queue stopped after {count} failed refills. {reason} Re-enable auto-queue to try again.",
   dj_nothing_queued: "DJ: nothing was queued that time. Ask again, or try a different direction.",
+  dj_refill_empty: "No tracks were queued",
+  dj_refill_reason: "{reason}.",
   dj_error: "DJ error ({backend}): {error}",
   dj_steps_exhausted: "Stopped after {count} steps. Ask again if that is not where you wanted to end up.",
   history_plays: "{count} plays · {duration}",
@@ -1398,7 +1416,10 @@ pub const ZH_HANS: InfraStatusStrings = InfraStatusStrings {
   dj_status: "DJ：{summary}",
   dj_library_failed: "DJ：无法读取你的播放列表（{error}），将不加过滤地推荐",
   dj_topped_up: "DJ：已补充队列",
+  dj_auto_queue_stopped: "DJ 自动补充队列连续 {count} 次失败，已关闭。{reason}请重新开启自动补充队列以重试。",
   dj_nothing_queued: "DJ：这次未加入任何曲目。请再试一次，或换个方向。",
+  dj_refill_empty: "这次未加入任何曲目",
+  dj_refill_reason: "{reason}。",
   dj_error: "DJ 错误（{backend}）：{error}",
   dj_steps_exhausted: "已在 {count} 步后停止。如果结果不符合预期，请再次提问。",
   history_plays: "{count} 次播放 · {duration}",
@@ -1717,7 +1738,10 @@ pub const ZH_HANT: InfraStatusStrings = InfraStatusStrings {
   dj_status: "DJ：{summary}",
   dj_library_failed: "DJ：無法讀取你的播放清單（{error}），將不加篩選地推薦",
   dj_topped_up: "DJ：已補充佇列",
+  dj_auto_queue_stopped: "DJ 自動補充佇列連續 {count} 次失敗，已關閉。{reason}請重新開啟自動補充佇列以重試。",
   dj_nothing_queued: "DJ：這次未加入任何曲目。請再試一次，或換個方向。",
+  dj_refill_empty: "這次未加入任何曲目",
+  dj_refill_reason: "{reason}。",
   dj_error: "DJ 錯誤（{backend}）：{error}",
   dj_steps_exhausted: "已在 {count} 步後停止。如果結果不符合預期，請再次提問。",
   history_plays: "{count} 次播放 · {duration}",

@@ -16,8 +16,8 @@
 use super::brain::{DjBrain, ToolExchange, ToolInvocation};
 use super::exec::ToolExecutor;
 use super::session::TurnContext;
-use super::tools::{self, DjToolCall, ToolCallError};
-use super::{DjLine, DjSpeaker};
+use super::tools::{self, DjToolCall, ToolCallError, ToolOutcome};
+use super::{DjLine, DjSpeaker, DjTurn};
 use crate::core::app::App;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -51,6 +51,7 @@ pub struct TurnOutcome {
   /// Whether the model set the standing vibe itself, which its own words should
   /// not then be overwritten by.
   pub vibe_set: bool,
+  pub tool_error: Option<Box<ToolOutcome>>,
 }
 
 /// Everything one turn needs.
@@ -59,15 +60,13 @@ pub struct Turn<'a, E: ToolExecutor> {
   pub brain: &'a DjBrain,
   pub context: &'a TurnContext,
   pub executor: &'a E,
-  /// The generation this turn belongs to. A bump the turn did not cause means the
-  /// listener has moved on and everything after it is unwanted.
-  pub generation: u64,
+  pub id: DjTurn,
   /// Whether this turn has to end in music rather than words.
   pub must_act: bool,
 }
 
 impl<E: ToolExecutor> Turn<'_, E> {
-  pub async fn run(mut self) -> anyhow::Result<TurnOutcome> {
+  pub async fn run(&mut self) -> anyhow::Result<TurnOutcome> {
     let max_steps = if self.must_act {
       MAX_STEPS_MUST_ACT
     } else {
@@ -76,16 +75,17 @@ impl<E: ToolExecutor> Turn<'_, E> {
     let mut scratch: Vec<ToolExchange> = Vec::new();
     let mut acted = false;
     let mut vibe_set = false;
+    let mut tool_error = None;
 
     for step_number in 1..=max_steps {
-      if self.abandoned().await {
+      if !self.show_step(step_number, max_steps).await {
         return Ok(TurnOutcome {
           acted,
           abandoned: true,
           vibe_set,
+          tool_error,
         });
       }
-      self.show_step(step_number, max_steps).await;
 
       let request = self.context.to_request(scratch.clone(), self.must_act);
       let step = self.brain.step(&request).await?;
@@ -98,11 +98,12 @@ impl<E: ToolExecutor> Turn<'_, E> {
           acted,
           abandoned: false,
           vibe_set,
+          tool_error,
         });
       }
 
       for call in step.calls.iter().take(MAX_CALLS_PER_STEP) {
-        match self.run_call(call).await {
+        match self.run_call(call, &mut tool_error).await {
           CallResult::Ran {
             exchange,
             mutated,
@@ -119,6 +120,7 @@ impl<E: ToolExecutor> Turn<'_, E> {
               acted,
               abandoned: true,
               vibe_set,
+              tool_error,
             })
           }
         }
@@ -140,18 +142,25 @@ impl<E: ToolExecutor> Turn<'_, E> {
     // identical to a hang, and on an agent CLI the turn has just cost real quota.
     {
       let mut app = self.app.lock().await;
-      let message = app.strings().status.infra.dj_steps_exhausted(max_steps);
-      app.dj.push_line(DjLine::system(message));
+      if self.id.is_current(&app) {
+        let message = app.strings().status.infra.dj_steps_exhausted(max_steps);
+        app.dj.push_line(DjLine::system(message));
+      }
     }
     Ok(TurnOutcome {
       acted,
       abandoned: false,
       vibe_set,
+      tool_error,
     })
   }
 
   /// Parse, apply the in-TUI policy, execute, and report one call.
-  async fn run_call(&mut self, call: &ToolInvocation) -> CallResult {
+  async fn run_call(
+    &mut self,
+    call: &ToolInvocation,
+    tool_error: &mut Option<Box<ToolOutcome>>,
+  ) -> CallResult {
     let parsed = match tools::parse_dj_call(&call.name, &call.arguments) {
       Ok(parsed) => self.apply_policy(parsed),
       // Handed back to the model rather than aborting: a malformed call is
@@ -191,43 +200,41 @@ impl<E: ToolExecutor> Turn<'_, E> {
     // Checked immediately before the call, not merely at the top of the step: a
     // brain call takes long enough for the listener to shift the vibe or leave,
     // and queueing the old direction's tracks after that is the bug this prevents.
-    if mutated && self.abandoned().await {
+    if !self.is_current().await {
       return CallResult::Abandoned;
     }
 
-    // Noted before the call consumes it: `set_dj_vibe` bumps the generation
-    // itself, and that one bump has to be told apart from the listener's.
     let sets_vibe = matches!(parsed, DjToolCall::SetDjVibe { .. });
-    let before = self.generation;
-    let outcome = self.executor.call(parsed).await;
-
-    // A serial-lane call takes seconds, which is ample time for the listener to
-    // hit vibe-shift. Adopting every bump would swallow theirs and leave a stale
-    // turn queueing alongside the one they just started, so only the single bump
-    // our own `set_dj_vibe` makes is adopted. Their bump on top of ours moves the
-    // counter by two, and still aborts.
-    let after = { self.app.lock().await.dj.generation };
-    if after != before {
-      if sets_vibe && !outcome.is_error && after == before.wrapping_add(1) {
-        self.generation = after;
-      } else {
-        return CallResult::Abandoned;
-      }
+    let outcome = self.executor.call_in_turn(parsed, self.id).await;
+    let succeeded = !outcome.is_error;
+    // The tool checks its ownership under the lock that applies its one bump.
+    if sets_vibe && succeeded {
+      self.id.generation = self.id.generation.wrapping_add(1);
     }
-    self
+    if !self
       .show_call(&call.name, |language| {
         outcome.display_text(language).to_owned()
       })
-      .await;
+      .await
+    {
+      return CallResult::Abandoned;
+    }
+    let result = if succeeded {
+      outcome.text
+    } else {
+      let text = outcome.text.clone();
+      *tool_error = Some(Box::new(outcome));
+      text
+    };
 
     CallResult::Ran {
       exchange: ToolExchange {
         name: call.name.clone(),
         arguments: call.arguments.clone(),
-        result: outcome.text,
+        result,
       },
-      mutated: mutated && !outcome.is_error,
-      set_vibe: sets_vibe && !outcome.is_error,
+      mutated: mutated && succeeded,
+      set_vibe: sets_vibe && succeeded,
     }
   }
 
@@ -254,13 +261,16 @@ impl<E: ToolExecutor> Turn<'_, E> {
     }
   }
 
-  async fn abandoned(&self) -> bool {
-    self.app.lock().await.dj.generation != self.generation
+  async fn is_current(&self) -> bool {
+    let app = self.app.lock().await;
+    self.id.is_current(&app)
   }
 
   async fn push(&self, line: DjLine) {
     let mut app = self.app.lock().await;
-    app.dj.push_line(line);
+    if self.id.is_current(&app) {
+      app.dj.push_line(line);
+    }
   }
 
   /// One transcript line per tool call, so the listener sees the DJ work rather
@@ -269,20 +279,28 @@ impl<E: ToolExecutor> Turn<'_, E> {
     &self,
     name: &str,
     render: impl FnOnce(crate::core::i18n::Language) -> String,
-  ) {
+  ) -> bool {
     let mut app = self.app.lock().await;
+    if !self.id.is_current(&app) {
+      return false;
+    }
     // Select and render under the same lock that publishes the visible line.
     let summary = first_line(&render(app.language()));
     app.dj.push_line(DjLine {
       speaker: DjSpeaker::System,
       text: format!("· {name} → {summary}"),
     });
+    true
   }
 
-  async fn show_step(&self, step: usize, of: usize) {
+  async fn show_step(&self, step: usize, of: usize) -> bool {
     let mut app = self.app.lock().await;
+    if !self.id.is_current(&app) {
+      return false;
+    }
     app.dj.step = Some((step, of));
     app.dj.bump_revision();
+    true
   }
 }
 
@@ -364,7 +382,10 @@ mod tests {
       brain,
       context,
       executor,
-      generation: 0,
+      id: DjTurn {
+        generation: 0,
+        seq: 0,
+      },
       must_act: false,
     }
   }
@@ -563,6 +584,15 @@ echo '{"say":"Still going.","tool_calls":[{"name":"get_queue","arguments":{}}]}'
   }
 
   #[cfg(unix)]
+  async fn begin_ask(app: &Arc<Mutex<App>>) -> DjTurn {
+    let mut app = app.lock().await;
+    DjTurn {
+      generation: app.dj.generation,
+      seq: app.dj.begin_turn(super::super::TurnKind::Ask),
+    }
+  }
+
+  #[cfg(unix)]
   #[tokio::test]
   async fn a_tool_result_feeds_the_next_step_and_the_turn_ends_on_words() {
     // The loop's whole contract in one test: call, feed the result back, and stop
@@ -577,7 +607,7 @@ echo '{"say":"Still going.","tool_calls":[{"name":"get_queue","arguments":{}}]}'
       brain: &brain,
       context: &context,
       executor: &executor,
-      generation: 0,
+      id: begin_ask(&app).await,
       must_act: false,
     }
     .run()
@@ -627,7 +657,7 @@ echo '{"say":"Still going.","tool_calls":[{"name":"get_queue","arguments":{}}]}'
       brain: &brain,
       context: &context,
       executor: &executor,
-      generation: 0,
+      id: begin_ask(&app).await,
       must_act: false,
     }
     .run()
@@ -662,7 +692,7 @@ echo '{"say":"Still going.","tool_calls":[{"name":"get_queue","arguments":{}}]}'
       brain: &brain,
       context: &context,
       executor: &executor,
-      generation: 0,
+      id: begin_ask(&app).await,
       must_act: false,
     }
     .run()
@@ -687,7 +717,7 @@ echo '{"say":"Still going.","tool_calls":[{"name":"get_queue","arguments":{}}]}'
       brain: &brain,
       context: &context,
       executor: &executor,
-      generation: 0,
+      id: begin_ask(&app).await,
       must_act: false,
     }
     .run()
@@ -723,8 +753,9 @@ echo '{"say":"Still going.","tool_calls":[{"name":"get_queue","arguments":{}}]}'
     ));
     let executor = ScriptedExecutor::new();
     let context = context(false);
-    let turn = turn(&app, &brain, &context, &executor);
+    let mut turn = turn(&app, &brain, &context, &executor);
     let mut guard = app.lock().await;
+    turn.id.seq = guard.dj.begin_turn(super::super::TurnKind::Ask);
     let show = turn.show_call("raw_tool", |language| {
       assert!(
         app.try_lock().is_err(),

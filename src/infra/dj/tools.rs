@@ -561,6 +561,10 @@ impl ToolOutcome {
     result
   }
 
+  pub fn dropped() -> Self {
+    Self::error_localized(|strings| strings.status.tools.dropped)
+  }
+
   pub fn data_localized<T: Into<String>>(
     render: impl Fn(&crate::core::i18n::Strings) -> T,
     structured: Value,
@@ -907,13 +911,20 @@ pub fn queue_needs_spotify(items: &[QueueItem]) -> bool {
 /// Returns `None` for calls that run the network handlers: on the Spotify lane
 /// when they need the client, else in the executor with none — see
 /// `crate::infra::network::dj`.
-pub async fn execute_app_only(app: &Arc<Mutex<App>>, call: &DjToolCall) -> Option<ToolOutcome> {
+pub async fn execute_app_only(
+  app: &Arc<Mutex<App>>,
+  call: &DjToolCall,
+  turn: Option<super::DjTurn>,
+) -> Option<ToolOutcome> {
   match call {
     DjToolCall::GetListeningHistory { period } => Some(history_outcome(app, *period).await),
     DjToolCall::GetNowPlaying => Some(now_playing_outcome(app).await),
     DjToolCall::GetQueue => Some(queue_outcome(app).await),
     DjToolCall::SkipTrack => {
       let mut app = app.lock().await;
+      if turn.is_some_and(|turn| !turn.is_current(&app)) {
+        return Some(ToolOutcome::dropped());
+      }
       // Through the shared vocabulary, so `App::next_track`'s ownership routing
       // (queue slot, decoded sources, suspend-to-queue, native shuffle
       // bookkeeping) applies; the old raw `IoEvent::NextTrack` dispatch missed
@@ -925,6 +936,9 @@ pub async fn execute_app_only(app: &Arc<Mutex<App>>, call: &DjToolCall) -> Optio
     }
     DjToolCall::SetDjVibe { vibe } => {
       let mut app = app.lock().await;
+      if turn.is_some_and(|turn| !turn.is_current(&app)) {
+        return Some(ToolOutcome::dropped());
+      }
       // The apply arm bumps the DJ generation exactly once (the adopt-one-bump
       // rule in the turn loop depends on that count).
       app.apply(Action::SetDjVibe(vibe.clone()));
@@ -1596,7 +1610,7 @@ mod tests {
     // A default `App` has no playback context and no native track, so the
     // snapshot is `None` — the branch that used to drop `is_live`.
     let app = Arc::new(Mutex::new(App::default()));
-    let outcome = execute_app_only(&app, &DjToolCall::GetNowPlaying)
+    let outcome = execute_app_only(&app, &DjToolCall::GetNowPlaying, None)
       .await
       .expect("get_now_playing is answered without the network");
     let data = outcome
@@ -1619,6 +1633,7 @@ mod tests {
       &DjToolCall::SetDjVibe {
         vibe: Some("mellow instrumental".into()),
       },
+      None,
     )
     .await
     .expect("set_dj_vibe is answered without the network");
@@ -1656,7 +1671,7 @@ mod tests {
   async fn clearing_a_vibe_stays_terse() {
     // Nothing was set, so there is no expectation to correct.
     let app = Arc::new(Mutex::new(App::default()));
-    let outcome = execute_app_only(&app, &DjToolCall::SetDjVibe { vibe: None })
+    let outcome = execute_app_only(&app, &DjToolCall::SetDjVibe { vibe: None }, None)
       .await
       .unwrap();
     assert_eq!(outcome.text, "DJ vibe cleared");
@@ -1871,7 +1886,7 @@ mod tests {
   async fn a_write_without_a_spotify_session_is_refused() {
     let (app, rx) = app_with_channel(false);
     let call = parse_call("create_playlist", &json!({"name": "Road Trip"})).unwrap();
-    let outcome = execute_app_only(&app, &call).await.unwrap();
+    let outcome = execute_app_only(&app, &call, None).await.unwrap();
     assert!(outcome.is_error);
     assert!(rx.try_recv().is_err(), "nothing reaches the pump");
   }
@@ -1885,7 +1900,7 @@ mod tests {
       &json!({"playlist": PLAYLIST, "uris": [TRACK, TRACK]}),
     )
     .unwrap();
-    let outcome = execute_app_only(&app, &call).await.unwrap();
+    let outcome = execute_app_only(&app, &call, None).await.unwrap();
     assert!(!outcome.is_error);
     for _ in 0..2 {
       assert!(matches!(rx.try_recv(), Ok(IoEvent::AddTrackToPlaylist(..))));
@@ -1906,7 +1921,7 @@ mod tests {
     }
     for tool in ["add_to_playlist", "remove_from_playlist"] {
       let args = json!({"playlist": "spotify:playlist:00000000000000000000p2", "uris": [TRACK], "uri": TRACK, "position": 0});
-      let outcome = execute_app_only(&app, &parse_call(tool, &args).unwrap())
+      let outcome = execute_app_only(&app, &parse_call(tool, &args).unwrap(), None)
         .await
         .unwrap();
       assert!(outcome.is_error, "{tool}");
@@ -1914,7 +1929,7 @@ mod tests {
     assert!(rx.try_recv().is_err(), "nothing reaches the pump");
 
     let shared = json!({"playlist": "spotify:playlist:00000000000000000000p3", "uris": [TRACK]});
-    let outcome = execute_app_only(&app, &parse_call("add_to_playlist", &shared).unwrap())
+    let outcome = execute_app_only(&app, &parse_call("add_to_playlist", &shared).unwrap(), None)
       .await
       .unwrap();
     assert!(!outcome.is_error);
@@ -1925,7 +1940,7 @@ mod tests {
     use crate::infra::network::IoEvent;
     let (app, rx) = app_with_channel(true);
     let call = parse_call("follow_artist", &json!({"artist": ARTIST, "follow": false})).unwrap();
-    execute_app_only(&app, &call).await.unwrap();
+    execute_app_only(&app, &call, None).await.unwrap();
     assert!(matches!(rx.try_recv(), Ok(IoEvent::UserUnfollowArtists(_))));
   }
 
@@ -1941,7 +1956,7 @@ mod tests {
         playlist_info("00000000000000000000p2", "Theirs", "other", false),
       ]);
     }
-    let outcome = execute_app_only(&app, &DjToolCall::ListPlaylists)
+    let outcome = execute_app_only(&app, &DjToolCall::ListPlaylists, None)
       .await
       .unwrap();
     let playlists = outcome.structured.unwrap()["playlists"].clone();

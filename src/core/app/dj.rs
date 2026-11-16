@@ -193,6 +193,7 @@ impl App {
   pub(crate) fn toggle_dj_auto_queue(&mut self) {
     use crate::infra::dj::TurnKind;
     self.dj.auto_queue = !self.dj.auto_queue;
+    self.dj.reset_refill_backoff();
     self.dj.bump_revision();
     // Either direction invalidates a *refill* in flight: switching off should drop
     // a pending one, and switching on starts a fresh one.
@@ -240,6 +241,7 @@ impl App {
   #[cfg(feature = "ai-dj")]
   pub(crate) fn toggle_dj_fresh_only(&mut self) {
     self.dj.avoid_library = !self.dj.avoid_library;
+    self.dj.reset_refill_backoff();
     self.dj.bump_revision();
     if self.dj.avoid_library {
       self.set_status_message(self.strings().status.app.dj_fresh_only, 4);
@@ -259,6 +261,7 @@ impl App {
     }
     let generation = self.dj.bump_generation();
     let dropped = self.drop_dj_queued_tracks();
+    self.dj.reset_refill_backoff();
     let turn_seq = self.dj.begin_turn(TurnKind::Ask);
     self.dj.scroll = 0;
     self.dj.push_line(DjLine::system(if dropped > 0 {
@@ -315,6 +318,7 @@ impl App {
     self.dj.close_setup();
     // A batch already in flight came from the backend the user just replaced.
     self.dj.bump_generation();
+    self.dj.reset_refill_backoff();
     self.dj.push_line(DjLine::system(
       self.strings().status.app.dj_brain(&choice.describe()),
     ));
@@ -349,6 +353,48 @@ impl App {
 mod tests {
   use super::*;
   use crate::core::app::test_support::*;
+
+  #[cfg(feature = "ai-dj")]
+  #[test]
+  fn dj_queue_edits_and_reenabling_auto_queue_reset_failed_refill_backoff() {
+    use crate::core::action::Action;
+    use std::time::Instant;
+    let first = "spotify:track:0000000000000000000001";
+    let second = "spotify:track:0000000000000000000002";
+    for action in [
+      Action::QueueTrack(queue_track(Some(second), "Second")),
+      Action::RemoveFromQueue {
+        uri: first.into(),
+        position: 0,
+      },
+      Action::MoveQueueItem {
+        uri: first.into(),
+        from: 0,
+        to: 1,
+      },
+      Action::ClearQueue,
+      Action::ToggleDjAutoQueue,
+    ] {
+      let (tx, _rx) = channel();
+      let mut app = App::new(tx, UserConfig::new(), None);
+      app.native_queue = vec![
+        queue_track(Some(first), "First"),
+        queue_track(Some(second), "Second"),
+      ];
+      app.dj.auto_queue = true;
+      app.dj.failed_refill(Instant::now());
+      app.apply(action);
+      assert_eq!(app.dj.refill_failures, 0);
+      assert_eq!(app.dj.refill_retry_at, None);
+    }
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), None);
+    app.dj.refill_failures = crate::infra::dj::REFILL_FAILURE_LIMIT;
+    app.apply(Action::ToggleDjAutoQueue);
+    assert!(app.dj.auto_queue);
+    assert_eq!(app.dj.refill_failures, 0);
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::DjTopUp(_, _))));
+  }
 
   /// A vibe shift drops the DJ's picks by identity, not by truncating a tail
   /// count: the DJ's tracks stop being a contiguous tail the moment the user

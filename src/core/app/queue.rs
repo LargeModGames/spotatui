@@ -64,6 +64,8 @@ impl App {
     }
     let name = track.display_name(self.strings()).to_owned();
     self.native_queue.push(track);
+    #[cfg(feature = "ai-dj")]
+    self.dj.reset_refill_backoff();
     info!(
       "queued {uri} at position {} of the native queue",
       self.native_queue.len()
@@ -107,6 +109,8 @@ impl App {
     };
     // Drop the items before the selected one so it becomes the queue head.
     self.native_queue.drain(..skip);
+    #[cfg(feature = "ai-dj")]
+    self.dj.reset_refill_backoff();
     if !self.queue_owns_playback() {
       self.suspend_active_decoded_context_mid_track();
       // No decoded context recorded a suspension: a native-Spotify context may be
@@ -123,6 +127,8 @@ impl App {
   pub(crate) fn remove_queue_item(&mut self, uri: &str, position: usize) {
     if let Some(idx) = self.queue_position_for(uri, position) {
       self.native_queue.remove(idx);
+      #[cfg(feature = "ai-dj")]
+      self.dj.reset_refill_backoff();
     }
   }
 
@@ -131,16 +137,20 @@ impl App {
     let Some(from) = self.queue_position_for(uri, from) else {
       return;
     };
-    if to >= self.native_queue.len() {
+    if from == to || to >= self.native_queue.len() {
       return;
     }
     let item = self.native_queue.remove(from);
     self.native_queue.insert(to, item);
+    #[cfg(feature = "ai-dj")]
+    self.dj.reset_refill_backoff();
   }
 
   /// Empty the native queue; the playing slot and a suspended context stay.
   pub(crate) fn clear_native_queue(&mut self) {
     self.native_queue.clear();
+    #[cfg(feature = "ai-dj")]
+    self.dj.reset_refill_backoff();
   }
 
   /// Whether the native queue's playback slot currently owns the output (either a
