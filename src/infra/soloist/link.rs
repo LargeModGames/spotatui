@@ -141,20 +141,31 @@ impl VolumeGate {
   }
 }
 
+pub(crate) struct QueuedCommand {
+  pub(crate) command: Command,
+  pub(super) activity_generation: Option<u64>,
+}
+
+#[derive(Default)]
+struct LinkState {
+  snapshot: Snapshot,
+  activity_generation: u64,
+}
+
 pub struct SoloistLink {
   device_id: String,
-  commands: UnboundedSender<Command>,
-  snapshot: Mutex<Snapshot>,
+  commands: UnboundedSender<QueuedCommand>,
+  state: Mutex<LinkState>,
   wanted_volume: Mutex<Option<(u8, Instant)>>,
   quality: Mutex<Option<StreamQuality>>,
 }
 
 impl SoloistLink {
-  pub fn new(device_id: String, commands: UnboundedSender<Command>) -> Self {
+  pub(super) fn new(device_id: String, commands: UnboundedSender<QueuedCommand>) -> Self {
     Self {
       device_id,
       commands,
-      snapshot: Mutex::new(Snapshot::default()),
+      state: Mutex::new(LinkState::default()),
       wanted_volume: Mutex::new(None),
       quality: Mutex::new(None),
     }
@@ -165,18 +176,53 @@ impl SoloistLink {
   }
 
   pub fn send(&self, command: Command) {
-    let _ = self.commands.send(command);
+    let activity_generation = match command {
+      Command::Pause | Command::Deactivate => {
+        let Ok(state) = self.state.lock() else {
+          return;
+        };
+        if !state.snapshot.is_active
+          || (command == Command::Pause && !state.snapshot.status.is_playing())
+        {
+          return;
+        }
+        Some(state.activity_generation)
+      }
+      _ => None,
+    };
+    let _ = self.commands.send(QueuedCommand {
+      command,
+      activity_generation,
+    });
+  }
+
+  /// Submit a queued pause or deactivation under the same lock as activity updates.
+  pub(super) fn submit_if_current<T>(
+    &self,
+    queued: QueuedCommand,
+    submit: impl FnOnce(Command) -> T,
+  ) -> Option<T> {
+    match queued.activity_generation {
+      None => Some(submit(queued.command)),
+      Some(generation) => {
+        let state = self.state.lock().ok()?;
+        (state.snapshot.is_active && state.activity_generation == generation)
+          .then(|| submit(queued.command))
+      }
+    }
   }
 
   pub fn snapshot(&self) -> Snapshot {
-    self.snapshot.lock().map(|s| s.clone()).unwrap_or_default()
+    self
+      .state
+      .lock()
+      .map(|state| state.snapshot.clone())
+      .unwrap_or_default()
   }
 
-  /// Pause unless Soloist is already paused or idle: a pause there is refused.
+  /// Pause only our active device while it is playing or buffering.
   pub fn pause(&self) {
-    if self.snapshot().status.is_playing() {
-      self.send(Command::Pause);
-    }
+    self.send(Command::Pause);
   }
 
   pub fn set_volume(&self, volume: u8) {
@@ -197,8 +243,12 @@ impl SoloistLink {
         }
       }
     }
-    if let Ok(mut snapshot) = self.snapshot.lock() {
-      snapshot.apply(event);
+    if let Ok(mut state) = self.state.lock() {
+      let was_active = state.snapshot.is_active;
+      state.snapshot.apply(event);
+      if state.snapshot.is_active != was_active {
+        state.activity_generation = state.activity_generation.wrapping_add(1);
+      }
     }
   }
 
@@ -217,7 +267,7 @@ impl SoloistLink {
     device_id: &str,
   ) -> (
     std::sync::Arc<Self>,
-    tokio::sync::mpsc::UnboundedReceiver<Command>,
+    tokio::sync::mpsc::UnboundedReceiver<QueuedCommand>,
   ) {
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     (
@@ -257,13 +307,22 @@ mod tests {
   }
 
   #[test]
-  fn pause_is_skipped_when_soloist_is_already_paused() {
+  fn pause_reaches_only_an_active_playing_soloist() {
     let (link, mut rx) = SoloistLink::test_pair("dev");
-    link.pause();
-    assert!(rx.try_recv().is_err());
-    link.apply(&Event::Playback(Status::Playing));
-    link.pause();
-    assert_eq!(rx.try_recv().ok(), Some(Command::Pause));
+    for is_active in [false, true] {
+      link.apply(&Event::Device { is_active });
+      for status in [
+        Status::Idle,
+        Status::Paused,
+        Status::Playing,
+        Status::Buffering,
+      ] {
+        link.apply(&Event::Playback(status));
+        link.pause();
+        let expected = (is_active && status.is_playing()).then_some(Command::Pause);
+        assert_eq!(rx.try_recv().ok().map(|queued| queued.command), expected);
+      }
+    }
   }
 
   #[test]

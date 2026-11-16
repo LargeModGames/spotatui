@@ -649,6 +649,28 @@ mod tests {
   use super::*;
   use crate::core::app::test_support::*;
 
+  #[cfg(all(feature = "soloist", feature = "audio-decode"))]
+  #[test]
+  fn decoded_start_after_a_soloist_handoff_sends_no_pause() {
+    use crate::infra::soloist::protocol::{Event, Status};
+    use crate::infra::soloist::SoloistLink;
+
+    let mut app = make_app_simple();
+    let (link, mut rx) = SoloistLink::test_pair("soloist-device");
+    app.install_soloist_link(link.clone());
+    app.apply_soloist_event(&link, &Event::Device { is_active: true });
+    app.apply_soloist_event(&link, &Event::Playback(Status::Playing));
+    app.apply_soloist_event(&link, &Event::Device { is_active: false });
+
+    app.claim_decoded_sink(crate::core::source::Source::Local);
+    app.release_native_for_decoded();
+
+    assert!(matches!(
+      rx.try_recv(),
+      Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+    ));
+  }
+
   #[cfg(feature = "streaming")]
   #[test]
   fn space_pauses_a_pulled_back_playback_before_spotify_confirms_the_device() {
