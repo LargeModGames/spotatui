@@ -12,6 +12,7 @@
 
 ### Fixed
 
+- Initial `--reconfigure-auth` setup selects Spotify even when a legacy config selected another source. Migrating legacy streaming settings preserves config comments and commented-out settings.
 - The first-run source setup still appears after CLI subcommands or an interrupted first launch. Existing installations with a state file, its recovery backup or legacy `client.yml` keep their completed setup. Starting with `--reconfigure-auth` completes source setup before the Spotify login, as picking Spotify does.
 - The global song counter answer is saved when `behavior:` is empty or null, and commented-out answers no longer suppress the question. Legacy streaming settings also migrate into an empty `behavior:` section.
 - Missing parent directories under `XDG_CONFIG_HOME` are created on launch, and directory errors include the path.

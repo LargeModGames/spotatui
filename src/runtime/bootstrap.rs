@@ -613,6 +613,7 @@ pub(super) async fn boot(
     if options.reconfigure_auth {
       // Asking to log in to Spotify already chooses a source, just like the
       // picker completing setup before boot starts the Spotify login.
+      runtime_state.active_source = crate::core::source::Source::Spotify;
       crate::core::first_run::complete_first_run(
         &user_config,
         &mut runtime_state,
@@ -1006,6 +1007,67 @@ mod tests {
       assert_eq!(
         crate::core::state::load(&state).unwrap().first_run_complete,
         Some(true)
+      );
+    });
+  }
+
+  #[cfg(not(feature = "spotify-session"))]
+  #[test]
+  fn reconfiguring_auth_selects_spotify_over_a_legacy_source() {
+    if !crate::core::test_helpers::in_isolated_process(
+      "runtime::bootstrap::tests::reconfiguring_auth_selects_spotify_over_a_legacy_source",
+      "config",
+    ) {
+      return;
+    }
+    let config = crate::core::paths::app_config_dir()
+      .unwrap()
+      .join("config.yml");
+    std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+    std::fs::write(&config, "behavior:\n  active_source: Local\n").unwrap();
+    let state = crate::core::state::default_state_path().unwrap();
+    assert!(!state.exists());
+    assert!(!crate::core::paths::legacy_client_config_path()
+      .unwrap()
+      .exists());
+
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+      let mut lock = None;
+      let mut options = boot_options(None);
+      options.reconfigure_auth = true;
+      let initial = super::boot(
+        options,
+        std::sync::Arc::new(ScriptedOnboarding::with_answers(&["n"])),
+        &mut lock,
+      )
+      .await
+      .unwrap();
+      let saved = crate::core::state::load(&state).unwrap();
+      assert_eq!(saved.first_run_complete, Some(true));
+      assert_eq!(
+        saved.active_source,
+        Some(crate::core::source::Source::Spotify)
+      );
+      assert_eq!(
+        initial.runtime_state.active_source,
+        crate::core::source::Source::Spotify
+      );
+      assert_eq!(
+        initial.app.lock().await.active_source,
+        crate::core::source::Source::Spotify
+      );
+
+      let rebooted = super::boot(
+        boot_options(None),
+        std::sync::Arc::new(ScriptedOnboarding::with_answers(&[])),
+        &mut lock,
+      )
+      .await
+      .unwrap();
+      assert!(rebooted.runtime_state.first_run_complete);
+      assert_eq!(
+        rebooted.app.lock().await.active_source,
+        crate::core::source::Source::Spotify
       );
     });
   }
