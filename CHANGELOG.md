@@ -24,7 +24,7 @@
 - **A slow DNS resolver no longer fails the Spotify login**: the session connect had 15 s, and behind a dead first nameserver every lookup waits the resolver's 5 s timeout, so the login failed while the network worked. It now has 35 s, and a connect that still runs out says that it timed out and points at the network and DNS settings instead of a generic "Could not connect to Spotify" ([#977](https://github.com/LargeModGames/spotatui/issues/977)).
 
 - **Remove single-file plugins from the CLI**: `spotatui plugin remove flat.lua` now removes a loose Lua plugin using the exact filename shown by `plugin list`, while preserving other loose files ([#1048](https://github.com/LargeModGames/spotatui/issues/1048)).
-- **Plugin updates stay in their own checkout**: refuse directories without their own repository and ignore inherited Git repository overrides while preserving transport and authentication settings.
+- **Plugin updates stay in their own checkout**: refuse directories without their own repository and ignore inherited Git repository overrides while preserving transport and authentication settings, including environment-injected Git config. Plugin clones resolve relative global config paths from the caller's directory.
 
 ### Documentation
 

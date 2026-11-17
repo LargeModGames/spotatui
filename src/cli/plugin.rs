@@ -589,8 +589,8 @@ fn short_rev(rev: &str) -> &str {
 
 // --- git (thin wrappers over the system `git`) ---
 
-/// Git's repository-local environment (`git rev-parse --local-env-vars`), plus
-/// namespace and discovery controls. Keep transport, credentials and user config.
+/// Repository, namespace and discovery overrides. Keep transport, credentials
+/// and user config, including settings supplied through the environment.
 fn repository_git_override(key: &std::ffi::OsStr) -> bool {
   let key = key.to_string_lossy().to_ascii_uppercase();
   matches!(
@@ -611,13 +611,10 @@ fn repository_git_override(key: &std::ffi::OsStr) -> bool {
       | "GIT_PREFIX"
       | "GIT_SHALLOW_FILE"
       | "GIT_CONFIG"
-      | "GIT_CONFIG_COUNT"
-      | "GIT_CONFIG_PARAMETERS"
-  ) || key.starts_with("GIT_CONFIG_KEY_")
-    || key.starts_with("GIT_CONFIG_VALUE_")
+  )
 }
 
-/// Do not inherit a hook's or dotfiles alias's repository, index, or config overrides.
+/// Do not inherit a hook's or dotfiles alias's repository or index overrides.
 fn git_command(dir: &Path) -> ProcessCommand {
   let mut command = ProcessCommand::new("git");
   for (key, _) in std::env::vars_os() {
@@ -691,9 +688,13 @@ fn git_clone(url: &str, dest: &Path) -> Result<()> {
       .file_name()
       .context("plugin clone has no directory name")?,
   );
+  let mut command = git_command(&parent);
+  if let Some(global) = std::env::var_os("GIT_CONFIG_GLOBAL").filter(|path| !path.is_empty()) {
+    command.env("GIT_CONFIG_GLOBAL", std::path::absolute(global)?);
+  }
   // `--` separates options from positionals so a URL is never mistaken for a flag.
   // An `ext::` URL runs a command; git blocks it by default, but a user config can permit it.
-  let status = git_command(&parent)
+  let status = command
     .args(["clone", "--depth", "1", "--"])
     .arg(url)
     .arg(dest)
@@ -862,6 +863,16 @@ mod tests {
       return;
     };
     let config = PathBuf::from(config);
+    let blocked = git_command(Path::new("."))
+      .args(["ls-remote", "ext::git --version"])
+      .output()
+      .unwrap();
+    assert!(!blocked.status.success());
+    assert!(
+      String::from_utf8_lossy(&blocked.stderr).contains("transport 'ext' not allowed"),
+      "{}",
+      String::from_utf8_lossy(&blocked.stderr)
+    );
     if std::env::var_os("SPOTATUI_PLUGIN_TEST_TRANSPORT").is_some() {
       let command = git_command(Path::new("."));
       for key in [
@@ -977,8 +988,132 @@ mod tests {
     }
   }
 
+  fn assert_environment_transport_config(installing: bool) {
+    ensure_git().unwrap();
+    for parameters in [false, true] {
+      let temp = tempfile::tempdir().unwrap();
+      let (seed, origin) = fixture_origin(temp.path(), "example", "main.lua");
+      let config = temp.path().join("config");
+      let plugin = config.join("plugins/example");
+      let url = "file:///spotatui-plugin-environment-fixture/example.git";
+      if !installing {
+        add_plugin(&config, &origin_url(&origin), false).unwrap();
+        fixture_git(&plugin, &["remote", "set-url", "origin", url]);
+        std::fs::write(seed.join("main.lua"), "-- updated\n").unwrap();
+        fixture_git(&seed, &["commit", "-qam", "Update"]);
+        fixture_git(&seed, &["push", "-q", "origin", "main"]);
+      }
+      let mut child = ProcessCommand::new(std::env::current_exe().unwrap());
+      child
+        .current_dir(temp.path())
+        .args([
+          "--exact",
+          "cli::plugin::tests::plugin_git_environment_child",
+          "--nocapture",
+        ])
+        .env("SPOTATUI_PLUGIN_TEST_CONFIG", &config);
+      let rewrite = format!("url.{}.insteadOf", origin_url(&origin));
+      if parameters {
+        child.env("GIT_CONFIG_COUNT", "0").env(
+          "GIT_CONFIG_PARAMETERS",
+          format!("'{rewrite}={url}' 'protocol.ext.allow=always'"),
+        );
+      } else {
+        child
+          .env_remove("GIT_CONFIG_PARAMETERS")
+          .env("GIT_CONFIG_COUNT", "2")
+          .env("GIT_CONFIG_KEY_0", &rewrite)
+          .env("GIT_CONFIG_VALUE_0", url)
+          .env("GIT_CONFIG_KEY_1", "protocol.ext.allow")
+          .env("GIT_CONFIG_VALUE_1", "always");
+      }
+      if installing {
+        child.env("SPOTATUI_PLUGIN_TEST_ADD", url);
+      } else {
+        child.env_remove("SPOTATUI_PLUGIN_TEST_ADD");
+      }
+      let out = child.output().unwrap();
+      assert!(
+        out.status.success(),
+        "parameters={parameters}:\n{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+      );
+      assert!(String::from_utf8_lossy(&out.stdout).contains("1 passed"));
+      let saved = load_lock(&lock_path(&config)).unwrap();
+      let expected = fixture_git(&seed, &["rev-parse", "HEAD"]);
+      assert_eq!(saved.plugins[0].rev, expected);
+      assert_eq!(git_head_rev(&plugin).unwrap(), expected);
+      assert_eq!(
+        std::fs::read_to_string(plugin.join("main.lua")).unwrap(),
+        if installing {
+          "original\n"
+        } else {
+          "-- updated\n"
+        }
+      );
+    }
+  }
+
   #[test]
-  fn plugin_git_ignores_inherited_repository_and_config_overrides() {
+  fn plugin_clone_preserves_environment_transport_config() {
+    assert_environment_transport_config(true);
+  }
+
+  #[test]
+  fn plugin_fetch_preserves_environment_transport_config() {
+    assert_environment_transport_config(false);
+  }
+
+  #[test]
+  fn plugin_clone_resolves_relative_global_config_from_the_callers_directory() {
+    ensure_git().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let (seed, origin) = fixture_origin(temp.path(), "example", "main.lua");
+    let config = temp.path().join("config");
+    let url = "file:///spotatui-plugin-relative-config-fixture/example.git";
+    fixture_git(
+      temp.path(),
+      &[
+        "config",
+        "--file",
+        "gitconfig",
+        &format!("url.{}.insteadOf", origin_url(&origin)),
+        url,
+      ],
+    );
+    let out = ProcessCommand::new(std::env::current_exe().unwrap())
+      .current_dir(temp.path())
+      .args([
+        "--exact",
+        "cli::plugin::tests::plugin_git_environment_child",
+        "--nocapture",
+      ])
+      .env("SPOTATUI_PLUGIN_TEST_CONFIG", &config)
+      .env("SPOTATUI_PLUGIN_TEST_ADD", url)
+      .env("GIT_CONFIG_GLOBAL", "gitconfig")
+      .output()
+      .unwrap();
+    assert!(
+      out.status.success(),
+      "{}\n{}",
+      String::from_utf8_lossy(&out.stdout),
+      String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(String::from_utf8_lossy(&out.stdout).contains("1 passed"));
+    let expected = fixture_git(&seed, &["rev-parse", "HEAD"]);
+    assert_eq!(
+      load_lock(&lock_path(&config)).unwrap().plugins[0].rev,
+      expected
+    );
+    assert_eq!(
+      git_head_rev(&config.join("plugins/example")).unwrap(),
+      expected
+    );
+  }
+
+  #[test]
+  fn plugin_git_ignores_inherited_repository_and_worktree_overrides() {
     if ensure_git().is_err() {
       return;
     }
@@ -1039,7 +1174,7 @@ mod tests {
             .env("GIT_IMPLICIT_WORK_TREE", "0")
             .env("GIT_CEILING_DIRECTORIES", temp.path())
             .env("GIT_DISCOVERY_ACROSS_FILESYSTEM", "1")
-            .env("GIT_CONFIG_PARAMETERS", "invalid injected configuration")
+            .env("GIT_CONFIG_PARAMETERS", "'protocol.ext.allow=always'")
             .env("GIT_CONFIG_COUNT", "1")
             .env("GIT_CONFIG_KEY_0", "core.worktree")
             .env("GIT_CONFIG_VALUE_0", &other);
