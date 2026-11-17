@@ -4093,7 +4093,7 @@ fn unfollowing_a_pinned_playlist_drops_only_its_pin() {
 }
 
 #[test]
-fn a_failed_pin_save_keeps_memory_and_reports_the_error() {
+fn a_failed_pin_action_rolls_back_and_reports_the_error() {
   let dir = tempfile::tempdir().unwrap();
   let (mut app, _rx) = app_with_channel();
   let blocker = dir.path().join("file");
@@ -4106,10 +4106,7 @@ fn a_failed_pin_save_keeps_memory_and_reports_the_error() {
     uri: "spotify:playlist:p1".into(),
     pinned: true,
   });
-  assert!(app.is_playlist_pinned("spotify:playlist:p1"));
-  assert!(app.status_message_is_error());
-  assert!(app
-    .status_message()
-    .unwrap()
-    .contains("Failed to save state"));
+  assert!(!app.is_playlist_pinned("spotify:playlist:p1"));
+  assert!(app.api_error().contains("Failed to save state"));
+  assert_eq!(app.get_current_route().id, RouteId::Error);
 }

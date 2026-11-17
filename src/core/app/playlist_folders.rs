@@ -209,6 +209,7 @@ impl App {
       return;
     };
     let name = playlist.name.clone();
+    let selected = self.selected_sidebar_item();
     let result = if pinned {
       let mut patch = PersistedRuntimeState::pinned_playlist(uri);
       let Some(pins) = patch
@@ -251,13 +252,11 @@ impl App {
       self.runtime_state.playlist_pin_accounts.remove(uri);
       self.save_removed_pinned_playlist(uri)
     };
-    if result
-      .as_ref()
-      .is_err_and(|error| error.is::<crate::core::state::PlaylistPinLimitReached>())
-    {
+    if pinned && result.is_err() {
       self.runtime_state.pinned_playlists.retain(|pin| pin != uri);
       self.runtime_state.playlist_pin_accounts.remove(uri);
     }
+    self.restore_sidebar_item(selected);
     self.clamp_playlist_pin_cursor();
     self.display_revisions.bump(DisplayDomain::Library);
     if let Err(error) = result {
@@ -275,7 +274,7 @@ impl App {
           .app
           .state_save_failed(&error.to_string())
       };
-      self.set_error_status_message(message, 6);
+      self.handle_error_with_message(error, message);
     } else {
       let message = if pinned {
         self.strings().status.app.playlist_pinned(&name)
@@ -296,22 +295,20 @@ impl App {
     self.runtime_state.playlist_pin_accounts.remove(uri);
     if let Err(error) = self.save_removed_pinned_playlist(uri) {
       log::warn!("failed to remove playlist pin: {error}");
-      self.set_error_status_message(
-        self
-          .strings()
-          .status
-          .app
-          .state_save_failed(&error.to_string()),
-        6,
-      );
+      let message = self
+        .strings()
+        .status
+        .app
+        .state_save_failed(&error.to_string());
+      self.handle_error_with_message(error, message);
     }
     self.restore_sidebar_item(selected);
     self.clamp_playlist_pin_cursor();
     self.display_revisions.bump(DisplayDomain::Library);
   }
 
-  /// The complete rootlist, rather than partially resolved playlist metadata,
-  /// is authoritative for removals. Unresolved playlists keep their pins.
+  /// Remove pins absent from both the complete rootlist and the refreshed list.
+  /// Unresolved rootlist entries and followed playlists keep their pins.
   pub(crate) fn prune_playlist_pins(
     &mut self,
     nodes: &[PlaylistFolderNode],
@@ -336,6 +333,10 @@ impl App {
           .get(uri.as_str())
           .is_some_and(|owner| owner == account)
           && !contains(nodes, uri)
+          && !self
+            .all_playlists
+            .iter()
+            .any(|playlist| playlist.uri == uri.as_str())
       })
       .cloned()
       .collect();
@@ -352,14 +353,12 @@ impl App {
       .retain(|uri, _| !removed.contains(uri));
     if let Err(error) = self.save_pruned_playlist_pins(&removed, account) {
       log::warn!("failed to prune playlist pins: {error}");
-      self.set_error_status_message(
-        self
-          .strings()
-          .status
-          .app
-          .state_save_failed(&error.to_string()),
-        6,
-      );
+      let message = self
+        .strings()
+        .status
+        .app
+        .state_save_failed(&error.to_string());
+      self.handle_error_with_message(error, message);
     }
     self.restore_sidebar_item(selected);
     self.clamp_playlist_pin_cursor();
@@ -645,6 +644,75 @@ mod tests {
   }
 
   #[test]
+  fn a_failed_pin_save_rolls_back_and_can_be_retried() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = sidebar_app();
+    let blocked = dir.path().join("blocked");
+    std::fs::write(&blocked, "not a directory").unwrap();
+    app.state_path = Some(blocked.join("state.yml"));
+    app.user = Some(UserInfo {
+      id: "account-a".into(),
+      ..Default::default()
+    });
+    let uri = app.all_playlists[2].uri.clone();
+    app.view.selected_playlist_index = Some(5);
+
+    app.set_playlist_pinned(&uri, true);
+
+    assert!(app.pinned_playlist_uris().is_empty());
+    assert!(app.runtime_state.playlist_pin_accounts.is_empty());
+    assert_eq!(app.get_selected_playlist_id().as_deref(), Some("p2"));
+
+    let path = dir.path().join("state.yml");
+    app.state_path = Some(path.clone());
+    app.clear_api_error();
+    app.set_playlist_pinned(&uri, true);
+
+    assert!(app.is_playlist_pinned(&uri));
+    let saved = crate::core::state::load(&path).unwrap();
+    assert_eq!(saved.pinned_playlists.unwrap(), [uri.clone()]);
+    assert_eq!(
+      saved.playlist_pin_accounts.unwrap(),
+      [(uri, "account-a".into())].into()
+    );
+  }
+
+  #[test]
+  fn failed_playlist_pin_writes_use_the_error_route() {
+    for operation in ["pin", "unpin", "forget", "prune"] {
+      let dir = tempfile::tempdir().unwrap();
+      let mut app = sidebar_app();
+      let blocked = dir.path().join("blocked");
+      std::fs::write(&blocked, "not a directory").unwrap();
+      app.state_path = Some(blocked.join("state.yml"));
+      let uri = app.all_playlists[0].uri.clone();
+      if operation != "pin" {
+        app.runtime_state.pinned_playlists = vec![uri.clone()];
+        app.runtime_state.playlist_pin_accounts = [(uri.clone(), "account-a".into())].into();
+      }
+      match operation {
+        "pin" => app.set_playlist_pinned(&uri, true),
+        "unpin" => app.set_playlist_pinned(&uri, false),
+        "forget" => app.forget_playlist_pin(&uri),
+        "prune" => {
+          app.all_playlists.clear();
+          app.prune_playlist_pins(&[], Some("account-a"));
+        }
+        _ => unreachable!(),
+      }
+
+      assert!(
+        app.api_error().starts_with("Failed to save state: "),
+        "{operation}: {}",
+        app.api_error()
+      );
+      assert!(app.api_error().contains("state.yml"), "{operation}");
+      assert_eq!(app.get_current_route().id, RouteId::Error, "{operation}");
+      assert!(!app.is_playlist_pinned(&uri), "{operation}");
+    }
+  }
+
+  #[test]
   fn the_pin_limit_reports_an_error_without_adding_an_unsaved_pin() {
     let mut app = sidebar_app();
     app.runtime_state.pinned_playlists = (0..100)
@@ -687,11 +755,8 @@ mod tests {
     app.set_playlist_pinned(&uri, true);
     assert!(!app.is_playlist_pinned(&uri));
     assert!(!app.runtime_state.playlist_pin_accounts.contains_key(&uri));
-    assert!(app.status_message_is_error());
-    assert_eq!(
-      app.status_message(),
-      Some("You can pin up to 100 playlists")
-    );
+    assert_eq!(app.api_error(), "You can pin up to 100 playlists");
+    assert_eq!(app.get_current_route().id, RouteId::Error);
     assert_eq!(
       crate::core::state::load(&path)
         .unwrap()
@@ -701,6 +766,7 @@ mod tests {
     );
     // Once the other instance frees a slot, the same request can be retried.
     crate::core::state::save_removing_pinned_playlist(&path, &disk_pins[99]).unwrap();
+    app.clear_api_error();
     app.set_playlist_pinned(&uri, true);
     assert!(app.is_playlist_pinned(&uri));
     assert!(crate::core::state::load(&path)
@@ -711,18 +777,18 @@ mod tests {
   }
 
   #[test]
-  fn pinning_keeps_the_cursor_row_and_unpinning_clamps_it() {
+  fn pinning_and_unpinning_preserve_the_selected_playlist() {
     let dir = tempfile::tempdir().unwrap();
     let mut app = sidebar_app();
     app.state_path = Some(dir.path().join("state.yml"));
     let uri = app.all_playlists[2].uri.clone();
     app.view.selected_playlist_index = Some(5);
     app.set_playlist_pinned(&uri, true);
-    assert_eq!(app.view.selected_playlist_index, Some(5));
-    assert_eq!(app.get_selected_playlist_id().as_deref(), Some("p1"));
+    assert_eq!(app.view.selected_playlist_index, Some(2));
+    assert_eq!(app.get_selected_playlist_id().as_deref(), Some("p2"));
     // Sort still restores the selected playlist through the pinned row mapping.
     app.set_playlist_sidebar_order(SidebarPlaylistOrder::Name);
-    assert_eq!(app.get_selected_playlist_id().as_deref(), Some("p1"));
+    assert_eq!(app.get_selected_playlist_id().as_deref(), Some("p2"));
     let inner = app.all_playlists[5].uri.clone();
     app.set_playlist_pinned(&inner, true);
     app.view.selected_playlist_index = Some(app.get_playlist_display_count());
@@ -735,13 +801,13 @@ mod tests {
   }
 
   #[test]
-  fn pruning_removes_missing_pins_but_keeps_unresolved_rootlist_entries() {
+  fn pruning_keeps_followed_playlists_and_unresolved_rootlist_entries() {
     let dir = tempfile::tempdir().unwrap();
     let mut app = sidebar_app();
     app.state_path = Some(dir.path().join("state.yml"));
     app.runtime_state.pinned_playlists = vec![
       "spotify:playlist:gone".into(),
-      app.all_playlists[3].uri.clone(), // Resolved by the older metadata snapshot.
+      app.all_playlists[3].uri.clone(), // Followed, but omitted from the rootlist.
       "spotify:playlist:unresolved".into(),
       app.all_playlists[0].uri.clone(),
     ];
@@ -782,7 +848,11 @@ mod tests {
     );
     assert_eq!(
       app.pinned_playlist_uris(),
-      ["spotify:playlist:unresolved", "spotify:playlist:p0"]
+      [
+        "spotify:playlist:p3",
+        "spotify:playlist:unresolved",
+        "spotify:playlist:p0"
+      ]
     );
     assert_eq!(app.get_selected_playlist_id().as_deref(), Some("p0"));
     let saved = crate::core::state::load(app.state_path.as_ref().unwrap()).unwrap();
@@ -817,6 +887,7 @@ mod tests {
       id: "account-b".into(),
       ..Default::default()
     });
+    other.all_playlists.retain(|playlist| playlist.uri != a);
     other.prune_playlist_pins(&[], Some("account-b"));
     assert_eq!(other.pinned_playlist_uris(), [a.clone()]);
     other.set_playlist_pinned(&b, true);
@@ -828,6 +899,7 @@ mod tests {
       saved.playlist_pin_accounts.unwrap(),
       [(b.clone(), "account-b".into())].into()
     );
+    other.all_playlists.clear();
     other.prune_playlist_pins(&[], Some("account-b"));
     assert!(other.pinned_playlist_uris().is_empty());
     assert!(crate::core::state::load(&path)
@@ -844,6 +916,7 @@ mod tests {
     app.state_path = Some(dir.path().join("state.yml"));
     let uri = app.all_playlists[0].uri.clone();
     app.set_playlist_pinned(&uri, true);
+    app.all_playlists.clear();
     app.prune_playlist_pins(&[], Some("account-a"));
     assert!(app.is_playlist_pinned(&uri));
     app

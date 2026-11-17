@@ -2252,6 +2252,51 @@ mod tests {
   use std::collections::{HashMap, HashSet};
 
   #[test]
+  fn publishing_a_refresh_keeps_followed_pins_missing_from_the_rootlist() {
+    use crate::core::state::{self, PersistedRuntimeState};
+    use crate::core::test_helpers::playlist_info;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.yml");
+    let playlist = playlist_info("followed", "Followed", "me", false);
+    let uri = playlist.uri.clone();
+    let mut app = App::default();
+    app.state_path = Some(path.clone());
+    app.user_config.behavior.pin_community_playlist = false;
+    app.runtime_state.pinned_playlists = vec![uri.clone()];
+    app.runtime_state.playlist_pin_accounts = [(uri.clone(), "account-a".into())].into();
+    state::save(
+      &path,
+      &PersistedRuntimeState {
+        pinned_playlists: Some(vec![uri.clone()]),
+        playlist_pin_accounts: Some(app.runtime_state.playlist_pin_accounts.clone()),
+        ..Default::default()
+      },
+    )
+    .unwrap();
+    let generation = app.playlist_refresh_generation;
+
+    publish_playlists_refresh(
+      &mut app,
+      vec![playlist],
+      Some(Vec::new()),
+      true,
+      Some("account-a"),
+      generation,
+      (None, 0, None),
+      (None, 0, None),
+    );
+
+    assert!(app.is_playlist_pinned(&uri));
+    let saved = state::load(&path).unwrap();
+    assert_eq!(saved.pinned_playlists.unwrap(), [uri]);
+    assert_eq!(
+      saved.playlist_pin_accounts.unwrap(),
+      app.runtime_state.playlist_pin_accounts
+    );
+  }
+
+  #[test]
   fn publishing_a_refresh_prunes_only_a_complete_current_rootlist_for_the_pins_account() {
     use crate::core::state::{self, PersistedRuntimeState};
     for (complete, nodes_present, account, stale, pruned) in [
@@ -2293,7 +2338,7 @@ mod tests {
       assert_eq!(
         !app.is_playlist_pinned(&uri),
         pruned,
-        "complete={complete} nodes={nodes_present} account={account:?} stale={stale}"
+        "complete={complete} nodes={nodes_present} stale={stale}"
       );
       assert_eq!(
         !state::load(&path)

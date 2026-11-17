@@ -387,23 +387,77 @@ mod tests {
     (app, dir)
   }
 
+  fn selected_playlist_uri(app: &App) -> Option<&str> {
+    app
+      .view
+      .selected_playlist_index
+      .and_then(|row| row.checked_sub(1))
+      .and_then(|index| app.get_playlist_display_item_at(index))
+      .and_then(|item| app.get_playlist_for_item(item))
+      .map(|playlist| playlist.uri.as_str())
+  }
+
   #[test]
-  fn the_pin_key_pins_and_then_unpins_the_selected_playlist_without_a_login() {
+  fn the_pin_key_keeps_the_same_playlist_selected_when_toggled_without_a_login() {
     let (mut app, _dir) = pin_app_with(Key::Char('t'), Source::Spotify);
+    let uri = "spotify:playlist:p1";
+    assert_eq!(selected_playlist_uri(&app), Some(uri));
+
     super::super::handle_app(Key::Char('t'), &mut app);
-    assert!(app.is_playlist_pinned("spotify:playlist:p1"));
+    assert!(app.is_playlist_pinned(uri));
     assert_eq!(app.status_message(), Some("Pinned One"));
-    assert_eq!(app.view.selected_playlist_index, Some(3));
-    app.view.selected_playlist_index = Some(2);
+    assert_eq!(selected_playlist_uri(&app), Some(uri));
+    assert_eq!(app.view.selected_playlist_index, Some(2));
+
     super::super::handle_app(Key::Char('t'), &mut app);
-    assert!(!app.is_playlist_pinned("spotify:playlist:p1"));
+    assert!(!app.is_playlist_pinned(uri));
     assert_eq!(app.status_message(), Some("Unpinned One"));
+    assert_eq!(selected_playlist_uri(&app), Some(uri));
+    assert_eq!(app.view.selected_playlist_index, Some(3));
     app.flush_state_save(true);
     assert!(crate::core::state::load(app.state_path.as_ref().unwrap())
       .unwrap()
       .pinned_playlists
       .unwrap()
       .is_empty());
+  }
+
+  #[test]
+  fn the_pin_key_keeps_the_same_uri_when_unpinning_with_a_community_pin_and_folder() {
+    let (mut app, _dir) = pin_app_with(Key::Char('t'), Source::Spotify);
+    let uri = "spotify:playlist:p1";
+    app
+      .all_playlists_mut()
+      .push(playlist_info("p2", "Two", "me", false));
+    app.playlist_folder_items_mut().insert(
+      0,
+      PlaylistFolderItem::Playlist {
+        index: 1,
+        current_id: 0,
+      },
+    );
+    app.apply(Action::SetPlaylistPinned {
+      uri: uri.to_string(),
+      pinned: true,
+    });
+    app.view.selected_playlist_index = Some(2);
+    assert!(app.community_pin_visible());
+    assert!(matches!(
+      app.get_playlist_display_item_at(3),
+      Some(PlaylistFolderItem::Folder(_))
+    ));
+    assert_eq!(selected_playlist_uri(&app), Some(uri));
+
+    super::super::handle_app(Key::Char('t'), &mut app);
+    assert!(app.pinned_playlist_uris().is_empty());
+    assert_eq!(selected_playlist_uri(&app), Some(uri));
+    assert_eq!(app.view.selected_playlist_index, Some(4));
+
+    super::super::handle_app(Key::Char('t'), &mut app);
+    assert!(app.is_playlist_pinned(uri));
+    assert!(!app.is_playlist_pinned("spotify:playlist:p2"));
+    assert_eq!(selected_playlist_uri(&app), Some(uri));
+    assert_eq!(app.view.selected_playlist_index, Some(2));
   }
 
   #[test]
