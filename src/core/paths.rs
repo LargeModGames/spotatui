@@ -69,6 +69,13 @@ fn test_root() -> &'static Path {
   static ROOT: std::sync::OnceLock<TestRoot> = std::sync::OnceLock::new();
   ROOT
     .get_or_init(|| {
+      #[cfg(unix)]
+      let parent = {
+        // SAFETY: geteuid has no preconditions and does not change process state.
+        let uid = unsafe { libc::geteuid() };
+        std::env::temp_dir().join(format!("spotatui-tests-{uid}"))
+      };
+      #[cfg(not(unix))]
       let parent = std::env::temp_dir().join("spotatui-tests");
       std::fs::create_dir_all(&parent).expect("creating the spotatui test parent");
       assert!(
@@ -307,6 +314,24 @@ fn valid_xdg_home(value: OsString) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[cfg(unix)]
+  #[test]
+  fn unix_test_roots_have_a_user_scoped_private_parent() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    let root = test_root();
+    let parent = root.parent().unwrap();
+    let uid = root.metadata().unwrap().uid();
+    assert_eq!(
+      parent,
+      std::env::temp_dir().join(format!("spotatui-tests-{uid}"))
+    );
+    let metadata = parent.symlink_metadata().unwrap();
+    assert!(metadata.is_dir());
+    assert_eq!(metadata.uid(), uid);
+    assert_eq!(metadata.permissions().mode() & 0o777, 0o700);
+  }
 
   #[test]
   fn implicit_paths_stay_under_the_test_root_and_outside_production_dirs() {
