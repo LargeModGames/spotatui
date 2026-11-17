@@ -164,12 +164,8 @@ impl App {
 
     // Qobuz playback owns the session the same way: toggle its sink directly.
     #[cfg(feature = "qobuz")]
-    if let Some(qobuz) = &self.qobuz_playback {
-      if qobuz.player.is_paused() {
-        qobuz.player.resume();
-      } else {
-        qobuz.player.pause();
-      }
+    if let Some(qobuz) = &mut self.qobuz_playback {
+      qobuz.set_paused(!qobuz.player.is_paused());
       return;
     }
 

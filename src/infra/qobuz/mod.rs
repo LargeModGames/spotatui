@@ -76,6 +76,18 @@ impl Drop for QobuzPlaybackState {
 pub use crate::infra::queue::ResumePoint;
 
 impl QobuzPlaybackState {
+  /// Keep the latest transport command authoritative while a fetch is staged.
+  pub fn set_paused(&mut self, paused: bool) {
+    if self.resume_at.is_some() || (self.advancing && self.tempfile.is_none()) {
+      self.resume_at.get_or_insert_with(Default::default).paused = paused;
+    }
+    if paused {
+      self.player.pause();
+    } else {
+      self.player.resume();
+    }
+  }
+
   /// The currently playing track, if `index` is in range.
   pub fn current(&self) -> Option<&TrackInfo> {
     self.tracks.get(self.index)
