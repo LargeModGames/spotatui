@@ -112,11 +112,12 @@ spotatui will display the updated playback. The output format is configurable wi
 
 Here's a list:
 
-* `--next` and `--previous` cannot be used together, and can only be used with `--seek`
+* `--next` and `--previous` cannot be used together, and work only with `--seek`, \
+`--device` and `--format`
 * `--status`, `--toggle`, `--transfer`, `--volume`, `--like`, `--dislike`, `--repeat` and \
 `--shuffle` can be used together
 * `--like` and `--dislike` cannot be used together
-* `--seek` can be used with any option except `--share-track` and `--share-album`
+* `--seek` is accepted with every option, but `--share-track` and `--share-album` ignore it
 * `--share-track` and `--share-album` cannot be used with other options",
     )
     .visible_alias("pb")
@@ -500,10 +501,10 @@ mod tests {
       .expect("playback must have a long help")
       .to_string();
     for line in [
-      "can only be used with `--seek`",
+      "work only with `--seek`, `--device` and `--format`",
       "`--like`, `--dislike`, `--repeat` and `--shuffle` can be used together",
       "`--like` and `--dislike` cannot be used together",
-      "`--seek` can be used with any option except `--share-track` and `--share-album`",
+      "`--seek` is accepted with every option, but `--share-track` and `--share-album` ignore it",
     ] {
       assert!(help.contains(line), "missing {line:?} in:\n{help}");
     }
