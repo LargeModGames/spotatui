@@ -444,7 +444,11 @@ fn write_behavior_keys(path: &Path, config: Option<Value>, keys: Mapping) -> Res
     Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
     Err(error) => return Err(error).with_context(|| format!("reading {}", path.display())),
   };
-  let offset = migration_node_offset(&original, has_behavior)?;
+  let offset = skip_node_properties(
+    &original,
+    migration_node_offset(&original, has_behavior)?,
+    !target.is_null(),
+  );
   let tail = &original[offset..];
   let newline = if original.contains("\r\n") {
     "\r\n"
@@ -569,6 +573,46 @@ fn migration_node_offset(text: &str, has_behavior: bool) -> Result<usize> {
     "invalid YAML source position"
   );
   Ok(offset)
+}
+
+/// Moves past the anchor and tag (`&name`, `!tag`, `!<uri>`) serde_yaml's
+/// start mark points at. With `to_content`, it also moves past the line break
+/// and comments between them and a block mapping's first key. Without
+/// properties the offset is returned unchanged.
+fn skip_node_properties(text: &str, mut offset: usize, to_content: bool) -> usize {
+  let mut skipped = false;
+  loop {
+    let rest = &text[offset..];
+    if !rest.starts_with(['&', '!']) {
+      break;
+    }
+    let end = if rest.starts_with("!<") {
+      rest.find('>').map_or(rest.len(), |index| index + 1)
+    } else {
+      rest
+        .find(|c: char| c.is_whitespace() || "[]{},".contains(c))
+        .unwrap_or(rest.len())
+    };
+    offset += end;
+    skipped = true;
+    let rest = &text[offset..];
+    let after = rest.trim_start_matches([' ', '\t']);
+    if !after.is_empty() && !after.starts_with(['\r', '\n', '#']) {
+      offset += rest.len() - after.len();
+    }
+  }
+  if skipped && to_content {
+    loop {
+      let rest = &text[offset..];
+      let after = rest.trim_start();
+      offset += rest.len() - after.len();
+      if !after.starts_with('#') {
+        break;
+      }
+      offset += after.find('\n').unwrap_or(after.len());
+    }
+  }
+  offset
 }
 
 fn path_exists(path: &Path) -> Result<bool> {
@@ -1056,6 +1100,34 @@ behavior:
       (
         "behavior: { # Multiline flow\n  volume_step: 7, # Keep the comma\n  streaming_bitrate: 96,\n}\ntheme: {preset: 'Dracula'}\n",
         vec!["behavior: { # Multiline flow\n", "  volume_step: 7, # Keep the comma\n  streaming_bitrate: 96,\n", "}\ntheme: {preset: 'Dracula'}\n"],
+      ),
+    ] {
+      assert_legacy_client_migration_preserves_text(config_yml, &fragments);
+    }
+  }
+
+  #[test]
+  fn legacy_client_migration_skips_anchors_and_tags() {
+    for (config_yml, fragments) in [
+      (
+        "behavior: &playback {volume_step: 7} # Anchored\ntheme: {preset: 'Dracula'}\n",
+        vec!["behavior: &playback {", "volume_step: 7", "} # Anchored\ntheme: {preset: 'Dracula'}\n"],
+      ),
+      (
+        "behavior: !!map {volume_step: 7}\ntheme: {preset: 'Dracula'}\n",
+        vec!["behavior: !!map {", "volume_step: 7", "}\ntheme: {preset: 'Dracula'}\n"],
+      ),
+      (
+        "behavior: &playback # Anchored block\n  # First key\n  volume_step: 7\ntheme: {preset: 'Dracula'}\n",
+        vec!["behavior: &playback # Anchored block\n  # First key\n", "  volume_step: 7\n", "theme: {preset: 'Dracula'}\n"],
+      ),
+      (
+        "behavior: &playback !!map\n  volume_step: 7\ntheme: {preset: 'Dracula'}\n",
+        vec!["behavior: &playback !!map\n", "  volume_step: 7\n", "theme: {preset: 'Dracula'}\n"],
+      ),
+      (
+        "behavior: &playback\ntheme: {preset: 'Dracula'}\n",
+        vec!["behavior: &playback", "\ntheme: {preset: 'Dracula'}\n"],
       ),
     ] {
       assert_legacy_client_migration_preserves_text(config_yml, &fragments);
