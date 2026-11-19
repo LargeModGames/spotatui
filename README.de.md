@@ -12,8 +12,8 @@
 
 [![Crates.io](https://img.shields.io/crates/v/spotatui.svg)](https://crates.io/crates/spotatui)
 [![Discord](https://img.shields.io/discord/1534820237122207815?logo=discord&logoColor=white&label=Discord&color=5865F2)](https://spotatui.com/discord)
-[![Songs played using spotatui](https://img.shields.io/badge/dynamic/json?url=https://spotatui-counter.spotatui.workers.dev&query=count&label=Songs%20played%20using%20spotatui&labelColor=0b0f14&color=1ed760&style=flat-square&cacheSeconds=600)](#wiedergabeverlauf)
-[![spotatui Contributors](https://img.shields.io/badge/dynamic/json?url=https://raw.githubusercontent.com/LargeModGames/spotatui/main/.all-contributorsrc&query=%24.contributors.length&label=spotatui%20contributors&color=1ed760&style=flat-square)](#spotatui-mitwirkende)
+[![Songs, die mit spotatui abgespielt wurden](https://img.shields.io/badge/dynamic/json?url=https://spotatui-counter.spotatui.workers.dev&query=count&label=Songs%20played%20using%20spotatui&labelColor=0b0f14&color=1ed760&style=flat-square&cacheSeconds=600)](#wiedergabeverlauf)
+[![spotatui-Mitwirkende](https://img.shields.io/badge/dynamic/json?url=https://raw.githubusercontent.com/LargeModGames/spotatui/main/.all-contributorsrc&query=%24.contributors.length&label=spotatui%20contributors&color=1ed760&style=flat-square)](#spotatui-mitwirkende)
 
 **Desktop-App**
 
@@ -53,7 +53,7 @@ spotatui ist ein Musikplayer mit zwei Oberflächen: einer Desktop-App und einer 
 - Ein lokaler Wiedergabeverlauf mit Statistiken und einem teilbaren Jahresrückblick.
 - Eine [CLI](docs/cli.md) für Wiedergabe, Suche und Playlists.
 
-**Spotify erfordert Premium.** spotatui meldet sich mit seinem eigenen eingebauten Client an – du brauchst weder eine Entwickler-App noch eine Client-ID.
+**Spotify erfordert Premium.** spotatui meldet sich mit seiner eigenen eingebauten Client-ID an – du brauchst weder eine Entwickler-App noch eine eigene Client-ID.
 
 spotatui begann als Fork von [spotify-tui](https://github.com/Rigellute/spotify-tui) und hat inzwischen einen eigenen Player, eigene Quellen und eine Desktop-App entwickelt.
 
@@ -69,7 +69,7 @@ Spotify ist optional: lokale Dateien, Internetradio und YouTube funktionieren oh
 | macOS | [Apple Silicon](https://spotatui.com/download/macos) · [Intel](https://spotatui.com/download/macos-intel) |
 | Linux | [.deb](https://spotatui.com/download/linux-deb) · [.rpm](https://spotatui.com/download/linux-rpm) · [AppImage](https://spotatui.com/download/linux-appimage) |
 
-Die Installer sind noch nicht signiert, daher warnen Windows und macOS beim ersten Start. [Desktop-App](docs/installation.md#desktop-app) zeigt, wie man sie öffnet, und listet die arm64-Dateien für Linux.
+Die Installer sind noch nicht signiert, daher warnen Windows und macOS beim ersten Start. Der Abschnitt [Desktop-App](docs/installation.md#desktop-app) im Installationsleitfaden zeigt, wie man sie öffnet, und listet die arm64-Dateien für Linux.
 
 **Terminal-App**
 
@@ -80,9 +80,9 @@ Die Installer sind noch nicht signiert, daher warnen Windows und macOS beim erst
 | Arch Linux | `yay -S spotatui-bin` |
 | Mit Rust | `cargo install --locked spotatui` |
 
-Homebrew, Nix, Void, `.deb`-Pakete und das Bauen aus den Quellen stehen im [Installationsleitfaden](docs/installation.md).
+Homebrew, Nix, Void, `.deb`-Pakete und die Anleitung zum Kompilieren aus dem Quellcode stehen im [Installationsleitfaden](docs/installation.md).
 
-- **Features pro Build:** die vorkompilierten Terminal-Binaries enthalten alle Quellen, den MCP-Server und den KI-DJ. `cargo install` baut nur Spotify, es sei denn, du fügst [die Features](docs/installation.md#which-build-has-which-features) hinzu; der Nix-Flake baut ebenfalls nur Spotify.
+- **Features pro Build:** die vorkompilierten Terminal-Binaries enthalten alle Quellen, den MCP-Server und den KI-DJ. `cargo install` kompiliert nur Spotify, es sei denn, du fügst [die Features](docs/installation.md#which-build-has-which-features) hinzu; der Nix-Flake kompiliert ebenfalls nur Spotify.
 - **Updates:** die Terminal-App aktualisiert sich selbst. Falls ein Paketmanager sie installiert hat, setze `behavior.disable_auto_update: true`. Siehe [Aktualisieren](docs/installation.md#updating).
 
 ## Schnellstart
@@ -117,7 +117,7 @@ Spotify spielt in spotatui selbst, auf jedem Spotify-Connect-Gerät oder auf Cas
 
 | Du willst | Lies |
 |---|---|
-| Anders installieren oder aus den Quellen bauen | [Installation](docs/installation.md) |
+| Anders installieren oder aus dem Quellcode kompilieren | [Installation](docs/installation.md) |
 | Einstellungen, Tasten oder das Theme ändern | [Konfiguration](docs/configuration.md), [Tastenkürzel](docs/keybindings.md), [Themes](docs/themes.md) |
 | spotatui aus deiner Shell steuern | [CLI](docs/cli.md) |
 | Ein Lua-Plugin schreiben oder installieren | [PLUGINS.md](PLUGINS.md), [Scripting-API](docs/scripting.md) |
