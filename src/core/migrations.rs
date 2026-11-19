@@ -580,6 +580,7 @@ fn migration_node_offset(text: &str, has_behavior: bool) -> Result<usize> {
 /// and comments between them and a block mapping's first key. Without
 /// properties the offset is returned unchanged.
 fn skip_node_properties(text: &str, mut offset: usize, to_content: bool) -> usize {
+  let start = offset;
   let mut skipped = false;
   loop {
     let rest = &text[offset..];
@@ -602,6 +603,12 @@ fn skip_node_properties(text: &str, mut offset: usize, to_content: bool) -> usiz
     }
   }
   if skipped && to_content {
+    // Properties followed by a key on the same line, as in `&step volume_step: 7`,
+    // belong to that key; the block mapping starts at them.
+    let rest = &text[offset..];
+    if !rest.is_empty() && !rest.starts_with(['\r', '\n', '#', ' ', '\t', '{']) {
+      return start;
+    }
     loop {
       let rest = &text[offset..];
       let after = rest.trim_start();
@@ -1128,6 +1135,14 @@ behavior:
       (
         "behavior: &playback\ntheme: {preset: 'Dracula'}\n",
         vec!["behavior: &playback", "\ntheme: {preset: 'Dracula'}\n"],
+      ),
+      (
+        "behavior:\n  &step volume_step: 7\ntheme: {preset: 'Dracula'}\n",
+        vec!["behavior:\n", "  &step volume_step: 7\n", "theme: {preset: 'Dracula'}\n"],
+      ),
+      (
+        "behavior: &playback\n  &step !!str volume_step: 7\ntheme: {preset: 'Dracula'}\n",
+        vec!["behavior: &playback\n", "  &step !!str volume_step: 7\n", "theme: {preset: 'Dracula'}\n"],
       ),
     ] {
       assert_legacy_client_migration_preserves_text(config_yml, &fragments);
