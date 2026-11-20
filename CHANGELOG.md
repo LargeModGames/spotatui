@@ -26,6 +26,7 @@
 
 - **Remove single-file plugins from the CLI**: `spotatui plugin remove flat.lua` now removes a loose Lua plugin using the exact filename shown by `plugin list`, while preserving other loose files ([#1048](https://github.com/LargeModGames/spotatui/issues/1048)).
 - **Clearing an icon in Settings no longer saves an empty icon**: Active Source Icon and List Highlight Icon keep their current value when cleared, and padded icons are trimmed like `config.yml` does ([#1062](https://github.com/LargeModGames/spotatui/issues/1062)).
+- **CLI `--seek` with a huge or invalid value**: clap now refuses a value that is not whole seconds before spotatui starts, and a huge value no longer overflows into a seek near the start of the track ([#1044](https://github.com/LargeModGames/spotatui/issues/1044)).
 
 ### Documentation
 
