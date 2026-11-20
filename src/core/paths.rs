@@ -161,7 +161,7 @@ pub(crate) fn app_log_path() -> PathBuf {
     let now = Utc::now();
     // Timestamp-only is an acceptable tradeoff of log collision for code simplicity
     // and UX ease of use
-    now.format("spotatui_%Y-%m-%d_%H-%M-%S.log").to_string()
+    now.format("spotatui_%Y-%m-%d_%H-%M-%SZ.log").to_string()
   });
   app_log_dir().join(filename)
 }
