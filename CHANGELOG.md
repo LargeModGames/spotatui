@@ -10,6 +10,10 @@
 - **Sort the playlists sidebar**: order the Spotify playlists by Spotify's own order, by what you played last in spotatui, or by name. Press `,` in the playlists sidebar or choose the order in Your Library in the GUI. The choice is saved in `state.yml`; folders keep their positions and the community playlist stays pinned first ([#657](https://github.com/LargeModGames/spotatui/issues/657)).
 - **Scroll to change the volume in the GUI**: the mouse wheel over the volume bar in the desktop app and the browser GUI steps the volume up or down by the same step as the arrow keys. A trackpad swipe adds up its small scroll events instead of stepping on each one, and the seek bar still ignores the wheel ([#1059](https://github.com/LargeModGames/spotatui/issues/1059)).
 
+### Changed
+
+- **Log files are named after the run**: instead of `spotatuilog<pid>`, each run writes `spotatui_<UTC timestamp>_<pid>.log` in the temp directory, for example `spotatui_2026-11-20_18-42-07Z_12345.log`. The name is picked once at startup and stays the same for the whole run, and the PID keeps two runs started in the same second from sharing a file. spotatui still prints the resolved path when it starts and exits. The [Logging docs](https://github.com/LargeModGames/spotatui/blob/main/docs/configuration.md#logging) and the bug-report instructions now show the new name.
+
 ### Fixed
 
 - **Text Emphasis off no longer bolds the selected row**: with `behavior.enable_text_emphasis: false`, the highlighted row in every list and table keeps its reversed colors but is no longer drawn bold ([#822](https://github.com/LargeModGames/spotatui/issues/822)).
