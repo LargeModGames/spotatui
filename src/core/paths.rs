@@ -159,7 +159,10 @@ pub(crate) fn app_log_path() -> PathBuf {
   static LOG_FILENAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
   let filename = LOG_FILENAME.get_or_init(|| {
     let now = Utc::now();
-    now.format("spotatui_%Y-%m-%d_%H-%M-%SZ.log").to_string()
+    let pid = std::process::id();
+    now
+      .format(&format!("spotatui_%Y-%m-%d_%H-%M-%SZ_{pid}.log"))
+      .to_string()
   });
   app_log_dir().join(filename)
 }
