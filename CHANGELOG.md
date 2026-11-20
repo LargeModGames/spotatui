@@ -16,6 +16,7 @@
 
 ### Fixed
 
+- **`playback --help` names every option**: the list of options that can be used together now includes `--dislike` and `--seek`, says that `--like` and `--dislike` exclude each other, says that `--next` and `--previous` work with `--seek`, and says that `--share-track` and `--share-album` ignore `--seek` ([#1045](https://github.com/LargeModGames/spotatui/issues/1045)).
 - **Text Emphasis off no longer bolds the selected row**: with `behavior.enable_text_emphasis: false`, the highlighted row in every list and table keeps its reversed colors but is no longer drawn bold ([#822](https://github.com/LargeModGames/spotatui/issues/822)).
 - **The recap share card shows the cover again**: the recap page asked Apple's iTunes search for the cover of your top track from the browser, and the browser blocked the answer, so the card and the downloaded picture always showed the placeholder. spotatui now does the lookup when it makes the recap, with the same title and artist, and keeps the placeholder when the lookup fails or you are offline.
 - **A misspelled default sort direction warns instead of sorting ascending**: a `default_sort_*` setting with a direction other than `asc` or `desc`, such as `name:dsc` or `name:DESC`, sorted the screen by name from A to Z and logged nothing. It now warns at config load and falls back to the default order, like a misspelled field ([#1021](https://github.com/LargeModGames/spotatui/issues/1021)).
@@ -28,6 +29,7 @@
 - **A slow DNS resolver no longer fails the Spotify login**: the session connect had 15 s, and behind a dead first nameserver every lookup waits the resolver's 5 s timeout, so the login failed while the network worked. It now has 35 s, and a connect that still runs out says that it timed out and points at the network and DNS settings instead of a generic "Could not connect to Spotify" ([#977](https://github.com/LargeModGames/spotatui/issues/977)).
 
 - **Remove single-file plugins from the CLI**: `spotatui plugin remove flat.lua` now removes a loose Lua plugin using the exact filename shown by `plugin list`, while preserving other loose files ([#1048](https://github.com/LargeModGames/spotatui/issues/1048)).
+- **Clearing an icon in Settings no longer saves an empty icon**: Active Source Icon and List Highlight Icon keep their current value when cleared, and padded icons are trimmed like `config.yml` does ([#1062](https://github.com/LargeModGames/spotatui/issues/1062)).
 
 ### Documentation
 
