@@ -157,8 +157,8 @@ pub(crate) fn fresh_private_dir(temp: &Path, prefix: &str) -> Option<PathBuf> {
 /// path shown to a user is always the path actually written.
 pub(crate) fn app_log_path() -> PathBuf {
   let now = Utc::now();
-  let now_iso = now.to_rfc3339();
-  app_log_dir().join(format!("spotatui_{now_iso}.log"))
+  let filename = now.format("spotatui_%Y-%m-%d_%H-%m-%SZ.log").to_string();
+  app_log_dir().join(filename)
 }
 
 /// Ensure a directory that stores credentials or other private app data exists
