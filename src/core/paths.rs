@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use chrono::Utc;
 use std::{
   ffi::OsString,
   path::{Path, PathBuf},
@@ -155,7 +156,9 @@ pub(crate) fn fresh_private_dir(temp: &Path, prefix: &str) -> Option<PathBuf> {
 /// (`setup_logging`) and the reporting side (the help screen) use this so the
 /// path shown to a user is always the path actually written.
 pub(crate) fn app_log_path() -> PathBuf {
-  app_log_dir().join(format!("spotatuilog{}", std::process::id()))
+  let now = Utc::now();
+  let now_iso = now.to_rfc3339();
+  app_log_dir().join(format!("spotatui_{now_iso}.log"))
 }
 
 /// Ensure a directory that stores credentials or other private app data exists
