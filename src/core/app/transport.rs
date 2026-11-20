@@ -100,6 +100,28 @@ impl App {
     self.park_native_backend();
   }
 
+  /// Set the saved intent while Qobuz stages the stream under its paused sink.
+  /// Other owners and the pending-fetch window keep their normal transport path.
+  pub(crate) fn set_staged_qobuz_playing(&mut self, playing: bool) -> bool {
+    #[cfg(feature = "qobuz")]
+    {
+      let owns_sink = !self.queue_owns_playback();
+      #[cfg(feature = "local-files")]
+      let owns_sink = owns_sink && self.local_playback.is_none();
+      #[cfg(feature = "subsonic")]
+      let owns_sink = owns_sink && self.subsonic_playback.is_none();
+      if let Some(qobuz) = self.qobuz_playback.as_mut().filter(|qobuz| {
+        owns_sink && qobuz.advancing && qobuz.tempfile.is_some() && qobuz.resume_at.is_some()
+      }) {
+        qobuz.set_paused(!playing);
+        return true;
+      }
+    }
+    #[cfg(not(feature = "qobuz"))]
+    let _ = playing;
+    false
+  }
+
   pub fn toggle_playback(&mut self) {
     if self.relay_party_toggle() {
       return;
@@ -647,6 +669,8 @@ impl App {
 #[cfg(all(test, feature = "qobuz"))]
 mod qobuz_tests {
   use super::*;
+  use crate::core::action::Action;
+  use crate::core::test_helpers::queued_track;
   use crate::infra::audio::LocalPlayer;
   use crate::infra::qobuz::{QobuzPlaybackState, ResumePoint};
 
@@ -654,7 +678,7 @@ mod qobuz_tests {
     let mut app = App::default();
     app.qobuz_playback = Some(QobuzPlaybackState {
       player: Arc::new(LocalPlayer::without_device()),
-      tracks: Vec::new(),
+      tracks: vec![queued_track("qobuz:track:1", "Staging")],
       index: 0,
       advancing: true,
       tempfile: Some(tempfile::NamedTempFile::new().unwrap()),
@@ -669,6 +693,159 @@ mod qobuz_tests {
       fetch: None,
     });
     app
+  }
+
+  #[test]
+  fn a_play_action_during_qobuz_staging_preserves_the_saved_play_intent() {
+    let mut app = app_with_qobuz();
+    app.qobuz_playback.as_ref().unwrap().player.pause();
+
+    for _ in 0..2 {
+      app.apply(Action::Play);
+      assert_eq!(
+        app.qobuz_playback.as_ref().unwrap().resume_at,
+        Some(ResumePoint {
+          position_ms: 1234,
+          paused: false,
+        })
+      );
+    }
+  }
+
+  #[test]
+  fn a_play_action_during_qobuz_staging_overrides_the_saved_pause_intent() {
+    let mut app = app_with_qobuz();
+    let session = app.qobuz_playback.as_mut().unwrap();
+    session.resume_at.as_mut().unwrap().paused = true;
+    session.player.pause();
+
+    for _ in 0..2 {
+      app.apply(Action::Play);
+      assert_eq!(
+        app.qobuz_playback.as_ref().unwrap().resume_at,
+        Some(ResumePoint {
+          position_ms: 1234,
+          paused: false,
+        })
+      );
+    }
+  }
+
+  #[test]
+  fn a_pause_action_during_qobuz_staging_overrides_the_saved_play_intent() {
+    let mut app = app_with_qobuz();
+    app.qobuz_playback.as_ref().unwrap().player.pause();
+
+    for _ in 0..2 {
+      app.apply(Action::Pause);
+      assert_eq!(
+        app.qobuz_playback.as_ref().unwrap().resume_at,
+        Some(ResumePoint {
+          position_ms: 1234,
+          paused: true,
+        })
+      );
+    }
+  }
+
+  #[test]
+  fn a_toggle_action_during_qobuz_staging_flips_the_saved_intent() {
+    let mut app = app_with_qobuz();
+    app.qobuz_playback.as_ref().unwrap().player.pause();
+
+    for paused in [true, false, true] {
+      app.apply(Action::TogglePlayback);
+      assert_eq!(
+        app.qobuz_playback.as_ref().unwrap().resume_at,
+        Some(ResumePoint {
+          position_ms: 1234,
+          paused,
+        })
+      );
+    }
+  }
+
+  #[test]
+  fn absolute_actions_during_a_qobuz_fetch_keep_the_existing_transport_behavior() {
+    for paused in [false, true] {
+      for saved_pause in [false, true] {
+        for play in [false, true] {
+          let mut app = app_with_qobuz();
+          let session = app.qobuz_playback.as_mut().unwrap();
+          session.tempfile = None;
+          session.set_paused(paused);
+          session.resume_at.as_mut().unwrap().paused = saved_pause;
+
+          app.apply(if play { Action::Play } else { Action::Pause });
+
+          let session = app.qobuz_playback.as_ref().unwrap();
+          assert_eq!(
+            session.player.is_paused(),
+            if play { !paused } else { paused }
+          );
+          assert_eq!(
+            session.resume_at,
+            Some(ResumePoint {
+              position_ms: 1234,
+              paused: if play { !paused } else { saved_pause },
+            })
+          );
+        }
+      }
+    }
+  }
+
+  #[test]
+  fn absolute_actions_leave_a_staged_qobuz_context_untouched_under_a_queue_slot() {
+    use crate::infra::queue::DecodedQueuePlayback;
+
+    for paused in [false, true] {
+      let mut app = app_with_qobuz();
+      let session = app.qobuz_playback.as_ref().unwrap();
+      let resume = session.resume_at;
+      session.player.pause();
+      if paused {
+        session.player.resume();
+      }
+      app.queue_now = Some(QueueNowPlaying::Decoded(DecodedQueuePlayback {
+        player: Arc::clone(&session.player),
+        track: queued_track("qobuz:track:2", "Queued"),
+        advancing: false,
+        fetch_id: 2,
+        tempfile: None,
+        abort_handle: None,
+        quality: None,
+      }));
+
+      app.apply(if paused { Action::Pause } else { Action::Play });
+
+      let session = app.qobuz_playback.as_ref().unwrap();
+      assert_eq!(session.resume_at, resume);
+      assert_eq!(session.player.is_paused(), paused);
+    }
+  }
+
+  #[tokio::test]
+  async fn routed_play_and_pause_during_qobuz_staging_set_the_saved_intent() {
+    use crate::infra::qobuz::dispatch::route_qobuz_event;
+
+    let app = Arc::new(tokio::sync::Mutex::new(app_with_qobuz()));
+    for paused in [false, false, true, true, false] {
+      let event = if paused {
+        IoEvent::PausePlayback
+      } else {
+        IoEvent::StartPlayback(None, None, None)
+      };
+      assert!(route_qobuz_event(&app, &event).await);
+      let guard = app.lock().await;
+      assert_eq!(
+        guard.qobuz_playback.as_ref().unwrap().resume_at,
+        Some(ResumePoint {
+          position_ms: 1234,
+          paused,
+        })
+      );
+    }
   }
 
   #[test]

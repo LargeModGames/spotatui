@@ -27,12 +27,12 @@ impl App {
       Action::Play if self.apple_music_owns_playback() => self.set_apple_music_playing(true),
       Action::Pause if self.apple_music_owns_playback() => self.set_apple_music_playing(false),
       Action::Play => {
-        if !effective_is_playing(self) {
+        if !self.set_staged_qobuz_playing(true) && !effective_is_playing(self) {
           self.toggle_playback();
         }
       }
       Action::Pause => {
-        if effective_is_playing(self) {
+        if !self.set_staged_qobuz_playing(false) && effective_is_playing(self) {
           self.toggle_playback();
         }
       }
