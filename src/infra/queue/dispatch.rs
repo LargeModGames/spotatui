@@ -1363,6 +1363,7 @@ async fn resume_qobuz(
       super::replay_file(player, path, Some(resume)).await;
       if let Some(s) = app.lock().await.qobuz_playback.as_mut() {
         s.advancing = false;
+        s.resume_at = None;
       }
     }
     None => crate::infra::qobuz::dispatch::play_index(app, index, Some(resume)).await,
@@ -1436,7 +1437,6 @@ mod tests {
   use std::sync::mpsc::channel;
   use std::time::SystemTime;
 
-  #[cfg(any(feature = "streaming", feature = "qobuz", not(feature = "subsonic")))]
   fn track(uri: &str, name: &str) -> TrackInfo {
     TrackInfo {
       generated_name: None,
@@ -1573,6 +1573,76 @@ mod tests {
     file.write_all(&vec![0u8; data_len as usize]).unwrap();
     file.flush().unwrap();
     file
+  }
+
+  #[cfg(feature = "qobuz")]
+  #[tokio::test]
+  async fn a_qobuz_queue_resume_clears_the_saved_position_before_repeat_one_replay() {
+    use crate::infra::qobuz::{QobuzPlaybackState, ResumePoint};
+    use crate::infra::queue::{DecodedQueuePlayback, QueueNowPlaying};
+
+    let player = Arc::new(LocalPlayer::without_device_with_consumer());
+    let file = silence();
+    player.stage_file(file.path()).unwrap();
+    let app = test_app();
+    {
+      let mut guard = app.lock().await;
+      guard.qobuz_playback = Some(QobuzPlaybackState {
+        player: Arc::clone(&player),
+        tracks: vec![track("qobuz:track:1", "Context")],
+        index: 0,
+        advancing: true,
+        tempfile: Some(file),
+        complete: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+        quality: None,
+        shuffle_backup: None,
+        fetch_id: 7,
+        resume_at: Some(ResumePoint {
+          position_ms: 800,
+          paused: false,
+        }),
+        fetch: None,
+      });
+      guard.suspend_active_decoded_context_mid_track();
+      guard.queue_now = Some(QueueNowPlaying::Decoded(DecodedQueuePlayback {
+        player: Arc::clone(&player),
+        track: track("qobuz:track:2", "Queued"),
+        advancing: false,
+        fetch_id: 8,
+        tempfile: None,
+        abort_handle: None,
+        quality: None,
+      }));
+      guard.queue_slot_desired_playing = false;
+    }
+    assert!(route_queue_event(&app, &IoEvent::AdvanceNativeQueue).await);
+    {
+      let guard = app.lock().await;
+      assert!(guard.queue_now.is_none() && guard.queue_suspended.is_none());
+      let session = guard.qobuz_playback.as_ref().unwrap();
+      assert!(!session.advancing);
+      assert_eq!(
+        session.resume_at, None,
+        "the queue resume consumed the parked intent"
+      );
+      assert_eq!(player.position(), Duration::ZERO);
+      assert!(player.is_paused());
+    }
+    // Repeat-one dispatches this event after the context track ends.
+    player.stop();
+    assert!(
+      crate::infra::qobuz::dispatch::route_qobuz_event(&app, &IoEvent::ReplayCurrentTrack).await
+    );
+    assert_eq!(
+      player.position(),
+      Duration::ZERO,
+      "repeat-one starts at the beginning"
+    );
+    assert!(player.is_paused(), "the old saved play flag is gone too");
+    let guard = app.lock().await;
+    let session = guard.qobuz_playback.as_ref().unwrap();
+    assert_eq!(session.resume_at, None);
+    assert!(!session.advancing);
   }
 
   #[cfg(feature = "qobuz")]

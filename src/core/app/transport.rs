@@ -14,22 +14,25 @@ enum QobuzTransportCommand {
 /// `S` requests true and pauses. `L` flips the live sink's pause state, then saves
 /// and applies it. `R` flips the staging record's pause state (live sink if no
 /// record exists), then saves and applies it. `-` delegates to the current owner
-/// without changing Qobuz intent or issuing a Qobuz sink command.
+/// without changing Qobuz intent or issuing a Qobuz sink command. `K` saves the
+/// seek target without moving the sink, preserving the saved pause flag (the
+/// default play intent if no record exists). `D` seeks the live sink off the pump.
 ///
-/// | Session | Play | Pause | TogglePlayback | StartPlayback(None, None, None) | PausePlayback |
-/// |---|---|---|---|---|---|
-/// | No session | - | - | - | - | - |
-/// | Pending fetch (advancing, no tempfile) | P | S | L | P | S |
-/// | Staging (advancing, tempfile) | P | S | R | P | S |
-/// | Playing (not advancing) | P | S | S | P | S |
-/// | Paused (not advancing) | P | S | P | P | S |
-/// | Owned by another source or queue | - | - | - | - | - |
+/// | Session | Play | Pause | TogglePlayback | StartPlayback(None, None, None) | PausePlayback | Seek |
+/// |---|---|---|---|---|---|---|
+/// | No session | - | - | - | - | - | - |
+/// | Pending fetch (advancing, no tempfile) | P | S | L | P | S | K |
+/// | Staging (advancing, tempfile) | P | S | R | P | S | K |
+/// | Playing (not advancing) | P | S | S | P | S | D |
+/// | Paused (not advancing) | P | S | P | P | S | D |
+/// | Owned by another source or queue | - | - | - | - | - | - |
 ///
 /// `set_paused` preserves any saved seek position. Pending fetch creates a
 /// record if needed; staging has one before the blocking decoder starts. A
 /// live session updates an existing recovery record but does not create one.
-/// Staging can temporarily pause the sink again; its commit applies the latest
-/// saved intent. Apple Music, a queue slot, Local and Subsonic take precedence
+/// A seek creates a record whenever advancing. Staging can temporarily pause
+/// the sink again; its commit reads both the latest seek and pause under the
+/// final lock. Apple Music, a queue slot, Local and Subsonic take precedence
 /// over Qobuz. Browse scope does not affect playback ownership.
 #[cfg(feature = "qobuz")]
 fn qobuz_transport_paused(
@@ -171,12 +174,18 @@ impl App {
   }
 
   #[cfg(feature = "qobuz")]
-  fn qobuz_transport(&mut self, command: QobuzTransportCommand) -> bool {
+  pub(crate) fn qobuz_owns_playback(&self) -> bool {
     let owns_session = !self.apple_music_owns_playback() && !self.queue_owns_playback();
     #[cfg(feature = "local-files")]
     let owns_session = owns_session && self.local_playback.is_none();
     #[cfg(feature = "subsonic")]
     let owns_session = owns_session && self.subsonic_playback.is_none();
+    owns_session && self.qobuz_playback.is_some()
+  }
+
+  #[cfg(feature = "qobuz")]
+  fn qobuz_transport(&mut self, command: QobuzTransportCommand) -> bool {
+    let owns_session = self.qobuz_owns_playback();
     let Some(qobuz) = self.qobuz_playback.as_mut() else {
       return false;
     };
@@ -768,6 +777,7 @@ mod qobuz_tests {
     TogglePlayback,
     StartPlayback,
     PausePlayback,
+    Seek,
   }
 
   impl TransportEntry {
@@ -784,6 +794,7 @@ mod qobuz_tests {
         Self::PausePlayback => {
           return Some(route_qobuz_event(app, &IoEvent::PausePlayback).await);
         }
+        Self::Seek => return Some(route_qobuz_event(app, &IoEvent::Seek(4321)).await),
       };
       app.lock().await.apply(action);
       None
@@ -837,6 +848,7 @@ mod qobuz_tests {
               (TransportEntry::TogglePlayback, toggle_paused),
               (TransportEntry::StartPlayback, false),
               (TransportEntry::PausePlayback, true),
+              (TransportEntry::Seek, live_paused),
             ] {
               let mut app = app_with_qobuz();
               // Browse scope must not choose the transport owner.
@@ -934,15 +946,25 @@ mod qobuz_tests {
                   "{context}"
                 );
                 if let Some(session) = &guard.qobuz_playback {
-                  let expected_resume =
-                    if controls_qobuz && (saved_paused.is_some() || (advancing && !has_tempfile)) {
+                  let expected_resume = if controls_qobuz && matches!(entry, TransportEntry::Seek) {
+                    if advancing {
                       Some(ResumePoint {
-                        position_ms: original_resume.map_or(0, |r| r.position_ms),
-                        paused,
+                        position_ms: 4321,
+                        paused: saved_paused.unwrap_or(false),
                       })
                     } else {
                       original_resume
-                    };
+                    }
+                  } else if controls_qobuz
+                    && (saved_paused.is_some() || (advancing && !has_tempfile))
+                  {
+                    Some(ResumePoint {
+                      position_ms: original_resume.map_or(0, |r| r.position_ms),
+                      paused,
+                    })
+                  } else {
+                    original_resume
+                  };
                   assert_eq!(session.resume_at, expected_resume, "{context}");
                   assert_eq!(session.advancing, advancing, "{context}");
                   assert_eq!(session.tempfile.is_some(), has_tempfile, "{context}");
@@ -974,7 +996,7 @@ mod qobuz_tests {
         }
       }
     }
-    assert_eq!(checks, owners.len() * 3 * 2 * 3 * 5 * 2);
+    assert_eq!(checks, owners.len() * 3 * 2 * 3 * 6 * 2);
     eprintln!("Qobuz transport matrix: {checks} state/command checks passed");
   }
 

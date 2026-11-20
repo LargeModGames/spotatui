@@ -182,8 +182,27 @@ impl LocalPlayer {
   /// An empty player for queue-state tests, with no system audio device.
   #[cfg(all(test, feature = "qobuz"))]
   pub(crate) fn without_device() -> Self {
-    let (player, _output) = Player::new();
-    let (keepalive, _rx) = mpsc::channel();
+    Self::test_player(false)
+  }
+
+  /// Consume samples in memory so seek and clear complete without an audio device.
+  #[cfg(all(test, feature = "qobuz"))]
+  pub(crate) fn without_device_with_consumer() -> Self {
+    Self::test_player(true)
+  }
+
+  #[cfg(all(test, feature = "qobuz"))]
+  fn test_player(consume: bool) -> Self {
+    let (player, mut output) = Player::new();
+    let (keepalive, rx) = mpsc::channel();
+    if consume {
+      std::thread::spawn(move || {
+        while matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)) {
+          output.by_ref().take(80).for_each(drop);
+          std::thread::sleep(Duration::from_millis(1));
+        }
+      });
+    }
     Self {
       sink: Mutex::new(Sink {
         player: Arc::new(player),

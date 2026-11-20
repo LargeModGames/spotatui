@@ -118,17 +118,32 @@ pub async fn route_qobuz_event(app: &Arc<Mutex<App>>, event: &IoEvent) -> bool {
       false
     }
     IoEvent::PausePlayback => app.lock().await.set_qobuz_playing(false),
-    IoEvent::Seek(position_ms) => match player(app).await {
-      Some(p) => {
-        // A seek past the downloaded part waits for that segment: off the pump.
-        let position = Duration::from_millis(*position_ms as u64);
-        tokio::task::spawn_blocking(move || {
-          let _ = p.seek(position);
-        });
-        true
-      }
-      None => false,
-    },
+    IoEvent::Seek(position_ms) => {
+      let player = {
+        let mut guard = app.lock().await;
+        if !guard.qobuz_owns_playback() {
+          return false;
+        }
+        let Some(s) = guard.qobuz_playback.as_mut() else {
+          return false;
+        };
+        if s.advancing {
+          // The sink still holds the outgoing track, or is being replaced.
+          // Only the fetch commit may apply this seek to the incoming track.
+          s.resume_at
+            .get_or_insert_with(ResumePoint::default)
+            .position_ms = u64::from(*position_ms);
+          return true;
+        }
+        Arc::clone(&s.player)
+      };
+      // A seek past the downloaded part waits for that segment: off the pump.
+      let position = Duration::from_millis(u64::from(*position_ms));
+      tokio::task::spawn_blocking(move || {
+        let _ = player.seek(position);
+      });
+      true
+    }
     IoEvent::ChangeVolume(volume) => match player(app).await {
       Some(p) => {
         p.set_volume(*volume);
@@ -888,9 +903,28 @@ async fn fail_fetch(
 async fn commit_fetch(
   app: &Arc<Mutex<App>>,
   fetch_id: u64,
+  download: (NamedTempFile, progressive::Completion),
+  quality: StreamQuality,
+  prepared: PreparedStream,
+) {
+  commit_fetch_with_stage(
+    app,
+    fetch_id,
+    download,
+    quality,
+    prepared,
+    LocalPlayer::stage_prepared,
+  )
+  .await;
+}
+
+async fn commit_fetch_with_stage(
+  app: &Arc<Mutex<App>>,
+  fetch_id: u64,
   (tmp, complete): (NamedTempFile, progressive::Completion),
   quality: StreamQuality,
   prepared: PreparedStream,
+  stage: impl FnOnce(&LocalPlayer, PreparedStream) -> Result<()> + Send + 'static,
 ) {
   let claimed = {
     let guard = app.lock().await;
@@ -939,18 +973,16 @@ async fn commit_fetch(
     s.complete = complete;
     s.quality = Some(quality);
     s.fetch = None;
-    let resume = s.resume_at;
-    // Keep a pause record through staging, after the tempfile is published.
-    s.resume_at.get_or_insert(ResumePoint {
+    // Keep seek and pause intent through staging, after the tempfile is published.
+    let resume = *s.resume_at.get_or_insert(ResumePoint {
       position_ms: 0,
       paused: was_paused,
     });
     (resume, volume)
   };
-  let paused = resume.map_or(was_paused, |r| r.paused);
   let stage_player = Arc::clone(&player);
   let staged = tokio::task::spawn_blocking(move || {
-    stage_player.stage_prepared(prepared)?;
+    stage(&stage_player, prepared)?;
     stage_player.set_volume(volume);
     Ok::<(), anyhow::Error>(())
   })
@@ -975,29 +1007,26 @@ async fn commit_fetch(
     return;
   };
   // A command received while the blocking stage ran supersedes its snapshot.
-  let paused = s.resume_at.take().map_or(paused, |r| r.paused);
+  let resume = s.resume_at.take().unwrap_or(resume);
   if !staged {
     // The device went under the stage, and the dropped stream left the file
-    // partial: the replay fetches it again, with the same pause. The advance
+    // partial: the replay fetches it again, with the latest seek and pause. The advance
     // latch stays on until it plays.
-    s.resume_at = Some(ResumePoint {
-      position_ms: resume.map_or(0, |r| r.position_ms),
-      paused,
-    });
+    s.resume_at = Some(resume);
     guard.dispatch(IoEvent::ReplayCurrentTrack);
     return;
   }
   s.advancing = false;
-  s.set_paused(paused);
+  s.set_paused(resume.paused);
   let display = s.current().map(|t| t.name.clone());
   if let Some(display) = display {
     guard.set_status_message(format!("\u{266a} {display}"), 4);
   }
   drop(guard);
   // The restore seek waits for that part of the download: off the App lock.
-  if let Some(position_ms) = resume.map(|r| r.position_ms).filter(|&ms| ms > 0) {
+  if resume.position_ms > 0 {
     tokio::task::spawn_blocking(move || {
-      let _ = player.seek(Duration::from_millis(position_ms));
+      let _ = player.seek(Duration::from_millis(resume.position_ms));
     });
   }
 }
@@ -1396,8 +1425,7 @@ mod tests {
     }
   }
 
-  /// Stage a local WAV through the real commit path, without an audio device.
-  async fn commit_test_track(app: &Arc<Mutex<App>>) {
+  fn prepared_test_track() -> (NamedTempFile, PreparedStream) {
     use std::io::Write;
     let mut file = NamedTempFile::new().unwrap();
     let data_len = 8_000u32 * 2;
@@ -1421,22 +1449,174 @@ mod tests {
       Some(44 + u64::from(data_len)),
     )
     .unwrap();
-    commit_fetch(
-      app,
-      7,
-      (file, Default::default()),
-      StreamQuality {
-        sample_rate: 8_000,
-        bits_per_sample: 16,
-        flac: false,
-      },
-      prepared,
-    )
-    .await;
+    (file, prepared)
+  }
+
+  fn test_quality() -> StreamQuality {
+    StreamQuality {
+      sample_rate: 8_000,
+      bits_per_sample: 16,
+      flac: false,
+    }
+  }
+
+  /// Stage a local WAV through the real commit path, without an audio device.
+  async fn commit_test_track(app: &Arc<Mutex<App>>) {
+    let (file, prepared) = prepared_test_track();
+    commit_fetch(app, 7, (file, Default::default()), test_quality(), prepared).await;
     let guard = app.lock().await;
     let session = guard.qobuz_playback.as_ref().unwrap();
     assert!(session.tempfile.is_some());
     assert!(!session.advancing);
+  }
+
+  async fn seek_during_fetch(resume: Option<ResumePoint>) {
+    let app = test_app();
+    let mut session = waiting_session(7);
+    let player = Arc::new(LocalPlayer::without_device_with_consumer());
+    let (_outgoing, prepared) = prepared_test_track();
+    player.stage_prepared(prepared).unwrap();
+    player.seek(Duration::from_millis(100)).unwrap();
+    session.player = Arc::clone(&player);
+    session.resume_at = resume;
+    app.lock().await.qobuz_playback = Some(session);
+
+    assert!(route_qobuz_event(&app, &IoEvent::Seek(400)).await);
+    {
+      let guard = app.lock().await;
+      let session = guard.qobuz_playback.as_ref().unwrap();
+      assert_eq!(
+        session.resume_at,
+        Some(ResumePoint {
+          position_ms: 400,
+          paused: resume.is_some_and(|r| r.paused)
+        })
+      );
+      assert_eq!(
+        player.position(),
+        Duration::from_millis(100),
+        "the outgoing track stays put"
+      );
+      assert!(session.advancing);
+      assert_eq!(session.fetch_id, 7);
+    }
+    // A fresh sink starts paused without a user pause intent. A seek must
+    // not turn that initial sink state into a pause of the incoming track.
+    // Pause explicitly before committing so its final seek can be read exactly.
+    assert!(route_qobuz_event(&app, &IoEvent::PausePlayback).await);
+    commit_test_track(&app).await;
+    tokio::time::timeout(Duration::from_secs(2), async {
+      while player.position() != Duration::from_millis(400) {
+        tokio::time::sleep(Duration::from_millis(1)).await;
+      }
+    })
+    .await
+    .expect("the committed track seeks to the latest target");
+    assert!(player.is_paused());
+    assert_eq!(
+      app.lock().await.qobuz_playback.as_ref().unwrap().resume_at,
+      None
+    );
+  }
+
+  #[tokio::test]
+  async fn a_seek_during_fetch_creates_a_resume_point_without_moving_the_outgoing_track() {
+    seek_during_fetch(None).await;
+  }
+
+  #[tokio::test]
+  async fn a_seek_during_fetch_replaces_the_saved_position_without_moving_the_outgoing_track() {
+    seek_during_fetch(Some(ResumePoint {
+      position_ms: 800,
+      paused: true,
+    }))
+    .await;
+  }
+
+  #[tokio::test]
+  async fn a_seek_on_a_fresh_player_keeps_the_default_play_intent() {
+    let app = test_app();
+    app.lock().await.qobuz_playback = Some(waiting_session(7));
+    assert!(route_qobuz_event(&app, &IoEvent::Seek(0)).await);
+    assert_eq!(
+      app.lock().await.qobuz_playback.as_ref().unwrap().resume_at,
+      Some(ResumePoint::default())
+    );
+    commit_test_track(&app).await;
+    assert!(!app
+      .lock()
+      .await
+      .qobuz_playback
+      .as_ref()
+      .unwrap()
+      .player
+      .is_paused());
+  }
+
+  #[tokio::test]
+  async fn a_seek_during_staging_overrides_the_position_snapshot() {
+    for target in [0, 600] {
+      let app = test_app();
+      let mut session = waiting_session(7);
+      let player = Arc::new(LocalPlayer::without_device_with_consumer());
+      session.player = Arc::clone(&player);
+      session.resume_at = Some(ResumePoint {
+        position_ms: 800,
+        paused: true,
+      });
+      app.lock().await.qobuz_playback = Some(session);
+      let (file, prepared) = prepared_test_track();
+      let (staging, started) = tokio::sync::oneshot::channel();
+      let (release, released) = std::sync::mpsc::channel();
+      let commit_app = Arc::clone(&app);
+      let commit = tokio::spawn(async move {
+        commit_fetch_with_stage(
+          &commit_app,
+          7,
+          (file, Default::default()),
+          test_quality(),
+          prepared,
+          move |player, prepared| {
+            staging.send(()).unwrap();
+            released.recv_timeout(Duration::from_secs(5)).unwrap();
+            player.stage_prepared(prepared)
+          },
+        )
+        .await;
+      });
+      tokio::time::timeout(Duration::from_secs(2), started)
+        .await
+        .unwrap()
+        .unwrap();
+      assert!(route_qobuz_event(&app, &IoEvent::Seek(target)).await);
+      {
+        let guard = app.lock().await;
+        let session = guard.qobuz_playback.as_ref().unwrap();
+        assert!(session.advancing && session.tempfile.is_some());
+        assert_eq!(
+          session.resume_at,
+          Some(ResumePoint {
+            position_ms: u64::from(target),
+            paused: true
+          })
+        );
+        assert_eq!(player.position(), Duration::ZERO);
+      }
+      release.send(()).unwrap();
+      commit.await.unwrap();
+      tokio::time::timeout(Duration::from_secs(2), async {
+        while player.position() != Duration::from_millis(u64::from(target)) {
+          tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+      })
+      .await
+      .expect("staging applies the latest seek, including zero");
+      assert!(player.is_paused());
+      let guard = app.lock().await;
+      let session = guard.qobuz_playback.as_ref().unwrap();
+      assert!(!session.advancing);
+      assert_eq!(session.resume_at, None);
+    }
   }
 
   #[test]
