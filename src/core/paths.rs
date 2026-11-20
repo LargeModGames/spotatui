@@ -156,8 +156,11 @@ pub(crate) fn fresh_private_dir(temp: &Path, prefix: &str) -> Option<PathBuf> {
 /// (`setup_logging`) and the reporting side (the help screen) use this so the
 /// path shown to a user is always the path actually written.
 pub(crate) fn app_log_path() -> PathBuf {
-  let now = Utc::now();
-  let filename = now.format("spotatui_%Y-%m-%d_%H-%m-%SZ.log").to_string();
+  static LOG_FILENAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+  let filename = LOG_FILENAME.get_or_init(|| {
+    let now = Utc::now();
+    now.format("spotatui_%Y-%m-%d_%H-%m-%SZ.log").to_string()
+  });
   app_log_dir().join(filename)
 }
 
