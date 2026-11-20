@@ -544,7 +544,7 @@ Setup, tools, and troubleshooting: [`docs/mcp-setup.md`](mcp-setup.md) and
 
 ## Logging
 
-Every run writes a log file to the OS temp directory, one per process id:
+Every run writes a log file to the OS temp directory:
 `$TMPDIR/spotatui_logs/spotatui_<timestamp>.log` (`%TEMP%\spotatui_logs\...` on Windows).
 spotatui prints the path when it starts and again when it exits, so you never
 have to guess which file belongs to the run you just had.
