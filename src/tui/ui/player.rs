@@ -1037,8 +1037,8 @@ fn draw_qobuz_playbar(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       name
     },
     artists: track.map(|t| t.artists.join(", ")).unwrap_or_default(),
-    is_playing: !qobuz.player.is_paused(),
-    position_ms: qobuz.player.position().as_millis(),
+    is_playing: !qobuz.is_paused(),
+    position_ms: qobuz.position_ms(),
     duration_ms: track.map(|t| t.duration_ms).unwrap_or(0),
     volume_percent: app.runtime_state.volume_percent,
     queue_position: (qobuz.tracks.len() > 1).then(|| (qobuz.index + 1, qobuz.tracks.len())),

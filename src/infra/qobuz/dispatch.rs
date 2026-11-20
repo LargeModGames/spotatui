@@ -57,9 +57,7 @@ use crate::core::source::{MediaSource, Searcher, Source};
 use crate::core::state::PersistedRuntimeState;
 use crate::infra::audio::{LocalPlayer, PreparedStream};
 use crate::infra::network::IoEvent;
-use crate::infra::queue::{
-  advance_index, apply_resolved, placeholder_uri, replay_file, snapshot_tracks,
-};
+use crate::infra::queue::{advance_index, apply_resolved, placeholder_uri, snapshot_tracks};
 
 /// Whether a URI is owned by the Qobuz source.
 pub fn is_qobuz_uri(uri: &str) -> bool {
@@ -128,7 +126,7 @@ pub async fn route_qobuz_event(app: &Arc<Mutex<App>>, event: &IoEvent) -> bool {
           return false;
         };
         if s.advancing {
-          // The sink still holds the outgoing track, or is being replaced.
+          // The sink is silent while the incoming track is being prepared.
           // Only the fetch commit may apply this seek to the incoming track.
           s.resume_at
             .get_or_insert_with(ResumePoint::default)
@@ -782,14 +780,29 @@ fn spawn_fetch(
   track_id: String,
   quality: u8,
 ) {
+  let stopped = session.player.stop_for_change();
   let placeholder = placeholder_uri(&session.tracks, session.index);
   let app = Arc::clone(app);
   let fetch_id = session.fetch_id;
   let task = tokio::spawn(async move {
+    let _ = stopped.await;
     let (token, epoch) = auth::token_snapshot();
     let prepared = async {
       let token = token.ok_or(Unauthorized)?;
-      let constants = constants_for_fetch(&app, web_constants(), fetch_id).await?;
+      let constants = constants_for_fetch(&app, web_constants()).await?;
+      {
+        let mut guard = app.lock().await;
+        if guard.queue_owns_playback()
+          || guard
+            .qobuz_playback
+            .as_ref()
+            .is_none_or(|s| s.fetch_id != fetch_id)
+        {
+          return Err(anyhow!("superseded Qobuz fetch"));
+        }
+        let notice = guard.strings().status.infra.qobuz_preparing;
+        guard.set_status_message(notice, 30);
+      }
       let source = QobuzSource::new(constants.app_id, constants.app_secret, token);
       let source = Arc::new(source);
       if let Some(uri) = placeholder {
@@ -807,29 +820,11 @@ fn spawn_fetch(
   session.fetch = Some(task.abort_handle());
 }
 
-/// The constants for the fetch `fetch_id`. While it waits for the scrape the
-/// sink is empty, for minutes at worst, and a fresh player reads paused; the
-/// player is marked playing for that time, so a pause pressed meanwhile shows
-/// and holds the track paused when it is staged.
+/// Wait for the constants off the pump, keeping transport intent in the session.
 async fn constants_for_fetch(
   app: &Arc<Mutex<App>>,
   constants: &Arc<Constants>,
-  fetch_id: u64,
 ) -> Result<QobuzBundleCache> {
-  if let Some(ready) = constants.ready() {
-    return Ok(ready);
-  }
-  {
-    let guard = app.lock().await;
-    if let Some(session) = guard
-      .qobuz_playback
-      .as_ref()
-      .filter(|s| s.fetch_id == fetch_id && !guard.queue_owns_playback())
-      .filter(|s| !s.resume_at.is_some_and(|r| r.paused))
-    {
-      session.player.resume();
-    }
-  }
   constants.get(app).await.map_err(constants_error)
 }
 
@@ -888,6 +883,7 @@ async fn fail_fetch(
     return;
   }
   let session = guard.qobuz_playback.take();
+  guard.release_decoded_sink_claim();
   report_locked(&mut guard, step, err, epoch);
   drop(guard);
   if let Some(s) = session {
@@ -895,11 +891,8 @@ async fn fail_fetch(
   }
 }
 
-/// Play the prepared stream and finalize the session. The previous track is
-/// cleared off the `App` lock first (the sink clear waits for the audio
-/// thread, which a stalled stream holds), then the session is checked again
-/// under the lock so a concurrent skip (which restamps `fetch_id`) cannot
-/// interleave. A stale stream is dropped, which cancels its download.
+/// Stage and finalize only the current fetch. The outgoing track was already
+/// silenced when this change began; a stale stream is dropped and cancelled.
 async fn commit_fetch(
   app: &Arc<Mutex<App>>,
   fetch_id: u64,
@@ -926,41 +919,14 @@ async fn commit_fetch_with_stage(
   prepared: PreparedStream,
   stage: impl FnOnce(&LocalPlayer, PreparedStream) -> Result<()> + Send + 'static,
 ) {
-  let claimed = {
-    let guard = app.lock().await;
-    // The native queue owns the sink: the session stays for its resume.
-    if guard.queue_owns_playback() {
-      return;
-    }
-    guard
-      .qobuz_playback
-      .as_ref()
-      .filter(|s| s.fetch_id == fetch_id)
-      // A pause pressed during the fetch window applies to the previous
-      // track's sink; a fresh player starts paused, so only a session that
-      // already played something counts.
-      .map(|s| {
-        (
-          Arc::clone(&s.player),
-          s.tempfile.is_some() && s.player.is_paused(),
-        )
-      })
-  };
-  let Some((player, was_paused)) = claimed else {
-    return;
-  };
-  let stop_player = Arc::clone(&player);
-  if tokio::task::spawn_blocking(move || stop_player.stop())
-    .await
-    .is_err()
-  {
-    return;
-  }
   // Claim the session under the lock, stage off it: the clear inside
   // `stage_prepared` waits on the audio thread, and the runner takes this
   // lock on every frame.
-  let (resume, volume) = {
+  let (player, resume, volume) = {
     let mut guard = app.lock().await;
+    if guard.queue_owns_playback() {
+      return;
+    }
     let volume = guard.runtime_state.volume_percent;
     let Some(s) = guard
       .qobuz_playback
@@ -974,11 +940,8 @@ async fn commit_fetch_with_stage(
     s.quality = Some(quality);
     s.fetch = None;
     // Keep seek and pause intent through staging, after the tempfile is published.
-    let resume = *s.resume_at.get_or_insert(ResumePoint {
-      position_ms: 0,
-      paused: was_paused,
-    });
-    (resume, volume)
+    let resume = *s.resume_at.get_or_insert_with(ResumePoint::default);
+    (Arc::clone(&s.player), resume, volume)
   };
   let stage_player = Arc::clone(&player);
   let staged = tokio::task::spawn_blocking(move || {
@@ -999,6 +962,9 @@ async fn commit_fetch_with_stage(
     }
   };
   let mut guard = app.lock().await;
+  if guard.queue_owns_playback() {
+    return;
+  }
   let Some(s) = guard
     .qobuz_playback
     .as_mut()
@@ -1060,6 +1026,7 @@ pub(crate) async fn start_qobuz_queue(
         .to_string(),
     )
     .await;
+    discard_failed_start(app).await;
     return;
   }
   let index = start_idx.min(tracks.len() - 1);
@@ -1076,10 +1043,12 @@ pub(crate) async fn start_qobuz_queue(
           .to_string(),
       )
       .await;
+      discard_failed_start(app).await;
       return;
     }
   };
   if !logged_in_for_playback(app).await {
+    discard_failed_start(app).await;
     return;
   }
 
@@ -1087,6 +1056,7 @@ pub(crate) async fn start_qobuz_queue(
   app.lock().await.claim_decoded_sink(Source::Qobuz);
   release_other_backends(app).await;
   let Some(player) = acquire_player(app).await else {
+    app.lock().await.release_decoded_sink_claim();
     return;
   };
 
@@ -1113,7 +1083,27 @@ pub(crate) async fn start_qobuz_queue(
   }
   spawn_fetch(app, &mut state, track_id, quality);
   // Dropping a previous session aborts its download.
+  guard.song_progress_ms = state.position_ms();
   guard.qobuz_playback = Some(state);
+  let notice = guard.strings().status.infra.qobuz_preparing;
+  guard.set_status_message(notice, 30);
+}
+
+/// The queue already stopped this context and cancelled its fetch. A rejected
+/// start must not leave that orphan holding the advance latch and sink claim.
+async fn discard_failed_start(app: &Arc<Mutex<App>>) {
+  let mut guard = app.lock().await;
+  if !guard.queue_owns_playback()
+    && guard.queue_suspended.is_none()
+    && guard
+      .qobuz_playback
+      .as_ref()
+      .is_some_and(|s| s.advancing && s.tempfile.is_none() && s.fetch.is_none())
+  {
+    guard.qobuz_playback = None;
+    guard.release_decoded_sink_claim();
+    guard.song_progress_ms = 0;
+  }
 }
 
 /// Move the queue index in `direction` and play the new track. Returns `true`
@@ -1146,26 +1136,35 @@ async fn skip(app: &Arc<Mutex<App>>, direction: Direction) -> bool {
 
 /// Replay the current track (repeat-one) from its retained tempfile, with no
 /// second download when the file is whole. Returns `true` if Qobuz owns the session.
-async fn replay_current(app: &Arc<Mutex<App>>) -> bool {
-  let (player, path, resume) = {
+pub(crate) async fn replay_current(app: &Arc<Mutex<App>>) -> bool {
+  replay_current_with_stage(app, LocalPlayer::stage_file).await
+}
+
+async fn replay_current_with_stage(
+  app: &Arc<Mutex<App>>,
+  stage: impl FnOnce(&LocalPlayer, &std::path::Path) -> Result<()> + Send + 'static,
+) -> bool {
+  let (player, path, fetch_id) = {
     let mut guard = app.lock().await;
-    let Some(s) = guard.qobuz_playback.as_mut() else {
+    if !guard.qobuz_owns_playback() {
       return false;
-    };
-    s.advancing = true;
-    // Still downloading: the commit applies `resume_at`, clears `advancing`
-    // and starts playback.
+    }
+    let s = guard.qobuz_playback.as_mut().unwrap();
+    // An in-flight fetch commits the parked seek and intent itself.
     if s.tempfile.is_none() {
       return true;
     }
-    let finished = s.finished_file().map(std::path::Path::to_path_buf);
-    let resume = s.resume_at.take().unwrap_or(ResumePoint {
+    let resume = *s.resume_at.get_or_insert(ResumePoint {
       position_ms: 0,
       paused: s.player.is_paused(),
     });
-    match finished {
-      Some(path) => (Arc::clone(&s.player), path, resume),
-      // A partial file (a dropped reader cancelled its download): fetch again.
+    s.advancing = true;
+    s.player.pause();
+    match s.finished_file().map(std::path::Path::to_path_buf) {
+      Some(path) => {
+        s.fetch_id = next_fetch_id();
+        (Arc::clone(&s.player), path, s.fetch_id)
+      }
       None => {
         let index = s.index;
         drop(guard);
@@ -1174,22 +1173,52 @@ async fn replay_current(app: &Arc<Mutex<App>>) -> bool {
       }
     }
   };
-  if replay_file(player, path, Some(resume)).await {
-    if let Some(s) = app.lock().await.qobuz_playback.as_mut() {
-      s.advancing = false;
+  let stage_player = Arc::clone(&player);
+  let staged = matches!(
+    tokio::task::spawn_blocking(move || stage(&stage_player, &path)).await,
+    Ok(Ok(()))
+  );
+  let position_ms = {
+    let mut guard = app.lock().await;
+    if guard.queue_owns_playback() {
+      return true;
     }
-  } else {
-    teardown_qobuz(app).await;
-    set_error(
-      app,
-      crate::infra::app_strings(app)
-        .await
-        .status
-        .infra
-        .qobuz_replay_failed
-        .to_string(),
-    )
-    .await;
+    let Some(s) = guard
+      .qobuz_playback
+      .as_ref()
+      .filter(|s| s.fetch_id == fetch_id)
+    else {
+      return true;
+    };
+    if !staged {
+      guard.qobuz_playback = None;
+      guard.release_decoded_sink_claim();
+      let message = guard.strings().status.infra.qobuz_replay_failed;
+      guard.set_error_status_message(message, 8);
+      return true;
+    }
+    s.resume_at.unwrap_or_default().position_ms
+  };
+  // Keep the change pending until this seek completes. The serial pump must
+  // not start the next track while an old replay seek is still outstanding.
+  if position_ms > 0 {
+    let seek_player = Arc::clone(&player);
+    let _ =
+      tokio::task::spawn_blocking(move || seek_player.seek(Duration::from_millis(position_ms)))
+        .await;
+  }
+  let mut guard = app.lock().await;
+  if guard.queue_owns_playback() {
+    return true;
+  }
+  if let Some(s) = guard
+    .qobuz_playback
+    .as_mut()
+    .filter(|s| s.fetch_id == fetch_id)
+  {
+    let resume = s.resume_at.take().unwrap_or_default();
+    s.advancing = false;
+    s.set_paused(resume.paused);
   }
   true
 }
@@ -1238,6 +1267,9 @@ pub(crate) async fn play_index(app: &Arc<Mutex<App>>, target: usize, resume: Opt
   s.advancing = true;
   s.fetch_id = next_fetch_id();
   spawn_fetch(app, s, track_id, quality);
+  guard.song_progress_ms = guard.qobuz_playback.as_ref().unwrap().position_ms();
+  let notice = guard.strings().status.infra.qobuz_preparing;
+  guard.set_status_message(notice, 30);
 }
 
 /// End the Qobuz session, releasing the output device and the tempfile. The
@@ -1428,7 +1460,7 @@ mod tests {
   fn prepared_test_track() -> (NamedTempFile, PreparedStream) {
     use std::io::Write;
     let mut file = NamedTempFile::new().unwrap();
-    let data_len = 8_000u32 * 2;
+    let data_len = 8_000u32 * 2 * 30;
     file.write_all(b"RIFF").unwrap();
     file.write_all(&(36 + data_len).to_le_bytes()).unwrap();
     file.write_all(b"WAVEfmt ").unwrap();
@@ -1617,6 +1649,264 @@ mod tests {
       assert!(!session.advancing);
       assert_eq!(session.resume_at, None);
     }
+  }
+
+  /// A real outgoing stream at six seconds, with commands wired to the pump.
+  fn playing_app() -> (
+    Arc<Mutex<App>>,
+    std::sync::mpsc::Receiver<IoEvent>,
+    NamedTempFile,
+  ) {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut app = App::new(tx, crate::core::user_config::UserConfig::new(), None);
+    let mut session = waiting_session(7);
+    let player = Arc::new(LocalPlayer::without_device_with_consumer());
+    let (file, prepared) = prepared_test_track();
+    player.stage_prepared(prepared).unwrap();
+    player.seek(Duration::from_secs(6)).unwrap();
+    session.player = player;
+    session.tracks.push(queued_track("qobuz:track:2", "Two"));
+    session.advancing = false;
+    app.qobuz_playback = Some(session);
+    (Arc::new(Mutex::new(app)), rx, file)
+  }
+
+  fn tick(app: &mut App) {
+    use crate::core::driver::{Driver, TickEnv};
+    Driver::new(None, None).tick(
+      app,
+      Duration::ZERO,
+      TickEnv {
+        now: std::time::Instant::now(),
+        #[cfg(any(feature = "audio-viz", feature = "audio-viz-cpal"))]
+        viz: None,
+        #[cfg(feature = "art-decode")]
+        cover_art_full_image_support: false,
+      },
+    );
+  }
+
+  #[tokio::test]
+  async fn next_during_playback_silences_the_outgoing_track_and_reports_zero_until_commit() {
+    let (app, _rx, outgoing) = playing_app();
+    let player = Arc::clone(&app.lock().await.qobuz_playback.as_ref().unwrap().player);
+    player.resume();
+    assert!(route_qobuz_event(&app, &IoEvent::NextTrack).await);
+    let fetch_id = {
+      let mut guard = app.lock().await;
+      let session = guard.qobuz_playback.as_mut().unwrap();
+      // Hold the download window open without network or a real account.
+      session.fetch.take().unwrap().abort();
+      assert!(
+        player.is_paused(),
+        "Next silences A before returning to the pump"
+      );
+      let fetch_id = session.fetch_id;
+      assert_eq!(session.index, 1);
+      assert_eq!(session.position_ms(), 0);
+      assert_eq!(guard.song_progress_ms, 0);
+      assert_eq!(
+        guard.status_message(),
+        Some(guard.strings().status.infra.qobuz_preparing)
+      );
+      for _ in 0..2 {
+        tick(&mut guard);
+        assert_eq!(guard.song_progress_ms, 0);
+        let snapshot = crate::infra::media_metadata::current_playback_snapshot(&guard).unwrap();
+        assert_eq!(snapshot.metadata.title, "Two");
+        assert_eq!(snapshot.progress_ms, 0);
+        assert!(!snapshot.is_playing);
+      }
+      fetch_id
+    };
+    tokio::time::timeout(Duration::from_secs(2), async {
+      while !player.is_finished() {
+        tokio::task::yield_now().await;
+      }
+    })
+    .await
+    .expect("the old source is discarded off the pump");
+    drop(outgoing);
+    let (file, prepared) = prepared_test_track();
+    commit_fetch(
+      &app,
+      fetch_id,
+      (file, Default::default()),
+      test_quality(),
+      prepared,
+    )
+    .await;
+    assert!(!app.lock().await.qobuz_playback.as_ref().unwrap().advancing);
+    assert!(!player.is_paused(), "B starts with its default play intent");
+  }
+
+  #[tokio::test]
+  async fn relative_seeks_during_a_pending_change_use_the_parked_position_or_zero() {
+    for parked in [None, Some(20_000)] {
+      let (app, rx, _outgoing) = playing_app();
+      {
+        let mut guard = app.lock().await;
+        let s = guard.qobuz_playback.as_mut().unwrap();
+        s.advancing = true;
+        s.tempfile = None;
+        s.resume_at = parked.map(|position_ms| ResumePoint {
+          position_ms,
+          paused: false,
+        });
+        guard.song_progress_ms = 6_000;
+        assert_eq!(
+          guard.decoded_transport_state(),
+          Some((false, u128::from(parked.unwrap_or(0))))
+        );
+        assert!(matches!(guard.current_persisted_playback(),
+          Some(crate::core::persisted_playback::PersistedPlayback::Qobuz {
+            position_ms, paused: false, ..
+          }) if position_ms == parked.unwrap_or(0)));
+        guard.seek_forwards();
+      }
+      let expected = parked.unwrap_or(0) as u32 + 5_000;
+      let event = rx.try_recv().unwrap();
+      assert!(matches!(event, IoEvent::Seek(ms) if ms == expected));
+      assert!(route_qobuz_event(&app, &event).await);
+      {
+        let mut guard = app.lock().await;
+        tick(&mut guard);
+        assert_eq!(guard.song_progress_ms, u128::from(expected));
+        guard.seek_backwards();
+      }
+      let event = rx
+        .try_iter()
+        .find(|e| matches!(e, IoEvent::Seek(_)))
+        .unwrap();
+      assert!(matches!(event, IoEvent::Seek(ms) if ms == expected - 5_000));
+      assert!(route_qobuz_event(&app, &event).await);
+      assert_eq!(
+        app
+          .lock()
+          .await
+          .qobuz_playback
+          .as_ref()
+          .unwrap()
+          .resume_at
+          .unwrap()
+          .position_ms,
+        parked.unwrap_or(0)
+      );
+    }
+  }
+
+  #[tokio::test]
+  async fn previous_during_a_pending_change_steps_back_instead_of_restarting_the_outgoing_track() {
+    let (app, rx, _outgoing) = playing_app();
+    {
+      let mut guard = app.lock().await;
+      let s = guard.qobuz_playback.as_mut().unwrap();
+      s.index = 1;
+      s.advancing = true;
+      s.tempfile = None;
+      guard.song_progress_ms = 6_000; // Before even the first tick can refresh it.
+      guard.previous_track();
+    }
+    let event = rx.try_recv().unwrap();
+    assert!(matches!(event, IoEvent::PreviousTrack));
+    assert!(route_qobuz_event(&app, &event).await);
+    let mut guard = app.lock().await;
+    let s = guard.qobuz_playback.as_mut().unwrap();
+    s.fetch.take().unwrap().abort();
+    assert_eq!(s.index, 0);
+    assert!(s.advancing);
+    assert_eq!(guard.song_progress_ms, 0);
+  }
+
+  #[test]
+  fn device_recovery_during_a_pending_change_keeps_the_parked_seek_and_play_intent() {
+    for tempfile in [false, true] {
+      for saved in [
+        None,
+        Some(ResumePoint {
+          position_ms: 42_000,
+          paused: false,
+        }),
+        Some(ResumePoint {
+          position_ms: 17_000,
+          paused: true,
+        }),
+      ] {
+        let mut s = waiting_session(7);
+        if tempfile {
+          s.tempfile = Some(NamedTempFile::new().unwrap());
+        }
+        s.resume_at = saved;
+        assert!(s.player.is_paused(), "a fresh/reopened sink is paused");
+        assert_eq!(s.recovery_point(), saved.unwrap_or_default());
+        assert_eq!(s.resume_at, saved);
+      }
+    }
+  }
+
+  #[tokio::test]
+  async fn pause_during_a_replay_restage_holds_when_the_stage_finishes() {
+    use crate::core::action::Action;
+    let (app, _rx, file) = playing_app();
+    {
+      let mut guard = app.lock().await;
+      let s = guard.qobuz_playback.as_mut().unwrap();
+      s.tempfile = Some(file);
+      s.resume_at = Some(ResumePoint {
+        position_ms: 400,
+        paused: false,
+      });
+      s.complete.store(true, Ordering::Release);
+      s.player.resume();
+    }
+    let (started, ready) = tokio::sync::oneshot::channel();
+    let (release, released) = std::sync::mpsc::channel();
+    let replay_app = Arc::clone(&app);
+    let replay = tokio::spawn(async move {
+      replay_current_with_stage(&replay_app, move |player, path| {
+        started.send(()).unwrap();
+        released.recv_timeout(Duration::from_secs(5)).unwrap();
+        player.stage_file(path)
+      })
+      .await
+    });
+    tokio::time::timeout(Duration::from_secs(2), ready)
+      .await
+      .unwrap()
+      .unwrap();
+    app.lock().await.apply(Action::Pause);
+    release.send(()).unwrap();
+    assert!(replay.await.unwrap());
+    let guard = app.lock().await;
+    let s = guard.qobuz_playback.as_ref().unwrap();
+    assert!(s.player.is_paused());
+    assert_eq!(
+      s.player.position(),
+      Duration::from_millis(400),
+      "the restore seek finishes before the pump can start another track"
+    );
+    assert!(!s.advancing);
+    assert_eq!(s.resume_at, None, "the replay consumes the latest intent");
+  }
+
+  #[tokio::test]
+  async fn a_rejected_qobuz_start_releases_a_context_orphaned_by_the_queue() {
+    use crate::infra::queue::dispatch::route_queue_event;
+    let app = test_app();
+    {
+      let mut guard = app.lock().await;
+      guard.claim_decoded_sink(Source::Qobuz);
+      guard.qobuz_playback = Some(waiting_session(7));
+      guard.suspend_active_decoded_context_mid_track();
+      assert!(guard.queue_suspended.is_some());
+    }
+    let event = IoEvent::StartPlayback(Some("qobuz:playlist:invalid".into()), None, None);
+    assert!(!route_queue_event(&app, &event).await);
+    assert!(route_qobuz_event(&app, &event).await);
+    let guard = app.lock().await;
+    assert!(guard.queue_suspended.is_none());
+    assert!(guard.qobuz_playback.is_none());
+    assert!(!guard.decoded_sink_claimed());
   }
 
   #[test]
@@ -1905,14 +2195,15 @@ mod tests {
     let app = test_app();
     app.lock().await.qobuz_playback = Some(waiting_session(7));
     let (constants, fetch_app) = (Arc::clone(&s.constants), Arc::clone(&app));
-    let fetch = tokio::spawn(async move { constants_for_fetch(&fetch_app, &constants, 7).await });
+    let fetch = tokio::spawn(async move { constants_for_fetch(&fetch_app, &constants).await });
     settle().await;
     assert_eq!(status(&app).await.as_deref(), Some(NOTICE));
     {
       let guard = app.lock().await;
       let session = guard.qobuz_playback.as_ref().unwrap();
       assert!(session.advancing, "the tick does not read the empty sink");
-      assert!(!session.player.is_paused(), "a pause now shows");
+      assert!(session.player.is_paused(), "the sink stays silent");
+      assert!(!session.is_paused(), "default intent is playing");
     }
 
     s.answer.send(Ok(bundle())).unwrap();
@@ -1929,7 +2220,7 @@ mod tests {
     let app = test_app();
     app.lock().await.qobuz_playback = Some(waiting_session(7));
     let (constants, fetch_app) = (Arc::clone(&s.constants), Arc::clone(&app));
-    let fetch = tokio::spawn(async move { constants_for_fetch(&fetch_app, &constants, 7).await });
+    let fetch = tokio::spawn(async move { constants_for_fetch(&fetch_app, &constants).await });
     settle().await;
 
     app.lock().await.toggle_playback();
@@ -1956,7 +2247,7 @@ mod tests {
     let app = test_app();
     app.lock().await.qobuz_playback = Some(waiting_session(7));
     let (constants, fetch_app) = (Arc::clone(&s.constants), Arc::clone(&app));
-    let fetch = tokio::spawn(async move { constants_for_fetch(&fetch_app, &constants, 7).await });
+    let fetch = tokio::spawn(async move { constants_for_fetch(&fetch_app, &constants).await });
     settle().await;
 
     app.lock().await.toggle_playback();
@@ -1980,7 +2271,7 @@ mod tests {
     let app = test_app();
     app.lock().await.qobuz_playback = Some(waiting_session(7));
     let (constants, fetch_app) = (Arc::clone(&s.constants), Arc::clone(&app));
-    let fetch = tokio::spawn(async move { constants_for_fetch(&fetch_app, &constants, 7).await });
+    let fetch = tokio::spawn(async move { constants_for_fetch(&fetch_app, &constants).await });
     settle().await;
 
     assert!(route_qobuz_event(&app, &IoEvent::PausePlayback).await);
@@ -1999,28 +2290,12 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn a_pause_while_replaying_a_complete_file_does_not_leave_a_fetch_restore_point() {
-    let app = test_app();
-    app.lock().await.qobuz_playback = Some(waiting_session(7));
-    commit_test_track(&app).await;
-    let mut guard = app.lock().await;
-    let session = guard.qobuz_playback.as_mut().unwrap();
-    session.complete.store(true, Ordering::Release);
-    // A retained-file replay also sets advancing, but has no fetch to commit.
-    session.advancing = true;
-    guard.toggle_playback();
-    let session = guard.qobuz_playback.as_ref().unwrap();
-    assert!(session.player.is_paused());
-    assert_eq!(session.resume_at, None);
-  }
-
-  #[tokio::test]
   async fn a_newer_start_during_the_scrape_supersedes_the_waiting_one() {
     let s = scrapes();
     let app = test_app();
     let (constants, fetch_app) = (Arc::clone(&s.constants), Arc::clone(&app));
     let fetch = tokio::spawn(async move {
-      match constants_for_fetch(&fetch_app, &constants, 7).await {
+      match constants_for_fetch(&fetch_app, &constants).await {
         Ok(_) => panic!("a superseded fetch went on to the stream"),
         Err(e) => fail_fetch(&fetch_app, 7, QobuzStep::Stream, e, 0).await,
       }
@@ -2053,7 +2328,7 @@ mod tests {
     app.lock().await.qobuz_playback = Some(waiting_session(7));
     let (constants, fetch_app) = (Arc::clone(&s.constants), Arc::clone(&app));
     let fetch = tokio::spawn(async move {
-      let err = constants_for_fetch(&fetch_app, &constants, 7)
+      let err = constants_for_fetch(&fetch_app, &constants)
         .await
         .unwrap_err();
       fail_fetch(&fetch_app, 7, QobuzStep::Stream, err, 0).await;

@@ -160,6 +160,11 @@ fn update_macos_metadata(
       );
       *last_metadata = Some(new_metadata);
     }
+    #[cfg(feature = "qobuz")]
+    if app.qobuz_owns_playback() {
+      manager.set_playback_status(snapshot.is_playing);
+      manager.set_position(snapshot.progress_ms as u64);
+    }
   } else if last_metadata.is_some() {
     *last_metadata = None;
   }
@@ -1355,11 +1360,10 @@ async fn route_decoded_mpris_event(
   // A decoded claim with no player (a start in flight, a lost output device)
   // consumes the event: nothing can serve it, and librespot must not. Volume
   // still falls through to `set_volume_percent`, which is owner-aware.
-  let Some(player) = app_lock.active_decoded_player() else {
+  let Some((is_paused, position_ms)) = app_lock.decoded_transport_state() else {
     return !matches!(event, MprisEvent::SetVolume(_)) && app_lock.active_decoded_source();
   };
-  let is_paused = player.is_paused();
-  let position_ms = player.position().as_millis() as i64;
+  let position_ms = position_ms as i64;
 
   match event {
     MprisEvent::PlayPause => {
@@ -1709,10 +1713,9 @@ async fn route_decoded_macos_event(
   // immutable read does not conflict with the `&mut self` dispatch calls below.
   // A decoded claim with no player (a start in flight, a lost output device)
   // consumes the event: nothing can serve it, and librespot must not.
-  let Some(player) = app_lock.active_decoded_player() else {
+  let Some((is_paused, _)) = app_lock.decoded_transport_state() else {
     return app_lock.active_decoded_source();
   };
-  let is_paused = player.is_paused();
 
   match event {
     MacMediaEvent::PlayPause => {

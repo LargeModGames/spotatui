@@ -311,9 +311,8 @@ fn source_playback_snapshot(
       track.duration_ms as u32,
       track.uri.clone(),
       track.image_url.clone(),
-      qobuz.player.position().as_millis(),
-      // Until the new stream commits, the sink still holds the old track.
-      !qobuz.player.is_paused() && !qobuz.advancing,
+      qobuz.position_ms(),
+      !qobuz.is_paused() && !qobuz.advancing,
       app,
     ));
   }

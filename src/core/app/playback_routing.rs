@@ -377,7 +377,7 @@ impl App {
   pub(crate) fn decoded_playing_state(&self) -> Option<bool> {
     #[cfg(feature = "audio-decode")]
     {
-      self.active_decoded_player().map(|p| !p.is_paused())
+      self.decoded_transport_state().map(|(paused, _)| !paused)
     }
     #[cfg(not(feature = "audio-decode"))]
     {
@@ -800,10 +800,25 @@ impl App {
     None
   }
 
+  /// Intent and position for decoded media commands. Pending Qobuz changes
+  /// read the parked record, never the silent sink's transient state.
+  #[cfg(feature = "audio-decode")]
+  pub(crate) fn decoded_transport_state(&self) -> Option<(bool, u128)> {
+    #[cfg(feature = "qobuz")]
+    if self.qobuz_owns_playback() {
+      let s = self.qobuz_playback.as_ref()?;
+      return Some((s.is_paused(), s.position_ms()));
+    }
+    self
+      .active_decoded_player()
+      .map(|p| (p.is_paused(), p.position().as_millis()))
+  }
+
   /// The current playback position, in milliseconds, of the active *seekable*
-  /// decoded source (local file, Subsonic, or YouTube).
+  /// decoded source (local file, Subsonic, Qobuz or YouTube).
   ///
-  /// Read live from the source player's sink. Internet radio is intentionally
+  /// Qobuz reads its parked position during a change; otherwise read the sink.
+  /// Internet radio is intentionally
   /// **excluded** — a live stream is not seekable — so radio returns `None` here
   /// and seek keys become correct no-ops for radio. In a build with all seekable
   /// source features off this reduces to `None`.
@@ -827,7 +842,7 @@ impl App {
     }
     #[cfg(feature = "qobuz")]
     if let Some(qobuz) = &self.qobuz_playback {
-      return Some(qobuz.player.position().as_millis());
+      return Some(qobuz.position_ms());
     }
     #[cfg(feature = "youtube")]
     if let Some(youtube) = &self.youtube_playback {

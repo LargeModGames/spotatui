@@ -131,7 +131,7 @@ impl App {
     #[cfg(feature = "qobuz")]
     #[allow(clippy::needless_return)]
     if let Some(s) = self.qobuz_playback.as_mut() {
-      let position_ms = s.player.position().as_millis() as u64;
+      let position_ms = s.position_ms() as u64;
       let index = s.index;
       // The queue takes the sink: a download in flight must not commit onto it.
       if let Some(fetch) = s.fetch.take() {

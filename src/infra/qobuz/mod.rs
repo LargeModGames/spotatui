@@ -38,7 +38,7 @@ use stream::progressive::SegmentStream;
 pub use stream::cmaf::StreamQuality;
 
 /// The active Qobuz playback session; the playbar reads position and pause
-/// live from `player`, like the Subsonic twin.
+/// from the parked record during a change, and live from `player` otherwise.
 pub struct QobuzPlaybackState {
   pub player: Arc<LocalPlayer>,
   /// The playing listing's tracks in order; the playbar reads `tracks[index]`.
@@ -78,13 +78,41 @@ pub use crate::infra::queue::ResumePoint;
 impl QobuzPlaybackState {
   /// Keep the latest transport command authoritative while a fetch is staged.
   pub fn set_paused(&mut self, paused: bool) {
-    if self.resume_at.is_some() || (self.advancing && self.tempfile.is_none()) {
+    if self.advancing || self.resume_at.is_some() {
       self.resume_at.get_or_insert_with(Default::default).paused = paused;
+    }
+    if self.advancing {
+      return; // The outgoing track stays silent until the final commit.
     }
     if paused {
       self.player.pause();
     } else {
       self.player.resume();
+    }
+  }
+
+  /// The incoming track has its own timeline while the sink is being replaced.
+  pub fn position_ms(&self) -> u128 {
+    if self.advancing {
+      u128::from(self.resume_at.unwrap_or_default().position_ms)
+    } else {
+      self.player.position().as_millis()
+    }
+  }
+
+  pub fn is_paused(&self) -> bool {
+    if self.advancing {
+      self.resume_at.unwrap_or_default().paused
+    } else {
+      self.player.is_paused()
+    }
+  }
+
+  /// Read before reopening the device: the new sink is empty and paused.
+  pub fn recovery_point(&self) -> ResumePoint {
+    ResumePoint {
+      position_ms: self.position_ms() as u64,
+      paused: self.player.device_removed() || self.is_paused(),
     }
   }
 

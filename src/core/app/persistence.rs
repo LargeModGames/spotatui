@@ -141,8 +141,8 @@ impl App {
           return Some(PersistedPlayback::Qobuz {
             tracks: s.tracks.clone(),
             index: s.index,
-            position_ms: s.player.position().as_millis() as u64,
-            paused: s.player.is_paused(),
+            position_ms: s.position_ms() as u64,
+            paused: s.is_paused(),
             repeat: self.decoded_repeat,
             shuffle_on: self.decoded_shuffle,
             shuffle: s.shuffle_backup.clone(),

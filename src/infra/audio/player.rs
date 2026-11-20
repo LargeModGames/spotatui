@@ -584,6 +584,19 @@ impl LocalPlayer {
     self.bounded(move || sink.clear());
   }
 
+  /// Silence a Qobuz change now, then clear off the App lock. A superseded
+  /// clear must not discard audio staged by a later change.
+  #[cfg(feature = "qobuz")]
+  pub(crate) fn stop_for_change(self: &Arc<Self>) -> tokio::task::JoinHandle<()> {
+    self.pause();
+    let stage = self.begin_stage();
+    let sink = self.player();
+    let player = Arc::clone(self);
+    tokio::task::spawn_blocking(move || {
+      let _ = player.clear_for_stage(stage, &sink);
+    })
+  }
+
   /// Stop on the blocking pool and return at once. `stop` waits for the audio
   /// thread, which a stalled network source holds until its stall timeout.
   pub fn stop_detached(self: std::sync::Arc<Self>) {

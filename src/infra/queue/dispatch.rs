@@ -1348,9 +1348,8 @@ async fn resume_qobuz(
     let mut guard = app.lock().await;
     match guard.qobuz_playback.as_mut() {
       Some(s) if index == s.index && s.finished_file().is_some() => {
-        s.advancing = true;
-        s.finished_file()
-          .map(|path| (Arc::clone(&s.player), path.to_path_buf()))
+        s.resume_at = Some(resume);
+        Some(())
       }
       Some(_) => None,
       None => return,
@@ -1359,12 +1358,8 @@ async fn resume_qobuz(
   // The queue slot shares the context player, so it is never stopped here.
   let _ = queue_player;
   match replay {
-    Some((player, path)) => {
-      super::replay_file(player, path, Some(resume)).await;
-      if let Some(s) = app.lock().await.qobuz_playback.as_mut() {
-        s.advancing = false;
-        s.resume_at = None;
-      }
+    Some(()) => {
+      crate::infra::qobuz::dispatch::replay_current(app).await;
     }
     None => crate::infra::qobuz::dispatch::play_index(app, index, Some(resume)).await,
   }
@@ -1625,7 +1620,11 @@ mod tests {
         session.resume_at, None,
         "the queue resume consumed the parked intent"
       );
-      assert_eq!(player.position(), Duration::ZERO);
+      assert_eq!(
+        player.position(),
+        Duration::from_millis(800),
+        "suspending a pending change keeps its parked position"
+      );
       assert!(player.is_paused());
     }
     // Repeat-one dispatches this event after the context track ends.
