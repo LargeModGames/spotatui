@@ -12,6 +12,7 @@
 
 ### Fixed
 
+- Qobuz restores the saved position before resuming playback and drops restore seeks superseded by a newer track. Boundary skips keep pending stages alive. Rejected starts also release orphaned contexts that already have a staged tempfile.
 - Qobuz stops the outgoing track as soon as a change starts. While a track loads or stages, position reads and relative seeks use its saved position or zero. Device recovery keeps that position and play intent; Pause during a replay stage holds. Rejected starts release an orphaned queue context. A queue resume clears its saved restore point so repeat-one starts at the beginning. Subsonic-only test builds compile again.
 - Qobuz drops successful sidebar, favorites, album, playlist-track and search responses from a previous login. During downloads and decoder staging, Play, Pause and Toggle update saved playback intent while the sink stays silent.
 - **Qobuz requests keep a newer login and the latest playback command**: a delayed 401 from an older request no longer signs out a newer login, and resuming a track while it is preparing no longer leaves it paused when playback starts.
