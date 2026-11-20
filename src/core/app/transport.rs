@@ -1,5 +1,58 @@
 use super::*;
 
+#[cfg(feature = "qobuz")]
+#[derive(Clone, Copy)]
+enum QobuzTransportCommand {
+  Play,
+  Pause,
+  Toggle,
+}
+
+/// Decide the Qobuz pause target, independently of the playback snapshot.
+///
+/// Each cell describes pause intent / sink state. `P` requests false and resumes;
+/// `S` requests true and pauses. `L` flips the live sink's pause state, then saves
+/// and applies it. `R` flips the staging record's pause state (live sink if no
+/// record exists), then saves and applies it. `-` delegates to the current owner
+/// without changing Qobuz intent or issuing a Qobuz sink command.
+///
+/// | Session | Play | Pause | TogglePlayback | StartPlayback(None, None, None) | PausePlayback |
+/// |---|---|---|---|---|---|
+/// | No session | - | - | - | - | - |
+/// | Pending fetch (advancing, no tempfile) | P | S | L | P | S |
+/// | Staging (advancing, tempfile) | P | S | R | P | S |
+/// | Playing (not advancing) | P | S | S | P | S |
+/// | Paused (not advancing) | P | S | P | P | S |
+/// | Owned by another source or queue | - | - | - | - | - |
+///
+/// `set_paused` preserves any saved seek position. Pending fetch creates a
+/// record if needed; staging has one before the blocking decoder starts. A
+/// live session updates an existing recovery record but does not create one.
+/// Staging can temporarily pause the sink again; its commit applies the latest
+/// saved intent. Apple Music, a queue slot, Local and Subsonic take precedence
+/// over Qobuz. Browse scope does not affect playback ownership.
+#[cfg(feature = "qobuz")]
+fn qobuz_transport_paused(
+  command: QobuzTransportCommand,
+  owns_session: bool,
+  advancing: bool,
+  has_tempfile: bool,
+  saved_paused: Option<bool>,
+  player_paused: bool,
+) -> Option<bool> {
+  if !owns_session {
+    return None;
+  }
+  Some(match command {
+    QobuzTransportCommand::Play => false,
+    QobuzTransportCommand::Pause => true,
+    QobuzTransportCommand::Toggle if advancing && has_tempfile => {
+      !saved_paused.unwrap_or(player_paused)
+    }
+    QobuzTransportCommand::Toggle => !player_paused,
+  })
+}
+
 impl App {
   pub(crate) fn devices(&self) -> Option<&DevicePayload> {
     self.devices.as_ref()
@@ -100,26 +153,45 @@ impl App {
     self.park_native_backend();
   }
 
-  /// Set the saved intent while Qobuz stages the stream under its paused sink.
-  /// Other owners and the pending-fetch window keep their normal transport path.
-  pub(crate) fn set_staged_qobuz_playing(&mut self, playing: bool) -> bool {
+  /// Apply an absolute command while Qobuz owns the session, including fetches.
+  pub(crate) fn set_qobuz_playing(&mut self, playing: bool) -> bool {
     #[cfg(feature = "qobuz")]
     {
-      let owns_sink = !self.queue_owns_playback();
-      #[cfg(feature = "local-files")]
-      let owns_sink = owns_sink && self.local_playback.is_none();
-      #[cfg(feature = "subsonic")]
-      let owns_sink = owns_sink && self.subsonic_playback.is_none();
-      if let Some(qobuz) = self.qobuz_playback.as_mut().filter(|qobuz| {
-        owns_sink && qobuz.advancing && qobuz.tempfile.is_some() && qobuz.resume_at.is_some()
-      }) {
-        qobuz.set_paused(!playing);
-        return true;
-      }
+      self.qobuz_transport(if playing {
+        QobuzTransportCommand::Play
+      } else {
+        QobuzTransportCommand::Pause
+      })
     }
     #[cfg(not(feature = "qobuz"))]
-    let _ = playing;
-    false
+    {
+      let _ = playing;
+      false
+    }
+  }
+
+  #[cfg(feature = "qobuz")]
+  fn qobuz_transport(&mut self, command: QobuzTransportCommand) -> bool {
+    let owns_session = !self.apple_music_owns_playback() && !self.queue_owns_playback();
+    #[cfg(feature = "local-files")]
+    let owns_session = owns_session && self.local_playback.is_none();
+    #[cfg(feature = "subsonic")]
+    let owns_session = owns_session && self.subsonic_playback.is_none();
+    let Some(qobuz) = self.qobuz_playback.as_mut() else {
+      return false;
+    };
+    let Some(paused) = qobuz_transport_paused(
+      command,
+      owns_session,
+      qobuz.advancing,
+      qobuz.tempfile.is_some(),
+      qobuz.resume_at.map(|resume| resume.paused),
+      qobuz.player.is_paused(),
+    ) else {
+      return false;
+    };
+    qobuz.set_paused(paused);
+    true
   }
 
   pub fn toggle_playback(&mut self) {
@@ -184,14 +256,8 @@ impl App {
       return;
     }
 
-    // A staged Qobuz sink is temporarily paused: toggle its saved intent.
     #[cfg(feature = "qobuz")]
-    if let Some(qobuz) = &mut self.qobuz_playback {
-      let paused = qobuz
-        .resume_at
-        .filter(|_| qobuz.advancing && qobuz.tempfile.is_some())
-        .map_or_else(|| qobuz.player.is_paused(), |resume| resume.paused);
-      qobuz.set_paused(!paused);
+    if self.qobuz_transport(QobuzTransportCommand::Toggle) {
       return;
     }
 
@@ -695,6 +761,223 @@ mod qobuz_tests {
     app
   }
 
+  #[derive(Clone, Copy, Debug)]
+  enum TransportEntry {
+    Play,
+    Pause,
+    TogglePlayback,
+    StartPlayback,
+    PausePlayback,
+  }
+
+  impl TransportEntry {
+    async fn send(self, app: &Arc<tokio::sync::Mutex<App>>) -> Option<bool> {
+      use crate::infra::qobuz::dispatch::route_qobuz_event;
+
+      let action = match self {
+        Self::Play => Action::Play,
+        Self::Pause => Action::Pause,
+        Self::TogglePlayback => Action::TogglePlayback,
+        Self::StartPlayback => {
+          return Some(route_qobuz_event(app, &IoEvent::StartPlayback(None, None, None)).await);
+        }
+        Self::PausePlayback => {
+          return Some(route_qobuz_event(app, &IoEvent::PausePlayback).await);
+        }
+      };
+      app.lock().await.apply(action);
+      None
+    }
+  }
+
+  #[tokio::test]
+  async fn qobuz_actions_and_media_commands_follow_the_full_transport_matrix() {
+    use crate::infra::queue::DecodedQueuePlayback;
+
+    #[derive(Clone, Copy, Debug)]
+    enum Owner {
+      Qobuz,
+      NoSession,
+      Queue,
+      AppleMusic,
+      #[cfg(feature = "local-files")]
+      Local,
+      #[cfg(feature = "subsonic")]
+      Subsonic,
+    }
+
+    let owners = [
+      Owner::Qobuz,
+      Owner::NoSession,
+      Owner::Queue,
+      Owner::AppleMusic,
+      #[cfg(feature = "local-files")]
+      Owner::Local,
+      #[cfg(feature = "subsonic")]
+      Owner::Subsonic,
+    ];
+    let mut checks = 0;
+    for owner in owners {
+      for (phase, advancing, has_tempfile) in [
+        ("pending fetch", true, false),
+        ("staging", true, true),
+        ("live", false, true),
+      ] {
+        for live_paused in [false, true] {
+          for saved_paused in [None, Some(false), Some(true)] {
+            let controls_qobuz = matches!(owner, Owner::Qobuz);
+            let toggle_paused = if controls_qobuz && advancing && has_tempfile {
+              !saved_paused.unwrap_or(live_paused)
+            } else {
+              !live_paused
+            };
+            for (entry, target_paused) in [
+              (TransportEntry::Play, false),
+              (TransportEntry::Pause, true),
+              (TransportEntry::TogglePlayback, toggle_paused),
+              (TransportEntry::StartPlayback, false),
+              (TransportEntry::PausePlayback, true),
+            ] {
+              let mut app = app_with_qobuz();
+              // Browse scope must not choose the transport owner.
+              app.active_source = Source::Spotify;
+              let session = app.qobuz_playback.as_mut().unwrap();
+              session.advancing = advancing;
+              if !has_tempfile {
+                session.tempfile = None;
+              }
+              let original_resume = saved_paused.map(|paused| ResumePoint {
+                position_ms: 1234,
+                paused,
+              });
+              session.resume_at = original_resume;
+              let qobuz_player = Arc::clone(&session.player);
+              let owner_player = Arc::new(LocalPlayer::without_device());
+              for player in [&qobuz_player, &owner_player] {
+                if live_paused {
+                  player.pause();
+                } else {
+                  player.resume();
+                }
+              }
+              match owner {
+                Owner::Qobuz => {}
+                Owner::NoSession => app.qobuz_playback = None,
+                Owner::Queue => {
+                  app.queue_now = Some(QueueNowPlaying::Decoded(DecodedQueuePlayback {
+                    player: Arc::clone(&owner_player),
+                    track: queued_track("qobuz:track:2", "Queued"),
+                    advancing: false,
+                    fetch_id: 2,
+                    tempfile: None,
+                    abort_handle: None,
+                    quality: None,
+                  }));
+                }
+                Owner::AppleMusic => {
+                  app.apple_music.claimed = true;
+                  app.apple_music.desired_playing = !live_paused;
+                }
+                #[cfg(feature = "local-files")]
+                Owner::Local => {
+                  app.local_playback = Some(crate::infra::local::LocalPlaybackState {
+                    player: Arc::clone(&owner_player),
+                    queue: vec!["file:///test.flac".to_string()],
+                    index: 0,
+                    name: "Local".to_string(),
+                    generated_name: None,
+                    artists: String::new(),
+                    album: String::new(),
+                    duration_ms: 1000,
+                    advancing: false,
+                    shuffle_backup: None,
+                    failed_since_played: Default::default(),
+                    resume_at: None,
+                  });
+                }
+                #[cfg(feature = "subsonic")]
+                Owner::Subsonic => {
+                  use crate::infra::subsonic::{SubsonicPlaybackState, SubsonicSource};
+
+                  app.subsonic_playback = Some(SubsonicPlaybackState {
+                    player: Arc::clone(&owner_player),
+                    source: Arc::new(SubsonicSource::new("http://127.0.0.1:1", "test", "test")),
+                    tracks: vec![queued_track("subsonic:track:1", "Subsonic")],
+                    index: 0,
+                    advancing: false,
+                    tempfile: tempfile::NamedTempFile::new().unwrap(),
+                    shuffle_backup: None,
+                    resume_at: None,
+                  });
+                }
+              }
+              let app = Arc::new(tokio::sync::Mutex::new(app));
+              // Check every call: repeated absolute commands are idempotent,
+              // while successive toggles must alternate.
+              for paused in [
+                target_paused,
+                if matches!(entry, TransportEntry::TogglePlayback) {
+                  !target_paused
+                } else {
+                  target_paused
+                },
+              ] {
+                let routed = entry.send(&app).await;
+                let context = format!("{owner:?}/{phase}/{live_paused}/{saved_paused:?}/{entry:?}");
+                if let Some(handled) = routed {
+                  assert_eq!(handled, controls_qobuz, "{context}");
+                }
+                let guard = app.lock().await;
+                assert_eq!(
+                  guard.qobuz_playback.is_some(),
+                  !matches!(owner, Owner::NoSession),
+                  "{context}"
+                );
+                if let Some(session) = &guard.qobuz_playback {
+                  let expected_resume =
+                    if controls_qobuz && (saved_paused.is_some() || (advancing && !has_tempfile)) {
+                      Some(ResumePoint {
+                        position_ms: original_resume.map_or(0, |r| r.position_ms),
+                        paused,
+                      })
+                    } else {
+                      original_resume
+                    };
+                  assert_eq!(session.resume_at, expected_resume, "{context}");
+                  assert_eq!(session.advancing, advancing, "{context}");
+                  assert_eq!(session.tempfile.is_some(), has_tempfile, "{context}");
+                  assert_eq!(session.fetch_id, 1, "{context}");
+                }
+                assert_eq!(
+                  qobuz_player.is_paused(),
+                  if controls_qobuz { paused } else { live_paused },
+                  "{context}"
+                );
+                if !matches!(owner, Owner::Qobuz | Owner::NoSession) {
+                  // A direct call to the Qobuz router delegates untouched;
+                  // Actions continue through the current owner's transport.
+                  let owner_paused = if routed.is_none() {
+                    paused
+                  } else {
+                    live_paused
+                  };
+                  if matches!(owner, Owner::AppleMusic) {
+                    assert_eq!(guard.apple_music_is_playing(), !owner_paused, "{context}");
+                  } else {
+                    assert_eq!(owner_player.is_paused(), owner_paused, "{context}");
+                  }
+                }
+                checks += 1;
+              }
+            }
+          }
+        }
+      }
+    }
+    assert_eq!(checks, owners.len() * 3 * 2 * 3 * 5 * 2);
+    eprintln!("Qobuz transport matrix: {checks} state/command checks passed");
+  }
+
   #[test]
   fn a_play_action_during_qobuz_staging_preserves_the_saved_play_intent() {
     let mut app = app_with_qobuz();
@@ -766,7 +1049,7 @@ mod qobuz_tests {
   }
 
   #[test]
-  fn absolute_actions_during_a_qobuz_fetch_keep_the_existing_transport_behavior() {
+  fn absolute_actions_during_a_qobuz_fetch_set_the_saved_intent_and_sink() {
     for paused in [false, true] {
       for saved_pause in [false, true] {
         for play in [false, true] {
@@ -779,15 +1062,12 @@ mod qobuz_tests {
           app.apply(if play { Action::Play } else { Action::Pause });
 
           let session = app.qobuz_playback.as_ref().unwrap();
-          assert_eq!(
-            session.player.is_paused(),
-            if play { !paused } else { paused }
-          );
+          assert_eq!(session.player.is_paused(), !play);
           assert_eq!(
             session.resume_at,
             Some(ResumePoint {
               position_ms: 1234,
-              paused: if play { !paused } else { saved_pause },
+              paused: !play,
             })
           );
         }

@@ -110,14 +110,14 @@ pub async fn route_qobuz_event(app: &Arc<Mutex<App>>, event: &IoEvent) -> bool {
       true
     }
     // Bare "resume current": ours only while Qobuz owns the session.
-    IoEvent::StartPlayback(None, None, None) => set_paused(app, false).await,
+    IoEvent::StartPlayback(None, None, None) => app.lock().await.set_qobuz_playing(true),
     // Any other start is a foreign play: relinquish the device, then let the
     // normal dispatch run.
     IoEvent::StartPlayback(..) => {
       teardown_qobuz(app).await;
       false
     }
-    IoEvent::PausePlayback => set_paused(app, true).await,
+    IoEvent::PausePlayback => app.lock().await.set_qobuz_playing(false),
     IoEvent::Seek(position_ms) => match player(app).await {
       Some(p) => {
         // A seek past the downloaded part waits for that segment: off the pump.
@@ -626,15 +626,6 @@ async fn player(app: &Arc<Mutex<App>>) -> Option<Arc<LocalPlayer>> {
     .qobuz_playback
     .as_ref()
     .map(|s| Arc::clone(&s.player))
-}
-
-async fn set_paused(app: &Arc<Mutex<App>>, paused: bool) -> bool {
-  let mut guard = app.lock().await;
-  let Some(session) = guard.qobuz_playback.as_mut() else {
-    return false;
-  };
-  session.set_paused(paused);
-  true
 }
 
 /// Release every other backend so only Qobuz holds the output device.

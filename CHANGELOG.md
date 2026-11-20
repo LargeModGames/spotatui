@@ -12,7 +12,7 @@
 
 ### Fixed
 
-- Qobuz drops successful sidebar, favorites, album, playlist-track and search responses from a previous login. During decoder staging, Play and Pause set the saved playback intent; only Play/Pause toggle commands flip it.
+- Qobuz drops successful sidebar, favorites, album, playlist-track and search responses from a previous login. During downloads and decoder staging, Play and Pause set the saved playback intent and the sink state. Toggle commands read the live player during a download and the saved intent during staging.
 - **Qobuz requests keep a newer login and the latest playback command**: a delayed 401 from an older request no longer signs out a newer login, and resuming a track while it is preparing no longer leaves it paused when playback starts.
 - **Qobuz's first action no longer holds up everything else**: the first Qobuz action after a launch looks up the web player's constants, which can take up to two minutes, and every other action, for every source, waited behind it. The lookup now runs in the background behind a "Qobuz: getting ready…" message. A track you start waits for it like for its download, so a skip or another start during the wait replaces it and a pause holds it paused, and a list or search you have moved on from is no longer filled in late ([#492](https://github.com/LargeModGames/spotatui/issues/492)).
 - **Text Emphasis off no longer bolds the selected row**: with `behavior.enable_text_emphasis: false`, the highlighted row in every list and table keeps its reversed colors but is no longer drawn bold ([#822](https://github.com/LargeModGames/spotatui/issues/822)).
