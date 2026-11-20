@@ -159,10 +159,9 @@ pub(crate) fn app_log_path() -> PathBuf {
   static LOG_FILENAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
   let filename = LOG_FILENAME.get_or_init(|| {
     let now = Utc::now();
-    let pid = std::process::id();
-    now
-      .format(&format!("spotatui_%Y-%m-%d_%H-%M-%SZ_{pid}.log"))
-      .to_string()
+    // Timestamp-only is an acceptable tradeoff of log collision for code simplicity
+    // and UX ease of use
+    now.format("spotatui_%Y-%m-%d_%H-%M-%S.log").to_string()
   });
   app_log_dir().join(filename)
 }
