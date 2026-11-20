@@ -446,7 +446,11 @@ impl LocalPlayer {
   ///
   /// **Blocking:** opens a device, like [`new`](Self::new).
   pub fn reopen(&self) -> Result<()> {
-    let fresh = open_sink()?;
+    self.reopen_with(open_sink)
+  }
+
+  fn reopen_with(&self, open: impl FnOnce() -> Result<Sink>) -> Result<()> {
+    let fresh = open()?;
     // Configure before publishing: once swapped in, other threads can see it.
     fresh.player.pause();
     fresh
@@ -459,6 +463,13 @@ impl LocalPlayer {
     }
     *self.device_check.lock().unwrap() = None;
     Ok(())
+  }
+
+  #[cfg(all(test, feature = "qobuz"))]
+  pub(crate) fn reopen_without_device(&self) {
+    self
+      .reopen_with(|| Ok(Self::test_player(true).sink.into_inner().unwrap()))
+      .unwrap();
   }
 
   /// [`reopen`](Self::reopen) with retries, for the driver's tick: an attempt
@@ -524,7 +535,11 @@ impl LocalPlayer {
     allow(dead_code)
   )]
   pub fn stage_file(&self, path: &Path) -> Result<()> {
-    let stage = self.begin_stage();
+    self.stage_file_for(self.begin_stage(), path)
+  }
+
+  /// Stage a retained file under the generation reserved by its session owner.
+  pub(crate) fn stage_file_for(&self, stage: u64, path: &Path) -> Result<()> {
     let sink = self.live_player()?;
     // Stop whatever is currently playing *before* any fallible step (open or
     // decode), so a failure here can never leave the previous track audible. A

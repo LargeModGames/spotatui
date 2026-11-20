@@ -998,21 +998,9 @@ async fn commit_fetch_with_stage(
       .await;
     }
     let mut guard = app.lock().await;
-    if guard.queue_owns_playback() {
-      return;
-    }
-    let Some(s) = guard
-      .qobuz_playback
-      .as_mut()
-      .filter(|s| s.fetch_id == fetch_id)
-    else {
+    let Some(s) = current_playback_stage(&mut guard, fetch_id, generation) else {
       return;
     };
-    // Device recovery restages through its queued replay. Do not release its
-    // empty-sink latch if the output changed or the seek abandoned that output.
-    if !player.stage_is_current(generation) || player.device_lost() {
-      return;
-    }
     let latest = s.resume_at.unwrap_or(resume);
     if latest.position_ms != position_ms {
       // A seek received during the wait supersedes that target, including zero.
@@ -1028,6 +1016,21 @@ async fn commit_fetch_with_stage(
     }
     return;
   }
+}
+
+/// Called under the final App lock: recovery owns the empty-output latch if it
+/// replaced this stage's output, or a seek abandoned the output before recovery.
+fn current_playback_stage(
+  app: &mut App,
+  fetch_id: u64,
+  generation: u64,
+) -> Option<&mut QobuzPlaybackState> {
+  if app.queue_owns_playback() {
+    return None;
+  }
+  app.qobuz_playback.as_mut().filter(|s| {
+    s.fetch_id == fetch_id && s.player.stage_is_current(generation) && !s.player.device_lost()
+  })
 }
 
 /// Begin playing a list of Qobuz tracks, taking over the session and starting
@@ -1161,14 +1164,14 @@ async fn skip(app: &Arc<Mutex<App>>, direction: Direction) -> bool {
 /// Replay the current track (repeat-one) from its retained tempfile, with no
 /// second download when the file is whole. Returns `true` if Qobuz owns the session.
 pub(crate) async fn replay_current(app: &Arc<Mutex<App>>) -> bool {
-  replay_current_with_stage(app, LocalPlayer::stage_file).await
+  replay_current_with_stage(app, LocalPlayer::stage_file_for).await
 }
 
 async fn replay_current_with_stage(
   app: &Arc<Mutex<App>>,
-  stage: impl FnOnce(&LocalPlayer, &std::path::Path) -> Result<()> + Send + 'static,
+  stage: impl FnOnce(&LocalPlayer, u64, &std::path::Path) -> Result<()> + Send + 'static,
 ) -> bool {
-  let (player, path, fetch_id) = {
+  let (player, path, fetch_id, generation) = {
     let mut guard = app.lock().await;
     if !guard.qobuz_owns_playback() {
       return false;
@@ -1187,7 +1190,12 @@ async fn replay_current_with_stage(
     match s.finished_file().map(std::path::Path::to_path_buf) {
       Some(path) => {
         s.fetch_id = next_fetch_id();
-        (Arc::clone(&s.player), path, s.fetch_id)
+        (
+          Arc::clone(&s.player),
+          path,
+          s.fetch_id,
+          s.player.begin_stage(),
+        )
       }
       None => {
         let index = s.index;
@@ -1199,7 +1207,7 @@ async fn replay_current_with_stage(
   };
   let stage_player = Arc::clone(&player);
   let staged = matches!(
-    tokio::task::spawn_blocking(move || stage(&stage_player, &path)).await,
+    tokio::task::spawn_blocking(move || stage(&stage_player, generation, &path)).await,
     Ok(Ok(()))
   );
   let position_ms = {
@@ -1227,19 +1235,13 @@ async fn replay_current_with_stage(
   // not start the next track while an old replay seek is still outstanding.
   if position_ms > 0 {
     let seek_player = Arc::clone(&player);
-    let _ =
-      tokio::task::spawn_blocking(move || seek_player.seek(Duration::from_millis(position_ms)))
-        .await;
+    let _ = tokio::task::spawn_blocking(move || {
+      seek_player.seek_for_stage(generation, Duration::from_millis(position_ms))
+    })
+    .await;
   }
   let mut guard = app.lock().await;
-  if guard.queue_owns_playback() {
-    return true;
-  }
-  if let Some(s) = guard
-    .qobuz_playback
-    .as_mut()
-    .filter(|s| s.fetch_id == fetch_id)
-  {
+  if let Some(s) = current_playback_stage(&mut guard, fetch_id, generation) {
     let resume = s.resume_at.take().unwrap_or_default();
     s.advancing = false;
     s.set_paused(resume.paused);
@@ -1868,6 +1870,73 @@ mod tests {
   }
 
   #[tokio::test]
+  async fn device_recovery_during_a_replay_seek_keeps_the_queued_replay_pending() {
+    let (app, rx, file) = playing_app();
+    let player = {
+      let mut guard = app.lock().await;
+      let s = guard.qobuz_playback.as_mut().unwrap();
+      s.tracks.truncate(1);
+      s.tempfile = Some(file);
+      s.complete.store(true, Ordering::Release);
+      s.resume_at = Some(ResumePoint {
+        position_ms: 400,
+        paused: false,
+      });
+      Arc::clone(&s.player)
+    };
+    let (started, ready) = tokio::sync::oneshot::channel();
+    let (release, released) = std::sync::mpsc::channel();
+    player.on_next_seek(move || {
+      started.send(()).unwrap();
+      released.recv_timeout(Duration::from_secs(5)).unwrap();
+    });
+    let replay_app = Arc::clone(&app);
+    let replay = tokio::spawn(async move { replay_current(&replay_app).await });
+    tokio::time::timeout(Duration::from_secs(2), ready)
+      .await
+      .unwrap()
+      .unwrap();
+    let (fetch_id, resume) = {
+      let mut guard = app.lock().await;
+      let s = guard.qobuz_playback.as_mut().unwrap();
+      let resume = s.recovery_point();
+      player.reopen_without_device();
+      s.advancing = true;
+      s.resume_at = Some(resume);
+      let fetch_id = s.fetch_id;
+      // Recovery queues behind the replay still awaiting its seek on the pump.
+      guard.dispatch(IoEvent::ReplayCurrentTrack);
+      (fetch_id, resume)
+    };
+    release.send(()).unwrap();
+    assert!(replay.await.unwrap());
+    {
+      let mut guard = app.lock().await;
+      let s = guard.qobuz_playback.as_ref().unwrap();
+      assert_eq!(s.fetch_id, fetch_id, "recovery has not run its replay yet");
+      assert!(player.is_finished(), "recovery opened an empty output");
+      assert!(s.advancing, "the old replay must keep recovery's latch set");
+      assert_eq!(s.resume_at, Some(resume));
+      tick(&mut guard);
+      assert!(guard.qobuz_playback.is_some(), "the tick keeps the session");
+    }
+    let event = rx.try_recv().unwrap();
+    assert!(matches!(event, IoEvent::ReplayCurrentTrack));
+    assert!(route_qobuz_event(&app, &event).await);
+    let guard = app.lock().await;
+    let s = guard.qobuz_playback.as_ref().unwrap();
+    assert_ne!(s.fetch_id, fetch_id, "the queued replay ran");
+    assert!(!s.advancing);
+    assert_eq!(s.resume_at, None);
+    assert!(
+      !player.is_finished(),
+      "the track is staged on the new output"
+    );
+    assert!(!player.is_paused(), "the queued replay plays the track");
+    assert_eq!(s.current().unwrap().uri.as_deref(), Some("qobuz:track:1"));
+  }
+
+  #[tokio::test]
   async fn pause_during_a_replay_restage_holds_when_the_stage_finishes() {
     use crate::core::action::Action;
     let (app, _rx, file) = playing_app();
@@ -1886,10 +1955,10 @@ mod tests {
     let (release, released) = std::sync::mpsc::channel();
     let replay_app = Arc::clone(&app);
     let replay = tokio::spawn(async move {
-      replay_current_with_stage(&replay_app, move |player, path| {
+      replay_current_with_stage(&replay_app, move |player, generation, path| {
         started.send(()).unwrap();
         released.recv_timeout(Duration::from_secs(5)).unwrap();
-        player.stage_file(path)
+        player.stage_file_for(generation, path)
       })
       .await
     });
