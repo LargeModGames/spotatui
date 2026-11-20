@@ -905,8 +905,12 @@ mod tests {
     true
   }
 
-  /// Runs git on a fixture repo, ignoring a global commit signing setting.
+  /// Runs git on a fixture repo, ignoring a global commit signing setting and
+  /// the caller's hooks (a global commit-msg hook can reject the fixture
+  /// commits), by pointing core.hooksPath at an empty directory.
   fn git(dir: &Path, args: &[&str]) -> String {
+    static NO_HOOKS: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
+    let no_hooks = NO_HOOKS.get_or_init(|| tempfile::tempdir().unwrap());
     let out = ProcessCommand::new("git")
       .args([
         "-c",
@@ -916,6 +920,8 @@ mod tests {
         "-c",
         "commit.gpgSign=false",
       ])
+      .arg("-c")
+      .arg(format!("core.hooksPath={}", no_hooks.path().display()))
       .arg("-C")
       .arg(dir)
       .args(args)
