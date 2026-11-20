@@ -34,7 +34,7 @@ Run spotatui again with `--debug`, make the bug happen, and attach the log:
 spotatui --debug
 ```
 
-spotatui prints the log path when it starts and when it exits: `spotatui_logs/spotatuilog<pid>` in your temp directory. If it crashed, `spotatui_panic.log` in the state directory has the panic, a backtrace and the end of the log. Skim the log before you post it: tokens are never written, but a log can contain your display name. See [Logging](docs/configuration.md#logging).
+spotatui prints the log path when it starts and when it exits: `spotatui_logs/spotatuilog_<timestamp>_<pid>.log` in your temp directory. If it crashed, `spotatui_panic.log` in the state directory has the panic, a backtrace and the end of the log. Skim the log before you post it: tokens are never written, but a log can contain your display name. See [Logging](docs/configuration.md#logging).
 
 Tell us the frontend (terminal or desktop app), the source, your OS, how you installed spotatui, and the version. Report what you see on the spotatui tracker, even when the cause may be in the librespot fork; we move it if it is.
 
