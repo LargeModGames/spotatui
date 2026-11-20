@@ -283,6 +283,29 @@ pub fn set_token(token: Option<String>) {
   }
 }
 
+/// Apply a result only while its login is current, holding off login replacement
+/// through the write. Call with `App` already locked, as on the 401 path; the
+/// callback must not acquire the token lock again.
+pub(super) fn with_current_login(request_epoch: u64, apply: impl FnOnce()) -> bool {
+  with_current_login_with(token_slot(), &TOKEN_EPOCH, request_epoch, apply)
+}
+
+fn with_current_login_with(
+  slot: &std::sync::Mutex<Option<String>>,
+  epoch: &std::sync::atomic::AtomicU64,
+  request_epoch: u64,
+  apply: impl FnOnce(),
+) -> bool {
+  let Ok(_token) = slot.lock() else {
+    return false;
+  };
+  if epoch.load(std::sync::atomic::Ordering::SeqCst) != request_epoch {
+    return false;
+  }
+  apply();
+  true
+}
+
 /// Invalidate only the login that received a 401, keeping a newer login intact.
 pub(super) fn clear_token_if_current(request_epoch: u64) -> bool {
   clear_token_if_current_with(token_slot(), &TOKEN_EPOCH, request_epoch)
@@ -423,6 +446,33 @@ async fn exchange_code(constants: &QobuzBundleCache, code: &str) -> Result<Qobuz
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn a_successful_response_from_an_old_login_cannot_write() {
+    use std::sync::{atomic::AtomicU64, Mutex};
+    let slot = Mutex::new(Some("new-login".to_string()));
+    let epoch = AtomicU64::new(2);
+
+    assert!(!with_current_login_with(&slot, &epoch, 1, || {
+      panic!("a stale response must not write")
+    }));
+    assert_eq!(slot.lock().unwrap().as_deref(), Some("new-login"));
+  }
+
+  #[test]
+  fn a_successful_response_holds_the_login_lock_until_its_write_finishes() {
+    use std::sync::{atomic::AtomicU64, Mutex, TryLockError};
+    let slot = Mutex::new(Some("current-login".to_string()));
+    let epoch = AtomicU64::new(2);
+    let mut written = false;
+
+    assert!(with_current_login_with(&slot, &epoch, 2, || {
+      assert!(matches!(slot.try_lock(), Err(TryLockError::WouldBlock)));
+      written = true;
+    }));
+    assert!(written);
+    assert_eq!(slot.try_lock().unwrap().as_deref(), Some("current-login"));
+  }
 
   #[test]
   fn an_old_unauthorized_request_keeps_the_newer_login() {

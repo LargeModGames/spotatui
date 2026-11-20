@@ -24,7 +24,9 @@
 //! download, and a browse, search or login request runs on a task of its own
 //! until the constants are ready. Work that waited checks that it is still
 //! wanted before it writes: the fetch by `fetch_id`, a listing by
-//! [`App::source_table_awaits`], a search by [`App::search_is_current`].
+//! [`App::source_table_awaits`], a search by [`App::search_is_current`]. Browse
+//! and search results also check their login epoch under the token lock, so
+//! replacing the login cannot interleave with publishing the result.
 //!
 //! Failures are status messages (never `handle_error`): the CLI never reaches
 //! this router, so no exit signal is lost. A 401 clears its own login's token so
@@ -50,7 +52,7 @@ use super::{
   Unauthorized,
 };
 use crate::core::app::{App, TrackTableContext};
-use crate::core::plugin_api::TrackInfo;
+use crate::core::plugin_api::{PlaylistInfo, TrackInfo};
 use crate::core::source::{MediaSource, Searcher, Source};
 use crate::core::state::PersistedRuntimeState;
 use crate::infra::audio::{LocalPlayer, PreparedStream};
@@ -550,9 +552,16 @@ async fn load_qobuz_playlists(app: Arc<Mutex<App>>) {
   let Some((source, epoch)) = build_source(&app).await else {
     return;
   };
-  match source.playlists().await {
-    Ok(playlists) => *app.lock().await.qobuz_playlists_mut() = playlists,
-    Err(e) => report(&app, QobuzStep::Library, e, epoch).await,
+  let result = source.playlists().await;
+  show_playlists(&mut *app.lock().await, result, epoch);
+}
+
+fn show_playlists(app: &mut App, result: Result<Vec<PlaylistInfo>>, epoch: u64) {
+  match result {
+    Ok(playlists) => {
+      auth::with_current_login(epoch, || *app.qobuz_playlists_mut() = playlists);
+    }
+    Err(e) => report_locked(app, QobuzStep::Library, e, epoch),
   }
 }
 
@@ -567,13 +576,16 @@ async fn load_qobuz_tracks(app: Arc<Mutex<App>>, playlist_uri: String) {
 
 /// Show a listing's tracks, tagged [`TrackTableContext::QobuzPlaylist`] so
 /// selecting a row plays it. Rows for a list the user has left (another list
-/// opened in the table meanwhile) are dropped.
+/// opened in the table meanwhile), or from an earlier login, are dropped.
 fn show_tracks(app: &mut App, playlist_uri: &str, result: Result<Vec<TrackInfo>>, epoch: u64) {
   match result {
-    Ok(tracks) if app.source_table_awaits(playlist_uri) => {
-      app.set_source_track_table(playlist_uri, tracks, TrackTableContext::QobuzPlaylist)
+    Ok(tracks) => {
+      auth::with_current_login(epoch, || {
+        if app.source_table_awaits(playlist_uri) {
+          app.set_source_track_table(playlist_uri, tracks, TrackTableContext::QobuzPlaylist);
+        }
+      });
     }
-    Ok(_) => {}
     Err(e) => report_locked(app, QobuzStep::Tracks, e, epoch),
   }
 }
@@ -588,13 +600,16 @@ async fn run_qobuz_search(app: Arc<Mutex<App>>, query: String) {
 }
 
 /// Show a search's hits. Hits for a search the user has replaced with another
-/// one are dropped.
+/// one, or from an earlier login, are dropped.
 fn show_search(app: &mut App, query: &str, result: Result<Vec<TrackInfo>>, epoch: u64) {
   match result {
-    Ok(tracks) if app.search_is_current(Source::Qobuz, query) => {
-      app.show_source_search_tracks(query, tracks)
+    Ok(tracks) => {
+      auth::with_current_login(epoch, || {
+        if app.search_is_current(Source::Qobuz, query) {
+          app.show_source_search_tracks(query, tracks);
+        }
+      });
     }
-    Ok(_) => {}
     Err(e) => report_locked(app, QobuzStep::Search, e, epoch),
   }
 }
@@ -1290,6 +1305,85 @@ mod tests {
   }
 
   const NOTICE: &str = crate::core::i18n::EN.status.infra.qobuz_preparing;
+
+  #[test]
+  fn successful_sidebar_results_from_an_old_login_keep_the_current_library() {
+    let epoch = auth::TOKEN_EPOCH.load(Ordering::SeqCst);
+    let mut app = App::default();
+    let playlists = |name: &str| {
+      Ok(vec![PlaylistInfo {
+        generated_name: None,
+        name: name.to_string(),
+        uri: "qobuz:favorites:tracks".to_string(),
+        owner: String::new(),
+        track_count: 1,
+        id: None,
+        owner_id: None,
+        collaborative: false,
+        public: None,
+        image_url: None,
+      }])
+    };
+    show_playlists(&mut app, playlists("Current favorites"), epoch);
+    assert_eq!(app.qobuz_playlists()[0].name, "Current favorites");
+
+    show_playlists(&mut app, playlists("Old favorites"), epoch.wrapping_sub(1));
+    assert_eq!(app.qobuz_playlists()[0].name, "Current favorites");
+  }
+
+  #[test]
+  fn successful_track_lists_from_an_old_login_do_not_fill_the_current_table() {
+    let epoch = auth::TOKEN_EPOCH.load(Ordering::SeqCst);
+    for uri in [
+      "qobuz:favorites:tracks",
+      "qobuz:album:1",
+      "qobuz:playlist:1",
+    ] {
+      let mut app = App::default();
+      app.open_source_playlist_tracks(uri.to_string());
+      show_tracks(
+        &mut app,
+        uri,
+        Ok(vec![queued_track("qobuz:track:1", "Old track")]),
+        epoch.wrapping_sub(1),
+      );
+      assert!(app.track_table.tracks.is_empty(), "stale rows for {uri}");
+      assert!(app.source_table_awaits(uri));
+
+      show_tracks(
+        &mut app,
+        uri,
+        Ok(vec![queued_track("qobuz:track:2", "Current track")]),
+        epoch,
+      );
+      assert_eq!(app.track_table.tracks[0].name, "Current track");
+    }
+  }
+
+  #[test]
+  fn successful_search_results_from_an_old_login_keep_the_current_hits() {
+    use crate::core::action::Action;
+    let epoch = auth::TOKEN_EPOCH.load(Ordering::SeqCst);
+    let mut app = App::default();
+    app.active_source = Source::Qobuz;
+    app.apply(Action::SearchActiveSource("same query".to_string()));
+    show_search(
+      &mut app,
+      "same query",
+      Ok(vec![queued_track("qobuz:track:2", "Current hit")]),
+      epoch,
+    );
+    show_search(
+      &mut app,
+      "same query",
+      Ok(vec![queued_track("qobuz:track:1", "Old hit")]),
+      epoch.wrapping_sub(1),
+    );
+    assert_eq!(
+      app.search_results().tracks.as_ref().unwrap().items[0].name,
+      "Current hit"
+    );
+  }
 
   /// A published session that waits for its first fetch, on a fresh (paused)
   /// player with no audio device.

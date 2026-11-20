@@ -162,10 +162,14 @@ impl App {
       return;
     }
 
-    // Qobuz playback owns the session the same way: toggle its sink directly.
+    // A staged Qobuz sink is temporarily paused: toggle its saved intent.
     #[cfg(feature = "qobuz")]
     if let Some(qobuz) = &mut self.qobuz_playback {
-      qobuz.set_paused(!qobuz.player.is_paused());
+      let paused = qobuz
+        .resume_at
+        .filter(|_| qobuz.advancing && qobuz.tempfile.is_some())
+        .map_or_else(|| qobuz.player.is_paused(), |resume| resume.paused);
+      qobuz.set_paused(!paused);
       return;
     }
 
@@ -637,6 +641,78 @@ impl App {
         _ => {}
       }
     }
+  }
+}
+
+#[cfg(all(test, feature = "qobuz"))]
+mod qobuz_tests {
+  use super::*;
+  use crate::infra::audio::LocalPlayer;
+  use crate::infra::qobuz::{QobuzPlaybackState, ResumePoint};
+
+  fn app_with_qobuz() -> App {
+    let mut app = App::default();
+    app.qobuz_playback = Some(QobuzPlaybackState {
+      player: Arc::new(LocalPlayer::without_device()),
+      tracks: Vec::new(),
+      index: 0,
+      advancing: true,
+      tempfile: Some(tempfile::NamedTempFile::new().unwrap()),
+      complete: Default::default(),
+      quality: None,
+      shuffle_backup: None,
+      fetch_id: 1,
+      resume_at: Some(ResumePoint {
+        position_ms: 1234,
+        paused: false,
+      }),
+      fetch: None,
+    });
+    app
+  }
+
+  #[test]
+  fn a_toggle_during_qobuz_staging_flips_the_saved_intent() {
+    let mut app = app_with_qobuz();
+    app.qobuz_playback.as_ref().unwrap().player.pause();
+
+    app.toggle_playback();
+    let session = app.qobuz_playback.as_ref().unwrap();
+    assert_eq!(
+      session.resume_at,
+      Some(ResumePoint {
+        position_ms: 1234,
+        paused: true,
+      })
+    );
+    assert!(session.player.is_paused());
+
+    app.toggle_playback();
+    let session = app.qobuz_playback.as_ref().unwrap();
+    assert!(!session.resume_at.unwrap().paused);
+    assert!(!session.player.is_paused());
+
+    // Once staging commits, the live player is authoritative again.
+    let session = app.qobuz_playback.as_mut().unwrap();
+    session.advancing = false;
+    session.resume_at = None;
+    app.toggle_playback();
+    let session = app.qobuz_playback.as_ref().unwrap();
+    assert!(session.player.is_paused());
+    assert_eq!(session.resume_at, None);
+  }
+
+  #[test]
+  fn a_toggle_during_a_qobuz_fetch_still_reads_the_live_player() {
+    let mut app = app_with_qobuz();
+    let session = app.qobuz_playback.as_mut().unwrap();
+    session.tempfile = None;
+    session.player.pause();
+
+    app.toggle_playback();
+    let session = app.qobuz_playback.as_ref().unwrap();
+    assert!(!session.resume_at.unwrap().paused);
+    assert!(!session.player.is_paused());
   }
 }
 
