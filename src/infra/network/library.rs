@@ -3612,7 +3612,7 @@ mod rootlist_only_tests {
   use super::*;
   use crate::core::test_helpers::playlist_info;
   use librespot_protocol::playlist4_external::Item;
-  
+
   fn playlist_node(id: &str) -> PlaylistFolderNode {
     PlaylistFolderNode {
       name: None,
@@ -3639,7 +3639,10 @@ mod rootlist_only_tests {
 
   /// Parses one empty folder group and returns its node.
   fn parse_folder(start_uri: &str) -> PlaylistFolderNode {
-    let mut nodes = parse_rootlist_items(&[rootlist_item(start_uri), rootlist_item("spotify:end-group:g1")]);
+    let mut nodes = parse_rootlist_items(&[
+      rootlist_item(start_uri),
+      rootlist_item("spotify:end-group:g1"),
+    ]);
     assert_eq!(nodes.len(), 1, "expected exactly one folder node");
     nodes.remove(0)
   }
@@ -3769,7 +3772,7 @@ mod rootlist_only_tests {
       .collect();
     assert_eq!(order, vec!["Release Radar", "Mine"]);
   }
-  
+
   #[test]
   fn folder_name_suffix_is_percent_decoded() {
     let folder = parse_folder("spotify:start-group:g1:Road%20Trip%20%26%20Chill");
