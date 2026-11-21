@@ -60,7 +60,7 @@ pub const EN: RecapStrings = RecapStrings {
   by_day: "Listening by Day",
   by_hour: "Listening by Hour",
   footer: "History is generated from spotatui local listening records and starts when the feature is enabled. Short or skipped plays are stored but excluded from headline recap totals.",
-  generating: "Generating...",
+  generating: "Generating…",
   render_failed: "Could not render image. Please try again!",
   empty_summary: "No qualified local listening history was recorded for this window yet.",
   summary: "A shareable HTML snapshot of your qualified local listening history, generated directly from spotatui.",
