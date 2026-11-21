@@ -272,6 +272,9 @@ ai-dj = ["dj-core"]
 tempfile = "3"
 ts-rs = "=12.0.1"
 
+[target.'cfg(unix)'.dev-dependencies]
+libc = "0.2"
+
 # Constraint-only pin (spotatui's build script does not use it): vergen 9.1.0 breaks
 # librespot-core 0.8.0's build script on a fresh resolve (#350). Remove once
 # librespot ships a fix.
