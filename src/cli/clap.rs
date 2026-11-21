@@ -91,6 +91,16 @@ fn parse_playlist_uri(input: &str) -> Result<String, String> {
   Ok(format!("spotify:playlist:{id}"))
 }
 
+/// Refuses a `--seek` value that is not whole seconds with an optional `+` or
+/// `-`, so it fails before boot. The string is returned unchanged because the
+/// sign decides between a relative and an absolute seek.
+fn parse_seek_seconds(value: &str) -> Result<String, String> {
+  match value.parse::<i32>() {
+    Ok(_) => Ok(value.to_string()),
+    Err(_) => Err("expected whole seconds, for example +10, -10 or 10".to_string()),
+  }
+}
+
 /// Refuses a `--queue` or `--random` that the kind of `--uri` cannot honor.
 ///
 /// Clap sees the kind of a `--name` search through its category flags, but the
@@ -219,6 +229,7 @@ two songs back, you can use `spotatui pb -ppp` and so on.",
       Arg::new("seek")
         .long("seek")
         .value_name("±SECONDS")
+        .value_parser(parse_seek_seconds)
         .allow_hyphen_values(true)
         .help("Jumps SECONDS forwards (+) or backwards (-)")
         .long_help(
@@ -542,6 +553,29 @@ mod tests {
         .unwrap();
       assert_eq!(matches.get_one::<String>("volume").unwrap(), volume);
       assert!(matches.get_flag("toggle"));
+    }
+  }
+
+  #[test]
+  fn playback_seek_accepts_signed_and_absolute_seconds() {
+    for seek in ["+10", "-10", "10"] {
+      let matches = playback_subcommand()
+        .try_get_matches_from(["playback", "--seek", seek])
+        .unwrap();
+      assert_eq!(matches.get_one::<String>("seek").unwrap(), seek);
+    }
+  }
+
+  #[test]
+  fn playback_seek_refuses_a_value_that_is_not_whole_seconds() {
+    for seek in ["ten", "1.5", "+", "", "99999999999"] {
+      let error = playback_subcommand()
+        .try_get_matches_from(["playback", "--seek", seek])
+        .unwrap_err();
+      assert!(
+        error.to_string().contains("expected whole seconds"),
+        "{seek}: {error}"
+      );
     }
   }
 

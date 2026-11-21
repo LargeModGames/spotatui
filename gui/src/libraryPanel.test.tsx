@@ -1,6 +1,11 @@
-import type { ReactElement, ReactNode } from "react";
+import {
+  isValidElement,
+  type ComponentProps,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Action } from "./bindings/Action";
 import type { PlaylistInfo } from "./bindings/PlaylistInfo";
 import type { Source } from "./bindings/Source";
@@ -15,10 +20,73 @@ import {
   PlaylistSortSelect,
 } from "./LibraryPanel";
 import { EN, deviceKind } from "./i18n";
-import { removalTarget, playlistRemoval } from "./libraryModel";
+import {
+  removalTarget,
+  removalText,
+  playlistRemoval,
+  playlistMenuItems,
+} from "./libraryModel";
 import { ALBUM_SORTS } from "./libraryModel";
 import type { View } from "./nav";
 import { hostElements } from "./testTree";
+import { MenuList } from "./TrackMenu";
+import type { MenuEntry } from "./trackMenuModel";
+
+// Keep the normal server-rendered tests intact; the push tests retain component
+// state and run layout effects after committing their simulated DOM changes.
+const hooks = vi.hoisted(() => ({
+  active: false,
+  cursor: 0,
+  values: [] as unknown[],
+  layout: [] as (() => void)[],
+}));
+vi.mock("react", async (original) => {
+  const react = await original<typeof import("react")>();
+  return {
+    ...react,
+    useState: (initial: unknown) => {
+      if (!hooks.active) return react.useState(initial);
+      const index = hooks.cursor++;
+      if (!(index in hooks.values))
+        hooks.values[index] =
+          typeof initial === "function" ? initial() : initial;
+      return [
+        hooks.values[index],
+        (next: unknown) => {
+          hooks.values[index] =
+            typeof next === "function" ? next(hooks.values[index]) : next;
+        },
+      ];
+    },
+    useRef: (initial: unknown) => {
+      if (!hooks.active) return react.useRef(initial);
+      const index = hooks.cursor++;
+      if (!(index in hooks.values)) hooks.values[index] = { current: initial };
+      return hooks.values[index];
+    },
+    useMemo: (factory: () => unknown, deps: readonly unknown[]) =>
+      hooks.active ? factory() : react.useMemo(factory, deps),
+    useCallback: <T extends (...args: never[]) => unknown>(
+      callback: T,
+      deps: readonly unknown[],
+    ) => (hooks.active ? callback : react.useCallback(callback, deps)),
+    useEffect: (effect: () => void, deps: readonly unknown[]) => {
+      if (!hooks.active) react.useEffect(effect, deps);
+    },
+    useLayoutEffect: (effect: () => void, deps: readonly unknown[]) => {
+      if (hooks.active) hooks.layout.push(effect);
+      else react.useLayoutEffect(effect, deps);
+    },
+  };
+});
+vi.mock("react-dom", async (original) => {
+  const dom = await original<typeof import("react-dom")>();
+  return {
+    ...dom,
+    createPortal: (children: ReactNode, container: Element) =>
+      hooks.active ? children : dom.createPortal(children, container),
+  };
+});
 
 const playlist = (
   uri: string,
@@ -38,6 +106,7 @@ const playlist = (
 
 const payload: SourcePlaylists = {
   playlist_sidebar_order: "spotify",
+  pinned: [],
   spotify: [
     playlist("spotify:playlist:mine", "Road trip"),
     playlist("spotify:playlist:theirs", "Their mix"),
@@ -103,6 +172,7 @@ const rows = (
     playlists?: SourcePlaylists;
     needle?: string;
     s?: typeof EN;
+    loggedOut?: boolean;
   } = {},
 ) => {
   const open = vi.fn();
@@ -113,6 +183,7 @@ const rows = (
     <PlaylistRows
       playlists={options.playlists ?? payload}
       source={source}
+      loggedOut={options.loggedOut}
       unmatched={0}
       view={options.view ?? { page: "home" }}
       open={open}
@@ -218,7 +289,293 @@ describe("LibraryPanel header and filters", () => {
   });
 });
 
+describe("LibraryPanel focus after a library push", () => {
+  afterEach(() => {
+    hooks.active = false;
+    vi.unstubAllGlobals();
+  });
+
+  type FocusRow = {
+    key: string;
+    props: Record<string, unknown>;
+    dataset: { playlistUri?: string };
+    isConnected: boolean;
+    focus: ReturnType<typeof vi.fn<() => void>>;
+    getBoundingClientRect: () => { left: number; bottom: number };
+  };
+  const elements = (
+    node: ReactNode,
+  ): ReactElement<Record<string, unknown>>[] => {
+    if (Array.isArray(node)) return node.flatMap(elements);
+    if (!isValidElement<Record<string, unknown>>(node)) return [];
+    return [node, ...elements(node.props.children as ReactNode)];
+  };
+
+  const mountPinned = (uri: string, expanded = false) => {
+    hooks.active = true;
+    hooks.values = [];
+    const document = { body: {}, activeElement: null as object | null };
+    vi.stubGlobal("document", document);
+    const send = vi.fn<(action: Action) => void>();
+    const component = LibraryPanel as unknown as {
+      type: (props: ComponentProps<typeof LibraryPanel>) => ReactNode;
+    };
+    let current: SourcePlaylists = {
+      ...payload,
+      pinned: [uri],
+      folders: [
+        { kind: "playlist", uri },
+        ...payload.folders!.filter(
+          (node) => node.kind !== "playlist" || node.uri !== uri,
+        ),
+      ],
+    };
+    let visible: FocusRow[] = [];
+    const box = { querySelectorAll: () => visible, focus: vi.fn() };
+    const commit = (playlists: SourcePlaylists) => {
+      current = playlists;
+      hooks.cursor = 0;
+      hooks.layout = [];
+      const tree = component.type({
+        playlists,
+        artists: [],
+        source: { active: "Spotify", compiled: ["Spotify"] },
+        sync: null,
+        view: { page: "home" },
+        open: vi.fn(),
+        send,
+      });
+      const list = elements(tree).find((node) => node.type === PlaylistRows)!;
+      const previous = visible;
+      visible = hostElements(list)
+        .filter((node) => node.type === "button")
+        .map((node) => {
+          const uri = node.props["data-playlist-uri"] as string | undefined;
+          const depth = (
+            node.props.style as { paddingLeft?: number } | undefined
+          )?.paddingLeft;
+          const key = JSON.stringify([uri ?? rowName(node), depth]);
+          const row: FocusRow = previous.find((row) => row.key === key) ?? {
+            key,
+            props: {},
+            dataset: { playlistUri: uri },
+            isConnected: true,
+            focus: vi.fn(() => {
+              document.activeElement = row;
+            }),
+            getBoundingClientRect: () => ({ left: 0, bottom: 10 }),
+          };
+          row.props = node.props;
+          return row;
+        });
+      for (const row of previous) row.isConnected = visible.includes(row);
+      // Browsers can blur a moved DOM node, as well as an unmounted shortcut.
+      const focused = previous.find((row) => row === document.activeElement);
+      if (focused && previous.indexOf(focused) !== visible.indexOf(focused))
+        document.activeElement = document.body;
+      const container = elements(tree).find(
+        (node) => node.props.className === "library-rows",
+      )!;
+      (container.props.ref as { current: unknown }).current = box;
+      for (const effect of hooks.layout) effect();
+      return tree;
+    };
+    const tree = commit(current);
+    if (expanded) {
+      const list = elements(tree).find((node) => node.type === PlaylistRows)!;
+      (list.props.onToggle as (uri: string) => void)(
+        "spotify:user:me:folder:moods",
+      );
+      commit(current);
+    }
+    const copies = () =>
+      visible.filter((row) => row.dataset.playlistUri === uri);
+    const unpin = () => {
+      const opener = copies()[0];
+      opener.focus();
+      (opener.props.onKeyDown as (event: unknown) => void)({
+        key: "F10",
+        shiftKey: true,
+        preventDefault: vi.fn(),
+        currentTarget: opener,
+      });
+      const menu = elements(commit(current)).find(
+        (node) => node.type === MenuList,
+      )!;
+      const entry = (menu.props.groups as MenuEntry[][])[0][0];
+      expect(entry).toMatchObject({
+        id: "pin-playlist",
+        action: { SetPlaylistPinned: { uri, pinned: false } },
+      });
+      (menu.props.run as (entry: MenuEntry) => void)(entry);
+      commit(current);
+      expect(send).toHaveBeenCalledWith({
+        SetPlaylistPinned: { uri, pinned: false },
+      });
+      expect(document.activeElement).toBe(opener);
+      return opener;
+    };
+    return {
+      document,
+      copies,
+      unpin,
+      push: () => commit({ ...payload, pinned: [] }),
+      unrelatedPush: () => commit({ ...current }),
+      named: (name: string) =>
+        visible.find((row) => String(row.props.title).split("\n")[0] === name),
+    };
+  };
+
+  it("refocuses the same root playlist after the pushed library moves its keyed row", () => {
+    const page = mountPinned("spotify:playlist:jam");
+    const opener = page.unpin();
+    opener.focus.mockClear();
+    page.push();
+    expect(page.copies()).toEqual([opener]);
+    expect(opener.focus).toHaveBeenCalledOnce();
+    expect(page.document.activeElement).toBe(opener);
+  });
+
+  it("focuses the visible folder copy after the pushed library removes the root shortcut", () => {
+    const page = mountPinned("spotify:playlist:mine", true);
+    const copy = page.copies()[1];
+    const opener = page.unpin();
+    page.push();
+    expect(opener.isConnected).toBe(false);
+    expect(page.copies()).toEqual([copy]);
+    expect(copy.focus).toHaveBeenCalledOnce();
+    expect(page.document.activeElement).toBe(copy);
+  });
+
+  it("focuses the adjacent visible row when the pushed library removes a shortcut into a closed folder", () => {
+    const page = mountPinned("spotify:playlist:mine");
+    const folder = page.named("Moods");
+    const opener = page.unpin();
+    page.push();
+    expect(opener.isConnected).toBe(false);
+    expect(page.copies()).toEqual([]);
+    expect(folder?.focus).toHaveBeenCalledOnce();
+    expect(page.document.activeElement).toBe(folder);
+  });
+
+  it("waits for the pin change instead of consuming an unrelated library push", () => {
+    const page = mountPinned("spotify:playlist:mine");
+    page.unpin();
+    page.unrelatedPush();
+    page.push();
+    expect(page.document.activeElement).toBe(page.named("Moods"));
+  });
+
+  it("does not take focus from another control when the pin push arrives", () => {
+    const page = mountPinned("spotify:playlist:mine");
+    page.unpin();
+    const search = {};
+    page.document.activeElement = search;
+    page.push();
+    expect(page.document.activeElement).toBe(search);
+    expect(page.named("Moods")?.focus).not.toHaveBeenCalled();
+  });
+});
+
 describe("PlaylistRows", () => {
+  it("marks a pin at the root and inside a folder with the translated accessible label", () => {
+    const { tree } = rows("Spotify", {
+      playlists: {
+        ...payload,
+        pinned: ["spotify:playlist:mine"],
+        folders: [
+          { kind: "playlist", uri: "spotify:playlist:mine" },
+          ...payload.folders!,
+        ],
+      },
+      expanded: ["spotify:user:me:folder:moods"],
+      s: { ...EN, pinned: "已置顶" },
+    });
+    const markers = hostElements(tree).filter(
+      (element) => element.props["aria-label"] === "已置顶",
+    );
+    expect(markers).toHaveLength(2);
+    expect(markers.every((marker) => marker.props.role === "img")).toBe(true);
+    expect(renderToStaticMarkup(tree)).toContain('width="12" height="12"');
+  });
+
+  it("gives a root pin and its folder copy distinct stable row keys", () => {
+    const { tree } = rows("Spotify", {
+      playlists: {
+        ...payload,
+        pinned: ["spotify:playlist:mine"],
+        folders: [
+          { kind: "playlist", uri: "spotify:playlist:mine" },
+          ...payload.folders!,
+        ],
+      },
+      expanded: ["spotify:user:me:folder:moods"],
+    });
+    // Inspect the rows before hostElements consumes their component keys.
+    const component = tree.type as {
+      type: (props: typeof tree.props) => ReactNode;
+    };
+    const keys: string[] = [];
+    const collect = (node: ReactNode) => {
+      if (Array.isArray(node)) return node.forEach(collect);
+      if (!isValidElement<{ children?: ReactNode }>(node)) return;
+      if (node.key !== null) keys.push(String(node.key));
+      collect(node.props.children);
+    };
+    collect(component.type(tree.props));
+    expect(new Set(keys).size).toBe(keys.length);
+    expect(keys).toContain('["spotify:playlist:mine"]:0');
+    expect(keys).toContain(
+      '["spotify:user:me:folder:moods","spotify:playlist:mine"]:0',
+    );
+  });
+
+  it("offers only a local pin for a cached Spotify row without a session or removal", () => {
+    const { tree, onMenu } = rows("Spotify", { loggedOut: true });
+    expect(rightClick(tree, "Jam")).toBe(true);
+    const [target] = onMenu.mock.calls[0];
+    expect(target).toMatchObject({
+      uri: "spotify:playlist:jam",
+      pinned: false,
+      pinsEditable: true,
+      removal: null,
+    });
+    expect(playlistMenuItems(target, EN)).toEqual([
+      {
+        id: "pin-playlist",
+        label: "Pin to top",
+        kind: "action",
+        action: {
+          SetPlaylistPinned: { uri: "spotify:playlist:jam", pinned: true },
+        },
+      },
+    ]);
+  });
+
+  it("offers no pin menu under another source, including YouTube's deletion menu", () => {
+    const { tree, onMenu } = rows("YouTube");
+    rightClick(tree, "Watch later");
+    expect(onMenu.mock.calls[0][0].pinsEditable).toBe(false);
+    expect(
+      playlistMenuItems(onMenu.mock.calls[0][0], EN).map((entry) => entry.id),
+    ).toEqual(["remove-library"]);
+    for (const source of [
+      "Local",
+      "Subsonic",
+      "Qobuz",
+      "Radio",
+      "AppleMusic",
+    ] as const) {
+      const other = rows(source, {
+        playlists: { ...payload, pinned: ["file:///rips"] },
+      });
+      expect(renderToStaticMarkup(other.tree)).not.toContain(
+        'aria-label="Pinned"',
+      );
+      expect(other.onMenu).not.toHaveBeenCalled();
+    }
+  });
+
   it("indents an open folder's playlists and toggles the folder on click", () => {
     const { tree, onToggle } = rows("Spotify", {
       expanded: ["spotify:user:me:folder:moods"],
@@ -256,9 +613,9 @@ describe("PlaylistRows", () => {
     for (const name of ["Road trip", "Their mix", "Jam"])
       expect(rightClick(tree, name)).toBe(true);
     expect(
-      onMenu.mock.calls.map(([removal, at]) => [
-        removal.label,
-        removal.action,
+      onMenu.mock.calls.map(([target, at]) => [
+        removalText(target.removal, EN).label,
+        target.removal.action,
         at,
       ]),
     ).toEqual([
@@ -294,13 +651,21 @@ describe("PlaylistRows", () => {
     expect(onMenu.mock.calls).toEqual([
       [
         expect.objectContaining({
-          label: "Delete",
-          action: { DeletePlaylist: "youtube:playlist:yt" },
+          removal: expect.objectContaining({
+            kind: "delete",
+            action: { DeletePlaylist: "youtube:playlist:yt" },
+          }),
         }),
         { x: 116, y: 50 },
         opener,
       ],
-      [expect.objectContaining({ label: "Delete" }), { x: 116, y: 50 }, opener],
+      [
+        expect.objectContaining({
+          removal: expect.objectContaining({ kind: "delete" }),
+        }),
+        { x: 116, y: 50 },
+        opener,
+      ],
     ]);
   });
 
@@ -346,7 +711,9 @@ describe("PlaylistRows", () => {
     expect(stopPropagation).toHaveBeenCalled();
     expect(open).not.toHaveBeenCalled();
     expect(onMenu).toHaveBeenCalledWith(
-      expect.objectContaining({ label: "Delete" }),
+      expect.objectContaining({
+        removal: expect.objectContaining({ kind: "delete" }),
+      }),
       { x: 200, y: 60 },
       row,
     );

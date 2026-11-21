@@ -4,6 +4,7 @@
 
 ### Added
 
+- **Pin playlists in your library**: press `t` on a Spotify sidebar playlist, or choose Pin to top in the GUI's Your Library menu. Pins are saved on this computer and stay below the community playlist, in pin order, ahead of folders and the chosen sidebar sort. A complete refresh removes missing pins only for the account that created them. The new default key reserves `t` from plugin commands; rebind `pin_playlist` to keep an existing plugin on `t` ([#863](https://github.com/LargeModGames/spotatui/issues/863)).
 - **A recap of the year in December**: from 1 December the terminal app offers the recap of the whole year once, in the popup that offers the monthly recap. The year popup also counts as that month's, and `enable_monthly_recap_prompt: false` turns both off. `spotatui history recap --period year` makes the same recap on any day.
 - **The recap popup in the desktop app and the browser GUI**: when the monthly recap or the December recap of the year is ready, the GUI now shows it in a dialog with Open, Later and Don't show this again. Before, only the terminal app showed the popup.
 - **The recap share card shows where you listened**: a Sources line names the three services with the most plays and their share, such as "Spotify 78% · Qobuz 21% · YouTube <1%", from the history spotatui already keeps. The card of the year recap shows the year in its badge, and the card footer names `spotatui.com`.
@@ -17,6 +18,7 @@
 ### Fixed
 
 - **The Connect device comes back after sleep/wake with slow DNS**: after a laptop wake, DNS can still fail while spotatui rebuilds the native Connect device. The rebuild was tried once and then given up on, so spotatui stayed absent from Spotify's device list until a restart, even after the network recovered. Transient build failures now retry with backoff (5 s up to 60 s) while spotatui still wants native playback, and stop when the network is up and the device re-registers (or immediately for a missing login or rejected credentials).
+- Playlist pin changes keep the selected playlist in the terminal sidebar. Failed additions can be retried, pin write errors use the normal error screen, and refreshes keep pins for followed playlists omitted from the rootlist.
 - **`playback --help` names every option**: the list of options that can be used together now includes `--dislike` and `--seek`, says that `--like` and `--dislike` exclude each other, says that `--next` and `--previous` work with `--seek`, and says that `--share-track` and `--share-album` ignore `--seek` ([#1045](https://github.com/LargeModGames/spotatui/issues/1045)).
 - **`spotatui plugin update` exits non-zero when an update fails**: a plugin whose git fetch or reset failed was reported on stdout and the command still exited 0, also when updating one plugin by name. Each failure now goes to stderr, the lockfile still records the plugins that did update, and the command ends with "N plugin(s) failed to update" and a non-zero exit ([#1047](https://github.com/LargeModGames/spotatui/issues/1047)).
 - **Status messages read consistently**: three English status messages now start with a capital letter, and four say "ID" instead of "id" ([#1053](https://github.com/LargeModGames/spotatui/issues/1053)).
@@ -39,6 +41,7 @@
 - **Plugin updates stay in their own checkout**: refuse directories without their own repository and ignore inherited Git repository overrides while preserving transport and authentication settings, including environment-injected Git config. Plugin clones resolve relative global config paths from the caller's directory.
 - **Clearing an icon in Settings no longer saves an empty icon**: Active Source Icon and List Highlight Icon keep their current value when cleared, and padded icons are trimmed like `config.yml` does ([#1062](https://github.com/LargeModGames/spotatui/issues/1062)).
 - **Typing q no longer closes the Create Playlist form**: Previously, pressing q while creating a playlist would close the form while preserving the entered value. Now, only Esc closes the form, clearing the entered value ([#1037](https://github.com/LargeModGames/spotatui/issues/1037)).
+- **CLI `--seek` with a huge or invalid value**: clap now refuses a value that is not whole seconds before spotatui starts, and a huge value no longer overflows into a seek near the start of the track ([#1044](https://github.com/LargeModGames/spotatui/issues/1044)).
 
 ### Documentation
 

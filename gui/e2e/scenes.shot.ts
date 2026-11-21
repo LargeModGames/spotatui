@@ -13,6 +13,7 @@ import {
   idle,
   library,
   libraryFolders,
+  libraryPinned,
   libraryUnavailable,
   onboarding,
   onboardingConfirm,
@@ -578,6 +579,26 @@ test("library folders", async ({ page }) => {
     Promise.all(document.getAnimations().map((motion) => motion.finished)),
   );
   await shot(page, "library-folders");
+});
+
+test("library pin markers at the root and inside their folder", async ({
+  page,
+}) => {
+  await openWith(page, [...playing, ...libraryPinned]);
+  const panel = page.getByRole("navigation", { name: "Your Library" });
+  const markers = panel.getByRole("img", { name: "Pinned", exact: true });
+  await expect(markers).toHaveCount(1);
+  await shot(page, "library-pinned-root");
+  await panel.getByRole("button", { name: /Chill & focus/ }).click();
+  await expect(markers).toHaveCount(2);
+  await expect(
+    panel.locator("button.library-row", { hasText: "Film scores" }),
+  ).toHaveCount(2);
+  await page.mouse.move(0, 0);
+  await page.evaluate(() =>
+    Promise.all(document.getAnimations().map((motion) => motion.finished)),
+  );
+  await shot(page, "library-pinned-root-and-folder");
 });
 
 test("library filter", async ({ page }) => {

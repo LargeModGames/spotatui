@@ -197,6 +197,8 @@ pub const ZH_HANT: SettingsStrings = SettingsStrings {
   keys_remove_from_queue_description: "從佇列中移除所選曲目",
   keys_like_track_name: "喜歡曲目",
   keys_like_track_description: "切換目前播放曲目或單集的收藏狀態",
+  keys_pin_playlist_name: "置頂/取消置頂播放清單",
+  keys_pin_playlist_description: "在此裝置上置頂或取消置頂側欄選取的 Spotify 播放清單",
   keys_generate_recap_name: "產生聆聽回顧",
   keys_generate_recap_description: "產生並開啟聆聽回顧 HTML 卡片（統計頁使用所選期間，其他頁面使用 30 天）",
   keys_copy_song_url_name: "複製歌曲 URL",

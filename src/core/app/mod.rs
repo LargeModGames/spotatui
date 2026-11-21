@@ -9,7 +9,8 @@ use crate::core::plugin_api::{
 };
 use crate::core::requirement::{availability, Availability, Capability, Requirement};
 use crate::core::sort::{
-  sort_playlist_slots, PlaylistLastListens, SidebarPlaylistOrder, SortContext, SortField, SortState,
+  pinned_first, present_pins, sort_playlist_slots, PlaylistLastListens, SidebarPlaylistOrder,
+  SortContext, SortField, SortState,
 };
 use crate::core::source::Source;
 use crate::core::state::{

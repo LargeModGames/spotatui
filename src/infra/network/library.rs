@@ -1440,9 +1440,12 @@ async fn finish_playlists_fetch(
   }
 
   #[cfg(feature = "streaming")]
-  let folder_nodes = {
+  let (folder_nodes, rootlist_complete, rootlist_account) = {
     let session = streaming_session(&app).await.ok();
-    let nodes = fetch_rootlist_folders(session.as_ref()).await;
+    let (nodes, complete) = fetch_rootlist_folders(session.as_ref())
+      .await
+      .map(|(nodes, complete)| (Some(nodes), complete))
+      .unwrap_or((None, false));
     // Spotify-owned playlists (Release Radar, daylist, the Mixes, editorial
     // lists) sit in the rootlist, but the Development Mode Web API leaves
     // them out of `me/playlists`. Resolve those rootlist-only ids through the
@@ -1460,18 +1463,49 @@ async fn finish_playlists_fetch(
         all_playlists.extend(resolved);
       }
     }
-    nodes
+    (
+      nodes,
+      complete,
+      session.as_ref().map(|session| session.username()),
+    )
   };
   #[cfg(not(feature = "streaming"))]
-  let folder_nodes: Option<Vec<PlaylistFolderNode>> = None;
+  let (folder_nodes, rootlist_complete, rootlist_account): (
+    Option<Vec<PlaylistFolderNode>>,
+    bool,
+    Option<String>,
+  ) = (None, false, None);
 
+  let mut app = app.lock().await;
+  publish_playlists_refresh(
+    &mut app,
+    all_playlists,
+    folder_nodes,
+    rootlist_complete,
+    rootlist_account.as_deref(),
+    generation,
+    original_selection,
+    page_one_selection,
+  );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn publish_playlists_refresh(
+  app: &mut App,
+  all_playlists: Vec<PlaylistInfo>,
+  folder_nodes: Option<Vec<PlaylistFolderNode>>,
+  rootlist_complete: bool,
+  rootlist_account: Option<&str>,
+  generation: u64,
+  original_selection: (Option<String>, usize, Option<usize>),
+  page_one_selection: (Option<String>, usize, Option<usize>),
+) {
   let folder_items = if let Some(ref nodes) = folder_nodes {
     structurize_playlist_folders(nodes, &all_playlists)
   } else {
     build_flat_playlist_items(&all_playlists)
   };
 
-  let mut app = app.lock().await;
   if app.playlist_refresh_generation != generation {
     return;
   }
@@ -1495,9 +1529,15 @@ async fn finish_playlists_fetch(
   *app.playlist_folder_nodes_mut() = folder_nodes;
   *app.playlist_folder_items_mut() = folder_items;
 
-  reconcile_playlist_selection(&mut app, preferred.0.as_deref(), preferred.1, preferred.2);
+  if rootlist_complete {
+    if let Some(nodes) = app.playlist_folder_nodes().clone() {
+      app.prune_playlist_pins(&nodes, rootlist_account);
+    }
+  }
 
-  maybe_prompt_community_pin(&mut app);
+  reconcile_playlist_selection(app, preferred.0.as_deref(), preferred.1, preferred.2);
+
+  maybe_prompt_community_pin(app);
 }
 
 /// Offer the one-time community-pin hide prompt once the full playlist list is
@@ -1955,7 +1995,11 @@ impl LibraryNetwork for Network {
     playlist_id: PlaylistId<'static>,
   ) {
     match self.library_remove_uris(&[playlist_id.uri()]).await {
-      Ok(_) => self.app.lock().await.dispatch(IoEvent::GetPlaylists),
+      Ok(_) => {
+        let mut app = self.app.lock().await;
+        app.forget_playlist_pin(&playlist_id.uri());
+        app.dispatch(IoEvent::GetPlaylists);
+      }
       Err(e) => self.handle_error(anyhow!(e)).await,
     }
   }
@@ -2206,6 +2250,106 @@ mod tests {
   use chrono::{Duration as ChronoDuration, Utc};
   use rspotify::model::{artist::SimplifiedArtist, track::FullTrack};
   use std::collections::{HashMap, HashSet};
+
+  #[test]
+  fn publishing_a_refresh_keeps_followed_pins_missing_from_the_rootlist() {
+    use crate::core::state::{self, PersistedRuntimeState};
+    use crate::core::test_helpers::playlist_info;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.yml");
+    let playlist = playlist_info("followed", "Followed", "me", false);
+    let uri = playlist.uri.clone();
+    let mut app = App::default();
+    app.state_path = Some(path.clone());
+    app.user_config.behavior.pin_community_playlist = false;
+    app.runtime_state.pinned_playlists = vec![uri.clone()];
+    app.runtime_state.playlist_pin_accounts = [(uri.clone(), "account-a".into())].into();
+    state::save(
+      &path,
+      &PersistedRuntimeState {
+        pinned_playlists: Some(vec![uri.clone()]),
+        playlist_pin_accounts: Some(app.runtime_state.playlist_pin_accounts.clone()),
+        ..Default::default()
+      },
+    )
+    .unwrap();
+    let generation = app.playlist_refresh_generation;
+
+    publish_playlists_refresh(
+      &mut app,
+      vec![playlist],
+      Some(Vec::new()),
+      true,
+      Some("account-a"),
+      generation,
+      (None, 0, None),
+      (None, 0, None),
+    );
+
+    assert!(app.is_playlist_pinned(&uri));
+    let saved = state::load(&path).unwrap();
+    assert_eq!(saved.pinned_playlists.unwrap(), [uri]);
+    assert_eq!(
+      saved.playlist_pin_accounts.unwrap(),
+      app.runtime_state.playlist_pin_accounts
+    );
+  }
+
+  #[test]
+  fn publishing_a_refresh_prunes_only_a_complete_current_rootlist_for_the_pins_account() {
+    use crate::core::state::{self, PersistedRuntimeState};
+    for (complete, nodes_present, account, stale, pruned) in [
+      (true, true, Some("account-a"), false, true),
+      (false, true, Some("account-a"), false, false),
+      (true, false, Some("account-a"), false, false),
+      (true, true, Some("account-b"), false, false),
+      (true, true, None, false, false),
+      (true, true, Some("account-a"), true, false),
+    ] {
+      let dir = tempfile::tempdir().unwrap();
+      let path = dir.path().join("state.yml");
+      let uri = "spotify:playlist:missing".to_string();
+      let mut app = App::default();
+      app.state_path = Some(path.clone());
+      app.user_config.behavior.pin_community_playlist = false;
+      app.runtime_state.pinned_playlists = vec![uri.clone()];
+      app.runtime_state.playlist_pin_accounts = [(uri.clone(), "account-a".into())].into();
+      state::save(
+        &path,
+        &PersistedRuntimeState {
+          pinned_playlists: Some(vec![uri.clone()]),
+          playlist_pin_accounts: Some(app.runtime_state.playlist_pin_accounts.clone()),
+          ..Default::default()
+        },
+      )
+      .unwrap();
+      let generation = app.playlist_refresh_generation + u64::from(stale);
+      publish_playlists_refresh(
+        &mut app,
+        Vec::new(),
+        nodes_present.then(Vec::new),
+        complete,
+        account,
+        generation,
+        (None, 0, None),
+        (None, 0, None),
+      );
+      assert_eq!(
+        !app.is_playlist_pinned(&uri),
+        pruned,
+        "complete={complete} nodes={nodes_present} stale={stale}"
+      );
+      assert_eq!(
+        !state::load(&path)
+          .unwrap()
+          .pinned_playlists
+          .unwrap()
+          .contains(&uri),
+        pruned
+      );
+    }
+  }
 
   #[test]
   fn a_whole_playlist_read_asks_for_full_pages() {
@@ -3127,7 +3271,7 @@ mod tests {
 #[cfg(feature = "streaming")]
 async fn fetch_rootlist_folders(
   session: Option<&librespot_core::Session>,
-) -> Option<Vec<PlaylistFolderNode>> {
+) -> Option<(Vec<PlaylistFolderNode>, bool)> {
   let session = session?;
 
   let bytes = match session.spclient().get_rootlist(0, Some(100_000)).await {
@@ -3140,7 +3284,49 @@ async fn fetch_rootlist_folders(
     Message::parse_from_bytes(&bytes).ok()?;
 
   let contents = selected.contents.as_ref()?;
-  Some(parse_rootlist_items(&contents.items))
+  Some((
+    parse_rootlist_items(&contents.items),
+    rootlist_response_is_complete(&selected),
+  ))
+}
+
+#[cfg(feature = "streaming")]
+fn rootlist_response_is_complete(
+  selected: &librespot_protocol::playlist4_external::SelectedListContent,
+) -> bool {
+  selected.contents.as_ref().is_some_and(|contents| {
+    contents.pos() == 0
+      && !contents.truncated()
+      && selected.length.is_some_and(|length| {
+        usize::try_from(length).is_ok_and(|length| length <= contents.items.len())
+      })
+  })
+}
+
+#[cfg(all(test, feature = "streaming"))]
+mod rootlist_pin_tests {
+  use super::*;
+  use librespot_protocol::playlist4_external::{Item, ListItems, SelectedListContent};
+
+  #[test]
+  fn only_a_complete_rootlist_can_prune_pins() {
+    let mut response = SelectedListContent::new();
+    assert!(!rootlist_response_is_complete(&response));
+    response.contents = protobuf::MessageField::some(ListItems::new());
+    assert!(!rootlist_response_is_complete(&response));
+    response.set_length(0);
+    assert!(rootlist_response_is_complete(&response));
+    response.contents.as_mut().unwrap().set_truncated(true);
+    assert!(!rootlist_response_is_complete(&response));
+    response.contents.as_mut().unwrap().set_truncated(false);
+    response.contents.as_mut().unwrap().set_pos(1);
+    assert!(!rootlist_response_is_complete(&response));
+    response.contents.as_mut().unwrap().set_pos(0);
+    response.set_length(1);
+    assert!(!rootlist_response_is_complete(&response));
+    response.contents.as_mut().unwrap().items.push(Item::new());
+    assert!(rootlist_response_is_complete(&response));
+  }
 }
 
 /// Playlist ids that appear in the librespot rootlist but not in the Web API
