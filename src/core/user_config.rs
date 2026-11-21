@@ -756,6 +756,7 @@ pub struct BehaviorConfigString {
   pub enable_lyrics: Option<bool>,
   pub announcement_feed_url: Option<String>,
   pub enable_monthly_recap_prompt: Option<bool>,
+  pub now_playing_panel_on_startup: Option<bool>,
   pub pin_community_playlist: Option<bool>,
   pub liked_icon: Option<String>,
   pub shuffle_icon: Option<String>,
@@ -888,6 +889,9 @@ pub struct BehaviorConfig {
   pub enable_lyrics: bool,
   pub announcement_feed_url: Option<String>,
   pub enable_monthly_recap_prompt: bool,
+  /// Open the terminal app's now playing panel (Enter on the playbar) at
+  /// startup instead of leaving it closed.
+  pub now_playing_panel_on_startup: bool,
   /// Pin the public "spotatui community" playlist to the top of the Spotify
   /// playlists sidebar.
   pub pin_community_playlist: bool,
@@ -1443,6 +1447,7 @@ impl UserConfig {
         enable_lyrics: true,
         announcement_feed_url: None,
         enable_monthly_recap_prompt: true,
+        now_playing_panel_on_startup: false,
         pin_community_playlist: true,
         liked_icon: "♥".to_string(),
         shuffle_icon: "🔀".to_string(),
@@ -1892,6 +1897,10 @@ impl UserConfig {
 
     if let Some(enable_monthly_recap_prompt) = behavior_config.enable_monthly_recap_prompt {
       self.behavior.enable_monthly_recap_prompt = enable_monthly_recap_prompt;
+    }
+
+    if let Some(now_playing_panel_on_startup) = behavior_config.now_playing_panel_on_startup {
+      self.behavior.now_playing_panel_on_startup = now_playing_panel_on_startup;
     }
 
     if let Some(pin_community_playlist) = behavior_config.pin_community_playlist {
@@ -2589,6 +2598,7 @@ impl UserConfig {
       enable_lyrics: Some(self.behavior.enable_lyrics),
       announcement_feed_url: self.behavior.announcement_feed_url.clone(),
       enable_monthly_recap_prompt: Some(self.behavior.enable_monthly_recap_prompt),
+      now_playing_panel_on_startup: Some(self.behavior.now_playing_panel_on_startup),
       pin_community_playlist: Some(self.behavior.pin_community_playlist),
       liked_icon: Some(self.behavior.liked_icon.clone()),
       shuffle_icon: Some(self.behavior.shuffle_icon.clone()),

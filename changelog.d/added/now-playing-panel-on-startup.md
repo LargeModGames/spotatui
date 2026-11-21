@@ -1,0 +1,1 @@
+- **Open the now playing panel at startup**: set `behavior.now_playing_panel_on_startup: true` in `config.yml` and the terminal app starts with the now playing panel (cover, details and up next) open, as if you had pressed `Enter` on the playbar. It is off by default, and `Enter` on the playbar still closes it.

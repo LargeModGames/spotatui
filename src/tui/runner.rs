@@ -267,6 +267,7 @@ pub async fn start_ui(
     app.view.terminal_input_caps.keyboard_enhancement_enabled = keyboard_enhancement_enabled;
     app.view.terminal_input_caps.ctrl_punct_reliable = app::CapabilityState::Unknown;
     app.keep_pane_focus_in_layout();
+    app.open_now_playing_panel_on_startup();
   }
   let mut route_depth = app.lock().await.navigation_depth();
 
