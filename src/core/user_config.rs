@@ -167,6 +167,36 @@ pub fn parse_update_delay_secs(value: &str) -> Result<u64, String> {
     .map_err(|_| "Invalid numeric value or unknown suffix".to_string())
 }
 
+/// Parse an audio cache limit in bytes, with optional binary K, M or G units.
+/// Empty values and zero (with or without a unit) mean unlimited.
+pub fn parse_audio_cache_limit(value: &str) -> Result<Option<u64>, String> {
+  let value = value.trim();
+  if value.is_empty() {
+    return Ok(None);
+  }
+
+  let (amount, multiplier) = match value.as_bytes().last() {
+    Some(b'K' | b'k') => (&value[..value.len() - 1], 1024_u64),
+    Some(b'M' | b'm') => (&value[..value.len() - 1], 1024_u64.pow(2)),
+    Some(b'G' | b'g') => (&value[..value.len() - 1], 1024_u64.pow(3)),
+    _ => (value, 1_u64),
+  };
+  if amount.is_empty() || !amount.bytes().all(|digit| digit.is_ascii_digit()) {
+    return Err("Use a byte count or a K, M or G suffix".to_string());
+  }
+
+  let bytes = amount
+    .bytes()
+    .try_fold(0_u64, |size, digit| {
+      size
+        .checked_mul(10)
+        .and_then(|size| size.checked_add(u64::from(digit - b'0')))
+    })
+    .and_then(|size| size.checked_mul(multiplier))
+    .ok_or_else(|| "Size is too large".to_string())?;
+  Ok(Some(bytes).filter(|&size| size != 0))
+}
+
 #[cfg(feature = "self-update")]
 pub fn format_update_delay_secs(secs: u64) -> String {
   if secs >= 86400 {
@@ -815,6 +845,7 @@ pub struct BehaviorConfigString {
   pub streaming_device_name: Option<String>,
   pub streaming_bitrate: Option<u16>,
   pub streaming_audio_cache: Option<bool>,
+  pub streaming_audio_cache_limit: Option<String>,
   pub streaming_autoplay: Option<bool>,
   pub sync_token: Option<String>,
   pub local_music_path: Option<String>,
@@ -1008,6 +1039,8 @@ pub struct BehaviorConfig {
   pub streaming_bitrate: u16,
   /// Keep played audio in the cache directory.
   pub streaming_audio_cache: bool,
+  /// Maximum size of the native streaming audio cache, e.g. "1G". Empty or "0" means unlimited.
+  pub streaming_audio_cache_limit: String,
   /// Play related songs when a list ends. Spotify keeps this per device,
   /// so librespot cannot read it from the account.
   pub streaming_autoplay: bool,
@@ -1505,6 +1538,7 @@ impl UserConfig {
         streaming_device_name: default_device_name(),
         streaming_bitrate: STREAMING_BITRATE_DEFAULT,
         streaming_audio_cache: false,
+        streaming_audio_cache_limit: String::new(),
         streaming_autoplay: true,
         sync_token: None,
         local_music_path: dirs::audio_dir().map(|p| p.to_string_lossy().to_string()),
@@ -2105,6 +2139,18 @@ impl UserConfig {
     if let Some(audio_cache) = behavior_config.streaming_audio_cache {
       self.behavior.streaming_audio_cache = audio_cache;
     }
+    if let Some(limit) = behavior_config.streaming_audio_cache_limit {
+      // Invalid values warn and fall back to unlimited, like most settings.
+      self.behavior.streaming_audio_cache_limit = match parse_audio_cache_limit(&limit) {
+        Ok(_) => limit.trim().to_string(),
+        Err(e) => {
+          log::warn!(
+            "[config] behavior.streaming_audio_cache_limit: {e}; using no cache size limit"
+          );
+          String::new()
+        }
+      };
+    }
     if let Some(autoplay) = behavior_config.streaming_autoplay {
       self.behavior.streaming_autoplay = autoplay;
     }
@@ -2666,6 +2712,7 @@ impl UserConfig {
       streaming_device_name: Some(self.behavior.streaming_device_name.clone()),
       streaming_bitrate: Some(self.behavior.streaming_bitrate),
       streaming_audio_cache: Some(self.behavior.streaming_audio_cache),
+      streaming_audio_cache_limit: Some(self.behavior.streaming_audio_cache_limit.clone()),
       streaming_autoplay: Some(self.behavior.streaming_autoplay),
       // --- Phase 2/3/6 new fields (persist whatever the user set) ---
       gauge_filled_icon: Some(self.behavior.gauge_filled_icon.clone()),
@@ -3482,6 +3529,129 @@ mod tests {
     let mut config = UserConfig::new();
 
     assert!(config.load_behaviorconfig(behavior).is_err());
+  }
+
+  #[test]
+  fn audio_cache_limit_accepts_byte_counts_and_binary_units() {
+    use super::parse_audio_cache_limit;
+
+    for (value, expected) in [
+      ("1G", 1_073_741_824),
+      ("512M", 536_870_912),
+      ("10K", 10_240),
+      ("1048576", 1_048_576),
+      ("1g", 1_073_741_824),
+      ("512m", 536_870_912),
+      ("10k", 10_240),
+      (" 1G ", 1_073_741_824),
+      ("18446744073709551615", u64::MAX),
+    ] {
+      assert_eq!(
+        parse_audio_cache_limit(value),
+        Ok(Some(expected)),
+        "{value}"
+      );
+    }
+  }
+
+  #[test]
+  fn audio_cache_limit_treats_empty_and_zero_as_unlimited() {
+    use super::parse_audio_cache_limit;
+
+    for value in ["", "  ", "0", "0K", "0M", "0G", "0k", "0m", "0g"] {
+      assert_eq!(parse_audio_cache_limit(value), Ok(None), "{value:?}");
+    }
+  }
+
+  #[test]
+  fn audio_cache_limit_rejects_invalid_sizes_and_overflow() {
+    use super::parse_audio_cache_limit;
+
+    for value in [
+      "abc",
+      "1.5G",
+      "-1",
+      "+1",
+      "1T",
+      "G",
+      "1 G",
+      "18446744073709551616",
+      "18446744073709551615G",
+    ] {
+      assert!(parse_audio_cache_limit(value).is_err(), "{value}");
+    }
+  }
+
+  #[test]
+  fn audio_cache_limit_loads_and_round_trips() {
+    use super::{BehaviorConfigString, UserConfig, UserConfigPaths, UserConfigString};
+
+    let mut config = UserConfig::new();
+    assert!(config.behavior.streaming_audio_cache_limit.is_empty());
+    let behavior: BehaviorConfigString =
+      serde_yaml::from_str("streaming_audio_cache: true\nstreaming_audio_cache_limit: 1G\n")
+        .unwrap();
+    config.load_behaviorconfig(behavior).unwrap();
+    assert!(config.behavior.streaming_audio_cache);
+    assert_eq!(config.behavior.streaming_audio_cache_limit, "1G");
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.yml");
+    config.path_to_config = Some(UserConfigPaths {
+      config_file_path: path.clone(),
+    });
+    config.save_config().unwrap();
+    let saved: UserConfigString =
+      serde_yaml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    assert_eq!(
+      saved
+        .behavior
+        .unwrap()
+        .streaming_audio_cache_limit
+        .as_deref(),
+      Some("1G")
+    );
+
+    let behavior: BehaviorConfigString =
+      serde_yaml::from_str("streaming_audio_cache_limit: ' 512M '\n").unwrap();
+    config.load_behaviorconfig(behavior).unwrap();
+    assert_eq!(config.behavior.streaming_audio_cache_limit, "512M");
+  }
+
+  #[test]
+  fn invalid_audio_cache_limit_warns_and_falls_back_to_unlimited() {
+    use super::{BehaviorConfigString, UserConfig};
+
+    let mut config = UserConfig::new();
+    let behavior: BehaviorConfigString =
+      serde_yaml::from_str("streaming_audio_cache_limit: 1G").unwrap();
+    config.load_behaviorconfig(behavior).unwrap();
+    assert_eq!(config.behavior.streaming_audio_cache_limit, "1G");
+
+    for cache_enabled in [false, true] {
+      for invalid in ["abc", "18446744073709551616"] {
+        let behavior: BehaviorConfigString = serde_yaml::from_str(&format!(
+          "streaming_audio_cache: {cache_enabled}\nstreaming_audio_cache_limit: {invalid}\n"
+        ))
+        .unwrap();
+        config.load_behaviorconfig(behavior).unwrap();
+        assert!(config.behavior.streaming_audio_cache_limit.is_empty());
+
+        // Reloading a valid value afterwards stores it again.
+        let behavior: BehaviorConfigString =
+          serde_yaml::from_str("streaming_audio_cache_limit: 512M").unwrap();
+        config.load_behaviorconfig(behavior).unwrap();
+        assert_eq!(config.behavior.streaming_audio_cache_limit, "512M");
+
+        let behavior: BehaviorConfigString = serde_yaml::from_str(&format!(
+          "streaming_audio_cache: {cache_enabled}\nstreaming_audio_cache_limit: {invalid}\n"
+        ))
+        .unwrap();
+        config.load_behaviorconfig(behavior).unwrap();
+        assert!(config.behavior.streaming_audio_cache_limit.is_empty());
+        assert_eq!(config.behavior.streaming_audio_cache, cache_enabled);
+      }
+    }
   }
 
   #[cfg(feature = "art-decode")]
