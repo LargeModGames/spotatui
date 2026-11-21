@@ -10,12 +10,15 @@ import type { Source } from "./bindings/Source";
 import type { SourcePlaylists } from "./bindings/SourcePlaylists";
 import type { TrackInfo } from "./bindings/TrackInfo";
 import type { OpenView, View } from "./nav";
+import type { MenuEntry } from "./trackMenuModel";
 
 /** A sidebar row of the active source: a playlist, a folder or a radio station. */
 export interface SidebarRow {
   uri: string;
   name: string;
   count: number | null;
+  /** Local Spotify pin membership, including copies inside folders. */
+  pinned: boolean;
   /** The cover; optional so a hand-made row needs none. */
   image?: string | null;
 }
@@ -55,14 +58,16 @@ export function playlistsFor(
       uri: station.uri ?? station.name,
       name: station.name,
       count: null,
+      pinned: false,
       image: station.image_url,
     }));
   // A Music row whose count Music has not given carries a placeholder 0.
   const uncounted = new Set(
     source === "AppleMusic" ? playlists.apple_music_uncounted : [],
   );
+  const pinned = new Set(source === "Spotify" ? playlists.pinned : []);
   return playlists[PLAYLIST_KEYS[source]].map((playlist) => {
-    const row = sidebarRow(playlist);
+    const row = sidebarRow(playlist, pinned.has(playlist.uri));
     return uncounted.has(row.uri) ? { ...row, count: null } : row;
   });
 }
@@ -153,11 +158,12 @@ export function playlistImage(
 }
 
 /** The sidebar row of a playlist. */
-export function sidebarRow(playlist: PlaylistInfo): SidebarRow {
+export function sidebarRow(playlist: PlaylistInfo, pinned = false): SidebarRow {
   return {
     uri: playlist.uri,
     name: playlist.name,
     count: playlist.track_count,
+    pinned,
     image: playlist.image_url,
   };
 }
@@ -198,6 +204,40 @@ export interface PlaylistRemoval extends PlaylistRemovalTarget {
   body: string;
   /** The dialog's confirm button. */
   confirm: string;
+}
+
+/** A row's local pin and optional removal are independent menu operations. */
+export interface PlaylistMenuTarget {
+  uri: string;
+  name: string;
+  pinned: boolean;
+  pinsEditable: boolean;
+  removal: PlaylistRemovalTarget | null;
+}
+
+/** Labels are resolved when the menu renders, so an open menu follows language changes. */
+export function playlistMenuItems(
+  target: PlaylistMenuTarget,
+  s: GuiStrings = EN,
+): MenuEntry[] {
+  const items: MenuEntry[] = [];
+  if (target.pinsEditable)
+    items.push({
+      id: "pin-playlist",
+      label: target.pinned ? s.unpin_playlist : s.pin_playlist,
+      kind: "action",
+      action: {
+        SetPlaylistPinned: { uri: target.uri, pinned: !target.pinned },
+      },
+    });
+  if (target.removal)
+    items.push({
+      id: "remove-library",
+      label: removalText(target.removal, s).label,
+      kind: "action",
+      action: target.removal.action,
+    });
+  return items;
 }
 
 /** What removing a sidebar playlist means; null where the source cannot remove one. */
@@ -292,6 +332,7 @@ export function libraryTree(
   nodes: LibraryNode[],
   playlists: PlaylistInfo[],
   expanded: ReadonlySet<string>,
+  pinned: ReadonlySet<string> = new Set(),
 ): TreeRow[] {
   const byUri = new Map(playlists.map((playlist) => [playlist.uri, playlist]));
   const placed = new Set<string>();
@@ -314,13 +355,21 @@ export function libraryTree(
       placed.add(node.uri);
       const playlist = byUri.get(node.uri);
       if (shown && playlist)
-        rows.push({ kind: "playlist", depth, row: sidebarRow(playlist) });
+        rows.push({
+          kind: "playlist",
+          depth,
+          row: sidebarRow(playlist, pinned.has(playlist.uri)),
+        });
     }
   };
   walk(nodes, 0, true);
   for (const playlist of playlists)
     if (!placed.has(playlist.uri))
-      rows.push({ kind: "playlist", depth: 0, row: sidebarRow(playlist) });
+      rows.push({
+        kind: "playlist",
+        depth: 0,
+        row: sidebarRow(playlist, pinned.has(playlist.uri)),
+      });
   return rows;
 }
 

@@ -250,6 +250,7 @@ fn update_plugins(config_dir: &Path, name: Option<&String>) -> Result<()> {
   }
 
   let mut changed = false;
+  let mut failed = 0;
   for target in targets {
     let dir = plugins_dir.join(&target.name);
     if !dir.is_dir() {
@@ -281,12 +282,19 @@ fn update_plugins(config_dir: &Path, name: Option<&String>) -> Result<()> {
           );
         }
       }
-      Err(e) => println!("  {}: update failed: {e}", target.name),
+      Err(e) => {
+        eprintln!("  {}: update failed: {e}", target.name);
+        failed += 1;
+      }
     }
   }
 
+  // Record the plugins that did update even when others failed.
   if changed {
     save_lock(&lock_path, &lock)?;
+  }
+  if failed > 0 {
+    bail!("{failed} plugin(s) failed to update");
   }
   Ok(())
 }
@@ -589,8 +597,85 @@ fn short_rev(rev: &str) -> &str {
 
 // --- git (thin wrappers over the system `git`) ---
 
+/// Repository, namespace and discovery overrides. Keep transport, credentials
+/// and user config, including settings supplied through the environment.
+fn repository_git_override(key: &std::ffi::OsStr) -> bool {
+  let key = key.to_string_lossy().to_ascii_uppercase();
+  matches!(
+    key.as_str(),
+    "GIT_DIR"
+      | "GIT_WORK_TREE"
+      | "GIT_INDEX_FILE"
+      | "GIT_OBJECT_DIRECTORY"
+      | "GIT_ALTERNATE_OBJECT_DIRECTORIES"
+      | "GIT_COMMON_DIR"
+      | "GIT_NAMESPACE"
+      | "GIT_CEILING_DIRECTORIES"
+      | "GIT_DISCOVERY_ACROSS_FILESYSTEM"
+      | "GIT_IMPLICIT_WORK_TREE"
+      | "GIT_GRAFT_FILE"
+      | "GIT_NO_REPLACE_OBJECTS"
+      | "GIT_REPLACE_REF_BASE"
+      | "GIT_PREFIX"
+      | "GIT_SHALLOW_FILE"
+      | "GIT_CONFIG"
+  )
+}
+
+/// Do not inherit a hook's or dotfiles alias's repository or index overrides.
+fn git_command(dir: &Path) -> ProcessCommand {
+  let mut command = ProcessCommand::new("git");
+  for (key, _) in std::env::vars_os() {
+    if repository_git_override(&key) {
+      command.env_remove(key);
+    }
+  }
+  command
+    .args(["-c", "protocol.ext.allow=never"])
+    .arg("-C")
+    .arg(dir);
+  command
+}
+
+/// Resolve and pin both paths, including a linked worktree's `.git` file.
+fn plugin_git_command(dir: &Path) -> Result<ProcessCommand> {
+  let invalid = || {
+    anyhow!(
+    "plugin directory {} is not its own git checkout; reinstall with `spotatui plugin add <repo> --force`",
+    dir.display()
+  )
+  };
+  // Canonical paths are for comparison only: on Windows they use the `\\?\` prefix.
+  let canonical_dir = std::fs::canonicalize(dir)?;
+  let dir = std::path::absolute(dir)?;
+  if !dir.join(".git").exists() {
+    return Err(invalid());
+  }
+  let out = git_command(&dir)
+    .args(["rev-parse", "--show-toplevel", "--absolute-git-dir"])
+    .output()
+    .context("checking plugin git checkout")?;
+  if !out.status.success() {
+    return Err(invalid());
+  }
+  let paths = String::from_utf8(out.stdout).context("reading plugin git paths")?;
+  let mut paths = paths.lines();
+  let top = paths.next().ok_or_else(invalid)?;
+  let git_dir = paths.next().ok_or_else(invalid)?;
+  if std::fs::canonicalize(top)? != canonical_dir {
+    return Err(invalid());
+  }
+  let mut command = git_command(&dir);
+  let mut git_arg = std::ffi::OsString::from("--git-dir=");
+  git_arg.push(git_dir);
+  let mut work_arg = std::ffi::OsString::from("--work-tree=");
+  work_arg.push(&dir);
+  command.arg(git_arg).arg(work_arg);
+  Ok(command)
+}
+
 fn ensure_git() -> Result<()> {
-  let out = ProcessCommand::new("git")
+  let out = git_command(Path::new("."))
     .arg("--version")
     .output()
     .map_err(|_| anyhow!("`git` was not found on your PATH. Install git to manage plugins."))?;
@@ -601,10 +686,23 @@ fn ensure_git() -> Result<()> {
 }
 
 fn git_clone(url: &str, dest: &Path) -> Result<()> {
+  let parent = std::path::absolute(
+    dest
+      .parent()
+      .context("plugin clone has no parent directory")?,
+  )?;
+  let dest = parent.join(
+    dest
+      .file_name()
+      .context("plugin clone has no directory name")?,
+  );
+  let mut command = git_command(&parent);
+  if let Some(global) = std::env::var_os("GIT_CONFIG_GLOBAL").filter(|path| !path.is_empty()) {
+    command.env("GIT_CONFIG_GLOBAL", std::path::absolute(global)?);
+  }
   // `--` separates options from positionals so a URL is never mistaken for a flag.
   // An `ext::` URL runs a command; git blocks it by default, but a user config can permit it.
-  let status = ProcessCommand::new("git")
-    .args(["-c", "protocol.ext.allow=never"])
+  let status = command
     .args(["clone", "--depth", "1", "--"])
     .arg(url)
     .arg(dest)
@@ -617,9 +715,7 @@ fn git_clone(url: &str, dest: &Path) -> Result<()> {
 }
 
 fn git_head_rev(dir: &Path) -> Result<String> {
-  let out = ProcessCommand::new("git")
-    .arg("-C")
-    .arg(dir)
+  let out = plugin_git_command(dir)?
     .args(["rev-parse", "HEAD"])
     .output()
     .context("running `git rev-parse`")?;
@@ -637,10 +733,7 @@ fn git_update(dir: &Path) -> Result<()> {
 }
 
 fn run_git(dir: &Path, args: &[&str]) -> Result<()> {
-  let out = ProcessCommand::new("git")
-    .args(["-c", "protocol.ext.allow=never"])
-    .arg("-C")
-    .arg(dir)
+  let out = plugin_git_command(dir)?
     .args(args)
     .output()
     .with_context(|| format!("running `git {}`", args.join(" ")))?;
@@ -654,6 +747,539 @@ fn run_git(dir: &Path, args: &[&str]) -> Result<()> {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  fn fixture_git(dir: &Path, args: &[&str]) -> String {
+    let mut command = ProcessCommand::new("git");
+    for (key, _) in std::env::vars_os() {
+      if key
+        .to_string_lossy()
+        .to_ascii_uppercase()
+        .starts_with("GIT_")
+      {
+        command.env_remove(key);
+      }
+    }
+    let out = command
+      .arg("-C")
+      .arg(dir)
+      .args([
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.invalid",
+        "-c",
+        "commit.gpgsign=false",
+        "-c",
+        "core.hooksPath=",
+      ])
+      .args(args)
+      .output()
+      .unwrap();
+    assert!(
+      out.status.success(),
+      "git {args:?}: {}",
+      String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8(out.stdout).unwrap().trim().to_string()
+  }
+
+  /// A local bare origin and a seed checkout; no remote service is contacted.
+  fn fixture_origin(root: &Path, name: &str, entry: &str) -> (PathBuf, PathBuf) {
+    let seed = root.join(format!("{name}-seed"));
+    let origin = root.join(format!("{name}.git"));
+    fixture_git(
+      root,
+      &[
+        "init",
+        "-q",
+        "--bare",
+        "--initial-branch=main",
+        origin.to_str().unwrap(),
+      ],
+    );
+    fixture_git(
+      root,
+      &[
+        "init",
+        "-q",
+        "--initial-branch=main",
+        seed.to_str().unwrap(),
+      ],
+    );
+    std::fs::write(seed.join(entry), "original\n").unwrap();
+    fixture_git(&seed, &["add", "."]);
+    fixture_git(&seed, &["commit", "-qm", "Initial"]);
+    fixture_git(
+      &seed,
+      &["remote", "add", "origin", origin.to_str().unwrap()],
+    );
+    fixture_git(&seed, &["push", "-q", "origin", "main"]);
+    (seed, origin)
+  }
+
+  fn origin_url(origin: &Path) -> String {
+    url::Url::from_file_path(origin).unwrap().to_string()
+  }
+
+  #[test]
+  fn plugin_update_leaves_the_enclosing_dotfiles_repository_untouched() {
+    if ensure_git().is_err() {
+      return;
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let (_, origin) = fixture_origin(temp.path(), "dotfiles", "config.yml");
+    let dotfiles = temp.path().join("dotfiles");
+    fixture_git(
+      temp.path(),
+      &[
+        "clone",
+        "-q",
+        origin.to_str().unwrap(),
+        dotfiles.to_str().unwrap(),
+      ],
+    );
+    let config = dotfiles.join("spotatui");
+    let (_, plugin_origin) = fixture_origin(temp.path(), "example", "main.lua");
+    add_plugin(&config, &origin_url(&plugin_origin), false).unwrap();
+    let plugin_dir = config.join("plugins/example");
+    // A restored config directory has the plugin and lock, but no nested repository.
+    std::fs::remove_dir_all(plugin_dir.join(".git")).unwrap();
+    std::fs::write(dotfiles.join("local.txt"), "unpushed commit").unwrap();
+    fixture_git(&dotfiles, &["add", "local.txt"]);
+    fixture_git(&dotfiles, &["commit", "-qm", "Local"]);
+    std::fs::write(dotfiles.join("config.yml"), "uncommitted settings\n").unwrap();
+    let head = fixture_git(&dotfiles, &["rev-parse", "HEAD"]);
+    let lock = std::fs::read(lock_path(&config)).unwrap();
+
+    let _ = update_plugins(&config, None);
+
+    assert_eq!(
+      std::fs::read_to_string(dotfiles.join("config.yml")).unwrap(),
+      "uncommitted settings\n"
+    );
+    assert_eq!(fixture_git(&dotfiles, &["rev-parse", "HEAD"]), head);
+    assert!(!dotfiles.join(".git/shallow").exists());
+    assert!(!dotfiles.join(".git/FETCH_HEAD").exists());
+    assert_eq!(std::fs::read(lock_path(&config)).unwrap(), lock);
+    let error = git_update(&plugin_dir).unwrap_err().to_string();
+    assert!(error.contains("not its own git checkout"), "{error}");
+  }
+
+  #[test]
+  fn plugin_git_environment_child() {
+    let Some(config) = std::env::var_os("SPOTATUI_PLUGIN_TEST_CONFIG") else {
+      return;
+    };
+    let config = PathBuf::from(config);
+    let blocked = git_command(Path::new("."))
+      .args(["ls-remote", "ext::git --version"])
+      .output()
+      .unwrap();
+    assert!(!blocked.status.success());
+    assert!(
+      String::from_utf8_lossy(&blocked.stderr).contains("transport 'ext' not allowed"),
+      "{}",
+      String::from_utf8_lossy(&blocked.stderr)
+    );
+    if std::env::var_os("SPOTATUI_PLUGIN_TEST_TRANSPORT").is_some() {
+      let command = git_command(Path::new("."));
+      for key in [
+        "GIT_SSL_CAINFO",
+        "GIT_SSL_NO_VERIFY",
+        "GIT_SSH_COMMAND",
+        "GIT_SSH",
+        "GIT_SSH_VARIANT",
+        "GIT_ASKPASS",
+        "GIT_TERMINAL_PROMPT",
+        "GIT_EXEC_PATH",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_SYSTEM",
+        "GIT_CONFIG_NOSYSTEM",
+        "GIT_PROXY_COMMAND",
+        "http_proxy",
+        "https_proxy",
+        "ALL_PROXY",
+        "NO_PROXY",
+      ] {
+        assert!(std::env::var_os(key).is_some(), "missing fixture {key}");
+        assert!(
+          !command
+            .get_envs()
+            .any(|(name, value)| name == key && value.is_none()),
+          "removed transport setting {key}"
+        );
+      }
+    }
+    if let Some(url) = std::env::var_os("SPOTATUI_PLUGIN_TEST_ADD") {
+      add_plugin(&config, url.to_str().unwrap(), false).unwrap();
+    } else {
+      update_plugins(&config, None).unwrap();
+    }
+  }
+
+  #[test]
+  fn plugin_git_preserves_transport_settings_and_custom_global_config() {
+    if ensure_git().is_err() {
+      return;
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let (seed, origin) = fixture_origin(temp.path(), "example", "main.lua");
+    let config = temp.path().join("config");
+    let global = temp.path().join("gitconfig");
+    let system = temp.path().join("system-gitconfig");
+    std::fs::write(&system, "").unwrap();
+    // This nonexistent local URL can work only if Git reads the custom global file.
+    let url = "file:///spotatui-plugin-transport-fixture/example.git";
+    fixture_git(
+      temp.path(),
+      &[
+        "config",
+        "--file",
+        global.to_str().unwrap(),
+        &format!("url.{}.insteadOf", origin_url(&origin)),
+        url,
+      ],
+    );
+    for installing in [true, false] {
+      if !installing {
+        std::fs::write(seed.join("main.lua"), "-- updated\n").unwrap();
+        fixture_git(&seed, &["commit", "-qam", "Update"]);
+        fixture_git(&seed, &["push", "-q", "origin", "main"]);
+      }
+      let mut child = ProcessCommand::new(std::env::current_exe().unwrap());
+      child
+        .args([
+          "--exact",
+          "cli::plugin::tests::plugin_git_environment_child",
+          "--nocapture",
+        ])
+        .env("SPOTATUI_PLUGIN_TEST_CONFIG", &config)
+        .env("SPOTATUI_PLUGIN_TEST_TRANSPORT", "1")
+        .env("GIT_SSL_CAINFO", temp.path().join("ca.pem"))
+        .env("GIT_SSL_NO_VERIFY", "0")
+        .env("GIT_SSH_COMMAND", "ssh -oBatchMode=yes")
+        .env("GIT_SSH", "ssh")
+        .env("GIT_SSH_VARIANT", "ssh")
+        .env("GIT_ASKPASS", "spotatui-fixture-askpass")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_EXEC_PATH", fixture_git(temp.path(), &["--exec-path"]))
+        .env("GIT_CONFIG_GLOBAL", &global)
+        .env("GIT_CONFIG_SYSTEM", &system)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_PROXY_COMMAND", "spotatui-fixture-proxy")
+        .env("http_proxy", "http://127.0.0.1:9")
+        .env("https_proxy", "http://127.0.0.1:9")
+        .env("ALL_PROXY", "http://127.0.0.1:9")
+        .env("NO_PROXY", "localhost,127.0.0.1");
+      if installing {
+        child.env("SPOTATUI_PLUGIN_TEST_ADD", url);
+      } else {
+        child.env_remove("SPOTATUI_PLUGIN_TEST_ADD");
+      }
+      let out = child.output().unwrap();
+      assert!(
+        out.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+      );
+      assert!(String::from_utf8_lossy(&out.stdout).contains("1 passed"));
+      let saved = load_lock(&lock_path(&config)).unwrap();
+      assert_eq!(
+        saved.plugins[0].rev,
+        fixture_git(&seed, &["rev-parse", "HEAD"])
+      );
+      assert_eq!(
+        git_head_rev(&config.join("plugins/example")).unwrap(),
+        saved.plugins[0].rev
+      );
+    }
+  }
+
+  fn assert_environment_transport_config(installing: bool) {
+    ensure_git().unwrap();
+    for parameters in [false, true] {
+      let temp = tempfile::tempdir().unwrap();
+      let (seed, origin) = fixture_origin(temp.path(), "example", "main.lua");
+      let config = temp.path().join("config");
+      let plugin = config.join("plugins/example");
+      let url = "file:///spotatui-plugin-environment-fixture/example.git";
+      if !installing {
+        add_plugin(&config, &origin_url(&origin), false).unwrap();
+        fixture_git(&plugin, &["remote", "set-url", "origin", url]);
+        std::fs::write(seed.join("main.lua"), "-- updated\n").unwrap();
+        fixture_git(&seed, &["commit", "-qam", "Update"]);
+        fixture_git(&seed, &["push", "-q", "origin", "main"]);
+      }
+      let mut child = ProcessCommand::new(std::env::current_exe().unwrap());
+      child
+        .current_dir(temp.path())
+        .args([
+          "--exact",
+          "cli::plugin::tests::plugin_git_environment_child",
+          "--nocapture",
+        ])
+        .env("SPOTATUI_PLUGIN_TEST_CONFIG", &config);
+      let rewrite = format!("url.{}.insteadOf", origin_url(&origin));
+      if parameters {
+        child.env("GIT_CONFIG_COUNT", "0").env(
+          "GIT_CONFIG_PARAMETERS",
+          format!("'{rewrite}={url}' 'protocol.ext.allow=always'"),
+        );
+      } else {
+        child
+          .env_remove("GIT_CONFIG_PARAMETERS")
+          .env("GIT_CONFIG_COUNT", "2")
+          .env("GIT_CONFIG_KEY_0", &rewrite)
+          .env("GIT_CONFIG_VALUE_0", url)
+          .env("GIT_CONFIG_KEY_1", "protocol.ext.allow")
+          .env("GIT_CONFIG_VALUE_1", "always");
+      }
+      if installing {
+        child.env("SPOTATUI_PLUGIN_TEST_ADD", url);
+      } else {
+        child.env_remove("SPOTATUI_PLUGIN_TEST_ADD");
+      }
+      let out = child.output().unwrap();
+      assert!(
+        out.status.success(),
+        "parameters={parameters}:\n{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+      );
+      assert!(String::from_utf8_lossy(&out.stdout).contains("1 passed"));
+      let saved = load_lock(&lock_path(&config)).unwrap();
+      let expected = fixture_git(&seed, &["rev-parse", "HEAD"]);
+      assert_eq!(saved.plugins[0].rev, expected);
+      assert_eq!(git_head_rev(&plugin).unwrap(), expected);
+      assert_eq!(
+        std::fs::read_to_string(plugin.join("main.lua")).unwrap(),
+        if installing {
+          "original\n"
+        } else {
+          "-- updated\n"
+        }
+      );
+    }
+  }
+
+  #[test]
+  fn plugin_clone_preserves_environment_transport_config() {
+    assert_environment_transport_config(true);
+  }
+
+  #[test]
+  fn plugin_fetch_preserves_environment_transport_config() {
+    assert_environment_transport_config(false);
+  }
+
+  #[test]
+  fn plugin_clone_resolves_relative_global_config_from_the_callers_directory() {
+    ensure_git().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let (seed, origin) = fixture_origin(temp.path(), "example", "main.lua");
+    let config = temp.path().join("config");
+    let url = "file:///spotatui-plugin-relative-config-fixture/example.git";
+    fixture_git(
+      temp.path(),
+      &[
+        "config",
+        "--file",
+        "gitconfig",
+        &format!("url.{}.insteadOf", origin_url(&origin)),
+        url,
+      ],
+    );
+    let out = ProcessCommand::new(std::env::current_exe().unwrap())
+      .current_dir(temp.path())
+      .args([
+        "--exact",
+        "cli::plugin::tests::plugin_git_environment_child",
+        "--nocapture",
+      ])
+      .env("SPOTATUI_PLUGIN_TEST_CONFIG", &config)
+      .env("SPOTATUI_PLUGIN_TEST_ADD", url)
+      .env("GIT_CONFIG_GLOBAL", "gitconfig")
+      .output()
+      .unwrap();
+    assert!(
+      out.status.success(),
+      "{}\n{}",
+      String::from_utf8_lossy(&out.stdout),
+      String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(String::from_utf8_lossy(&out.stdout).contains("1 passed"));
+    let expected = fixture_git(&seed, &["rev-parse", "HEAD"]);
+    assert_eq!(
+      load_lock(&lock_path(&config)).unwrap().plugins[0].rev,
+      expected
+    );
+    assert_eq!(
+      git_head_rev(&config.join("plugins/example")).unwrap(),
+      expected
+    );
+  }
+
+  #[test]
+  fn plugin_git_ignores_inherited_repository_and_worktree_overrides() {
+    if ensure_git().is_err() {
+      return;
+    }
+    for extra_overrides in [false, true] {
+      let temp = tempfile::tempdir().unwrap();
+      let (_, other_origin) = fixture_origin(temp.path(), "other", "notes.txt");
+      let other = temp.path().join("other");
+      fixture_git(
+        temp.path(),
+        &[
+          "clone",
+          "-q",
+          other_origin.to_str().unwrap(),
+          other.to_str().unwrap(),
+        ],
+      );
+      fixture_git(&other, &["commit", "-qm", "Local", "--allow-empty"]);
+      std::fs::write(other.join("notes.txt"), "uncommitted notes\n").unwrap();
+      let other_head = fixture_git(&other, &["rev-parse", "HEAD"]);
+      let other_index = std::fs::read(other.join(".git/index")).unwrap();
+      let (seed, origin) = fixture_origin(temp.path(), "example", "main.lua");
+      for installing in [false, true] {
+        let config = temp
+          .path()
+          .join(if installing { "install" } else { "update" });
+        if !installing {
+          add_plugin(&config, &origin_url(&origin), false).unwrap();
+          std::fs::write(seed.join("main.lua"), "-- updated\n").unwrap();
+          fixture_git(&seed, &["commit", "-qam", "Update"]);
+          fixture_git(&seed, &["push", "-q", "origin", "main"]);
+        }
+        let mut child = ProcessCommand::new(std::env::current_exe().unwrap());
+        child
+          .args([
+            "--exact",
+            "cli::plugin::tests::plugin_git_environment_child",
+            "--nocapture",
+          ])
+          .env("SPOTATUI_PLUGIN_TEST_CONFIG", &config)
+          .env("GIT_DIR", other.join(".git"));
+        if installing {
+          child.env("SPOTATUI_PLUGIN_TEST_ADD", origin_url(&origin));
+        } else {
+          child.env_remove("SPOTATUI_PLUGIN_TEST_ADD");
+        }
+        if extra_overrides {
+          child
+            .env("GIT_WORK_TREE", &other)
+            .env("GIT_COMMON_DIR", other.join(".git"))
+            .env("GIT_INDEX_FILE", other.join(".git/index"))
+            .env("GIT_OBJECT_DIRECTORY", other.join(".git/objects"))
+            .env(
+              "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+              other.join(".git/objects"),
+            )
+            .env("GIT_NAMESPACE", "other")
+            .env("GIT_PREFIX", "other/")
+            .env("GIT_IMPLICIT_WORK_TREE", "0")
+            .env("GIT_CEILING_DIRECTORIES", temp.path())
+            .env("GIT_DISCOVERY_ACROSS_FILESYSTEM", "1")
+            .env("GIT_CONFIG_PARAMETERS", "'protocol.ext.allow=always'")
+            .env("GIT_CONFIG_COUNT", "1")
+            .env("GIT_CONFIG_KEY_0", "core.worktree")
+            .env("GIT_CONFIG_VALUE_0", &other);
+        }
+        let out = child.output().unwrap();
+        assert!(
+          out.status.success(),
+          "{}\n{}",
+          String::from_utf8_lossy(&out.stdout),
+          String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(String::from_utf8_lossy(&out.stdout).contains("1 passed"));
+        assert_eq!(
+          std::fs::read_to_string(other.join("notes.txt")).unwrap(),
+          "uncommitted notes\n"
+        );
+        assert_eq!(fixture_git(&other, &["rev-parse", "HEAD"]), other_head);
+        assert_eq!(
+          std::fs::read(other.join(".git/index")).unwrap(),
+          other_index
+        );
+        assert!(!other.join(".git/FETCH_HEAD").exists());
+        let saved = load_lock(&lock_path(&config)).unwrap();
+        assert_eq!(
+          saved.plugins[0].rev,
+          fixture_git(&seed, &["rev-parse", "HEAD"])
+        );
+        assert_eq!(
+          fixture_git(&config.join("plugins/example"), &["rev-parse", "HEAD"]),
+          saved.plugins[0].rev
+        );
+        assert!(!config.join("plugins/example/notes.txt").exists());
+      }
+    }
+  }
+
+  #[test]
+  fn plugin_git_uses_absolute_paths_without_canonicalizing_git_arguments() {
+    if ensure_git().is_err() {
+      return;
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let (seed, origin) = fixture_origin(temp.path(), "example", "main.lua");
+    let parent = seed.join("..");
+    let checkout = parent.join("checkout");
+    git_clone(&origin_url(&origin), &checkout).unwrap();
+    let command = plugin_git_command(&checkout).unwrap();
+    let args: Vec<_> = command.get_args().collect();
+    let absolute = std::path::absolute(&checkout).unwrap();
+    assert!(args
+      .windows(2)
+      .any(|pair| pair[0] == "-C" && pair[1] == absolute.as_os_str()));
+    let mut work_tree = std::ffi::OsString::from("--work-tree=");
+    work_tree.push(&absolute);
+    assert!(args.contains(&work_tree.as_os_str()));
+    #[cfg(windows)]
+    for arg in &args {
+      assert!(!arg.to_string_lossy().contains(r"\\?\"), "{arg:?}");
+    }
+    assert_eq!(
+      git_head_rev(&checkout).unwrap(),
+      fixture_git(&seed, &["rev-parse", "HEAD"])
+    );
+  }
+
+  #[test]
+  fn plugin_update_accepts_its_own_linked_worktree() {
+    if ensure_git().is_err() {
+      return;
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let (seed, _) = fixture_origin(temp.path(), "example", "main.lua");
+    let checkout = temp.path().join("checkout");
+    fixture_git(
+      &seed,
+      &[
+        "worktree",
+        "add",
+        "-qb",
+        "plugin",
+        checkout.to_str().unwrap(),
+      ],
+    );
+    assert!(checkout.join(".git").is_file());
+    std::fs::write(seed.join("main.lua"), "-- updated\n").unwrap();
+    fixture_git(&seed, &["commit", "-qam", "Update"]);
+    fixture_git(&seed, &["push", "-q", "origin", "main"]);
+    git_update(&checkout).unwrap();
+    assert_eq!(
+      git_head_rev(&checkout).unwrap(),
+      fixture_git(&seed, &["rev-parse", "HEAD"])
+    );
+    assert_eq!(
+      std::fs::read_to_string(checkout.join("main.lua")).unwrap(),
+      "-- updated\n"
+    );
+  }
 
   #[test]
   fn parse_github_shorthand() {
@@ -875,5 +1501,129 @@ mod tests {
     let error = remove_plugin(dir.path(), "missing").unwrap_err();
 
     assert_eq!(error.to_string(), "no plugin named 'missing' is installed");
+  }
+
+  /// Whether the git fixture tests can run. The Nix build runs the tests without
+  /// git, so they are skipped there. A GIT_DIR, GIT_WORK_TREE or GIT_INDEX_FILE
+  /// from the caller (git sets them inside hooks) would make `update_plugins`
+  /// fetch and reset the caller's repository, so the tests stop before any git
+  /// command runs.
+  fn can_run_git_fixtures() -> bool {
+    if ensure_git().is_err() {
+      return false;
+    }
+    let inherited: Vec<&str> = ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"]
+      .into_iter()
+      .filter(|name| std::env::var_os(name).is_some())
+      .collect();
+    assert!(
+      inherited.is_empty(),
+      "unset {inherited:?} to run the plugin update tests: git would act on the caller's repository"
+    );
+    true
+  }
+
+  /// Runs git on a fixture repo, ignoring a global commit signing setting and
+  /// the caller's hooks (a global commit-msg hook can reject the fixture
+  /// commits), by pointing core.hooksPath at an empty directory.
+  fn git(dir: &Path, args: &[&str]) -> String {
+    static NO_HOOKS: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
+    let no_hooks = NO_HOOKS.get_or_init(|| tempfile::tempdir().unwrap());
+    let out = ProcessCommand::new("git")
+      .args([
+        "-c",
+        "user.name=test",
+        "-c",
+        "user.email=test@example.invalid",
+        "-c",
+        "commit.gpgSign=false",
+      ])
+      .arg("-c")
+      .arg(format!("core.hooksPath={}", no_hooks.path().display()))
+      .arg("-C")
+      .arg(dir)
+      .args(args)
+      .output()
+      .unwrap();
+    assert!(out.status.success(), "git {args:?} failed");
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+  }
+
+  fn locked(name: &str, rev: &str) -> LockedPlugin {
+    LockedPlugin {
+      name: name.into(),
+      repo: format!("owner/{name}"),
+      url: format!("https://example.invalid/{name}.git"),
+      rev: rev.into(),
+    }
+  }
+
+  #[test]
+  fn plugin_update_with_a_failed_git_update_returns_an_error() {
+    if !can_run_git_fixtures() {
+      return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let plugin_dir = dir.path().join("plugins").join("broken");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    // No `origin` remote, so `git fetch origin HEAD` fails without the network.
+    git(&plugin_dir, &["init", "-q"]);
+    let mut lock = PluginLock::default();
+    lock.upsert(locked("broken", "abcdef1"));
+    save_lock(&lock_path(dir.path()), &lock).unwrap();
+
+    let all = update_plugins(dir.path(), None).unwrap_err();
+    let one = update_plugins(dir.path(), Some(&"broken".to_string())).unwrap_err();
+
+    assert_eq!(all.to_string(), "1 plugin(s) failed to update");
+    assert_eq!(one.to_string(), "1 plugin(s) failed to update");
+  }
+
+  #[test]
+  fn plugin_update_records_the_plugins_that_updated_when_another_fails() {
+    if !can_run_git_fixtures() {
+      return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let origin = dir.path().join("origin");
+    std::fs::create_dir_all(&origin).unwrap();
+    git(&origin, &["init", "-q"]);
+    git(&origin, &["commit", "-q", "--allow-empty", "-m", "one"]);
+    let plugins_dir = dir.path().join("plugins");
+    std::fs::create_dir_all(&plugins_dir).unwrap();
+    git(
+      &plugins_dir,
+      &["clone", "-q", origin.to_str().unwrap(), "good"],
+    );
+    let old_rev = git(&plugins_dir.join("good"), &["rev-parse", "HEAD"]);
+    git(&origin, &["commit", "-q", "--allow-empty", "-m", "two"]);
+    let new_rev = git(&origin, &["rev-parse", "HEAD"]);
+    std::fs::create_dir_all(plugins_dir.join("broken")).unwrap();
+    git(&plugins_dir.join("broken"), &["init", "-q"]);
+    let mut lock = PluginLock::default();
+    lock.upsert(locked("good", &old_rev));
+    lock.upsert(locked("broken", "abcdef1"));
+    save_lock(&lock_path(dir.path()), &lock).unwrap();
+
+    let error = update_plugins(dir.path(), None).unwrap_err();
+
+    assert_eq!(error.to_string(), "1 plugin(s) failed to update");
+    let saved = load_lock(&lock_path(dir.path())).unwrap();
+    let good = saved.plugins.iter().find(|p| p.name == "good").unwrap();
+    assert_eq!(good.rev, new_rev);
+  }
+
+  #[test]
+  fn plugin_update_skips_a_plugin_missing_on_disk_without_failing() {
+    // Only `git --version` runs here: the plugin folder is missing.
+    if ensure_git().is_err() {
+      return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let mut lock = PluginLock::default();
+    lock.upsert(locked("gone", "abcdef1"));
+    save_lock(&lock_path(dir.path()), &lock).unwrap();
+
+    assert!(update_plugins(dir.path(), None).is_ok());
   }
 }

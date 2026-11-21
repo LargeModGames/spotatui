@@ -3,6 +3,7 @@ import {
   memo,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -36,6 +37,7 @@ import {
   loadExpanded,
   nearEnd,
   openRow,
+  playlistMenuItems,
   playlistRemoval,
   playlistsFor,
   removePlaylist,
@@ -46,7 +48,7 @@ import {
   sortChoice,
   libraryPager,
   wantsNextPage,
-  type PlaylistRemoval,
+  type PlaylistMenuTarget,
   type PlaylistRemovalTarget,
   removalTarget,
   removalText,
@@ -65,7 +67,7 @@ type Point = { x: number; y: number };
 
 /** Opens a row's menu at a window point; `opener` takes the focus back afterwards. */
 type OpenMenu = (
-  removal: PlaylistRemoval,
+  target: PlaylistMenuTarget,
   at: Point,
   opener: HTMLElement,
 ) => void;
@@ -116,11 +118,13 @@ export const LibraryPanel = memo(function LibraryPanel({
   const artistOrder = sortChoice(ARTIST_SORTS, artistPick ?? artistSort);
   const [expanded, setExpanded] = useState(() => loadExpanded(pageStorage()));
   const [naming, setNaming] = useState<string | null>(null);
-  const [menu, setMenu] = useState<{
-    removal: PlaylistRemovalTarget;
-    at: Point;
-    opener: HTMLElement;
-  } | null>(null);
+  const [menu, setMenu] = useState<
+    | (PlaylistMenuTarget & {
+        at: Point;
+        opener: HTMLElement;
+      })
+    | null
+  >(null);
   const [asking, setAsking] = useState<{
     removal: PlaylistRemovalTarget;
     opener: HTMLElement;
@@ -128,6 +132,46 @@ export const LibraryPanel = memo(function LibraryPanel({
   const createButton = useRef<HTMLButtonElement>(null);
   const rowsBox = useRef<HTMLDivElement>(null);
   const askedFor = useRef<unknown>(null);
+  const pinFocus = useRef<{
+    uri: string;
+    pinned: boolean;
+    opener: HTMLElement;
+    index: number;
+    playlists: SourcePlaylists | null;
+  } | null>(null);
+
+  // Moving or removing a pin can blur even a keyed row. Restore after the
+  // library push commits, unless the user has moved to another control.
+  useLayoutEffect(() => {
+    const pending = pinFocus.current;
+    if (!pending) return;
+    if (active !== "Spotify" || filter !== "Playlists") {
+      pinFocus.current = null;
+      return;
+    }
+    if (
+      playlists === pending.playlists ||
+      playlists?.pinned.includes(pending.uri) !== pending.pinned
+    )
+      return;
+    pinFocus.current = null;
+    if (
+      document.activeElement !== document.body &&
+      document.activeElement !== pending.opener
+    )
+      return;
+    const rows = [
+      ...(rowsBox.current?.querySelectorAll<HTMLElement>(
+        "button.library-row",
+      ) ?? []),
+    ];
+    const target = rows.includes(pending.opener)
+      ? pending.opener
+      : (rows.find((row) => row.dataset.playlistUri === pending.uri) ??
+        rows[Math.min(pending.index, rows.length - 1)] ??
+        rowsBox.current);
+    target?.focus();
+  }, [active, filter, playlists]);
 
   // Each pick refetches the first page, so new saves and follows show.
   const choose = (next: Filter) => {
@@ -146,7 +190,10 @@ export const LibraryPanel = memo(function LibraryPanel({
   const pageMore = pager?.more ?? false;
   // A failed fetch pushes only an error status, so the next scroll may ask again.
   useEffect(() => {
-    if (errorRev !== null) askedFor.current = null;
+    if (errorRev !== null) {
+      askedFor.current = null;
+      pinFocus.current = null;
+    }
   }, [errorRev]);
   const nextPage = useCallback(() => {
     const box = rowsBox.current;
@@ -185,8 +232,7 @@ export const LibraryPanel = memo(function LibraryPanel({
     [expanded],
   );
   const openMenu: OpenMenu = useCallback(
-    (removal, at, opener) =>
-      setMenu({ removal: removalTarget(removal), at, opener }),
+    (target, at, opener) => setMenu({ ...target, at, opener }),
     [],
   );
   const closeAsk = (confirmed: boolean) => {
@@ -291,6 +337,7 @@ export const LibraryPanel = memo(function LibraryPanel({
             needle={needle}
             playlists={playlists}
             source={active}
+            loggedOut={loggedOut}
             unmatched={unmatched}
             view={view}
             open={open}
@@ -372,20 +419,30 @@ export const LibraryPanel = memo(function LibraryPanel({
       {menu &&
         createPortal(
           <MenuList
-            label={menu.removal.name}
-            groups={[
-              [
-                {
-                  id: "remove-library",
-                  label: removalText(menu.removal, s).label,
-                  kind: "action",
-                  action: menu.removal.action,
-                },
-              ],
-            ]}
+            label={menu.name}
+            groups={[playlistMenuItems(menu, s)]}
             at={menu.at}
-            run={() => {
-              setAsking({ removal: menu.removal, opener: menu.opener });
+            run={(entry) => {
+              if (entry.id === "remove-library" && menu.removal)
+                setAsking({ removal: menu.removal, opener: menu.opener });
+              else if (entry.kind === "action") {
+                if (entry.id === "pin-playlist") {
+                  const rows = [
+                    ...(rowsBox.current?.querySelectorAll<HTMLElement>(
+                      "button.library-row",
+                    ) ?? []),
+                  ];
+                  pinFocus.current = {
+                    uri: menu.uri,
+                    pinned: !menu.pinned,
+                    opener: menu.opener,
+                    index: Math.max(0, rows.indexOf(menu.opener)),
+                    playlists,
+                  };
+                }
+                send(entry.action);
+                if (menu.opener.isConnected) menu.opener.focus();
+              }
               setMenu(null);
             }}
             onClose={() => {
@@ -559,6 +616,7 @@ export const PlaylistRows = memo(function PlaylistRows({
   needle = "",
   playlists,
   source,
+  loggedOut = false,
   unmatched,
   view,
   open,
@@ -571,6 +629,7 @@ export const PlaylistRows = memo(function PlaylistRows({
   needle?: string;
   playlists: SourcePlaylists | null;
   source: Source | null;
+  loggedOut?: boolean;
   unmatched: number;
   view: View;
   open: OpenView;
@@ -583,7 +642,12 @@ export const PlaylistRows = memo(function PlaylistRows({
   const filtering = needle.trim() !== "";
   const tree =
     !filtering && playlists && source === "Spotify" && playlists.folders
-      ? libraryTree(playlists.folders, playlists.spotify, expanded)
+      ? libraryTree(
+          playlists.folders,
+          playlists.spotify,
+          expanded,
+          new Set(playlists.pinned),
+        )
       : null;
   const rows = (
     playlists && source ? playlistsFor(playlists, source) : []
@@ -603,9 +667,7 @@ export const PlaylistRows = memo(function PlaylistRows({
   ) {
     return <NoMatches s={s} needle={needle} />;
   }
-  const menus = source === "Spotify" || source === "YouTube";
-  // Sorting moves playlist slots. Keys follow the folder path and URI so a
-  // focused row survives, including repeated playlists in different folders.
+  // Keys retain row identity across sorting, including folder copies.
   const parents: string[] = [];
   const occurrences = new Map<string, number>();
   const treeKey = (item: TreeRow) => {
@@ -626,32 +688,46 @@ export const PlaylistRows = memo(function PlaylistRows({
     }
     open({ page: "playlist", uri: row.uri, name: row.name, source });
   };
-  const playlistRow = (row: SidebarRow, key: string, depth = 0) => (
-    <Row
-      s={s}
-      key={key}
-      cover={<Cover src={row.image} size={48} />}
-      title={row.name}
-      subline={
-        source === "Radio"
-          ? s.radio_station
-          : row.count === null
-            ? s.playlist
-            : fmt(s.playlist_count, { count: songCount(row.count, s) })
-      }
-      current={view.page === "playlist" && view.uri === row.uri}
-      depth={depth}
-      onClick={() => pick(row)}
-      onMenu={
-        menus && playlists
-          ? (at, opener) => {
-              const removal = playlistRemoval(source, row, playlists, s);
-              if (removal) onMenu(removal, at, opener);
-            }
-          : undefined
-      }
-    />
-  );
+  const playlistRow = (row: SidebarRow, key: string, depth = 0) => {
+    const removal =
+      playlists && !(source === "Spotify" && loggedOut)
+        ? playlistRemoval(source, row, playlists, s)
+        : null;
+    const pinsEditable =
+      source === "Spotify" && row.uri.startsWith("spotify:playlist:");
+    const target: PlaylistMenuTarget = {
+      uri: row.uri,
+      name: row.name,
+      pinned: row.pinned,
+      pinsEditable,
+      removal: removal ? removalTarget(removal) : null,
+    };
+    return (
+      <Row
+        s={s}
+        key={key}
+        cover={<Cover src={row.image} size={48} />}
+        title={row.name}
+        playlistUri={row.uri}
+        subline={
+          source === "Radio"
+            ? s.radio_station
+            : row.count === null
+              ? s.playlist
+              : fmt(s.playlist_count, { count: songCount(row.count, s) })
+        }
+        current={view.page === "playlist" && view.uri === row.uri}
+        pinned={row.pinned}
+        depth={depth}
+        onClick={() => pick(row)}
+        onMenu={
+          removal || pinsEditable
+            ? (at, opener) => onMenu(target, at, opener)
+            : undefined
+        }
+      />
+    );
+  };
   return (
     <>
       {showLiked && (
@@ -772,8 +848,10 @@ function Row({
   s = EN,
   cover,
   title,
+  playlistUri,
   subline,
   current,
+  pinned = false,
   depth = 0,
   onClick,
   onMenu,
@@ -781,8 +859,10 @@ function Row({
   s?: GuiStrings;
   cover: ReactNode;
   title: string;
+  playlistUri?: string;
   subline: ReactNode;
   current: boolean;
+  pinned?: boolean;
   depth?: number;
   /** Absent, the row cannot open anything. */
   onClick?: () => void;
@@ -815,6 +895,7 @@ function Row({
     <button
       type="button"
       className="library-row"
+      data-playlist-uri={playlistUri}
       title={onMenu ? `${title}\n${s.row_menu_hint}` : title}
       aria-current={current ? "page" : undefined}
       aria-haspopup={onMenu ? "menu" : undefined}
@@ -828,7 +909,16 @@ function Row({
       {cover}
       <span className="library-row-text">
         <span className="library-row-title">{title}</span>
-        <span className="library-row-sub">{subline}</span>
+        <span className="library-row-sub">
+          {pinned && (
+            <>
+              <span role="img" aria-label={s.pinned}>
+                <Glyph name="pin" size={12} />
+              </span>{" "}
+            </>
+          )}
+          {subline}
+        </span>
       </span>
       {onMenu && (
         <span className="library-more" aria-hidden="true" onClick={onMore}>

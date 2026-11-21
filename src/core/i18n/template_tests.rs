@@ -829,6 +829,21 @@ fn every_typed_message_fills_its_placeholders_and_preserves_all_arguments() {
       ["SENTINEL_ERROR_中"]
     );
     check!(
+      "status_app.playlist_pinned",
+      strings.status.app.playlist_pinned("SENTINEL_NAME_中"),
+      ["SENTINEL_NAME_中"]
+    );
+    check!(
+      "status_app.playlist_unpinned",
+      strings.status.app.playlist_unpinned("SENTINEL_NAME_中"),
+      ["SENTINEL_NAME_中"]
+    );
+    check!(
+      "status_app.playlist_pin_limit",
+      strings.status.app.playlist_pin_limit(9101),
+      ["9101"]
+    );
+    check!(
       "status_app.friend_code_copied",
       strings.status.app.friend_code_copied("SENTINEL_CODE_中"),
       ["SENTINEL_CODE_中"]

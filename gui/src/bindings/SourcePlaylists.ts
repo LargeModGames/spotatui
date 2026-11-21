@@ -10,7 +10,11 @@ import type { TrackInfo } from "./TrackInfo";
 /**
  * Every source's sidebar list; the page shows the one for the active source.
  */
-export type SourcePlaylists = { spotify: Array<PlaylistInfo>, local: Array<PlaylistInfo>, subsonic: Array<PlaylistInfo>, qobuz: Array<PlaylistInfo>, youtube: Array<PlaylistInfo>, 
+export type SourcePlaylists = { spotify: Array<PlaylistInfo>, 
+/**
+ * Loaded Spotify playlist URIs, in local pin order.
+ */
+pinned: Array<string>, local: Array<PlaylistInfo>, subsonic: Array<PlaylistInfo>, qobuz: Array<PlaylistInfo>, youtube: Array<PlaylistInfo>, 
 /**
  * The Music app's playlists, led by an "All songs" row; empty off macOS.
  */

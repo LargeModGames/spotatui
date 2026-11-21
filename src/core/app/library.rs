@@ -818,6 +818,8 @@ impl App {
       }
       None => albums.add_pages(page),
     }
+    // Open in the order `default_sort_saved_albums` set, like Saved Artists.
+    self.sort_saved_albums();
   }
 
   /// Show a fetched saved-shows page and mark its shows as saved; `first`
@@ -1308,6 +1310,23 @@ mod tests {
 
     app.apply_sort_field(SortContext::SavedAlbums, SortField::Default);
     assert_eq!(saved_album_ids(&app), ["zebra", "apple", "mango"]);
+  }
+
+  #[test]
+  fn stored_saved_albums_page_follows_the_default_sort() {
+    let (tx, _rx) = channel();
+    let mut config = UserConfig::new();
+    config.behavior.default_sort_saved_albums = "name".to_string();
+    let mut app = App::new(tx, config, Some(SystemTime::now()));
+    let mut page = saved_album_page(0, &["zebra", "apple", "mango"], false);
+    let names = ["Zebra", "Apple", "Mango"];
+    for (item, name) in page.items.iter_mut().zip(names) {
+      item.album.name = name.to_string();
+    }
+
+    app.store_saved_albums_page(page, true);
+
+    assert_eq!(saved_album_ids(&app), ["apple", "mango", "zebra"]);
   }
 
   #[test]

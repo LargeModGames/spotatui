@@ -207,6 +207,25 @@ pub fn handler(key: Key, app: &mut App) {
     {
       app.apply(Action::OpenPlaylistSyncPicker);
     }
+    // Config files may bind pinning to an existing sidebar key. Keep navigation
+    // and the other sidebar actions above it so those bindings retain priority.
+    k if k == app.user_config.keys.pin_playlist
+      && app
+        .availability(Requirement::BrowseSource(Source::Spotify))
+        .is_available() =>
+    {
+      let uri = app
+        .view
+        .selected_playlist_index
+        .and_then(|row| row.checked_sub(1))
+        .and_then(|index| app.get_playlist_display_item_at(index))
+        .and_then(|item| app.get_playlist_for_item(item))
+        .map(|playlist| playlist.uri.clone());
+      if let Some(uri) = uri {
+        let pinned = !app.is_playlist_pinned(&uri);
+        app.apply(Action::SetPlaylistPinned { uri, pinned });
+      }
+    }
     _ => {}
   }
 }
@@ -319,6 +338,344 @@ mod tests {
       image_url: None,
       release_date: None,
     }
+  }
+
+  fn pin_app_with(key: Key, source: Source) -> (App, tempfile::TempDir) {
+    let mut config = UserConfig::new();
+    config.keys.pin_playlist = key;
+    pin_app_with_config(config, source, false)
+  }
+
+  fn pin_app_with_config(
+    mut config: UserConfig,
+    source: Source,
+    spotify_connected: bool,
+  ) -> (App, tempfile::TempDir) {
+    let dir = tempfile::tempdir().unwrap();
+    config.path_to_config = Some(UserConfigPaths {
+      config_file_path: dir.path().join("config.yml"),
+    });
+    let (tx, _rx) = channel();
+    let mut app = App::new_with_state(
+      tx,
+      config,
+      crate::core::state::RuntimeState::default(),
+      Some(dir.path().join("state.yml")),
+      spotify_connected,
+      crate::core::i18n::Language::En,
+    );
+    app.set_active_source(source);
+    *app.all_playlists_mut() = vec![playlist_info("p1", "One", "me", false)];
+    *app.playlist_folder_items_mut() = vec![
+      PlaylistFolderItem::Folder(crate::core::app::PlaylistFolder {
+        generated_name: false,
+        name: "Folder".into(),
+        current_id: 0,
+        target_id: 1,
+      }),
+      PlaylistFolderItem::Playlist {
+        index: 0,
+        current_id: 0,
+      },
+    ];
+    app.view.selected_playlist_index = Some(3);
+    app.push_navigation_stack(RouteId::Home, ActiveBlock::MyPlaylists);
+    app.set_current_route_state(
+      Some(ActiveBlock::MyPlaylists),
+      Some(ActiveBlock::MyPlaylists),
+    );
+    (app, dir)
+  }
+
+  fn selected_playlist_uri(app: &App) -> Option<&str> {
+    app
+      .view
+      .selected_playlist_index
+      .and_then(|row| row.checked_sub(1))
+      .and_then(|index| app.get_playlist_display_item_at(index))
+      .and_then(|item| app.get_playlist_for_item(item))
+      .map(|playlist| playlist.uri.as_str())
+  }
+
+  #[test]
+  fn the_pin_key_keeps_the_same_playlist_selected_when_toggled_without_a_login() {
+    let (mut app, _dir) = pin_app_with(Key::Char('t'), Source::Spotify);
+    let uri = "spotify:playlist:p1";
+    assert_eq!(selected_playlist_uri(&app), Some(uri));
+
+    super::super::handle_app(Key::Char('t'), &mut app);
+    assert!(app.is_playlist_pinned(uri));
+    assert_eq!(app.status_message(), Some("Pinned One"));
+    assert_eq!(selected_playlist_uri(&app), Some(uri));
+    assert_eq!(app.view.selected_playlist_index, Some(2));
+
+    super::super::handle_app(Key::Char('t'), &mut app);
+    assert!(!app.is_playlist_pinned(uri));
+    assert_eq!(app.status_message(), Some("Unpinned One"));
+    assert_eq!(selected_playlist_uri(&app), Some(uri));
+    assert_eq!(app.view.selected_playlist_index, Some(3));
+    app.flush_state_save(true);
+    assert!(crate::core::state::load(app.state_path.as_ref().unwrap())
+      .unwrap()
+      .pinned_playlists
+      .unwrap()
+      .is_empty());
+  }
+
+  #[test]
+  fn the_pin_key_keeps_the_same_uri_when_unpinning_with_a_community_pin_and_folder() {
+    let (mut app, _dir) = pin_app_with(Key::Char('t'), Source::Spotify);
+    let uri = "spotify:playlist:p1";
+    app
+      .all_playlists_mut()
+      .push(playlist_info("p2", "Two", "me", false));
+    app.playlist_folder_items_mut().insert(
+      0,
+      PlaylistFolderItem::Playlist {
+        index: 1,
+        current_id: 0,
+      },
+    );
+    app.apply(Action::SetPlaylistPinned {
+      uri: uri.to_string(),
+      pinned: true,
+    });
+    app.view.selected_playlist_index = Some(2);
+    assert!(app.community_pin_visible());
+    assert!(matches!(
+      app.get_playlist_display_item_at(3),
+      Some(PlaylistFolderItem::Folder(_))
+    ));
+    assert_eq!(selected_playlist_uri(&app), Some(uri));
+
+    super::super::handle_app(Key::Char('t'), &mut app);
+    assert!(app.pinned_playlist_uris().is_empty());
+    assert_eq!(selected_playlist_uri(&app), Some(uri));
+    assert_eq!(app.view.selected_playlist_index, Some(4));
+
+    super::super::handle_app(Key::Char('t'), &mut app);
+    assert!(app.is_playlist_pinned(uri));
+    assert!(!app.is_playlist_pinned("spotify:playlist:p2"));
+    assert_eq!(selected_playlist_uri(&app), Some(uri));
+    assert_eq!(app.view.selected_playlist_index, Some(2));
+  }
+
+  #[test]
+  fn a_rebound_pin_key_is_the_one_that_pins() {
+    let (mut app, _dir) = pin_app_with(Key::Char('u'), Source::Spotify);
+    super::super::handle_app(Key::Char('t'), &mut app);
+    assert!(app.pinned_playlist_uris().is_empty());
+    super::super::handle_app(Key::Char('u'), &mut app);
+    assert!(app.is_playlist_pinned("spotify:playlist:p1"));
+  }
+
+  #[test]
+  fn rebound_up_and_down_keys_move_the_cursor_without_pinning() {
+    for (up, expected_row) in [(true, 2), (false, 0)] {
+      let mut config = UserConfig::new();
+      if up {
+        config.keys.move_up = Key::Char('t');
+      } else {
+        config.keys.move_down = Key::Char('t');
+      }
+      let (mut app, _dir) = pin_app_with_config(config, Source::Spotify, false);
+
+      super::super::handle_app(Key::Char('t'), &mut app);
+
+      assert_eq!(app.view.selected_playlist_index, Some(expected_row));
+      assert!(app.pinned_playlist_uris().is_empty());
+      assert!(!app.state_path.as_ref().unwrap().exists());
+    }
+  }
+
+  #[test]
+  fn rebound_content_navigation_keeps_priority_over_pinning_on_either_sidebar_side() {
+    for side in ["left", "right"] {
+      let mut config = UserConfig::new();
+      config.behavior.sidebar_position = side.to_string();
+      if side == "right" {
+        config.keys.move_left = Key::Char('t');
+      } else {
+        config.keys.move_right = Key::Char('t');
+      }
+      let (mut app, _dir) = pin_app_with_config(config, Source::Spotify, false);
+
+      super::super::handle_app(Key::Char('t'), &mut app);
+
+      assert_eq!(app.get_current_route().active_block, ActiveBlock::Home);
+      assert_eq!(app.get_current_route().hovered_block, ActiveBlock::Home);
+      assert_eq!(app.view.selected_playlist_index, Some(3));
+      assert!(app.pinned_playlist_uris().is_empty());
+      assert!(!app.state_path.as_ref().unwrap().exists());
+    }
+  }
+
+  #[test]
+  fn fixed_sidebar_navigation_keeps_priority_over_a_rebound_pin_key() {
+    for (key, expected_row) in [
+      (Key::Up, 2),
+      (Key::Down, 0),
+      (Key::Ctrl('p'), 2),
+      (Key::Ctrl('n'), 0),
+      (Key::Char('H'), 0),
+      (Key::Char('M'), 1),
+      (Key::Char('L'), 3),
+    ] {
+      let (mut app, _dir) = pin_app_with(key, Source::Spotify);
+
+      handler(key, &mut app);
+
+      assert_eq!(
+        app.view.selected_playlist_index,
+        Some(expected_row),
+        "{key:?}"
+      );
+      assert!(app.pinned_playlist_uris().is_empty(), "{key:?}");
+      assert!(!app.state_path.as_ref().unwrap().exists());
+    }
+  }
+
+  #[test]
+  fn existing_sidebar_actions_keep_priority_over_a_rebound_pin_key() {
+    for key in [Key::Enter, Key::Char(','), Key::Char('D'), Key::Char('m')] {
+      let mut config = UserConfig::new();
+      config.keys.pin_playlist = key;
+      let (mut app, _dir) = pin_app_with_config(config, Source::Spotify, true);
+
+      super::super::handle_app(key, &mut app);
+
+      match key {
+        Key::Enter => assert_eq!(app.get_current_route().id, RouteId::TrackTable),
+        Key::Char(',') => {
+          assert_eq!(app.get_current_route().active_block, ActiveBlock::SortMenu);
+          assert!(app.view.sort_menu_visible);
+        }
+        Key::Char('D') => {
+          assert_eq!(
+            app.get_current_route().active_block,
+            ActiveBlock::Dialog(DialogContext::PlaylistWindow)
+          );
+          assert_eq!(app.view.dialog.as_deref(), Some("One"));
+        }
+        Key::Char('m') => {
+          if app.get_current_route().active_block
+            == ActiveBlock::Dialog(DialogContext::PlaylistSyncPicker)
+          {
+            assert_eq!(
+              app.pending_playlist_sync_master().unwrap().playlist_uri,
+              "spotify:playlist:p1"
+            );
+          } else {
+            assert_eq!(
+              app.status_message(),
+              Some(app.strings().status.app.no_mirror_source)
+            );
+          }
+        }
+        _ => unreachable!(),
+      }
+      assert!(app.pinned_playlist_uris().is_empty(), "{key:?}");
+      assert!(
+        crate::core::state::load(app.state_path.as_ref().unwrap())
+          .unwrap()
+          .pinned_playlists
+          .is_none_or(|pins| pins.is_empty()),
+        "{key:?}"
+      );
+    }
+  }
+
+  #[test]
+  fn settings_refuse_conflicts_between_pinning_and_named_navigation_in_both_directions() {
+    use crate::core::app::{SettingValue, SettingsCategory};
+
+    for (id, key, unchanged, error) in [
+      (
+        "keys.move_up",
+        Key::Char('t'),
+        "k",
+        "Key t is already assigned to Pin / Unpin Playlist",
+      ),
+      (
+        "keys.pin_playlist",
+        Key::Char('k'),
+        "t",
+        "Key k is already assigned to Move Up",
+      ),
+    ] {
+      let (mut app, _dir) = pin_app_with(Key::Char('t'), Source::Spotify);
+      app.view.settings_category = SettingsCategory::Keybindings;
+      app.open_settings_screen();
+      let index = app
+        .settings_items
+        .iter()
+        .position(|item| item.id == id)
+        .unwrap();
+      app.view.settings_selected_index = index;
+
+      super::super::handle_app(Key::Enter, &mut app);
+      assert!(app.view.settings_edit_mode);
+      super::super::handle_app(key, &mut app);
+
+      assert_eq!(app.api_error(), error);
+      assert_eq!(
+        app.settings_items[index].value,
+        SettingValue::Key(unchanged.to_string())
+      );
+      assert!(!app.view.settings_edit_mode);
+      assert!(app.pinned_playlist_uris().is_empty());
+    }
+  }
+
+  #[test]
+  fn editing_the_pin_key_in_settings_saves_and_reloads_the_binding() {
+    use crate::core::app::{SettingValue, SettingsCategory};
+
+    let (mut app, _dir) = pin_app_with(Key::Char('t'), Source::Spotify);
+    app.view.settings_category = SettingsCategory::Keybindings;
+    app.open_settings_screen();
+    let index = app
+      .settings_items
+      .iter()
+      .position(|item| item.id == "keys.pin_playlist")
+      .unwrap();
+    app.view.settings_selected_index = index;
+
+    super::super::handle_app(Key::Enter, &mut app);
+    super::super::handle_app(Key::F6, &mut app);
+    assert_eq!(
+      app.settings_items[index].value,
+      SettingValue::Key("f6".into())
+    );
+    assert_eq!(app.user_config.keys.pin_playlist, Key::Char('t'));
+
+    let save_key = app.effective_save_settings_key();
+    super::super::handle_app(save_key, &mut app);
+    assert_eq!(app.user_config.keys.pin_playlist, Key::F6);
+    assert!(!app.has_unsaved_settings_changes());
+    let mut reloaded = UserConfig::new();
+    reloaded.path_to_config = app.user_config.path_to_config.clone();
+    reloaded.load_config().unwrap();
+    assert_eq!(reloaded.keys.pin_playlist, Key::F6);
+  }
+
+  #[test]
+  fn the_pin_key_ignores_folders_the_community_pin_add_playlist_and_other_sources() {
+    let (mut app, _dir) = pin_app_with(Key::Char('t'), Source::Spotify);
+    for row in [0, 1, 2] {
+      app.view.selected_playlist_index = Some(row);
+      handler(Key::Char('t'), &mut app);
+      assert!(app.pinned_playlist_uris().is_empty());
+    }
+    for source in Source::ALL {
+      if source == Source::Spotify {
+        continue;
+      }
+      let (mut app, _dir) = pin_app_with(Key::Char('t'), source);
+      handler(Key::Char('t'), &mut app);
+      assert!(app.pinned_playlist_uris().is_empty());
+    }
+    assert!(!app.state_path.as_ref().unwrap().exists());
   }
 
   #[test]

@@ -1135,14 +1135,10 @@ mod tests {
   /// Full local-playlist lifecycle through the dispatch, exactly as the
   /// runtime pump drives it: create → list → add (metadata resolved from a
   /// fake search view) → open → duplicate-add no-op → remove → delete. No
-  /// network, no audio device — the file lives in a tempdir via the
-  /// `SPOTATUI_YOUTUBE_PLAYLISTS_PATH` override. Kept as ONE test because the
-  /// override is process-global env.
+  /// network, no audio device — the default test path is already isolated.
   #[tokio::test]
   async fn playlist_lifecycle_through_dispatch() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("yt_playlists.yml");
-    std::env::set_var(super::super::playlists::PATH_ENV, &path);
+    let path = super::super::playlists::default_playlists_path().unwrap();
 
     let app = Arc::new(Mutex::new(test_app()));
 
