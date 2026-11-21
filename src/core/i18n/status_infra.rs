@@ -951,7 +951,7 @@ pub const EN: InfraStatusStrings = InfraStatusStrings {
   youtube_already_added: "\"{name}\" is already in {playlist}",
   youtube_decode_failed: "Cannot play YouTube audio: {error} (installing ffmpeg fixes most container issues)",
   qobuz_login_expired: "Qobuz: login expired, press `d` and pick Qobuz to log in again",
-  qobuz_login_busy: "Qobuz login already in progress...",
+  qobuz_login_busy: "Qobuz login already in progress…",
   qobuz_browser_login: "Qobuz: open the browser window to log in",
   qobuz_logged_in: "Qobuz: logged in",
   qobuz_no_tracks: "No Qobuz tracks to play",

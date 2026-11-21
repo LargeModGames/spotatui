@@ -91,6 +91,19 @@ fn every_language_has_nonempty_messages_and_the_same_named_placeholders() {
   }
 }
 
+#[test]
+fn english_ui_strings_use_the_ellipsis_character() {
+  for (key, message) in entries(&EN) {
+    if key.starts_with("onboarding.") || key == "status.runtime.forgetting_spotify_login" {
+      continue;
+    }
+    assert!(
+      !message.contains("..."),
+      "{key} uses three dots instead of the ellipsis character: {message}"
+    );
+  }
+}
+
 /// Informational by design: contributors can ship English first.
 #[test]
 fn reports_entries_still_in_english() {

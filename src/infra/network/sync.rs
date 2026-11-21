@@ -112,7 +112,7 @@ impl std::fmt::Display for PartyStatus {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     match self {
       PartyStatus::Disconnected => write!(f, "Disconnected"),
-      PartyStatus::Connecting => write!(f, "Connecting..."),
+      PartyStatus::Connecting => write!(f, "Connecting…"),
       PartyStatus::Hosting => write!(f, "Hosting"),
       PartyStatus::Joined => write!(f, "Joined"),
     }
