@@ -88,7 +88,7 @@ pub const TOOLS: &[ToolSpec] = &[
   ToolSpec {
     name: "get_now_playing",
     title: "Now playing",
-    description: "The currently playing or paused track, whether playback is active, and how many tracks are waiting in the queue.",
+    description: "The currently playing or paused track with its URI, whether playback is active, and how many tracks are waiting in the queue.",
     read_only: true,
     needs_network: false,
     dj: true,
@@ -1241,6 +1241,7 @@ async fn now_playing_outcome(app: &Arc<Mutex<App>>) -> ToolOutcome {
         },
         json!({
           "track": label,
+          "uri": snapshot.item_uri,
           "is_playing": snapshot.is_playing,
           "is_live": snapshot.is_live,
           "queue_depth": queue_depth,
@@ -1254,6 +1255,7 @@ async fn now_playing_outcome(app: &Arc<Mutex<App>>) -> ToolOutcome {
       |strings| strings.status.tools.nothing_playing(queue_depth),
       json!({
         "track": Value::Null,
+        "uri": Value::Null,
         "is_playing": false,
         "is_live": false,
         "queue_depth": queue_depth,
@@ -1604,9 +1606,35 @@ mod tests {
       .expect("now_playing returns structured data");
 
     assert_eq!(data.get("track"), Some(&Value::Null));
+    assert_eq!(data.get("uri"), Some(&Value::Null));
     assert_eq!(data.get("is_playing"), Some(&json!(false)));
     // The key the playing branch always sends. Absent, a client cannot tell "not
     // a live stream" from "this build never says".
+    assert_eq!(data.get("is_live"), Some(&json!(false)));
+    assert_eq!(data.get("queue_depth"), Some(&json!(0)));
+  }
+
+  #[tokio::test]
+  async fn now_playing_returns_the_uri_of_the_playing_track() {
+    let mut app = App::default();
+    app.current_playback_context = Some(crate::core::test_helpers::playing_with_art(
+      "4uLU6hMCjMI75M1A2tKUQC",
+      "https://example.com/a.jpg",
+    ));
+    let app = Arc::new(Mutex::new(app));
+    let outcome = execute_app_only(&app, &DjToolCall::GetNowPlaying)
+      .await
+      .expect("get_now_playing is answered without the network");
+    let data = outcome
+      .structured
+      .expect("now_playing returns structured data");
+
+    assert_eq!(data.get("track"), Some(&json!("Cover Song — Test Artist")));
+    assert_eq!(
+      data.get("uri"),
+      Some(&json!("spotify:track:4uLU6hMCjMI75M1A2tKUQC"))
+    );
+    assert_eq!(data.get("is_playing"), Some(&json!(true)));
     assert_eq!(data.get("is_live"), Some(&json!(false)));
     assert_eq!(data.get("queue_depth"), Some(&json!(0)));
   }
