@@ -5,7 +5,7 @@ use crate::infra::macos_media;
 use crate::infra::mpris;
 use crate::infra::network::IoEvent;
 use crate::infra::player::{
-  player_build_timeout, PlayerEvent, SessionDisconnectReason, StreamingConfig,
+  player_build_timeout, PlayerEvent, SessionDisconnectReason, StreamingBuildError, StreamingConfig,
   StreamingConnectionState, StreamingPlayer,
 };
 use log::{info, warn};
@@ -19,6 +19,12 @@ use tokio::sync::Mutex;
 const STALLED_PLAYBACK_RECOVERY_TIMEOUT: Duration = Duration::from_secs(5);
 const END_OF_TRACK_CONTINUATION_DELAY: Duration = Duration::from_millis(500);
 const END_OF_TRACK_RECONNECT_TIMEOUT: Duration = Duration::from_secs(12);
+/// A failed Connect-device rebuild is retried, because the usual cause is a
+/// transient network/DNS failure right after a laptop wake. Start short and
+/// back off to a polite interval; the retry only stops when it succeeds or the
+/// app no longer wants the native backend.
+const RECOVERY_RETRY_BASE_DELAY: Duration = Duration::from_secs(5);
+const RECOVERY_RETRY_MAX_DELAY: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SessionDisconnectRecovery {
@@ -37,6 +43,9 @@ fn session_disconnect_recovery(reason: SessionDisconnectReason) -> SessionDiscon
 
 #[derive(Clone, Default)]
 pub struct StreamingRecoveryRequest {
+  /// Identity of the rebuild request that owns writes made by its recovery chain.
+  /// A newer request supersedes an older build even if the old build finishes first.
+  pub generation: u64,
   pub reselect_device: bool,
   pub restore_playback: bool,
   pub continue_after_track: Option<String>,
@@ -130,6 +139,9 @@ fn recovery_snapshot_summary(app: &App) -> String {
 /// (`restore_playback == false`) stickily vetoes restore/reselect: restoring
 /// over the user's handoff would steal playback back (#437).
 fn merge_recovery_requests(request: &mut StreamingRecoveryRequest, next: StreamingRecoveryRequest) {
+  // The latest request owns the rebuild identity. Intent is still merged below,
+  // but stale work from the previous identity must not install or clear state.
+  request.generation = request.generation.max(next.generation);
   request.reacquire |= next.reacquire;
   if !request.restore_playback || !next.restore_playback {
     request.reselect_device = false;
@@ -140,6 +152,267 @@ fn merge_recovery_requests(request: &mut StreamingRecoveryRequest, next: Streami
   request.reselect_device |= next.reselect_device;
   if next.continue_after_track.is_some() {
     request.continue_after_track = next.continue_after_track;
+  }
+}
+
+fn next_recovery_retry_delay(current: Duration) -> Duration {
+  current.saturating_mul(2).min(RECOVERY_RETRY_MAX_DELAY)
+}
+
+/// One rebuild attempt.
+type BuildAttempt<P> = std::pin::Pin<
+  Box<dyn std::future::Future<Output = std::result::Result<P, StreamingBuildError>> + Send>,
+>;
+
+/// The result of one rebuild chain
+enum RebuildOutcome<P> {
+  /// A live player
+  Built(P),
+  /// A newer rebuild request superseded this chain.
+  Superseded,
+  /// An error we give up on
+  Failed(StreamingBuildError),
+  /// A decoded owner interrupted the rebuild.
+  DecodedOwner,
+  /// The frontend exited or another engine took over.
+  Cancelled,
+}
+
+/// Who else wants the audio sink, and so must stop a rebuild.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RebuildCancellation {
+  DecodedOwner,
+  /// The frontend exited, another engine was selected, or Music took the sink.
+  Cancelled,
+}
+
+impl RebuildCancellation {
+  fn outcome<P>(self) -> RebuildOutcome<P> {
+    match self {
+      Self::DecodedOwner => RebuildOutcome::DecodedOwner,
+      Self::Cancelled => RebuildOutcome::Cancelled,
+    }
+  }
+}
+
+/// Whether librespot is connected.
+///
+/// This decides whether a rebuild is still useful.
+/// Condition has to be whether the frontend is alive, no decoded source
+/// or Soloist has taken the engine, and librespot is still the configured one.
+fn rebuild_cancellation(app: &App) -> Option<RebuildCancellation> {
+  if app.io_tx_clone().is_none()
+    || !app.native_engine_still_selected()
+    || app.apple_music_owns_playback()
+  {
+    Some(RebuildCancellation::Cancelled)
+  } else if app.active_decoded_source() {
+    Some(RebuildCancellation::DecodedOwner)
+  } else {
+    None
+  }
+}
+
+/// Finish a cancelled librespot recovery without clearing Soloist's startup flag.
+fn finish_cancelled_recovery(app: &mut App, interrupted_by_decoded: bool) {
+  if !app.native_engine_still_selected() {
+    return;
+  }
+  app.native_backend_pending = false;
+  if app.io_tx_clone().is_none() {
+    return;
+  }
+  if app.apple_music_owns_playback() {
+    app.park_cancelled_native_recovery();
+  } else if interrupted_by_decoded {
+    app.park_cancelled_native_recovery();
+    if !app.active_decoded_source() {
+      app.reacquire_parked_backend();
+    }
+  }
+}
+
+/// Build a replacement Connect device, retrying transient failures with backoffs.
+///
+/// A new recovery request restarts the chain with a fresh delay and the merged intent.
+/// `build` is the attempt itself, so tests can drive the chain without a session.
+async fn rebuild_with_retries<P, B>(
+  ctx: &mut StreamingRecoveryContext,
+  request: &mut StreamingRecoveryRequest,
+  base_delay: Duration,
+  build: B,
+) -> RebuildOutcome<P>
+where
+  P: Send + 'static,
+  B: Fn(StreamingConfig) -> BuildAttempt<P>,
+{
+  let mut attempt = 1_u32;
+  let mut delay = base_delay;
+
+  loop {
+    // Cancel if not native
+    let app = ctx.app.lock().await;
+    if app.native_recovery_generation() != request.generation {
+      return RebuildOutcome::Superseded;
+    }
+    if let Some(cancellation) = rebuild_cancellation(&app) {
+      return cancellation.outcome();
+    }
+
+    let initial_volume = app.runtime_state.volume_percent;
+    drop(app);
+    let streaming_config = StreamingConfig {
+      initial_volume,
+      ..ctx.streaming_config.clone()
+    };
+    info!("attempting native streaming recovery (attempt {attempt})");
+
+    // Build new player without timeout
+    let build_task = tokio::spawn(build(streaming_config));
+    let abort_handle = build_task.abort_handle();
+    let build_timeout = player_build_timeout();
+    let built = match tokio::time::timeout(build_timeout, build_task).await {
+      Ok(Ok(result)) => result,
+      Ok(Err(e)) => Err(StreamingBuildError::Setup(anyhow::anyhow!(
+        "rebuild task failed: {e}"
+      ))),
+      Err(_) => {
+        abort_handle.abort();
+        Err(StreamingBuildError::Timeout {
+          secs: build_timeout.as_secs(),
+        })
+      }
+    };
+
+    match built {
+      Ok(player) => return RebuildOutcome::Built(player),
+      Err(e) => {
+        // Handle retry
+        {
+          let error = e.to_string();
+          let mut app = ctx.app.lock().await;
+
+          if app.native_recovery_generation() != request.generation {
+            return RebuildOutcome::Superseded;
+          }
+          if let Some(cancellation) = rebuild_cancellation(&app) {
+            return cancellation.outcome();
+          }
+
+          if !e.is_retryable() {
+            return RebuildOutcome::Failed(e);
+          }
+
+          // A bare resume would otherwise reach Spotify with no
+          // active device and surface a full-screen error.
+          app.native_backend_pending = true;
+          if attempt == 1 {
+            let strings = app.strings();
+            app.set_status_message(strings.status.app.native_reconnecting, 8);
+          }
+          info!(
+            "native streaming recovery attempt {attempt} failed ({error}); retrying in {}s",
+            delay.as_secs()
+          );
+        }
+
+        // If nothing, proceed. If something, handle accordingly
+        let next_request = tokio::select! {
+          _ = tokio::time::sleep(delay) => None,
+          next = ctx.recovery_rx.recv() => Some(next),
+        };
+
+        match next_request {
+          None => {
+            attempt = attempt.saturating_add(1);
+            delay = next_recovery_retry_delay(delay);
+          }
+          Some(Some(next)) => {
+            // Merge if an incoming one exists
+            merge_recovery_requests(request, next);
+            while let Ok(more) = ctx.recovery_rx.try_recv() {
+              merge_recovery_requests(request, more);
+            }
+            info!("native streaming recovery superseded by a new request; restarting retries");
+            attempt = 1;
+            delay = base_delay;
+          }
+          Some(None) => {
+            // The recovery channel closed
+            return RebuildOutcome::Cancelled;
+          }
+        }
+      }
+    }
+  }
+}
+
+/// Replay what a recovery request still holds, now that a backend can act on it:
+/// parked start, then the published queue slot, then the restore snapshot.
+///
+/// `rebuild_device` is the Connect device to reselect after a rebuild. Over a live
+/// player it is `None`: the queue slot and the reacquire restore are a rebuild's own.
+fn replay_recovery_intent(
+  app: &mut App,
+  request: &StreamingRecoveryRequest,
+  rebuild_device: Option<&str>,
+  replay_queue_slot: bool,
+) {
+  let after_rebuild = rebuild_device.is_some();
+  if let Some(device_name) = rebuild_device {
+    if app.native_should_drive() && recovery_needs_native_selection(request, replay_queue_slot) {
+      app.dispatch(IoEvent::AutoSelectStreamingDevice(
+        device_name.to_string(),
+        false,
+        true,
+      ));
+    }
+  }
+  // A new explicit playback request wins over restoring older intent.
+  // Both paths are queued after device selection on the serial IoEvent pump.
+  if app.pending_start_playback.is_some() {
+    info!("recovery route: replay parked StartPlayback");
+    app.replay_pending_start_playback();
+  } else if replay_queue_slot {
+    // The published queue slot outranks snapshot restore: its direct load was
+    // discarded with the replaced player, and for a queue playing over an idle
+    // app there is no snapshot whose TrackChanged would trigger the reload guard.
+    info!("recovery route: ReplayPublishedSpotifyQueueSlot");
+    app.dispatch(IoEvent::ReplayPublishedSpotifyQueueSlot);
+  } else if !app.native_context_should_drive() {
+    info!("recovery route: none - another player owns the sink");
+  } else if let Some(previous_track_id) = request.continue_after_track.as_deref() {
+    if app.native_transition_has_advanced(previous_track_id) {
+      if let Some(generation) = app.native_playback_restore_generation() {
+        info!("recovery route: RestoreNativePlayback({generation}) (transition advanced)");
+        app.dispatch(IoEvent::RestoreNativePlayback(generation));
+      } else {
+        warn!("recovery route: none - transition advanced but the snapshot is gone");
+      }
+    } else {
+      info!("recovery route: EnsurePlaybackContinues({previous_track_id})");
+      app.dispatch(IoEvent::EnsurePlaybackContinues(
+        previous_track_id.to_string(),
+      ));
+    }
+  } else if request.reselect_device || (after_rebuild && request.reacquire) {
+    if let Some(generation) = app.native_playback_restore_generation() {
+      info!("recovery route: RestoreNativePlayback({generation}) (reselect or reacquire)");
+      app.dispatch(IoEvent::RestoreNativePlayback(generation));
+    } else {
+      warn!("recovery route: none - restore requested but the snapshot is gone");
+      if after_rebuild {
+        let strings = app.strings();
+        app.set_status_message(strings.status.infra.native_recovered, 6);
+      }
+    }
+  } else if after_rebuild && request.restore_playback {
+    // A handoff rebuild instead keeps the teardown's "moved to another
+    // device" message.
+    let strings = app.strings();
+    app.set_status_message(strings.status.infra.native_recovered, 6);
+  } else {
+    info!("recovery route: none - no restore intent on the request");
   }
 }
 
@@ -160,74 +433,46 @@ async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
         request.continue_after_track,
         recovery_snapshot_summary(&app)
       );
-      if app.pending_start_playback.is_some() {
-        info!("recovery route: replay parked StartPlayback");
-        app.replay_pending_start_playback();
-      } else if !app.native_context_should_drive() {
-        info!("recovery route: none - another player owns the sink");
-      } else if let Some(previous_track_id) = request.continue_after_track {
-        if app.native_transition_has_advanced(&previous_track_id) {
-          if let Some(generation) = app.native_playback_restore_generation() {
-            info!("recovery route: RestoreNativePlayback({generation}) (transition advanced)");
-            app.dispatch(IoEvent::RestoreNativePlayback(generation));
-          } else {
-            warn!("recovery route: none - transition advanced but the snapshot is gone");
-          }
-        } else {
-          info!("recovery route: EnsurePlaybackContinues({previous_track_id})");
-          app.dispatch(IoEvent::EnsurePlaybackContinues(previous_track_id));
-        }
-      } else if request.reselect_device {
-        if let Some(generation) = app.native_playback_restore_generation() {
-          info!("recovery route: RestoreNativePlayback({generation}) (reselect)");
-          app.dispatch(IoEvent::RestoreNativePlayback(generation));
-        } else {
-          warn!("recovery route: none - reselect requested but the snapshot is gone");
-        }
-      } else {
-        info!("recovery route: none - no restore intent on the request");
-      }
+      replay_recovery_intent(&mut app, &request, None, false);
       continue;
     }
 
-    let initial_volume = {
-      let app = ctx.app.lock().await;
-      app.runtime_state.volume_percent
-    };
-
-    let streaming_config = StreamingConfig {
-      initial_volume,
-      ..ctx.streaming_config.clone()
-    };
-
-    info!("attempting native streaming recovery");
-
-    let build =
-      tokio::spawn(async move { StreamingPlayer::new_cache_only(streaming_config).await });
-    let abort_handle = build.abort_handle();
-    let build_timeout = player_build_timeout();
-    let built = match tokio::time::timeout(build_timeout, build).await {
-      Ok(Ok(result)) => result,
-      Ok(Err(e)) => Err(anyhow::anyhow!("rebuild task failed: {e}")),
-      Err(_) => {
-        abort_handle.abort();
-        Err(anyhow::anyhow!(
-          "rebuild timed out after {}s",
-          build_timeout.as_secs()
-        ))
+    let recovery_started = Instant::now();
+    let outcome = rebuild_with_retries(
+      &mut ctx,
+      &mut request,
+      RECOVERY_RETRY_BASE_DELAY,
+      |config| -> BuildAttempt<StreamingPlayer> {
+        Box::pin(StreamingPlayer::new_cache_only(config))
+      },
+    )
+    .await;
+    // The retry chain can outlast a single player build. Not user's wait, so credit it
+    // back to any start parked for this backend before replaying it on the built route.
+    {
+      let mut app = ctx.app.lock().await;
+      if app.native_recovery_generation() == request.generation {
+        app.exclude_recovery_time_from_parked_start(recovery_started.elapsed());
       }
-    };
-
-    match built {
-      Ok(recovered_player) => {
+    }
+    match outcome {
+      RebuildOutcome::Built(recovered_player) => {
         let recovered_player = Arc::new(recovered_player);
         let reacquired = {
           let mut app = ctx.app.lock().await;
+          if app.native_recovery_generation() != request.generation {
+            drop(app);
+            recovered_player.shutdown();
+            tokio::task::spawn_blocking(move || drop(recovered_player));
+            continue;
+          }
           let reacquired = app.native_backend_parked();
           // The frontend is exiting, or a park gave the sink to another
           // source during the build: nothing would drive this player.
           if app.io_tx_clone().is_none() || !app.accept_rebuilt_native_backend() {
-            app.native_backend_pending = false;
+            if app.native_engine_still_selected() {
+              app.native_backend_pending = false;
+            }
             drop(app);
             info!("native rebuild not installed: exiting, or another source owns the sink");
             recovered_player.shutdown();
@@ -278,63 +523,37 @@ async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
           replay_queue_slot,
           recovery_snapshot_summary(&app)
         );
-        if app.native_should_drive() && recovery_needs_native_selection(&request, replay_queue_slot)
-        {
-          app.dispatch(IoEvent::AutoSelectStreamingDevice(
-            ctx.streaming_config.device_name.clone(),
-            false,
-            true,
-          ));
-        }
-        // A new explicit playback request wins over restoring older intent.
-        // Both paths are queued after device selection on the serial IoEvent pump.
-        if app.pending_start_playback.is_some() {
-          info!("recovery route: replay parked StartPlayback");
-          app.replay_pending_start_playback();
-        } else if replay_queue_slot {
-          // The published queue slot outranks snapshot restore: its direct
-          // load was discarded with the replaced player, and for a queue
-          // playing over an idle app there is no snapshot whose TrackChanged
-          // would trigger the reload guard.
-          info!("recovery route: ReplayPublishedSpotifyQueueSlot");
-          app.dispatch(IoEvent::ReplayPublishedSpotifyQueueSlot);
-        } else if !app.native_context_should_drive() {
-          info!("recovery route: none - another player owns the sink");
-        } else if let Some(previous_track_id) = request.continue_after_track {
-          if app.native_transition_has_advanced(&previous_track_id) {
-            if let Some(generation) = app.native_playback_restore_generation() {
-              info!("recovery route: RestoreNativePlayback({generation}) (transition advanced)");
-              app.dispatch(IoEvent::RestoreNativePlayback(generation));
-            } else {
-              warn!("recovery route: none - transition advanced but the snapshot is gone");
-            }
-          } else {
-            info!("recovery route: EnsurePlaybackContinues({previous_track_id})");
-            app.dispatch(IoEvent::EnsurePlaybackContinues(previous_track_id));
-          }
-        } else if request.reselect_device || request.reacquire {
-          if let Some(generation) = app.native_playback_restore_generation() {
-            info!("recovery route: RestoreNativePlayback({generation}) (reselect or reacquire)");
-            app.dispatch(IoEvent::RestoreNativePlayback(generation));
-          } else {
-            warn!("recovery route: none - restore requested but the snapshot is gone");
-            let strings = app.strings();
-            app.set_status_message(strings.status.infra.native_recovered, 6);
-          }
-        } else if request.restore_playback {
-          // A handoff rebuild instead keeps the teardown's "moved to another
-          // device" message.
-          let strings = app.strings();
-          app.set_status_message(strings.status.infra.native_recovered, 6);
-        }
+        replay_recovery_intent(
+          &mut app,
+          &request,
+          Some(&ctx.streaming_config.device_name),
+          replay_queue_slot,
+        );
         // A playlist refresh while parked had no session for the folders.
         if reacquired && app.playlist_folder_nodes().is_none() {
           app.dispatch(IoEvent::GetPlaylists);
         }
       }
-      Err(e) => {
+      RebuildOutcome::Superseded => {
+        info!("native streaming recovery superseded by a newer rebuild request");
+      }
+      RebuildOutcome::DecodedOwner | RebuildOutcome::Cancelled => {
+        info!(
+          "native streaming recovery cancelled: another owner took the sink or the frontend exited"
+        );
+        let mut app = ctx.app.lock().await;
+        if app.native_recovery_generation() == request.generation {
+          finish_cancelled_recovery(&mut app, matches!(outcome, RebuildOutcome::DecodedOwner));
+        }
+      }
+      RebuildOutcome::Failed(e) => {
         info!("native streaming recovery failed: {}", e);
         let mut app = ctx.app.lock().await;
+        if app.native_recovery_generation() != request.generation
+          || !app.native_engine_still_selected()
+        {
+          continue;
+        }
         app.native_backend_pending = false;
         app.native_restore_pending = None;
         app.native_load_watchdog = None;
@@ -1575,7 +1794,9 @@ async fn disconnect_streaming_player(
   shared_position.store(0, Ordering::Relaxed);
   shared_is_playing.store(false, Ordering::Relaxed);
 
+  let generation = app_lock.begin_native_recovery();
   Some(StreamingRecoveryRequest {
+    generation,
     reselect_device,
     restore_playback,
     continue_after_track,
@@ -1586,13 +1807,343 @@ async fn disconnect_streaming_player(
 #[cfg(test)]
 mod tests {
   use super::{
-    merge_recovery_requests, recovery_needs_native_selection, recovery_watchdog_should_escalate,
-    session_disconnect_recovery, should_replay_published_queue_slot, stop_disarms_watchdog,
-    unavailable_is_for_the_loading_track, unavailable_is_transport_related,
-    SessionDisconnectReason, SessionDisconnectRecovery, StreamingConnectionState,
-    StreamingRecoveryRequest, STALLED_PLAYBACK_RECOVERY_TIMEOUT,
+    merge_recovery_requests, next_recovery_retry_delay, recovery_needs_native_selection,
+    recovery_watchdog_should_escalate, session_disconnect_recovery,
+    should_replay_published_queue_slot, stop_disarms_watchdog,
+    unavailable_is_for_the_loading_track, unavailable_is_transport_related, BuildAttempt,
+    RebuildOutcome, SessionDisconnectReason, SessionDisconnectRecovery, StreamingBuildError,
+    StreamingConfig, StreamingConnectionState, StreamingRecoveryContext, StreamingRecoveryRequest,
+    RECOVERY_RETRY_BASE_DELAY, RECOVERY_RETRY_MAX_DELAY, STALLED_PLAYBACK_RECOVERY_TIMEOUT,
   };
+  use crate::core::app::App;
+  use librespot_core::error::Error as LibrespotError;
+  use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+  use std::sync::Arc;
   use std::time::Duration;
+
+  /// The startup path's recovery context, minus the OS media integrations.
+  fn recovery_context(
+    app: Arc<tokio::sync::Mutex<App>>,
+  ) -> (
+    StreamingRecoveryContext,
+    tokio::sync::mpsc::UnboundedSender<StreamingRecoveryRequest>,
+  ) {
+    let (recovery_tx, recovery_rx) = tokio::sync::mpsc::unbounded_channel();
+    (
+      StreamingRecoveryContext {
+        app,
+        shared_position: Arc::new(AtomicU64::new(0)),
+        shared_is_playing: Arc::new(AtomicBool::new(false)),
+        recovery_rx,
+        recovery_tx: recovery_tx.clone(),
+        streaming_config: StreamingConfig::default(),
+        #[cfg(all(feature = "mpris", target_os = "linux"))]
+        mpris_manager: None,
+        #[cfg(all(feature = "macos-media", target_os = "macos"))]
+        macos_media_manager: None,
+        #[cfg(all(feature = "windows-media", target_os = "windows"))]
+        windows_media_manager: None,
+      },
+      recovery_tx,
+    )
+  }
+
+  /// What a wake usually loses: DNS or the socket, not the login.
+  fn transient_build_failure() -> StreamingBuildError {
+    StreamingBuildError::Spirc(LibrespotError::unavailable(anyhow::anyhow!("dns error")))
+  }
+
+  #[test]
+  fn decoded_owner_cancels_recovery_and_can_reacquire_after_release() {
+    use crate::core::{app::App, source::Source, user_config::UserConfig};
+    use std::sync::mpsc::channel;
+    use std::time::SystemTime;
+
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    let (recovery_tx, mut recovery_rx) = tokio::sync::mpsc::unbounded_channel();
+    app.streaming_recovery_tx = Some(recovery_tx);
+    app.claim_decoded_sink(Source::YouTube);
+    assert!(matches!(
+      super::rebuild_cancellation(&app),
+      Some(super::RebuildCancellation::DecodedOwner)
+    ));
+    app.native_backend_pending = true;
+    super::finish_cancelled_recovery(&mut app, true);
+    assert!(!app.native_backend_pending);
+    assert!(app.native_backend_parked());
+    app.release_decoded_sink_claim();
+    assert!(app.reacquire_parked_backend());
+    assert!(recovery_rx.try_recv().unwrap().reacquire);
+  }
+
+  #[test]
+  fn apple_music_cancellation_preserves_the_absent_backend_for_reacquisition() {
+    use crate::core::{app::App, user_config::UserConfig};
+    use std::sync::mpsc::channel;
+    use std::time::SystemTime;
+
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.claim_apple_music();
+    assert!(app.apple_music_owns_playback());
+    assert!(matches!(
+      super::rebuild_cancellation(&app),
+      Some(super::RebuildCancellation::Cancelled)
+    ));
+
+    app.native_backend_pending = true;
+    super::finish_cancelled_recovery(&mut app, false);
+    assert!(!app.native_backend_pending);
+    assert!(app.native_backend_parked());
+  }
+
+  #[test]
+  fn frontend_shutdown_is_not_a_decoded_owner_cancellation() {
+    use crate::core::{app::App, source::Source, user_config::UserConfig};
+    use std::sync::mpsc::channel;
+    use std::time::SystemTime;
+
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.claim_decoded_sink(Source::YouTube);
+    app.close_io_channel();
+    assert!(matches!(
+      super::rebuild_cancellation(&app),
+      Some(super::RebuildCancellation::Cancelled)
+    ));
+    app.native_backend_pending = true;
+    super::finish_cancelled_recovery(&mut app, false);
+    assert!(!app.native_backend_pending);
+    assert!(!app.native_backend_parked());
+  }
+
+  #[cfg(all(
+    feature = "soloist",
+    not(all(target_os = "macos", target_arch = "x86_64"))
+  ))]
+  #[test]
+  fn cancelling_librespot_recovery_does_not_clear_soloist_startup_pending() {
+    use crate::core::{
+      app::App,
+      user_config::{PlaybackEngine, UserConfig},
+    };
+    use std::sync::mpsc::channel;
+    use std::time::SystemTime;
+
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.user_config.behavior.enable_streaming = true;
+    app.user_config.behavior.playback_engine = PlaybackEngine::Soloist;
+    assert!(app.apply_playback_engine().is_some());
+    assert!(app.native_backend_pending);
+    assert!(matches!(
+      super::rebuild_cancellation(&app),
+      Some(super::RebuildCancellation::Cancelled)
+    ));
+
+    for interrupted_by_decoded in [false, true] {
+      super::finish_cancelled_recovery(&mut app, interrupted_by_decoded);
+      assert!(app.native_backend_pending);
+      assert!(!app.native_backend_parked());
+    }
+  }
+
+  #[test]
+  fn a_dns_failure_keeps_retrying_the_connect_device_rebuild() {
+    let dns_error =
+      StreamingBuildError::Spirc(LibrespotError::unavailable(anyhow::anyhow!("dns error")));
+    assert!(dns_error.is_retryable());
+    assert!(StreamingBuildError::Timeout { secs: 45 }.is_retryable());
+  }
+
+  #[test]
+  fn a_missing_login_or_rejected_credentials_stop_the_rebuild_retries() {
+    assert!(!StreamingBuildError::Setup(anyhow::anyhow!("No cached Spotify login")).is_retryable());
+    assert!(
+      !StreamingBuildError::Spirc(LibrespotError::unauthenticated(anyhow::anyhow!(
+        "bad token"
+      )))
+      .is_retryable()
+    );
+    assert!(
+      !StreamingBuildError::Spirc(LibrespotError::permission_denied(anyhow::anyhow!("denied")))
+        .is_retryable()
+    );
+    // login5 answers a bad stored credential with FailedPrecondition.
+    for detail in [
+      "Login request was denied: INVALID_CREDENTIALS",
+      "Login request was denied: UNKNOWN_IDENTIFIER",
+    ] {
+      assert!(
+        !StreamingBuildError::Spirc(LibrespotError::failed_precondition(anyhow::anyhow!(detail)))
+          .is_retryable(),
+        "{detail} is a rejected login, not a transient failure"
+      );
+    }
+    // FailedPrecondition is also librespot's generic local-state error, which a
+    // retry can still fix.
+    assert!(
+      StreamingBuildError::Spirc(LibrespotError::failed_precondition(anyhow::anyhow!(
+        "No client token response type"
+      )))
+      .is_retryable()
+    );
+  }
+
+  /// A refused login ends the chain on its first attempt.
+  #[tokio::test]
+  async fn a_login5_rejected_login_ends_the_recovery_chain_without_retrying() {
+    use crate::core::user_config::UserConfig;
+    use std::sync::mpsc::channel;
+    use std::time::SystemTime;
+
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    assert_eq!(app.begin_native_recovery(), 1);
+    let app = Arc::new(tokio::sync::Mutex::new(app));
+    let (mut ctx, _recovery_tx) = recovery_context(Arc::clone(&app));
+
+    let attempts = Arc::new(AtomicU32::new(0));
+    let attempts_for_build = Arc::clone(&attempts);
+    let build = move |_config: StreamingConfig| -> BuildAttempt<()> {
+      let attempt = attempts_for_build.fetch_add(1, Ordering::SeqCst) + 1;
+      Box::pin(async move {
+        // A second attempt is the regression; answer it so the test fails
+        // instead of retrying forever.
+        if attempt > 1 {
+          return Ok(());
+        }
+        Err(StreamingBuildError::Spirc(
+          LibrespotError::failed_precondition(anyhow::anyhow!(
+            "Login request was denied: INVALID_CREDENTIALS"
+          )),
+        ))
+      })
+    };
+
+    let mut request = StreamingRecoveryRequest {
+      generation: 1,
+      reselect_device: true,
+      restore_playback: true,
+      continue_after_track: None,
+      reacquire: false,
+    };
+    let outcome =
+      super::rebuild_with_retries(&mut ctx, &mut request, Duration::from_millis(1), build).await;
+
+    assert!(
+      matches!(outcome, RebuildOutcome::Failed(ref error) if !error.is_retryable()),
+      "a rejected login is a failure the chain gives up on"
+    );
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
+  }
+
+  /// A transient failure is retried; a newer request supersedes the older chain
+  /// and replays its parked start.
+  #[tokio::test]
+  async fn recovery_retries_a_transient_failure_then_replays_the_parked_start_of_the_newer_request()
+  {
+    use crate::core::user_config::UserConfig;
+    use crate::infra::network::IoEvent;
+    use std::sync::mpsc::channel;
+    use std::time::SystemTime;
+
+    let (tx, io_rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    assert_eq!(app.begin_native_recovery(), 1);
+    app.park_start_playback(Some("spotify:playlist:parked".to_string()), None, None);
+    let app = Arc::new(tokio::sync::Mutex::new(app));
+    let (mut ctx, recovery_tx) = recovery_context(Arc::clone(&app));
+
+    let attempts = Arc::new(AtomicU32::new(0));
+    let attempts_for_build = Arc::clone(&attempts);
+    let app_for_build = Arc::clone(&app);
+    let build = move |_config: StreamingConfig| -> BuildAttempt<()> {
+      let attempt = attempts_for_build.fetch_add(1, Ordering::SeqCst) + 1;
+      let app = Arc::clone(&app_for_build);
+      let recovery_tx = recovery_tx.clone();
+      Box::pin(async move {
+        match attempt {
+          // A DNS failure right after a wake is retried.
+          1 => Err(transient_build_failure()),
+          // A transport drop owns a newer generation from here on.
+          2 => {
+            let generation = {
+              let mut app = app.lock().await;
+              app.begin_native_recovery()
+            };
+            recovery_tx
+              .send(StreamingRecoveryRequest {
+                generation,
+                reselect_device: true,
+                restore_playback: true,
+                continue_after_track: None,
+                reacquire: false,
+              })
+              .expect("the recovery channel is open");
+            Err(transient_build_failure())
+          }
+          _ => Ok(()),
+        }
+      })
+    };
+
+    let mut request = StreamingRecoveryRequest {
+      generation: 1,
+      reselect_device: true,
+      restore_playback: true,
+      continue_after_track: None,
+      reacquire: false,
+    };
+    let outcome =
+      super::rebuild_with_retries(&mut ctx, &mut request, Duration::from_millis(1), &build).await;
+
+    assert!(matches!(outcome, RebuildOutcome::Superseded));
+    // One retry, then the second build loses the chain to the newer generation.
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
+
+    let mut newer = ctx
+      .recovery_rx
+      .try_recv()
+      .expect("the newer request is queued");
+    assert_eq!(newer.generation, 2);
+    let outcome =
+      super::rebuild_with_retries(&mut ctx, &mut newer, Duration::from_millis(1), &build).await;
+    assert!(matches!(outcome, RebuildOutcome::Built(())));
+    assert_eq!(attempts.load(Ordering::SeqCst), 3);
+
+    // The rebuilt route reselects the device, then replays the parked start.
+    {
+      let mut app = app.lock().await;
+      super::replay_recovery_intent(&mut app, &newer, Some("spotatui"), false);
+    }
+    assert!(matches!(
+      io_rx.try_recv(),
+      Ok(IoEvent::AutoSelectStreamingDevice(_, false, true))
+    ));
+    assert!(matches!(
+      io_rx.try_recv(),
+      Ok(IoEvent::StartPlayback(Some(ref context), None, None))
+        if context == "spotify:playlist:parked"
+    ));
+  }
+
+  #[test]
+  fn retry_delays_back_off_up_to_a_minute() {
+    assert_eq!(
+      next_recovery_retry_delay(RECOVERY_RETRY_BASE_DELAY),
+      Duration::from_secs(10)
+    );
+    assert_eq!(
+      next_recovery_retry_delay(Duration::from_secs(30)),
+      Duration::from_secs(60)
+    );
+    assert_eq!(
+      next_recovery_retry_delay(RECOVERY_RETRY_MAX_DELAY),
+      RECOVERY_RETRY_MAX_DELAY
+    );
+  }
 
   #[test]
   fn recovery_watchdog_waits_for_the_full_stall_window() {
@@ -1717,6 +2268,7 @@ mod tests {
     merge_recovery_requests(
       &mut request,
       StreamingRecoveryRequest {
+        generation: 2,
         reselect_device: true,
         restore_playback: true,
         continue_after_track: None,
@@ -1725,12 +2277,14 @@ mod tests {
     );
     assert!(request.reselect_device);
     assert!(request.restore_playback);
+    assert_eq!(request.generation, 2);
     // The newest non-None continuation wins; None does not erase it.
     assert_eq!(request.continue_after_track.as_deref(), Some("older"));
 
     merge_recovery_requests(
       &mut request,
       StreamingRecoveryRequest {
+        generation: 3,
         reselect_device: false,
         restore_playback: true,
         continue_after_track: Some("newer".to_string()),
@@ -1738,6 +2292,7 @@ mod tests {
       },
     );
     assert!(request.reselect_device);
+    assert_eq!(request.generation, 3);
     assert_eq!(request.continue_after_track.as_deref(), Some("newer"));
   }
 
@@ -1763,6 +2318,7 @@ mod tests {
   #[test]
   fn recovery_request_merge_handoff_vetoes_restore_intent() {
     let restore = StreamingRecoveryRequest {
+      generation: 1,
       reselect_device: true,
       restore_playback: true,
       continue_after_track: Some("track".to_string()),

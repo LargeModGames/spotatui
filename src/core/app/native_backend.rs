@@ -58,6 +58,34 @@ pub struct PendingStartPlayback {
 }
 
 impl App {
+  /// Whether librespot is still the configured playback engine. Exists in
+  /// every build so callers need no `#[cfg(feature = "soloist")]`; a build
+  /// without Soloist always answers true.
+  #[cfg(feature = "streaming")]
+  pub(crate) fn native_engine_still_selected(&self) -> bool {
+    #[cfg(feature = "soloist")]
+    {
+      !self.soloist_engine_selected()
+    }
+    #[cfg(not(feature = "soloist"))]
+    {
+      true
+    }
+  }
+
+  /// Identity of the native backend rebuild currently wanted.
+  #[cfg(feature = "streaming")]
+  pub(crate) fn native_recovery_generation(&self) -> u64 {
+    self.native_recovery_generation
+  }
+
+  /// Start a new rebuild identity and return it.
+  #[cfg(feature = "streaming")]
+  pub(crate) fn begin_native_recovery(&mut self) -> u64 {
+    self.native_recovery_generation = self.native_recovery_generation.wrapping_add(1);
+    self.native_recovery_generation
+  }
+
   #[cfg(feature = "streaming")]
   pub(crate) fn mark_native_handed_off(&mut self) {
     self.native_handed_off = true;
@@ -147,9 +175,12 @@ impl App {
     }
 
     self.set_status_message(self.strings().status.app.native_disconnected, 8);
-    if let Some(tx) = &self.streaming_recovery_tx {
+    // Cloned so starting the new rebuild identity can borrow `self` mutably.
+    if let Some(tx) = self.streaming_recovery_tx.clone() {
+      let generation = self.begin_native_recovery();
       self.native_backend_pending = tx
         .send(crate::infra::player::StreamingRecoveryRequest {
+          generation,
           reselect_device,
           restore_playback: true,
           continue_after_track: None,
@@ -180,6 +211,14 @@ impl App {
     tokio::task::spawn_blocking(move || drop(player));
   }
 
+  /// Preserve the absent backend when another owner interrupts recovery.
+  #[cfg(feature = "streaming")]
+  pub(crate) fn park_cancelled_native_recovery(&mut self) {
+    if self.streaming_player.is_none() {
+      self.native_parked = true;
+    }
+  }
+
   /// Whether the park took the player and no rebuild has installed a new one.
   #[cfg(feature = "streaming")]
   pub(crate) fn native_backend_parked(&self) -> bool {
@@ -194,8 +233,10 @@ impl App {
       return false;
     }
     if !self.native_backend_pending {
+      let generation = self.begin_native_recovery();
       self.native_backend_pending = self.streaming_recovery_tx.as_ref().is_some_and(|tx| {
         tx.send(crate::infra::player::StreamingRecoveryRequest {
+          generation,
           reselect_device: false,
           restore_playback: true,
           continue_after_track: None,
@@ -232,9 +273,7 @@ impl App {
   #[cfg(feature = "streaming")]
   pub(crate) fn accept_rebuilt_native_backend(&mut self) -> bool {
     // A rebuild that started before a switch to Soloist must not register a second device.
-    #[cfg(feature = "soloist")]
-    if self.soloist_engine_selected() {
-      self.native_backend_pending = false;
+    if !self.native_engine_still_selected() {
       return false;
     }
     // A rebuild may have started before Music took over. Park it, so an
@@ -243,6 +282,10 @@ impl App {
       self.park_native_backend();
       self.native_parked = true;
       self.native_backend_pending = false;
+      return false;
+    }
+    if self.active_decoded_source() {
+      self.park_cancelled_native_recovery();
       return false;
     }
     if self.native_parked && !self.native_should_drive() {
@@ -299,6 +342,20 @@ impl App {
       Some(StartupBehavior::Pause) => self.dispatch(IoEvent::PausePlayback),
       Some(StartupBehavior::Continue) | None => {}
     }
+  }
+
+  /// Credit the time a rebuild chain spent retrying back to a parked start.
+  ///
+  /// `max_parked_age` is sized for a single player build. The shift is clamped
+  /// so a start parked part-way through the chain never gets a timestamp in the future.
+  #[cfg(feature = "streaming")]
+  pub(crate) fn exclude_recovery_time_from_parked_start(&mut self, duration: Duration) {
+    let Some(pending) = self.pending_start_playback.as_mut() else {
+      return;
+    };
+    let now = Instant::now();
+    let shift = duration.min(now.saturating_duration_since(pending.parked_at));
+    pending.parked_at += shift;
   }
 
   /// Replay a parked StartPlayback through the normal dispatch path. No-op
@@ -775,6 +832,44 @@ mod tests {
   }
 
   #[test]
+  fn a_long_retry_chain_does_not_expire_a_parked_start() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.park_start_playback(Some("spotify:playlist:p".to_string()), None, None);
+    let chain = Duration::from_secs(180);
+    if let Some(pending) = app.pending_start_playback.as_mut() {
+      // Leave a small margin below the expiry boundary: the replay assertion
+      // runs after a few clock reads, so placing it exactly at max_parked_age()
+      // makes this test timing-sensitive.
+      pending.parked_at = Instant::now() - max_parked_age() - chain + Duration::from_secs(1);
+    }
+
+    app.exclude_recovery_time_from_parked_start(chain);
+    app.replay_pending_start_playback();
+
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::StartPlayback(..))));
+    assert!(app.pending_start_playback.is_some());
+    assert_ne!(
+      app.status_message(),
+      Some(crate::core::i18n::EN.status.app.native_request_expired)
+    );
+  }
+
+  #[test]
+  fn a_start_parked_mid_chain_is_not_shifted_into_the_future() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.park_start_playback(Some("spotify:playlist:p".to_string()), None, None);
+
+    app.exclude_recovery_time_from_parked_start(Duration::from_secs(3600));
+
+    let parked_at = app.pending_start_playback.as_ref().unwrap().parked_at;
+    assert!(parked_at <= Instant::now());
+    app.replay_pending_start_playback();
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::StartPlayback(..))));
+  }
+
+  #[test]
   fn a_parked_backend_sends_one_reacquire_request_per_rebuild() {
     let (tx, rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
@@ -795,7 +890,7 @@ mod tests {
   }
 
   #[test]
-  fn a_rebuild_under_a_decoded_owner_is_refused_only_while_parked() {
+  fn a_rebuild_under_a_decoded_owner_is_parked_until_the_claim_is_released() {
     let (tx, _rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
     app.native_parked = true;
@@ -808,9 +903,10 @@ mod tests {
     assert!(app.accept_rebuilt_native_backend());
     assert!(!app.native_parked);
 
-    // A decoded queue slot over a Spotify context parks nothing.
+    // A rebuild started before a decoded claim must also be refused.
     app.claim_decoded_sink(Source::YouTube);
-    assert!(app.accept_rebuilt_native_backend());
+    assert!(!app.accept_rebuilt_native_backend());
+    assert!(app.native_backend_parked());
   }
 
   #[test]
