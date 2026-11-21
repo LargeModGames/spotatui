@@ -114,7 +114,7 @@ Also run, when they apply:
 
 CI then checks eight feature combinations on Linux plus one macOS job ([`ci.yml`](.github/workflows/ci.yml)). The desktop app builds on macOS and Windows only after the merge. Code coverage is reported but never blocks a PR.
 
-Add or update tests when you change behavior, add a line under `## [Unreleased]` in [`CHANGELOG.md`](CHANGELOG.md) for a change users notice, and add screenshots for a UI change.
+Add or update tests when you change behavior, add a changelog fragment in [`changelog.d/`](changelog.d/README.md) for a change users notice, and add screenshots for a UI change.
 
 ## Adding interface text
 
