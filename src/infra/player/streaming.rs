@@ -39,6 +39,55 @@ use tokio::time::{timeout, Duration};
 const FAST_SESSION_RECONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const PLAY_AFTER_TRANSFER_WINDOW: Duration = Duration::from_secs(15);
 
+/// Why building a Connect device failed.
+#[derive(Debug)]
+pub enum StreamingBuildError {
+  /// Setup before Spirc. Waiting cannot fix these without user action.
+  Setup(anyhow::Error),
+  /// Spirc creation failed.
+  Spirc(librespot_core::error::Error),
+  /// Timeout while waiting for Spotify.
+  Timeout { secs: u64 },
+}
+
+impl StreamingBuildError {
+  /// Whether a later build could succeed while everything else stays the same.
+  pub fn is_retryable(&self) -> bool {
+    match self {
+      Self::Setup(_) => false,
+      Self::Spirc(error) => !matches!(
+        error.kind,
+        ErrorKind::Unauthenticated | ErrorKind::PermissionDenied
+      ),
+      Self::Timeout { .. } => true,
+    }
+  }
+}
+
+impl From<anyhow::Error> for StreamingBuildError {
+  fn from(error: anyhow::Error) -> Self {
+    Self::Setup(error)
+  }
+}
+
+impl From<librespot_core::error::Error> for StreamingBuildError {
+  fn from(error: librespot_core::error::Error) -> Self {
+    Self::Setup(anyhow::Error::new(error))
+  }
+}
+
+impl std::fmt::Display for StreamingBuildError {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self {
+      Self::Setup(error) => write!(f, "{error:#}"),
+      Self::Spirc(error) => write!(f, "Failed to create Spirc: {error}"),
+      Self::Timeout { secs } => write!(f, "Timed out after {secs}s waiting for Spotify"),
+    }
+  }
+}
+
+impl std::error::Error for StreamingBuildError {}
+
 type SpircTaskHandle = tokio::task::JoinHandle<Option<SavedPlaybackState>>;
 
 /// One-shot play for the paused load a resume-after-handoff transfer ends in (#693).
@@ -671,7 +720,9 @@ impl StreamingPlayer {
   }
 
   /// A streaming player from the cached Spotify login; never opens a browser.
-  pub async fn new_cache_only(config: StreamingConfig) -> Result<Self> {
+  pub async fn new_cache_only(
+    config: StreamingConfig,
+  ) -> std::result::Result<Self, StreamingBuildError> {
     // Set up cache paths
     let cache_path = config.cache_path.clone().or_else(get_default_cache_path);
     let audio_cache_path = if config.audio_cache {
@@ -817,17 +868,15 @@ impl StreamingPlayer {
           clear_cached_streaming_credentials(&cache_path);
         }
         warn!("Spirc creation error: {:?}", e);
-        return Err(anyhow!("Failed to create Spirc: {:?}", e));
+        return Err(StreamingBuildError::Spirc(e));
       }
       Err(_) => {
         // Timeout means the network was slow, not that credentials are bad.
         // Do NOT clear credentials, they may be valid for the next startup.
         // Streaming is skipped for this session; main.rs falls back to Web API.
-        return Err(anyhow!(
-          "Spirc initialization timed out after {}s. Streaming skipped for this session. \
-             Set SPOTATUI_STREAMING_INIT_TIMEOUT_SECS to adjust.",
-          init_timeout.as_secs()
-        ));
+        return Err(StreamingBuildError::Timeout {
+          secs: init_timeout.as_secs(),
+        });
       }
     };
 
