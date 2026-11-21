@@ -293,6 +293,9 @@ Everyone who helped, with code or without. To get on this list, see [Recognition
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/ViktorBystrov72"><img src="https://avatars.githubusercontent.com/u/18964918?v=4&size=100" width="100px" height="100px" alt="ViktorBystrov72"/><br /><sub><b>ViktorBystrov72</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=ViktorBystrov72" title="Code">💻</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/PiyushChoudhary-Git"><img src="https://avatars.githubusercontent.com/u/143430812?v=4&size=100" width="100px" height="100px" alt="Piyush Choudhary"/><br /><sub><b>Piyush Choudhary</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=PiyushChoudhary-Git" title="Code">💻</a></td>
     </tr>
+    <tr>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/Xnadir"><img src="https://avatars.githubusercontent.com/u/36660597?v=4&size=100" width="100px" height="100px" alt="Nadir Ali"/><br /><sub><b>Nadir Ali</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=Xnadir" title="Code">💻</a></td>
+    </tr>
   </tbody>
 </table>
 
