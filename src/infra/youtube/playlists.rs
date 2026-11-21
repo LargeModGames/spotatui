@@ -101,14 +101,16 @@ pub fn playlist_id_from_ref(uri_or_id: &str) -> &str {
 // File I/O
 // ---------------------------------------------------------------------------
 
-/// Environment override for the playlists file location (used by tests and
-/// available to users who keep their config elsewhere).
+/// Environment override for users who keep their playlists elsewhere.
+/// Ignored in tests, which pass temporary paths directly.
 pub const PATH_ENV: &str = "SPOTATUI_YOUTUBE_PLAYLISTS_PATH";
 
 /// Location of the playlists file: `$SPOTATUI_YOUTUBE_PLAYLISTS_PATH` when
 /// set, else `<config dir>/youtube_playlists.yml` next to the app config.
 pub fn default_playlists_path() -> Result<PathBuf> {
-  if let Ok(path) = std::env::var(PATH_ENV) {
+  if let Some(path) =
+    crate::core::paths::path_override(PATH_ENV).and_then(|value| value.into_string().ok())
+  {
     return Ok(PathBuf::from(path));
   }
   crate::core::user_config::default_app_config_dir()
