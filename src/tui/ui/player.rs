@@ -40,6 +40,7 @@ const PLAYBAR_CONTROLS: [PlaybarControl; 8] = [
   PlaybarControl::VolumeDown,
   PlaybarControl::VolumeUp,
 ];
+/// Cell height / width assumed when the terminal's cell size is unknown.
 #[cfg(feature = "cover-art")]
 const COVER_ART_CELL_RATIO: f32 = 1.9;
 #[cfg(feature = "cover-art")]
@@ -178,6 +179,7 @@ fn playbar_layout_areas(app: &App, layout_chunk: Rect) -> PlaybarLayoutAreas {
       let cover_layout = playbar_cover_layout(
         other,
         app.user_config.behavior.playbar_cover_art_size_percent,
+        crate::tui::cover_art::cell_ratio().unwrap_or(COVER_ART_CELL_RATIO),
       );
       if let Some(rendered_size) =
         crate::tui::cover_art::size_for(cover_layout.image_area, &app.cover_art)
@@ -229,10 +231,11 @@ fn playbar_layout_areas(app: &App, layout_chunk: Rect) -> PlaybarLayoutAreas {
 }
 
 #[cfg(feature = "cover-art")]
-fn playbar_cover_layout(inner: Rect, size_percent: u16) -> PlaybarCoverLayout {
+fn playbar_cover_layout(inner: Rect, size_percent: u16, cell_ratio: f32) -> PlaybarCoverLayout {
   let size_percent = crate::core::user_config::clamp_playbar_cover_art_size_percent(size_percent);
   let image_height = scaled_cover_art_height(inner.height, size_percent);
-  let requested_width = ((image_height as f32) * COVER_ART_CELL_RATIO).ceil() as u16;
+  // A square cover `image_height` rows tall needs `cell_ratio` columns per row.
+  let requested_width = ((image_height as f32) * cell_ratio).ceil() as u16;
   let max_slot_width = if inner.width > 2 {
     inner.width.saturating_sub(2)
   } else {
@@ -2222,7 +2225,7 @@ mod tests {
   #[cfg(feature = "cover-art")]
   #[test]
   fn playbar_cover_layout_uses_default_slot_width() {
-    let layout = playbar_cover_layout(Rect::new(2, 3, 100, 4), 100);
+    let layout = playbar_cover_layout(Rect::new(2, 3, 100, 4), 100, COVER_ART_CELL_RATIO);
 
     assert_eq!(layout.slot, Rect::new(2, 3, 6, 4));
     assert_eq!(layout.image_area, Rect::new(2, 3, 6, 3));
@@ -2232,8 +2235,8 @@ mod tests {
   #[cfg(feature = "cover-art")]
   #[test]
   fn playbar_cover_layout_centers_rendered_image_in_slot() {
-    let layout =
-      playbar_cover_layout(Rect::new(2, 3, 100, 6), 200).with_rendered_size(Rect::new(0, 0, 8, 4));
+    let layout = playbar_cover_layout(Rect::new(2, 3, 100, 6), 200, COVER_ART_CELL_RATIO)
+      .with_rendered_size(Rect::new(0, 0, 8, 4));
 
     assert_eq!(layout.slot, Rect::new(2, 3, 12, 6));
     assert_eq!(layout.image_area, Rect::new(4, 5, 8, 4));
@@ -2243,8 +2246,8 @@ mod tests {
   #[cfg(feature = "cover-art")]
   #[test]
   fn playbar_cover_layout_bottom_aligns_smaller_rendered_image_at_max_size() {
-    let layout =
-      playbar_cover_layout(Rect::new(2, 3, 100, 4), 200).with_rendered_size(Rect::new(0, 0, 6, 3));
+    let layout = playbar_cover_layout(Rect::new(2, 3, 100, 4), 200, COVER_ART_CELL_RATIO)
+      .with_rendered_size(Rect::new(0, 0, 6, 3));
 
     assert_eq!(layout.image_area, Rect::new(3, 4, 6, 3));
   }
@@ -2297,8 +2300,8 @@ mod tests {
   #[cfg(feature = "cover-art")]
   #[test]
   fn playbar_cover_layout_scales_smaller_and_larger_sizes() {
-    let smaller = playbar_cover_layout(Rect::new(0, 0, 100, 4), 50);
-    let larger = playbar_cover_layout(Rect::new(0, 0, 100, 4), 200);
+    let smaller = playbar_cover_layout(Rect::new(0, 0, 100, 4), 50, COVER_ART_CELL_RATIO);
+    let larger = playbar_cover_layout(Rect::new(0, 0, 100, 4), 200, COVER_ART_CELL_RATIO);
 
     assert_eq!(smaller.slot.width, 4);
     assert_eq!(smaller.text_area, Rect::new(5, 0, 95, 4));
@@ -2306,6 +2309,17 @@ mod tests {
     assert_eq!(larger.text_area, Rect::new(9, 0, 91, 4));
     assert_eq!(smaller.image_area.height, 2);
     assert_eq!(larger.image_area.height, 4);
+  }
+
+  #[cfg(feature = "cover-art")]
+  #[test]
+  fn playbar_cover_layout_uses_measured_cell_ratio_for_full_height() {
+    // 6x15 px cells: a square cover 4 rows tall is 60 px, so 10 columns wide.
+    let layout = playbar_cover_layout(Rect::new(0, 0, 100, 4), 200, 2.5);
+
+    assert_eq!(layout.slot, Rect::new(0, 0, 10, 4));
+    assert_eq!(layout.image_area, Rect::new(0, 0, 10, 4));
+    assert_eq!(layout.text_area, Rect::new(11, 0, 89, 4));
   }
 
   #[cfg(feature = "cover-art")]
@@ -2319,13 +2333,13 @@ mod tests {
   #[cfg(feature = "cover-art")]
   #[test]
   fn playbar_cover_layout_clamps_to_tiny_playbar_area() {
-    let layout = playbar_cover_layout(Rect::new(0, 0, 10, 6), 200);
+    let layout = playbar_cover_layout(Rect::new(0, 0, 10, 6), 200, COVER_ART_CELL_RATIO);
 
     assert_eq!(layout.slot, Rect::new(0, 0, 8, 6));
     assert_eq!(layout.image_area, Rect::new(0, 0, 8, 6));
     assert_eq!(layout.text_area, Rect::new(9, 0, 1, 6));
 
-    let zero_height = playbar_cover_layout(Rect::new(4, 5, 10, 0), 100);
+    let zero_height = playbar_cover_layout(Rect::new(4, 5, 10, 0), 100, COVER_ART_CELL_RATIO);
     assert_eq!(zero_height.slot, Rect::new(4, 5, 0, 0));
     assert_eq!(zero_height.text_area, Rect::new(4, 5, 10, 0));
   }

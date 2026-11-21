@@ -50,7 +50,7 @@ pub fn init_renderer() {
     if iterm2 {
       options.blacklist_protocols = vec![ProtocolType::Kitty, ProtocolType::Sixel];
     }
-    let picker = match Picker::from_query_stdio_with_options(options) {
+    let (picker, measured_cell) = match Picker::from_query_stdio_with_options(options) {
       Ok(mut picker) => {
         let measured = picker
           .capabilities()
@@ -67,11 +67,11 @@ pub fn init_renderer() {
         } else if iterm2 && measured {
           picker.set_protocol_type(ProtocolType::Iterm2);
         }
-        picker
+        (picker, measured || device_cell.is_some())
       }
       Err(err) => {
         warn!("cover art renderer fallback to halfblocks: {err}");
-        Picker::halfblocks()
+        (Picker::halfblocks(), false)
       }
     };
 
@@ -82,7 +82,12 @@ pub fn init_renderer() {
       cell.width,
       cell.height
     );
-    CoverArtRenderer::new(picker)
+    let renderer = CoverArtRenderer::new(picker);
+    if measured_cell {
+      renderer.with_measured_cell_ratio()
+    } else {
+      renderer
+    }
   });
 }
 
@@ -175,6 +180,13 @@ pub fn full_image_support() -> bool {
   RENDERER
     .get()
     .is_some_and(CoverArtRenderer::full_image_support)
+}
+
+/// Height-to-width ratio of one terminal cell, from the cell size measured at
+/// startup. `None` for the halfblocks fallback or when the terminal did not
+/// report its cell size; callers then fall back to their own estimate.
+pub fn cell_ratio() -> Option<f32> {
+  RENDERER.get().and_then(|renderer| renderer.cell_ratio)
 }
 
 /// Drop cached protocols that no longer match the store, so cleared art
@@ -318,6 +330,8 @@ pub fn plugin_size_for(area: Rect, fit: PluginCoverArtFit, store: &CoverArtStore
 struct CoverArtRenderer {
   picker: Picker,
   terminal_background: Option<[u8; 3]>,
+  /// Measured cell height / width; see [`cell_ratio`].
+  cell_ratio: Option<f32>,
   /// Playbar protocol state.
   playbar: Mutex<Option<Surface>>,
   /// The Mini player pane's playbar, drawn in the same frame as the main playbar.
@@ -487,12 +501,23 @@ impl CoverArtRenderer {
     Self {
       picker,
       terminal_background,
+      cell_ratio: None,
       playbar: Mutex::new(None),
       pane_playbar: Mutex::new(None),
       fullscreen: Mutex::new(None),
       now_playing: Mutex::new(None),
       plugin: Mutex::new(None),
     }
+  }
+
+  /// Record the picker's cell size as measured. Only image protocols draw
+  /// whole pixels per cell, so halfblocks keeps `None`.
+  fn with_measured_cell_ratio(mut self) -> Self {
+    let font = self.picker.font_size();
+    if self.full_image_support() && font.width > 0 && font.height > 0 {
+      self.cell_ratio = Some(f32::from(font.height) / f32::from(font.width));
+    }
+    self
   }
 
   fn playbar_surface(&self) -> &Mutex<Option<Surface>> {
