@@ -119,9 +119,12 @@ spotatui will display the updated playback. The output format is configurable wi
 
 Here's a list:
 
-* `--next` and `--previous` cannot be used with other options
-* `--status`, `--toggle`, `--transfer`, `--volume`, `--like`, `--repeat` and `--shuffle` \
-can be used together
+* `--next` and `--previous` cannot be used together, and work only with `--seek`, \
+`--device` and `--format`
+* `--status`, `--toggle`, `--transfer`, `--volume`, `--like`, `--dislike`, `--repeat` and \
+`--shuffle` can be used together
+* `--like` and `--dislike` cannot be used together
+* `--seek` is accepted with every option, but `--share-track` and `--share-album` ignore it
 * `--share-track` and `--share-album` cannot be used with other options",
     )
     .visible_alias("pb")
@@ -539,6 +542,22 @@ mod tests {
         .unwrap();
       assert_eq!(matches.get_one::<String>("volume").unwrap(), volume);
       assert!(matches.get_flag("toggle"));
+    }
+  }
+
+  #[test]
+  fn playback_long_help_names_dislike_and_seek() {
+    let help = playback_subcommand()
+      .get_long_about()
+      .expect("playback must have a long help")
+      .to_string();
+    for line in [
+      "work only with `--seek`, `--device` and `--format`",
+      "`--like`, `--dislike`, `--repeat` and `--shuffle` can be used together",
+      "`--like` and `--dislike` cannot be used together",
+      "`--seek` is accepted with every option, but `--share-track` and `--share-album` ignore it",
+    ] {
+      assert!(help.contains(line), "missing {line:?} in:\n{help}");
     }
   }
 
