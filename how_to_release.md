@@ -9,7 +9,7 @@ The workflow runs when you push a tag.
 1. Bump the version in `Cargo.toml` and run the app to update `Cargo.lock`.
    - Set the same version in `desktop/Cargo.toml` (the desktop test `version_matches_root` fails otherwise).
    - Refresh the desktop lock: `cargo metadata --manifest-path desktop/Cargo.toml --format-version 1 > $null` (in bash, `> /dev/null`). Commit `Cargo.lock` and `desktop/Cargo.lock` together.
-2. Update the "Unreleased" header for the new version in `CHANGELOG.md` (`### Added/Fixed/Changed` as appropriate).
+2. Run `tools/assemble_changelog.sh vX.Y.Z` (bash) to move the `changelog.d/` fragments into `CHANGELOG.md`.
 3. Commit and push your changes.
 4. Create an annotated tag:
    - `git tag -a v0.7.0 -m "Release v0.7.0"`
