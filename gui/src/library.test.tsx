@@ -49,6 +49,7 @@ const liked: LikedSongs = {
 
 const playlists: SourcePlaylists = {
   playlist_sidebar_order: "spotify",
+  pinned: [],
   spotify: [],
   local: [
     {

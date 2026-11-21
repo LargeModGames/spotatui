@@ -223,6 +223,8 @@ pub struct SettingsStrings {
   pub keys_remove_from_queue_description: &'static str,
   pub keys_like_track_name: &'static str,
   pub keys_like_track_description: &'static str,
+  pub keys_pin_playlist_name: &'static str,
+  pub keys_pin_playlist_description: &'static str,
   pub keys_generate_recap_name: &'static str,
   pub keys_generate_recap_description: &'static str,
   pub keys_copy_song_url_name: &'static str,
@@ -777,6 +779,10 @@ impl SettingsStrings {
         self.keys_remove_from_queue_description,
       ),
       "keys.like_track" => (self.keys_like_track_name, self.keys_like_track_description),
+      "keys.pin_playlist" => (
+        self.keys_pin_playlist_name,
+        self.keys_pin_playlist_description,
+      ),
       "keys.generate_recap" => (
         self.keys_generate_recap_name,
         self.keys_generate_recap_description,

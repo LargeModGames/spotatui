@@ -237,7 +237,13 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
         crate::core::app::PlaylistFolderItem::Playlist { index, .. } => app
           .all_playlists()
           .get(*index)
-          .map(|p| p.name.clone())
+          .map(|p| {
+            if app.is_playlist_pinned(&p.uri) {
+              format!("📌 {}", p.name)
+            } else {
+              p.name.clone()
+            }
+          })
           .unwrap_or_else(|| strings.unknown.to_string()),
         crate::core::app::PlaylistFolderItem::CommunityPin => community_pin_label(app),
       })
@@ -508,6 +514,41 @@ mod tests {
     let app = App::default_connected();
     let content = rendered(&app, Rect::new(0, 0, 60, 40));
     assert!(!content.contains("log in to Spotify"), "{content}");
+  }
+
+  #[test]
+  fn pinned_playlists_render_with_a_marker_below_the_community_pin() {
+    use crate::core::app::PlaylistFolderItem;
+    use crate::core::test_helpers::playlist_info;
+    let mut app = App::default();
+    *app.all_playlists_mut() = ["Ordinary", "Pinned"]
+      .iter()
+      .enumerate()
+      .map(|(i, name)| playlist_info(&format!("p{i}"), name, "me", false))
+      .collect();
+    *app.playlist_folder_items_mut() = (0..2)
+      .map(|index| PlaylistFolderItem::Playlist {
+        index,
+        current_id: 0,
+      })
+      .collect();
+    app.runtime_state.pinned_playlists = vec!["spotify:playlist:p1".into()];
+    let compact = |text: String| {
+      text
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect::<String>()
+    };
+    let content = compact(rendered(&app, Rect::new(0, 0, 60, 40)));
+    assert!(content.contains("📌Pinned"), "{content}");
+    assert!(content.find("spotatuicommunity").unwrap() < content.find("📌Pinned").unwrap());
+    assert!(content.find("📌Pinned").unwrap() < content.find("Ordinary").unwrap());
+    app.current_playlist_folder_id = 1;
+    *app.playlist_folder_items_mut() = vec![PlaylistFolderItem::Playlist {
+      index: 1,
+      current_id: 1,
+    }];
+    assert!(compact(rendered(&app, Rect::new(0, 0, 60, 40))).contains("📌Pinned"));
   }
 
   #[test]

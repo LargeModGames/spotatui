@@ -5,6 +5,7 @@ import type { QueuePayload } from "./bindings/QueuePayload";
 import type { Source } from "./bindings/Source";
 import type { SourcePlaylists } from "./bindings/SourcePlaylists";
 import type { TrackInfo } from "./bindings/TrackInfo";
+import { EN } from "./i18n";
 import {
   ALBUM_SORTS,
   ARTIST_SORTS,
@@ -20,7 +21,9 @@ import {
   nearEnd,
   openRow,
   playlistImage,
+  playlistMenuItems,
   playlistRemoval,
+  removalTarget,
   playlistsFor,
   playRequest,
   removePlaylist,
@@ -53,6 +56,7 @@ const track = (name: string, uri: string | null): TrackInfo => ({
 
 const empty: SourcePlaylists = {
   playlist_sidebar_order: "spotify",
+  pinned: [],
   spotify: [],
   local: [],
   subsonic: [],
@@ -131,19 +135,32 @@ describe("playlistsFor", () => {
       radio: [track("Score radio", "radio:https://radio.example")],
     };
     expect(playlistsFor(playlists, "Local")).toEqual([
-      { uri: "file:///rips", name: "Rips", count: 3, image: null },
+      {
+        uri: "file:///rips",
+        name: "Rips",
+        count: 3,
+        pinned: false,
+        image: null,
+      },
     ]);
     expect(playlistsFor(playlists, "Radio")).toEqual([
       {
         uri: "radio:https://radio.example",
         name: "Score radio",
         count: null,
+        pinned: false,
         image: null,
       },
     ]);
     expect(playlistsFor(playlists, "Qobuz")).toEqual([]);
     expect(playlistsFor(playlists, "AppleMusic")).toEqual([
-      { uri: "applemusic:library", name: "All songs", count: 0, image: null },
+      {
+        uri: "applemusic:library",
+        name: "All songs",
+        count: 0,
+        pinned: false,
+        image: null,
+      },
     ]);
     // A Music row whose count Music has not given shows none, not 0.
     expect(
@@ -156,9 +173,32 @@ describe("playlistsFor", () => {
         uri: "applemusic:library",
         name: "All songs",
         count: null,
+        pinned: false,
         image: null,
       },
     ]);
+  });
+
+  it("marks Spotify pins without changing the server's order or marking another source", () => {
+    const playlists = {
+      ...empty,
+      spotify: [
+        list("spotify:playlist:b", "B"),
+        list("spotify:playlist:a", "A"),
+      ],
+      local: [list("spotify:playlist:a", "Local copy")],
+      pinned: ["spotify:playlist:a"],
+    };
+    expect(
+      playlistsFor(playlists, "Spotify").map(({ uri, pinned }) => [
+        uri,
+        pinned,
+      ]),
+    ).toEqual([
+      ["spotify:playlist:b", false],
+      ["spotify:playlist:a", true],
+    ]);
+    expect(playlistsFor(playlists, "Local")[0].pinned).toBe(false);
   });
 });
 
@@ -218,7 +258,12 @@ describe("playRequest", () => {
 });
 
 describe("openRow", () => {
-  const row = (uri: string) => ({ uri, name: "Row", count: null });
+  const row = (uri: string) => ({
+    uri,
+    name: "Row",
+    count: null,
+    pinned: false,
+  });
 
   it("opens a Spotify playlist by URI and any other list as a source playlist", () => {
     expect(openRow("Spotify", row("spotify:playlist:p1"))).toEqual({
@@ -367,6 +412,62 @@ describe("playlistRemoval", () => {
   });
 });
 
+describe("playlistMenuItems", () => {
+  const target = {
+    uri: "spotify:playlist:mine",
+    name: "Mine",
+    pinned: false,
+    pinsEditable: true,
+    removal: null,
+  };
+
+  it("offers a local pin without a removal operation, and unpins by explicit intent", () => {
+    expect(playlistMenuItems(target, EN)).toEqual([
+      {
+        id: "pin-playlist",
+        label: "Pin to top",
+        kind: "action",
+        action: {
+          SetPlaylistPinned: { uri: target.uri, pinned: true },
+        },
+      },
+    ]);
+    expect(playlistMenuItems({ ...target, pinned: true }, EN)).toEqual([
+      {
+        id: "pin-playlist",
+        label: "Unpin",
+        kind: "action",
+        action: {
+          SetPlaylistPinned: { uri: target.uri, pinned: false },
+        },
+      },
+    ]);
+  });
+
+  it("keeps pinning before removal", () => {
+    const removal = removalTarget(playlistRemoval("Spotify", target, empty)!);
+    expect(
+      playlistMenuItems({ ...target, removal }, EN).map((entry) => entry.id),
+    ).toEqual(["pin-playlist", "remove-library"]);
+  });
+
+  it("reads the current strings without changing the playlist identity", () => {
+    const translated = {
+      ...EN,
+      pin_playlist: "置顶",
+      unpin_playlist: "取消置顶",
+    };
+    expect(playlistMenuItems(target, translated)[0]).toMatchObject({
+      id: "pin-playlist",
+      label: "置顶",
+      action: { SetPlaylistPinned: { uri: target.uri, pinned: true } },
+    });
+    expect(
+      playlistMenuItems({ ...target, pinned: true }, translated)[0].label,
+    ).toBe("取消置顶");
+  });
+});
+
 describe("removePlaylist", () => {
   it("sends the removal and leaves the open playlist for home", () => {
     const removal = playlistRemoval(
@@ -464,6 +565,29 @@ describe("libraryTree", () => {
     expect(
       shape(libraryTree(nodes, playlists, new Set(["f:outer", "f:inner"]))),
     ).toEqual(["0 [-] Outer", "1 A", "1 [-] Inner", "2 B", "0 C", "0 Loose"]);
+  });
+
+  it("keeps a root pin and its nested copy in the supplied order, marking both", () => {
+    const rows = libraryTree(
+      [{ kind: "playlist", uri: "p:b" }, ...nodes],
+      playlists,
+      new Set(["f:outer", "f:inner"]),
+      new Set(["p:b"]),
+    );
+    expect(shape(rows)).toEqual([
+      "0 B",
+      "0 [-] Outer",
+      "1 A",
+      "1 [-] Inner",
+      "2 B",
+      "0 C",
+      "0 Loose",
+    ]);
+    expect(
+      rows
+        .filter((row) => row.kind === "playlist" && row.row.pinned)
+        .map((row) => row.depth),
+    ).toEqual([0, 2]);
   });
 });
 

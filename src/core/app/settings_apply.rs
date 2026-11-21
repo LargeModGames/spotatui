@@ -794,6 +794,13 @@ impl App {
             }
           }
         }
+        "keys.pin_playlist" => {
+          if let SettingValue::Key(v) = &setting.value {
+            if let Ok(key) = crate::core::user_config::parse_key_public(v.clone()) {
+              self.user_config.keys.pin_playlist = key;
+            }
+          }
+        }
         "keys.generate_recap" => {
           if let SettingValue::Key(v) = &setting.value {
             if let Ok(key) = crate::core::user_config::parse_key_public(v.clone()) {
