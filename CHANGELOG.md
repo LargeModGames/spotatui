@@ -41,6 +41,7 @@
 - **Clearing an icon in Settings no longer saves an empty icon**: Active Source Icon and List Highlight Icon keep their current value when cleared, and padded icons are trimmed like `config.yml` does ([#1062](https://github.com/LargeModGames/spotatui/issues/1062)).
 - **Typing q no longer closes the Create Playlist form**: Previously, pressing q while creating a playlist would close the form while preserving the entered value. Now, only Esc closes the form, clearing the entered value ([#1037](https://github.com/LargeModGames/spotatui/issues/1037)).
 - **CLI `--seek` with a huge or invalid value**: clap now refuses a value that is not whole seconds before spotatui starts, and a huge value no longer overflows into a seek near the start of the track ([#1044](https://github.com/LargeModGames/spotatui/issues/1044)).
+- **Typing q no longer closes the Friends search or the add-friend box**: the back key reached the runner before the Friends screen could read it, so a typed `q` left the screen with the half-typed search or open dialog kept for the next visit. `q` now types a `q` while a Friends text box is up, and still goes back on the idle list ([#1039](https://github.com/LargeModGames/spotatui/issues/1039)).
 
 ### Documentation
 
