@@ -55,12 +55,28 @@ impl StreamingBuildError {
   pub fn is_retryable(&self) -> bool {
     match self {
       Self::Setup(_) => false,
-      Self::Spirc(error) => !matches!(
-        error.kind,
-        ErrorKind::Unauthenticated | ErrorKind::PermissionDenied
-      ),
+      Self::Spirc(error) => !login_was_rejected(error),
       Self::Timeout { .. } => true,
     }
+  }
+}
+
+/// Whether Spotify rejected the stored login.
+///
+/// The Spirc handshake authenticates through login5, which answers a bad stored
+/// credential with `FailedPrecondition` (`INVALID_CREDENTIALS` or
+/// `UNKNOWN_IDENTIFIER`), not `Unauthenticated`. That kind is also librespot's
+/// generic local-state error, so only the login5 detail counts. `Login5Error` is
+/// private in librespot-core, which leaves its `Display` as the only handle on the
+/// code.
+fn login_was_rejected(error: &librespot_core::error::Error) -> bool {
+  match error.kind {
+    ErrorKind::Unauthenticated | ErrorKind::PermissionDenied => true,
+    ErrorKind::FailedPrecondition => {
+      let detail = error.error.to_string();
+      detail.contains("INVALID_CREDENTIALS") || detail.contains("UNKNOWN_IDENTIFIER")
+    }
+    _ => false,
   }
 }
 
@@ -857,14 +873,12 @@ impl StreamingPlayer {
     let (spirc, spirc_task) = match timeout(init_timeout, spirc_new).await {
       Ok(Ok(result)) => result,
       Ok(Err(e)) => {
-        // Only discard cached credentials when Spotify actually rejected them.
+        // Only discard cached credentials when Spotify actually rejected them
+        // (including login5's `FailedPrecondition` for a bad stored credential).
         // A transient failure (network down, service unavailable) must NOT wipe
         // valid credentials and force a browser re-auth next launch — same
         // reasoning as the timeout arm below.
-        if matches!(
-          e.kind,
-          ErrorKind::Unauthenticated | ErrorKind::PermissionDenied
-        ) {
+        if login_was_rejected(&e) {
           clear_cached_streaming_credentials(&cache_path);
         }
         warn!("Spirc creation error: {:?}", e);

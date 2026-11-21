@@ -242,8 +242,7 @@ impl App {
     }
     // Soloist's id; librespot registers its own.
     self.native_device_id = None;
-    self.native_recovery_generation = self.native_recovery_generation.wrapping_add(1);
-    let generation = self.native_recovery_generation;
+    let generation = self.begin_native_recovery();
     self.native_backend_pending = self.streaming_recovery_tx.as_ref().is_some_and(|tx| {
       tx.send(crate::infra::player::StreamingRecoveryRequest {
         generation,

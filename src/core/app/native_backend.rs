@@ -73,6 +73,19 @@ impl App {
     }
   }
 
+  /// Identity of the native backend rebuild currently wanted.
+  #[cfg(feature = "streaming")]
+  pub(crate) fn native_recovery_generation(&self) -> u64 {
+    self.native_recovery_generation
+  }
+
+  /// Start a new rebuild identity and return it.
+  #[cfg(feature = "streaming")]
+  pub(crate) fn begin_native_recovery(&mut self) -> u64 {
+    self.native_recovery_generation = self.native_recovery_generation.wrapping_add(1);
+    self.native_recovery_generation
+  }
+
   #[cfg(feature = "streaming")]
   pub(crate) fn mark_native_handed_off(&mut self) {
     self.native_handed_off = true;
@@ -162,9 +175,9 @@ impl App {
     }
 
     self.set_status_message(self.strings().status.app.native_disconnected, 8);
-    if let Some(tx) = &self.streaming_recovery_tx {
-      self.native_recovery_generation = self.native_recovery_generation.wrapping_add(1);
-      let generation = self.native_recovery_generation;
+    // Cloned so starting the new rebuild identity can borrow `self` mutably.
+    if let Some(tx) = self.streaming_recovery_tx.clone() {
+      let generation = self.begin_native_recovery();
       self.native_backend_pending = tx
         .send(crate::infra::player::StreamingRecoveryRequest {
           generation,
@@ -220,8 +233,7 @@ impl App {
       return false;
     }
     if !self.native_backend_pending {
-      self.native_recovery_generation = self.native_recovery_generation.wrapping_add(1);
-      let generation = self.native_recovery_generation;
+      let generation = self.begin_native_recovery();
       self.native_backend_pending = self.streaming_recovery_tx.as_ref().is_some_and(|tx| {
         tx.send(crate::infra::player::StreamingRecoveryRequest {
           generation,
