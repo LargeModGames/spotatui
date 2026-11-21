@@ -37,13 +37,6 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
 
 const HANDSHAKE_FILE: &str = "mcp.json";
-/// Overrides the handshake file location so a test does not write into the
-/// user's own config directory. Compiled in **only** under `cfg(test)`: in a
-/// release build the path always derives from the config directory, so no
-/// inherited environment can move the token file out of the `0700` directory
-/// that protects it, or point a relay at a port and token of its choosing.
-#[cfg(test)]
-const HANDSHAKE_PATH_ENV: &str = "SPOTATUI_MCP_HANDSHAKE_PATH";
 /// A connecting relay has to present its token immediately; without a deadline a
 /// silent connection would hold a task open forever.
 const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
@@ -64,12 +57,6 @@ pub struct Handshake {
 }
 
 pub fn handshake_path() -> Result<PathBuf> {
-  #[cfg(test)]
-  if let Ok(path) = std::env::var(HANDSHAKE_PATH_ENV) {
-    if !path.trim().is_empty() {
-      return Ok(PathBuf::from(path));
-    }
-  }
   let dir = crate::core::user_config::default_app_config_dir()
     .context("could not determine the spotatui config directory")?;
   Ok(dir.join(HANDSHAKE_FILE))
@@ -458,12 +445,7 @@ mod tests {
   /// other test exercises end to end.
   #[tokio::test]
   async fn spawn_listener_publishes_a_handshake_the_status_probe_can_use() {
-    let dir = std::env::temp_dir().join(format!("spotatui-mcp-e2e-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("mcp.json");
-    // Serialised against the other env-var tests by being the only one to use
-    // this variable, and cleaned up below.
-    unsafe { std::env::set_var(HANDSHAKE_PATH_ENV, &path) };
+    let path = handshake_path().unwrap();
 
     let (io_tx, _io_rx) = std::sync::mpsc::channel();
     let app = Arc::new(Mutex::new(App::default()));
@@ -491,8 +473,6 @@ mod tests {
 
     clear_handshake();
     assert!(read_handshake().is_err(), "shutdown should unpublish it");
-    unsafe { std::env::remove_var(HANDSHAKE_PATH_ENV) };
-    let _ = std::fs::remove_dir_all(&dir);
   }
 
   #[tokio::test]

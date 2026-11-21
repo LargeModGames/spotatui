@@ -2985,23 +2985,18 @@ mod tests {
   }
 
   #[test]
-  fn default_config_paths_create_missing_parent_directories() {
-    if !crate::core::test_helpers::in_isolated_process(
-      "core::user_config::tests::default_config_paths_create_missing_parent_directories",
-      "missing/parents/config",
-    ) {
-      return;
-    }
-    let mut config = super::UserConfig::new();
-    config.get_or_build_paths().unwrap();
-    assert!(config
-      .path_to_config
-      .as_ref()
-      .unwrap()
-      .config_file_path
-      .parent()
-      .unwrap()
-      .is_dir());
+  fn config_paths_create_missing_parent_directories() {
+    let dir = tempfile::tempdir().unwrap();
+    let app_config_dir = dir.path().join("missing/parents/config/spotatui");
+    assert!(!app_config_dir.parent().unwrap().exists());
+
+    let paths = super::config_paths_in(app_config_dir.clone()).unwrap();
+
+    assert_eq!(
+      paths.config_file_path,
+      app_config_dir.join(super::FILE_NAME)
+    );
+    assert!(app_config_dir.is_dir());
   }
 
   #[test]
