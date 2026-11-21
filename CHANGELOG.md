@@ -26,6 +26,7 @@
 
 - **Remove single-file plugins from the CLI**: `spotatui plugin remove flat.lua` now removes a loose Lua plugin using the exact filename shown by `plugin list`, while preserving other loose files ([#1048](https://github.com/LargeModGames/spotatui/issues/1048)).
 - **Clearing an icon in Settings no longer saves an empty icon**: Active Source Icon and List Highlight Icon keep their current value when cleared, and padded icons are trimmed like `config.yml` does ([#1062](https://github.com/LargeModGames/spotatui/issues/1062)).
+- **Typing q no longer closes the Create Playlist form**: Previously, pressing q while creating a playlist would close the form while preserving the entered value. Now, only Esc closes the form, clearing the entered value ([#1037](https://github.com/LargeModGames/spotatui/issues/1037)).
 
 ### Documentation
 
