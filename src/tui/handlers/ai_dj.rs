@@ -985,7 +985,7 @@ mod tests {
     // tells them apart. `status_message.is_some()` alone would hold even with the
     // error guard deleted outright.
     assert!(!app.status_message_is_error());
-    assert_eq!(app.status_message(), Some("keeping the current DJ brain"));
+    assert_eq!(app.status_message(), Some("Keeping the current DJ brain"));
     assert!(
       dir.path().join("config.yml").exists(),
       "and the marker actually landed, which is the only reason to persist"

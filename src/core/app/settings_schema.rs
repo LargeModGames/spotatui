@@ -877,10 +877,10 @@ impl App {
     ]
   }
 
-  /// Load settings for the current category into settings_items
-  pub fn load_settings_for_category(&mut self) {
+  /// Build rows from the current config without resetting the Settings screen.
+  pub(super) fn settings_items_for_category(&self) -> Vec<SettingItem> {
     let strings = &self.strings().settings;
-    self.settings_items = match self.view.settings_category {
+    match self.view.settings_category {
       SettingsCategory::Behavior => self.behavior_setting_items(),
       SettingsCategory::Icons => vec![
         SettingItem {
@@ -1345,7 +1345,12 @@ impl App {
           },
         ]
       }
-    };
+    }
+  }
+
+  /// Load settings for the current category into settings_items
+  pub fn load_settings_for_category(&mut self) {
+    self.settings_items = self.settings_items_for_category();
     self.view.settings_selected_index = self
       .settings_items
       .iter()

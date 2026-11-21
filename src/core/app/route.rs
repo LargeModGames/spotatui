@@ -602,7 +602,7 @@ mod tests {
     assert!(rx.try_recv().is_err());
     assert_eq!(
       app.status_message(),
-      Some("The queued track has no album id")
+      Some("The queued track has no album ID")
     );
   }
 
