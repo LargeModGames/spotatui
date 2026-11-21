@@ -15,8 +15,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { betaTool } from "@anthropic-ai/sdk/helpers/beta/json-schema";
 import { oidcFederationProvider } from "@anthropic-ai/sdk/lib/credentials/oidc-federation";
 import { execFileSync } from "node:child_process";
-import { readdirSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { readFileSync } from "node:fs";
 
 // Change here to try another model, for example "claude-fable-5-1".
 const MODEL = "claude-opus-5-5";
@@ -153,9 +152,9 @@ const agents = readFileSync("AGENTS.md", "utf8");
 const changelog = readFileSync("CHANGELOG.md", "utf8");
 // [Unreleased] plus the latest release: the third `## [` heading ends it.
 const releaseHeads = [...changelog.matchAll(/^## \[/gm)].map((m) => m.index);
-const fragments = readdirSync("changelog.d", { recursive: true })
-  .filter((f) => f.endsWith(".md") && f !== "README.md")
-  .map((f) => `[${dirname(f)}] ${readFileSync(join("changelog.d", f), "utf8").trim()}`);
+const fragments = [...trackedFiles]
+  .filter((f) => /^changelog\.d\/[^/]+\/.+\.md$/.test(f))
+  .map((f) => `[${f.split("/")[1]}] ${readFileSync(f, "utf8").trim()}`);
 const recentChanges = clip(
   `## Unreleased (changelog.d)\n\n${fragments.join("\n")}\n\n` +
     changelog.slice(releaseHeads[0] ?? 0, releaseHeads[2]),
