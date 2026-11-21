@@ -183,6 +183,25 @@ fn rebuild_cancellation(app: &App) -> Option<RebuildOutcome> {
   }
 }
 
+/// Finish a cancelled librespot recovery without clearing Soloist's startup flag.
+fn finish_cancelled_recovery(app: &mut App, interrupted_by_decoded: bool) {
+  if !app.native_engine_still_selected() {
+    return;
+  }
+  app.native_backend_pending = false;
+  if app.io_tx_clone().is_none() {
+    return;
+  }
+  if app.apple_music_owns_playback() {
+    app.park_cancelled_native_recovery();
+  } else if interrupted_by_decoded {
+    app.park_cancelled_native_recovery();
+    if !app.active_decoded_source() {
+      app.reacquire_parked_backend();
+    }
+  }
+}
+
 /// Build a replacement Connect device, retrying transient failures with backoffs.
 ///
 /// A new recovery request restarts the chain with a fresh delay and the merged intent.
@@ -351,7 +370,9 @@ async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
           // The frontend is exiting, or a park gave the sink to another
           // source during the build: nothing would drive this player.
           if app.io_tx_clone().is_none() || !app.accept_rebuilt_native_backend() {
-            app.native_backend_pending = false;
+            if app.native_engine_still_selected() {
+              app.native_backend_pending = false;
+            }
             drop(app);
             info!("native rebuild not installed: exiting, or another source owns the sink");
             recovered_player.shutdown();
@@ -456,33 +477,19 @@ async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
           app.dispatch(IoEvent::GetPlaylists);
         }
       }
-      RebuildOutcome::DecodedOwner => {
+      RebuildOutcome::DecodedOwner | RebuildOutcome::Cancelled => {
+        info!(
+          "native streaming recovery cancelled: another owner took the sink or the frontend exited"
+        );
         let mut app = ctx.app.lock().await;
-        app.native_backend_pending = false;
-        if app.io_tx_clone().is_some()
-          && app.native_engine_still_selected()
-          && !app.apple_music_owns_playback()
-        {
-          app.park_cancelled_native_recovery();
-          if !app.active_decoded_source() {
-            app.reacquire_parked_backend();
-          }
-        }
-      }
-      RebuildOutcome::Cancelled => {
-        info!("native streaming recovery cancelled: another engine owns the sink or the frontend exited");
-        let mut app = ctx.app.lock().await;
-        app.native_backend_pending = false;
-        if app.io_tx_clone().is_some()
-          && app.native_engine_still_selected()
-          && app.apple_music_owns_playback()
-        {
-          app.park_cancelled_native_recovery();
-        }
+        finish_cancelled_recovery(&mut app, matches!(outcome, RebuildOutcome::DecodedOwner));
       }
       RebuildOutcome::Failed(e) => {
         info!("native streaming recovery failed: {}", e);
         let mut app = ctx.app.lock().await;
+        if !app.native_engine_still_selected() {
+          continue;
+        }
         app.native_backend_pending = false;
         app.native_restore_pending = None;
         app.native_load_watchdog = None;
@@ -1760,7 +1767,9 @@ mod tests {
       super::rebuild_cancellation(&app),
       Some(super::RebuildOutcome::DecodedOwner)
     ));
-    app.park_cancelled_native_recovery();
+    app.native_backend_pending = true;
+    super::finish_cancelled_recovery(&mut app, true);
+    assert!(!app.native_backend_pending);
     assert!(app.native_backend_parked());
     app.release_decoded_sink_claim();
     assert!(app.reacquire_parked_backend());
@@ -1782,10 +1791,9 @@ mod tests {
       Some(super::RebuildOutcome::Cancelled)
     ));
 
-    // This is the state transition performed by the Cancelled arm while
-    // Music owns the sink; shutdown and non-native-engine cancellation must
-    // not perform it.
-    app.park_cancelled_native_recovery();
+    app.native_backend_pending = true;
+    super::finish_cancelled_recovery(&mut app, false);
+    assert!(!app.native_backend_pending);
     assert!(app.native_backend_parked());
   }
 
@@ -1803,7 +1811,41 @@ mod tests {
       super::rebuild_cancellation(&app),
       Some(super::RebuildOutcome::Cancelled)
     ));
+    app.native_backend_pending = true;
+    super::finish_cancelled_recovery(&mut app, false);
+    assert!(!app.native_backend_pending);
     assert!(!app.native_backend_parked());
+  }
+
+  #[cfg(all(
+    feature = "soloist",
+    not(all(target_os = "macos", target_arch = "x86_64"))
+  ))]
+  #[test]
+  fn cancelling_librespot_recovery_does_not_clear_soloist_startup_pending() {
+    use crate::core::{
+      app::App,
+      user_config::{PlaybackEngine, UserConfig},
+    };
+    use std::sync::mpsc::channel;
+    use std::time::SystemTime;
+
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.user_config.behavior.enable_streaming = true;
+    app.user_config.behavior.playback_engine = PlaybackEngine::Soloist;
+    assert!(app.apply_playback_engine().is_some());
+    assert!(app.native_backend_pending);
+    assert!(matches!(
+      super::rebuild_cancellation(&app),
+      Some(super::RebuildOutcome::Cancelled)
+    ));
+
+    for interrupted_by_decoded in [false, true] {
+      super::finish_cancelled_recovery(&mut app, interrupted_by_decoded);
+      assert!(app.native_backend_pending);
+      assert!(!app.native_backend_parked());
+    }
   }
 
   #[test]

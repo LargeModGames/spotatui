@@ -255,9 +255,7 @@ impl App {
   #[cfg(feature = "streaming")]
   pub(crate) fn accept_rebuilt_native_backend(&mut self) -> bool {
     // A rebuild that started before a switch to Soloist must not register a second device.
-    #[cfg(feature = "soloist")]
-    if self.soloist_engine_selected() {
-      self.native_backend_pending = false;
+    if !self.native_engine_still_selected() {
       return false;
     }
     // A rebuild may have started before Music took over. Park it, so an
