@@ -8,24 +8,27 @@ shopt -s nullglob
 version=${1:?usage: tools/assemble_changelog.sh vX.Y.Z}
 cd "$(git rev-parse --show-toplevel)"
 
-sections="added changed removed fixed security performance documentation internal"
-known() { case " $sections " in *" $1 "*) ;; *) return 1 ;; esac; }
+sections="added:Added changed:Changed removed:Removed fixed:Fixed security:Security performance:Performance documentation:Documentation internal:Internal"
+known() { case " $sections " in *"$1"*) ;; *) return 1 ;; esac; }
 
+if [ -n "$(git status --porcelain -- changelog.d)" ]; then
+  echo "commit or remove the uncommitted changes in changelog.d first" >&2
+  exit 1
+fi
 for dir in changelog.d/*/; do
-  known "$(basename "$dir")" || { echo "unknown changelog section: $dir" >&2; exit 1; }
+  known " $(basename "$dir"):" || { echo "unknown changelog section: $dir" >&2; exit 1; }
 done
 
 changelog=$(tr -d '\r' < CHANGELOG.md)
 unreleased=$(printf '%s\n' "$changelog" | awk '/^## \[Unreleased\]/ { f = 1; next } /^## \[/ { f = 0 } f')
 
 while IFS= read -r heading; do
-  title=${heading#\#\#\# }
-  known "${title,,}" || { echo "unknown heading under Unreleased: $heading" >&2; exit 1; }
+  known ":${heading#\#\#\# } " || { echo "unknown heading under Unreleased: $heading" >&2; exit 1; }
 done < <(printf '%s\n' "$unreleased" | grep '^### ' || true)
 
 release=""
-for dir in $sections; do
-  title=${dir^}
+for pair in $sections; do
+  dir=${pair%%:*} title=${pair#*:}
   existing=$(printf '%s\n' "$unreleased" | awk -v t="### $title" '$0 == t { f = 1; next } /^### / { f = 0 } f')
   entries=$(printf '%s\n' "$existing" | awk '{ sub(/\r$/, "") } NF' changelog.d/"$dir"/*.md -)
   [ -n "$entries" ] && release+=$'\n'"### $title"$'\n\n'"$entries"$'\n'
