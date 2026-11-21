@@ -794,6 +794,15 @@
       "contributions": [
         "code"
       ]
+    },
+    {
+      "login": "Seyamalam",
+      "name": "Touhidul Alam Seyam",
+      "avatar_url": "https://avatars.githubusercontent.com/u/126227356?v=4",
+      "profile": "https://seyamalam.vercel.app",
+      "contributions": [
+        "code"
+      ]
     }
   ],
   "contributorsPerLine": 7,

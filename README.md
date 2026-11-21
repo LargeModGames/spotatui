@@ -284,6 +284,9 @@ Everyone who helped, with code or without. To get on this list, see [Recognition
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/Vansh170707"><img src="https://avatars.githubusercontent.com/u/219549318?v=4&size=100" width="100px" height="100px" alt="Vansh"/><br /><sub><b>Vansh</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=Vansh170707" title="Code">💻</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/polete-bermejo"><img src="https://avatars.githubusercontent.com/u/182244119?v=4&size=100" width="100px" height="100px" alt="Pol Bermejo Gorrindo"/><br /><sub><b>Pol Bermejo Gorrindo</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=polete-bermejo" title="Code">💻</a></td>
     </tr>
+    <tr>
+      <td align="center" valign="top" width="14.28%"><a href="https://seyamalam.vercel.app"><img src="https://avatars.githubusercontent.com/u/126227356?v=4&size=100" width="100px" height="100px" alt="Touhidul Alam Seyam"/><br /><sub><b>Touhidul Alam Seyam</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=Seyamalam" title="Code">💻</a></td>
+    </tr>
   </tbody>
 </table>
 
