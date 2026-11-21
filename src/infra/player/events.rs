@@ -315,7 +315,16 @@ async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
       continue;
     }
 
-    match rebuild_with_retries(&mut ctx, &mut request).await {
+    let recovery_started = Instant::now();
+    let outcome = rebuild_with_retries(&mut ctx, &mut request).await;
+    // The retry chain can outlast a single player build. Not user's wait, so credit it
+    // back to any start parked for this backend before replaying it on the built route.
+    ctx
+      .app
+      .lock()
+      .await
+      .exclude_recovery_time_from_parked_start(recovery_started.elapsed());
+    match outcome {
       RebuildOutcome::Built(recovered_player) => {
         let recovered_player = Arc::new(recovered_player);
         let reacquired = {

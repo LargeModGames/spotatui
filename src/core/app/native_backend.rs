@@ -316,6 +316,20 @@ impl App {
     }
   }
 
+  /// Credit the time a rebuild chain spent retrying back to a parked start.
+  ///
+  /// `max_parked_age` is sized for a single player build. The shift is clamped
+  /// so a start parked part-way through the chain never gets a timestamp in the future.
+  #[cfg(feature = "streaming")]
+  pub(crate) fn exclude_recovery_time_from_parked_start(&mut self, duration: Duration) {
+    let Some(pending) = self.pending_start_playback.as_mut() else {
+      return;
+    };
+    let now = Instant::now();
+    let shift = duration.min(now.saturating_duration_since(pending.parked_at));
+    pending.parked_at += shift;
+  }
+
   /// Replay a parked StartPlayback through the normal dispatch path. No-op
   /// when nothing is parked.
   #[cfg(feature = "streaming")]
@@ -786,6 +800,41 @@ mod tests {
 
     app.replay_pending_start_playback();
 
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::StartPlayback(..))));
+  }
+
+  #[test]
+  fn a_long_retry_chain_does_not_expire_a_parked_start() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.park_start_playback(Some("spotify:playlist:p".to_string()), None, None);
+    let chain = Duration::from_secs(180);
+    if let Some(pending) = app.pending_start_playback.as_mut() {
+      pending.parked_at = Instant::now() - max_parked_age() - chain;
+    }
+
+    app.exclude_recovery_time_from_parked_start(chain);
+    app.replay_pending_start_playback();
+
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::StartPlayback(..))));
+    assert!(app.pending_start_playback.is_some());
+    assert_ne!(
+      app.status_message(),
+      Some(crate::core::i18n::EN.status.app.native_request_expired)
+    );
+  }
+
+  #[test]
+  fn a_start_parked_mid_chain_is_not_shifted_into_the_future() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.park_start_playback(Some("spotify:playlist:p".to_string()), None, None);
+
+    app.exclude_recovery_time_from_parked_start(Duration::from_secs(3600));
+
+    let parked_at = app.pending_start_playback.as_ref().unwrap().parked_at;
+    assert!(parked_at <= Instant::now());
+    app.replay_pending_start_playback();
     assert!(matches!(rx.try_recv(), Ok(IoEvent::StartPlayback(..))));
   }
 
