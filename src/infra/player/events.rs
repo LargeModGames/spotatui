@@ -200,7 +200,8 @@ async fn rebuild_with_retries(
       return outcome;
     }
 
-    let initial_volume = ctx.app.lock().await.runtime_state.volume_percent;
+    let initial_volume = app.runtime_state.volume_percent;
+    drop(app);
     let streaming_config = StreamingConfig {
       initial_volume,
       ..ctx.streaming_config.clone()
@@ -229,28 +230,30 @@ async fn rebuild_with_retries(
       Ok(player) => return RebuildOutcome::Built(player),
       Err(e) => {
         // Handle retry
-        let error = e.to_string();
-        let app = ctx.app.lock().await;
-        if let Some(outcome) = rebuild_cancellation(&app) {
-          return outcome;
-        }
-        if !e.is_retryable() {
-          return RebuildOutcome::Failed(e);
-        }
-        // A bare resume would otherwise reach Spotify with no
-        // active device and surface a full-screen error.
         {
+          let error = e.to_string();
           let mut app = ctx.app.lock().await;
+
+          if let Some(outcome) = rebuild_cancellation(&app) {
+            return outcome;
+          }
+
+          if !e.is_retryable() {
+            return RebuildOutcome::Failed(e);
+          }
+
+          // A bare resume would otherwise reach Spotify with no
+          // active device and surface a full-screen error.
           app.native_backend_pending = true;
           if attempt == 1 {
             let strings = app.strings();
             app.set_status_message(strings.status.app.native_reconnecting, 8);
           }
+          info!(
+            "native streaming recovery attempt {attempt} failed ({error}); retrying in {}s",
+            delay.as_secs()
+          );
         }
-        info!(
-          "native streaming recovery attempt {attempt} failed ({error}); retrying in {}s",
-          delay.as_secs()
-        );
 
         // If nothing, proceed. If something, handle accordingly
         let next_request = tokio::select! {
