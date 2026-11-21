@@ -58,6 +58,21 @@ pub struct PendingStartPlayback {
 }
 
 impl App {
+  /// Whether librespot is still the configured playback engine. Exists in
+  /// every build so callers need no `#[cfg(feature = "soloist")]`; a build
+  /// without Soloist always answers true.
+  #[cfg(feature = "streaming")]
+  pub(crate) fn native_engine_still_selected(&self) -> bool {
+    #[cfg(feature = "soloist")]
+    {
+      !self.soloist_engine_selected()
+    }
+    #[cfg(not(feature = "soloist"))]
+    {
+      true
+    }
+  }
+
   #[cfg(feature = "streaming")]
   pub(crate) fn mark_native_handed_off(&mut self) {
     self.native_handed_off = true;

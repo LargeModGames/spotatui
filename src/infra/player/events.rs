@@ -5,7 +5,7 @@ use crate::infra::macos_media;
 use crate::infra::mpris;
 use crate::infra::network::IoEvent;
 use crate::infra::player::{
-  player_build_timeout, PlayerEvent, SessionDisconnectReason, StreamingConfig,
+  player_build_timeout, PlayerEvent, SessionDisconnectReason, StreamingBuildError, StreamingConfig,
   StreamingConnectionState, StreamingPlayer,
 };
 use log::{info, warn};
@@ -19,6 +19,12 @@ use tokio::sync::Mutex;
 const STALLED_PLAYBACK_RECOVERY_TIMEOUT: Duration = Duration::from_secs(5);
 const END_OF_TRACK_CONTINUATION_DELAY: Duration = Duration::from_millis(500);
 const END_OF_TRACK_RECONNECT_TIMEOUT: Duration = Duration::from_secs(12);
+/// A failed Connect-device rebuild is retried, because the usual cause is a
+/// transient network/DNS failure right after a laptop wake. Start short and
+/// back off to a polite interval; the retry only stops when it succeeds or the
+/// app no longer wants the native backend.
+const RECOVERY_RETRY_BASE_DELAY: Duration = Duration::from_secs(5);
+const RECOVERY_RETRY_MAX_DELAY: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SessionDisconnectRecovery {
@@ -143,6 +149,125 @@ fn merge_recovery_requests(request: &mut StreamingRecoveryRequest, next: Streami
   }
 }
 
+fn next_recovery_retry_delay(current: Duration) -> Duration {
+  current.saturating_mul(2).min(RECOVERY_RETRY_MAX_DELAY)
+}
+
+/// The result of one rebuild chain
+enum RebuildOutcome {
+  /// A live player
+  Built(StreamingPlayer),
+  /// An error we give up on
+  Failed(StreamingBuildError),
+  /// a cancellation because another engine took over
+  Cancelled,
+}
+
+/// Whether librespot is connected.
+///
+/// This decides whether a rebuild is still useful.
+/// Condition has to be whether the frontend is alive, no decoded source
+/// or Soloist has taken the engine, and librespot is still the configured one.
+async fn native_backend_still_wanted(ctx: &StreamingRecoveryContext) -> bool {
+  let app = ctx.app.lock().await;
+  app.io_tx_clone().is_some() && app.native_should_drive() && app.native_engine_still_selected()
+}
+
+/// Build a replacement Connect device, retrying transient failures with backoffs.
+///
+/// A new recovery request restarts the chain with a fresh delay and the merged intent.
+async fn rebuild_with_retries(
+  ctx: &mut StreamingRecoveryContext,
+  request: &mut StreamingRecoveryRequest,
+) -> RebuildOutcome {
+  let mut attempt = 1_u32;
+  let mut delay = RECOVERY_RETRY_BASE_DELAY;
+
+  loop {
+    // Cancel if not native
+    if !native_backend_still_wanted(ctx).await {
+      return RebuildOutcome::Cancelled;
+    }
+
+    let initial_volume = ctx.app.lock().await.runtime_state.volume_percent;
+    let streaming_config = StreamingConfig {
+      initial_volume,
+      ..ctx.streaming_config.clone()
+    };
+    info!("attempting native streaming recovery (attempt {attempt})");
+
+    // Build new player without timeout
+    let build =
+      tokio::spawn(async move { StreamingPlayer::new_cache_only(streaming_config).await });
+    let abort_handle = build.abort_handle();
+    let build_timeout = player_build_timeout();
+    let built = match tokio::time::timeout(build_timeout, build).await {
+      Ok(Ok(result)) => result,
+      Ok(Err(e)) => Err(StreamingBuildError::Setup(anyhow::anyhow!(
+        "rebuild task failed: {e}"
+      ))),
+      Err(_) => {
+        abort_handle.abort();
+        Err(StreamingBuildError::Timeout {
+          secs: build_timeout.as_secs(),
+        })
+      }
+    };
+
+    match built {
+      Ok(player) => return RebuildOutcome::Built(player),
+      Err(e) => {
+        // Handle retry
+        let error = e.to_string();
+        if !e.is_retryable() || !native_backend_still_wanted(ctx).await {
+          return RebuildOutcome::Failed(e);
+        }
+        // A bare resume would otherwise reach Spotify with no
+        // active device and surface a full-screen error.
+        {
+          let mut app = ctx.app.lock().await;
+          app.native_backend_pending = true;
+          if attempt == 1 {
+            let strings = app.strings();
+            app.set_status_message(strings.status.app.native_reconnecting, 8);
+          }
+        }
+        info!(
+          "native streaming recovery attempt {attempt} failed ({error}); retrying in {}s",
+          delay.as_secs()
+        );
+
+        // If nothing, proceed. If something, handle accordingly
+        let next_request = tokio::select! {
+          _ = tokio::time::sleep(delay) => None,
+          next = ctx.recovery_rx.recv() => Some(next),
+        };
+
+        match next_request {
+          None => {
+            attempt = attempt.saturating_add(1);
+            delay = next_recovery_retry_delay(delay);
+          }
+          Some(Some(next)) => {
+            // Merge if an incoming one exists
+            merge_recovery_requests(request, next);
+            while let Ok(more) = ctx.recovery_rx.try_recv() {
+              merge_recovery_requests(request, more);
+            }
+            info!("native streaming recovery superseded by a new request; restarting retries");
+            attempt = 1;
+            delay = RECOVERY_RETRY_BASE_DELAY;
+          }
+          Some(None) => {
+            // The recovery channel closed
+            return RebuildOutcome::Cancelled;
+          }
+        }
+      }
+    }
+  }
+}
+
 async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
   while let Some(mut request) = ctx.recovery_rx.recv().await {
     while let Ok(next_request) = ctx.recovery_rx.try_recv() {
@@ -190,36 +315,8 @@ async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
       continue;
     }
 
-    let initial_volume = {
-      let app = ctx.app.lock().await;
-      app.runtime_state.volume_percent
-    };
-
-    let streaming_config = StreamingConfig {
-      initial_volume,
-      ..ctx.streaming_config.clone()
-    };
-
-    info!("attempting native streaming recovery");
-
-    let build =
-      tokio::spawn(async move { StreamingPlayer::new_cache_only(streaming_config).await });
-    let abort_handle = build.abort_handle();
-    let build_timeout = player_build_timeout();
-    let built = match tokio::time::timeout(build_timeout, build).await {
-      Ok(Ok(result)) => result,
-      Ok(Err(e)) => Err(anyhow::anyhow!("rebuild task failed: {e}")),
-      Err(_) => {
-        abort_handle.abort();
-        Err(anyhow::anyhow!(
-          "rebuild timed out after {}s",
-          build_timeout.as_secs()
-        ))
-      }
-    };
-
-    match built {
-      Ok(recovered_player) => {
+    match rebuild_with_retries(&mut ctx, &mut request).await {
+      RebuildOutcome::Built(recovered_player) => {
         let recovered_player = Arc::new(recovered_player);
         let reacquired = {
           let mut app = ctx.app.lock().await;
@@ -332,7 +429,11 @@ async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
           app.dispatch(IoEvent::GetPlaylists);
         }
       }
-      Err(e) => {
+      RebuildOutcome::Cancelled => {
+        info!("native streaming recovery cancelled: another engine owns the sink or the frontend exited");
+        ctx.app.lock().await.native_backend_pending = false;
+      }
+      RebuildOutcome::Failed(e) => {
         info!("native streaming recovery failed: {}", e);
         let mut app = ctx.app.lock().await;
         app.native_backend_pending = false;
@@ -1586,13 +1687,55 @@ async fn disconnect_streaming_player(
 #[cfg(test)]
 mod tests {
   use super::{
-    merge_recovery_requests, recovery_needs_native_selection, recovery_watchdog_should_escalate,
-    session_disconnect_recovery, should_replay_published_queue_slot, stop_disarms_watchdog,
+    merge_recovery_requests, next_recovery_retry_delay, recovery_needs_native_selection,
+    recovery_watchdog_should_escalate, session_disconnect_recovery,
+    should_replay_published_queue_slot, stop_disarms_watchdog,
     unavailable_is_for_the_loading_track, unavailable_is_transport_related,
-    SessionDisconnectReason, SessionDisconnectRecovery, StreamingConnectionState,
-    StreamingRecoveryRequest, STALLED_PLAYBACK_RECOVERY_TIMEOUT,
+    SessionDisconnectReason, SessionDisconnectRecovery, StreamingBuildError,
+    StreamingConnectionState, StreamingRecoveryRequest, RECOVERY_RETRY_BASE_DELAY,
+    RECOVERY_RETRY_MAX_DELAY, STALLED_PLAYBACK_RECOVERY_TIMEOUT,
   };
+  use librespot_core::error::Error as LibrespotError;
   use std::time::Duration;
+
+  #[test]
+  fn a_dns_failure_keeps_retrying_the_connect_device_rebuild() {
+    let dns_error =
+      StreamingBuildError::Spirc(LibrespotError::unavailable(anyhow::anyhow!("dns error")));
+    assert!(dns_error.is_retryable());
+    assert!(StreamingBuildError::Timeout { secs: 45 }.is_retryable());
+  }
+
+  #[test]
+  fn a_missing_login_or_rejected_credentials_stop_the_rebuild_retries() {
+    assert!(!StreamingBuildError::Setup(anyhow::anyhow!("No cached Spotify login")).is_retryable());
+    assert!(
+      !StreamingBuildError::Spirc(LibrespotError::unauthenticated(anyhow::anyhow!(
+        "bad token"
+      )))
+      .is_retryable()
+    );
+    assert!(
+      !StreamingBuildError::Spirc(LibrespotError::permission_denied(anyhow::anyhow!("denied")))
+        .is_retryable()
+    );
+  }
+
+  #[test]
+  fn retry_delays_back_off_up_to_a_minute() {
+    assert_eq!(
+      next_recovery_retry_delay(RECOVERY_RETRY_BASE_DELAY),
+      Duration::from_secs(10)
+    );
+    assert_eq!(
+      next_recovery_retry_delay(Duration::from_secs(30)),
+      Duration::from_secs(60)
+    );
+    assert_eq!(
+      next_recovery_retry_delay(RECOVERY_RETRY_MAX_DELAY),
+      RECOVERY_RETRY_MAX_DELAY
+    );
+  }
 
   #[test]
   fn recovery_watchdog_waits_for_the_full_stall_window() {
