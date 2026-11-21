@@ -793,7 +793,8 @@ fn draw_playbar_badge(f: &mut Frame<'_>, app: &App, controls_area: Rect, badge: 
   let width = first_control
     .saturating_sub(controls_area.x)
     .saturating_sub(1);
-  if width == 0 || controls_area.height == 0 {
+  let badge_width = UnicodeWidthStr::width(badge.as_str()) as u16;
+  if width < badge_width || controls_area.height == 0 {
     return;
   }
   let style = Style::default()
@@ -2509,6 +2510,30 @@ mod tests {
     assert!(
       row.trim_end().len() > "FLAC 44.1".len(),
       "controls kept: {row}"
+    );
+  }
+
+  #[test]
+  fn playbar_badge_hidden_when_it_does_not_fit_before_controls() {
+    let app = App::default();
+    let area = Rect::new(0, 0, 50, 1);
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(50, 1)).unwrap();
+    terminal
+      .draw(|f| {
+        draw_playbar_controls(f, &app, area);
+        draw_playbar_badge(f, &app, area, "FLAC 44.1".to_string());
+      })
+      .unwrap();
+    let row: String = terminal
+      .backend()
+      .buffer()
+      .content()
+      .iter()
+      .map(|cell| cell.symbol())
+      .collect();
+    assert!(
+      !row.contains("FLAC"),
+      "badge should not be partially rendered when it does not fit: {row}"
     );
   }
 
