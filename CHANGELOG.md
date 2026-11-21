@@ -32,6 +32,7 @@
 - **Plugin updates stay in their own checkout**: refuse directories without their own repository and ignore inherited Git repository overrides while preserving transport and authentication settings, including environment-injected Git config. Plugin clones resolve relative global config paths from the caller's directory.
 - **Clearing an icon in Settings no longer saves an empty icon**: Active Source Icon and List Highlight Icon keep their current value when cleared, and padded icons are trimmed like `config.yml` does ([#1062](https://github.com/LargeModGames/spotatui/issues/1062)).
 - **Typing q no longer closes the Create Playlist form**: Previously, pressing q while creating a playlist would close the form while preserving the entered value. Now, only Esc closes the form, clearing the entered value ([#1037](https://github.com/LargeModGames/spotatui/issues/1037)).
+- **Playlist folder names with encoded characters**: Folder names from the Spotify rootlist are now URL-decoded exactly once, on the name suffix only, so names containing `:` or a literal `%3A` display correctly. Added a streaming-gated regression test for `parse_rootlist_items`. ([#1094](https://github.com/LargeModGames/spotatui/pull/1094))
 
 ### Documentation
 
