@@ -460,7 +460,7 @@ async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
           && app.native_engine_still_selected()
           && !app.apple_music_owns_playback()
         {
-          app.park_cancelled_native_recovery_for_decoded();
+          app.park_cancelled_native_recovery();
           if !app.active_decoded_source() {
             app.reacquire_parked_backend();
           }
@@ -468,7 +468,14 @@ async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
       }
       RebuildOutcome::Cancelled => {
         info!("native streaming recovery cancelled: another engine owns the sink or the frontend exited");
-        ctx.app.lock().await.native_backend_pending = false;
+        let mut app = ctx.app.lock().await;
+        app.native_backend_pending = false;
+        if app.io_tx_clone().is_some()
+          && app.native_engine_still_selected()
+          && app.apple_music_owns_playback()
+        {
+          app.park_cancelled_native_recovery();
+        }
       }
       RebuildOutcome::Failed(e) => {
         info!("native streaming recovery failed: {}", e);
@@ -1750,11 +1757,33 @@ mod tests {
       super::rebuild_cancellation(&app),
       Some(super::RebuildOutcome::DecodedOwner)
     ));
-    app.park_cancelled_native_recovery_for_decoded();
+    app.park_cancelled_native_recovery();
     assert!(app.native_backend_parked());
     app.release_decoded_sink_claim();
     assert!(app.reacquire_parked_backend());
     assert!(recovery_rx.try_recv().unwrap().reacquire);
+  }
+
+  #[test]
+  fn apple_music_cancellation_preserves_the_absent_backend_for_reacquisition() {
+    use crate::core::{app::App, user_config::UserConfig};
+    use std::sync::mpsc::channel;
+    use std::time::SystemTime;
+
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.claim_apple_music();
+    assert!(app.apple_music_owns_playback());
+    assert!(matches!(
+      super::rebuild_cancellation(&app),
+      Some(super::RebuildOutcome::Cancelled)
+    ));
+
+    // This is the state transition performed by the Cancelled arm while
+    // Music owns the sink; shutdown and non-native-engine cancellation must
+    // not perform it.
+    app.park_cancelled_native_recovery();
+    assert!(app.native_backend_parked());
   }
 
   #[test]

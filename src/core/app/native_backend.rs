@@ -195,9 +195,9 @@ impl App {
     tokio::task::spawn_blocking(move || drop(player));
   }
 
-  /// Preserve the absent backend when a decoded owner interrupts recovery.
+  /// Preserve the absent backend when another owner interrupts recovery.
   #[cfg(feature = "streaming")]
-  pub(crate) fn park_cancelled_native_recovery_for_decoded(&mut self) {
+  pub(crate) fn park_cancelled_native_recovery(&mut self) {
     if self.streaming_player.is_none() {
       self.native_parked = true;
     }
@@ -269,7 +269,7 @@ impl App {
       return false;
     }
     if self.active_decoded_source() {
-      self.park_cancelled_native_recovery_for_decoded();
+      self.park_cancelled_native_recovery();
       return false;
     }
     if self.native_parked && !self.native_should_drive() {
