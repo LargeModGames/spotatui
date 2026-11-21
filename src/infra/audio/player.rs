@@ -88,11 +88,26 @@ pub struct LocalPlayer {
   /// touches the sink after it: two fetches can share one player and finish
   /// in the wrong order.
   stage_generation: AtomicU64,
-  /// Serializes a stage's two sink transitions (the clear, and the append)
+  /// Serializes a stage's sink transitions (clear, append, and restore seek)
   /// with the generation check in front of each, so an overtaken stage can
   /// neither clear a newer track nor append behind it. The decode between
   /// them runs outside it.
   stage_transition: Mutex<()>,
+  #[cfg(all(test, feature = "qobuz"))]
+  before_seek: Mutex<Option<SeekHook>>,
+}
+
+#[cfg(all(test, feature = "qobuz"))]
+struct SeekHook {
+  before: Option<Box<dyn FnOnce() + Send>>,
+  finished: mpsc::Sender<()>,
+}
+
+#[cfg(all(test, feature = "qobuz"))]
+impl Drop for SeekHook {
+  fn drop(&mut self) {
+    let _ = self.finished.send(());
+  }
 }
 
 /// One default-output read, keyed on the opened device's id so a swapped
@@ -132,6 +147,9 @@ struct Sink {
   _keepalive: mpsc::Sender<()>,
   /// Raised by our cpal error callback when the device is *removed*.
   lost: Arc<AtomicBool>,
+  /// An abandoned restore seek may still touch this output. Never stage onto
+  /// it again; recovery opens a new output without pretending cpal removed it.
+  retired: bool,
   /// The key identifying the device this sink was opened on (id on macOS,
   /// name elsewhere - see `device_key`), so a default-output change can be
   /// spotted (see module docs). `None` when the key could not be read, which
@@ -179,6 +197,47 @@ fn reopen_due(attempts: u8, since_last: Option<Duration>) -> bool {
 pub struct PreparedStream(Box<dyn rodio::Source + Send>);
 
 impl LocalPlayer {
+  /// An empty player for queue-state tests, with no system audio device.
+  #[cfg(all(test, feature = "qobuz"))]
+  pub(crate) fn without_device() -> Self {
+    Self::test_player(false)
+  }
+
+  /// Consume samples in memory so seek and clear complete without an audio device.
+  #[cfg(all(test, feature = "qobuz"))]
+  pub(crate) fn without_device_with_consumer() -> Self {
+    Self::test_player(true)
+  }
+
+  #[cfg(all(test, feature = "qobuz"))]
+  fn test_player(consume: bool) -> Self {
+    let (player, mut output) = Player::new();
+    let (keepalive, rx) = mpsc::channel();
+    if consume {
+      std::thread::spawn(move || {
+        while matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)) {
+          output.by_ref().take(80).for_each(drop);
+          std::thread::sleep(Duration::from_millis(1));
+        }
+      });
+    }
+    Self {
+      sink: Mutex::new(Sink {
+        player: Arc::new(player),
+        _keepalive: keepalive,
+        lost: Arc::new(AtomicBool::new(false)),
+        retired: false,
+        device_name: None,
+      }),
+      volume_percent: AtomicU8::new(100),
+      device_check: Mutex::new(None),
+      reopen: Mutex::new(ReopenState::default()),
+      stage_generation: AtomicU64::new(0),
+      stage_transition: Mutex::new(()),
+      before_seek: Mutex::new(None),
+    }
+  }
+
   /// Open the default audio output device and return a ready player.
   ///
   /// **Blocking:** waits for the audio thread to open the device. Call once at
@@ -195,12 +254,19 @@ impl LocalPlayer {
       reopen: Mutex::new(ReopenState::default()),
       stage_generation: AtomicU64::new(0),
       stage_transition: Mutex::new(()),
+      #[cfg(all(test, feature = "qobuz"))]
+      before_seek: Mutex::new(None),
     })
   }
 
   /// Start a stage: the generation it must still hold at each sink transition.
-  fn begin_stage(&self) -> u64 {
+  pub(crate) fn begin_stage(&self) -> u64 {
     self.stage_generation.fetch_add(1, Ordering::SeqCst) + 1
+  }
+
+  #[cfg(feature = "qobuz")]
+  pub(crate) fn stage_is_current(&self, stage: u64) -> bool {
+    self.stage_generation.load(Ordering::SeqCst) == stage
   }
 
   /// Clear the sink for `stage`, unless a later stage started since it began.
@@ -226,7 +292,7 @@ impl LocalPlayer {
     source: impl rodio::Source + Send + 'static,
   ) -> Result<()> {
     let _transition = self.stage_transition.lock().unwrap();
-    if !Arc::ptr_eq(sink, &self.player()) {
+    if !Arc::ptr_eq(sink, &self.live_player()?) {
       anyhow::bail!("audio output device changed");
     }
     if self.stage_generation.load(Ordering::SeqCst) != stage {
@@ -248,7 +314,7 @@ impl LocalPlayer {
   /// returns, and would wedge the serial IoEvent pump rather than fall silent.
   fn live_player(&self) -> Result<Arc<Player>> {
     let sink = self.sink.lock().unwrap();
-    if sink.lost.load(Ordering::Relaxed) {
+    if sink.lost.load(Ordering::Relaxed) || sink.retired {
       anyhow::bail!("audio output device disconnected");
     }
     Ok(Arc::clone(&sink.player))
@@ -273,7 +339,10 @@ impl LocalPlayer {
     // below queries the OS, and the render path waits on this mutex.
     let (removed, opened) = {
       let sink = self.sink.lock().unwrap();
-      (sink.lost.load(Ordering::Relaxed), sink.device_name.clone())
+      (
+        sink.lost.load(Ordering::Relaxed) || sink.retired,
+        sink.device_name.clone(),
+      )
     };
     if removed {
       return true;
@@ -328,6 +397,17 @@ impl LocalPlayer {
       let sink = self.sink.lock().unwrap();
       (Arc::clone(&sink.player), Arc::clone(&sink.lost))
     };
+    self.bounded_on(waited_on, lost, op)
+  }
+
+  /// Monitor the output the command actually uses, even if it was reopened
+  /// between selecting that output and starting the wait.
+  fn bounded_on<T: Send + 'static>(
+    &self,
+    waited_on: Arc<Player>,
+    lost: Arc<AtomicBool>,
+    op: impl FnOnce() -> T + Send + 'static,
+  ) -> Option<T> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
       let _ = tx.send(op());
@@ -366,15 +446,30 @@ impl LocalPlayer {
   ///
   /// **Blocking:** opens a device, like [`new`](Self::new).
   pub fn reopen(&self) -> Result<()> {
-    let fresh = open_sink()?;
+    self.reopen_with(open_sink)
+  }
+
+  fn reopen_with(&self, open: impl FnOnce() -> Result<Sink>) -> Result<()> {
+    let fresh = open()?;
     // Configure before publishing: once swapped in, other threads can see it.
     fresh.player.pause();
     fresh
       .player
       .set_volume(volume_gain(self.volume_percent.load(Ordering::Relaxed)));
-    *self.sink.lock().unwrap() = fresh;
+    {
+      let mut sink = self.sink.lock().unwrap();
+      self.begin_stage();
+      *sink = fresh;
+    }
     *self.device_check.lock().unwrap() = None;
     Ok(())
+  }
+
+  #[cfg(all(test, feature = "qobuz"))]
+  pub(crate) fn reopen_without_device(&self) {
+    self
+      .reopen_with(|| Ok(Self::test_player(true).sink.into_inner().unwrap()))
+      .unwrap();
   }
 
   /// [`reopen`](Self::reopen) with retries, for the driver's tick: an attempt
@@ -440,7 +535,11 @@ impl LocalPlayer {
     allow(dead_code)
   )]
   pub fn stage_file(&self, path: &Path) -> Result<()> {
-    let stage = self.begin_stage();
+    self.stage_file_for(self.begin_stage(), path)
+  }
+
+  /// Stage a retained file under the generation reserved by its session owner.
+  pub(crate) fn stage_file_for(&self, stage: u64, path: &Path) -> Result<()> {
     let sink = self.live_player()?;
     // Stop whatever is currently playing *before* any fallible step (open or
     // decode), so a failure here can never leave the previous track audible. A
@@ -515,7 +614,12 @@ impl LocalPlayer {
   /// [`stage_file`](Self::stage_file).
   #[cfg(any(feature = "internet-radio", feature = "qobuz"))]
   pub fn stage_prepared(&self, stream: PreparedStream) -> Result<()> {
-    let stage = self.begin_stage();
+    self.stage_prepared_for(self.begin_stage(), stream)
+  }
+
+  /// Stage under the generation reserved while the caller still owned its session.
+  #[cfg(any(feature = "internet-radio", feature = "qobuz"))]
+  pub(crate) fn stage_prepared_for(&self, stage: u64, stream: PreparedStream) -> Result<()> {
     let sink = self.live_player()?;
     self.clear_for_stage(stage, &sink)?;
     self.append_for_stage(stage, &sink, stream.0)
@@ -543,6 +647,19 @@ impl LocalPlayer {
   pub fn stop(&self) {
     let Ok(sink) = self.live_player() else { return };
     self.bounded(move || sink.clear());
+  }
+
+  /// Silence a Qobuz change now, then clear off the App lock. A superseded
+  /// clear must not discard audio staged by a later change.
+  #[cfg(feature = "qobuz")]
+  pub(crate) fn stop_for_change(self: &Arc<Self>) -> tokio::task::JoinHandle<()> {
+    self.pause();
+    let stage = self.begin_stage();
+    let sink = self.player();
+    let player = Arc::clone(self);
+    tokio::task::spawn_blocking(move || {
+      let _ = player.clear_for_stage(stage, &sink);
+    })
   }
 
   /// Stop on the blocking pool and return at once. `stop` waits for the audio
@@ -596,11 +713,63 @@ impl LocalPlayer {
     allow(dead_code)
   )]
   pub fn seek(&self, pos: Duration) -> Result<()> {
+    #[cfg(all(test, feature = "qobuz"))]
+    let _hook = self.run_before_seek();
     let sink = self.live_player()?;
     match self.bounded(move || sink.try_seek(pos)) {
       Some(result) => result.map_err(|e| anyhow::anyhow!("seeking local audio: {e}")),
       None => anyhow::bail!("audio output device stopped responding"),
     }
+  }
+
+  /// A restore seek belongs to its stage. Serialize it with clear/append, and
+  /// retire its output if the bounded wait leaves the command outstanding.
+  #[cfg(feature = "qobuz")]
+  pub(crate) fn seek_for_stage(self: &Arc<Self>, stage: u64, pos: Duration) -> Result<()> {
+    #[cfg(test)]
+    let _hook = self.run_before_seek();
+    let _transition = self.stage_transition.lock().unwrap();
+    let (sink, lost) = {
+      let output = self.sink.lock().unwrap();
+      if output.lost.load(Ordering::Relaxed) || output.retired {
+        anyhow::bail!("audio output device disconnected");
+      }
+      (Arc::clone(&output.player), Arc::clone(&output.lost))
+    };
+    if !self.stage_is_current(stage) {
+      anyhow::bail!("superseded by a later track");
+    }
+    let seeking = Arc::clone(&sink);
+    match self.bounded_on(Arc::clone(&sink), lost, move || seeking.try_seek(pos)) {
+      Some(result) => result.map_err(|e| anyhow::anyhow!("seeking local audio: {e}")),
+      None => {
+        let mut current = self.sink.lock().unwrap();
+        if Arc::ptr_eq(&sink, &current.player) {
+          current.retired = true;
+        }
+        anyhow::bail!("audio output device stopped responding");
+      }
+    }
+  }
+
+  /// Hold one seek before it selects its sink, to exercise a delayed audio command.
+  #[cfg(all(test, feature = "qobuz"))]
+  pub(crate) fn on_next_seek(&self, hook: impl FnOnce() + Send + 'static) -> mpsc::Receiver<()> {
+    let (finished, rx) = mpsc::channel();
+    *self.before_seek.lock().unwrap() = Some(SeekHook {
+      before: Some(Box::new(hook)),
+      finished,
+    });
+    rx
+  }
+
+  #[cfg(all(test, feature = "qobuz"))]
+  fn run_before_seek(&self) -> Option<SeekHook> {
+    let mut hook = self.before_seek.lock().unwrap().take();
+    if let Some(hook) = hook.as_mut() {
+      hook.before.take().unwrap()();
+    }
+    hook
   }
 }
 
@@ -684,6 +853,7 @@ fn open_sink() -> Result<Sink> {
     player: Arc::new(player),
     _keepalive: keepalive_tx,
     lost,
+    retired: false,
     device_name: device_key,
   })
 }

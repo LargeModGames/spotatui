@@ -4,7 +4,7 @@
 use crate::core::app::App;
 use crate::core::app::{DiscoverPlaylist, DiscoverShelf, UserInfo};
 use crate::core::plugin_api::PlaylistInfo;
-#[cfg(feature = "streaming")]
+#[cfg(any(feature = "streaming", feature = "qobuz"))]
 use crate::core::plugin_api::TrackInfo;
 use chrono::Duration;
 use rspotify::model::{
@@ -17,7 +17,7 @@ use rspotify::model::{
 use std::collections::HashMap;
 
 /// A queue-slot [`TrackInfo`] with only its `uri` and `name` set.
-#[cfg(feature = "streaming")]
+#[cfg(any(feature = "streaming", feature = "qobuz"))]
 pub fn queued_track(uri: &str, name: &str) -> TrackInfo {
   TrackInfo {
     generated_name: None,

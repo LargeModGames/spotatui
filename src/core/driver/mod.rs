@@ -476,6 +476,16 @@ impl Driver {
     #[cfg(feature = "audio-decode-queue")]
     macro_rules! decoded_device_recovery {
       ($app:ident, $playback:ident) => {
+        decoded_device_recovery!($app, $playback, |s| crate::infra::queue::ResumePoint {
+          position_ms: if s.advancing {
+            0
+          } else {
+            s.player.position().as_millis() as u64
+          },
+          paused: s.player.device_removed() || s.player.is_paused(),
+        });
+      };
+      ($app:ident, $playback:ident, $point:expr) => {
         // Not while the queue owns the sink: the session below is suspended, and
         // its player is the *same* handle the queue slot is using (see
         // `suspended_context_player`). The queue branch further down recovers it.
@@ -487,18 +497,13 @@ impl Driver {
         {
           use crate::infra::audio::Reopen;
           // Read before the reopen: it swaps in a fresh sink that is paused,
-          // empty, and reports no removal. A change already in flight stages a
-          // different track, so its position is the top.
-          let (position_ms, paused) = $app.$playback.as_ref().map_or((0, false), |s| {
-            (
-              if s.advancing {
-                0
-              } else {
-                s.player.position().as_millis() as u64
-              },
-              s.player.device_removed() || s.player.is_paused(),
-            )
-          });
+          // empty, and reports no removal. Qobuz keeps a pending track's
+          // parked position and intent; other sources keep their existing rule.
+          let point = $app.$playback.as_ref().map($point).unwrap_or_default();
+          let crate::infra::queue::ResumePoint {
+            position_ms,
+            paused,
+          } = point;
           match $app.$playback.as_ref().map(|s| s.player.recover_device()) {
             Some(Reopen::Reopened) => {
               // The fresh sink is empty, so `is_finished()` is true from here
@@ -538,7 +543,7 @@ impl Driver {
     #[cfg(feature = "subsonic")]
     decoded_device_recovery!(app, subsonic_playback);
     #[cfg(feature = "qobuz")]
-    decoded_device_recovery!(app, qobuz_playback);
+    decoded_device_recovery!(app, qobuz_playback, |s| s.recovery_point());
     #[cfg(feature = "youtube")]
     decoded_device_recovery!(app, youtube_playback);
 
@@ -773,10 +778,10 @@ impl Driver {
       }
     }
     #[cfg(feature = "qobuz")]
-    if !spotify_queue_slot {
+    if !app.queue_owns_playback() {
       if let Some(qobuz) = app.qobuz_playback.as_ref() {
         source_owns_playback = true;
-        app.song_progress_ms = qobuz.player.position().as_millis();
+        app.song_progress_ms = qobuz.position_ms();
       }
     }
     #[cfg(feature = "internet-radio")]

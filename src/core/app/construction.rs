@@ -25,6 +25,8 @@ impl Default for App {
       #[cfg(feature = "gui")]
       visualizer_look: Default::default(),
       source_table_uri: None,
+      source_table_request: None,
+      search_request: None,
       track_table_view: TrackTableView::default(),
       stats_period: RecapPeriod::ThirtyDays,
       stats_loading: false,

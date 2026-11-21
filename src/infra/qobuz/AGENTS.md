@@ -9,4 +9,9 @@
   (`sign.rs`) is pure; `stream/` does the network and file I/O. Both are unit
   tested. The three web-player constants are scraped at runtime (`auth.rs`),
   cached in `state.yml`, and overridable through `SPOTATUI_QOBUZ_*` env vars;
-  they are never embedded. Failures are status messages, never `handle_error`.
+  they are never embedded. The pump never waits for that scrape
+  (`dispatch::Constants`, one at a time on its own task): a track's fetch task
+  waits for it, and a browse, search or login request runs on its own task
+  until the constants are ready, so it checks its view before it writes
+  (`App::source_table_awaits`, `App::search_is_current`). Failures are status
+  messages, never `handle_error`.

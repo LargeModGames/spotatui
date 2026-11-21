@@ -435,10 +435,9 @@ fn restore_in_place<T>(items: &mut Vec<T>, backup: &ShuffleBackup, current: usiz
 /// session down — an empty sink left in place would read as end-of-track and
 /// re-fire replay every runner tick.
 ///
-/// Gated on the *queueable* decoded sources rather than `audio-decode`: replay
-/// is the repeat-one path of a finite track list. Internet radio decodes audio
-/// too, but a live stream has no track to re-decode.
-#[cfg(feature = "audio-decode-queue")]
+/// Used by Local, Subsonic and YouTube. Qobuz stages silently and reads its
+/// latest saved intent before resuming. Radio has no finite track to re-decode.
+#[cfg(any(feature = "local-files", feature = "subsonic", feature = "youtube"))]
 pub async fn replay_file(
   player: std::sync::Arc<crate::infra::audio::LocalPlayer>,
   path: std::path::PathBuf,
@@ -468,7 +467,7 @@ pub struct ResumePoint {
 ///
 /// **Blocking:** the stage clears the sink and decodes; call it off the async
 /// runtime and off the `App` lock.
-#[cfg(feature = "audio-decode-queue")]
+#[cfg(any(feature = "local-files", feature = "subsonic", feature = "youtube"))]
 pub fn restage(
   player: &crate::infra::audio::LocalPlayer,
   path: &std::path::Path,

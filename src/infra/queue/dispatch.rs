@@ -426,22 +426,38 @@ async fn play_queued_subsonic(app: &Arc<Mutex<App>>, track: &TrackInfo, uri: &st
 #[cfg(feature = "qobuz")]
 async fn play_queued_qobuz(app: &Arc<Mutex<App>>, track: &TrackInfo, uri: &str) -> bool {
   release_librespot(app, Source::Qobuz).await;
-  let Some(source) = crate::infra::qobuz::dispatch::build_playback_source(app).await else {
-    return false; // build_playback_source surfaced its own status
+  if !crate::infra::qobuz::dispatch::logged_in_for_playback(app).await {
+    return false; // it surfaced its own status
+  }
+  let quality = app.lock().await.user_config.behavior.qobuz_quality;
+  let fetch_app = Arc::clone(app);
+  let uri = uri.to_string();
+  // The fetch builds the source too: the first one of a process waits for the
+  // web-player constants there, not on the pump.
+  let fetch = async move {
+    crate::infra::qobuz::dispatch::download_for_queue(&fetch_app, &uri, quality).await
   };
+  play_queued_qobuz_fetch(app, track, fetch).await
+}
+
+/// Publish the pending slot for `track` and run `fetch` off the IoEvent pump,
+/// like Subsonic: a Qobuz track is a long download.
+#[cfg(feature = "qobuz")]
+async fn play_queued_qobuz_fetch(
+  app: &Arc<Mutex<App>>,
+  track: &TrackInfo,
+  fetch: impl std::future::Future<Output = anyhow::Result<(tempfile::NamedTempFile, String)>>
+    + Send
+    + 'static,
+) -> bool {
   let Some(player) = acquire_queue_player(app).await else {
     return false;
   };
   let fetch_id = publish_pending_decoded(app, &player, track).await;
-  let quality = app.lock().await.user_config.behavior.qobuz_quality;
-  // Fetch off the IoEvent pump, like Subsonic: a Qobuz track is a long download.
   let app_for_spawn = Arc::clone(app);
-  let uri = uri.to_string();
   let name = track.name.clone();
   let handle = tokio::spawn(async move {
-    let result = crate::infra::qobuz::dispatch::download_for_queue(&source, &uri, quality)
-      .await
-      .map(|(tmp, label)| (tmp, Some(label)));
+    let result = fetch.await.map(|(tmp, label)| (tmp, Some(label)));
     finish_decoded_fetch(&app_for_spawn, fetch_id, result, &name).await;
   });
 
@@ -1332,9 +1348,8 @@ async fn resume_qobuz(
     let mut guard = app.lock().await;
     match guard.qobuz_playback.as_mut() {
       Some(s) if index == s.index && s.finished_file().is_some() => {
-        s.advancing = true;
-        s.finished_file()
-          .map(|path| (Arc::clone(&s.player), path.to_path_buf()))
+        s.resume_at = Some(resume);
+        Some(())
       }
       Some(_) => None,
       None => return,
@@ -1343,11 +1358,8 @@ async fn resume_qobuz(
   // The queue slot shares the context player, so it is never stopped here.
   let _ = queue_player;
   match replay {
-    Some((player, path)) => {
-      super::replay_file(player, path, Some(resume)).await;
-      if let Some(s) = app.lock().await.qobuz_playback.as_mut() {
-        s.advancing = false;
-      }
+    Some(()) => {
+      crate::infra::qobuz::dispatch::replay_current(app).await;
     }
     None => crate::infra::qobuz::dispatch::play_index(app, index, Some(resume)).await,
   }
@@ -1420,10 +1432,6 @@ mod tests {
   use std::sync::mpsc::channel;
   use std::time::SystemTime;
 
-  #[cfg(any(
-    feature = "streaming",
-    not(all(feature = "qobuz", feature = "subsonic"))
-  ))]
   fn track(uri: &str, name: &str) -> TrackInfo {
     TrackInfo {
       generated_name: None,
@@ -1466,6 +1474,237 @@ mod tests {
     let message = app.status_message().unwrap_or_default().to_string();
     assert!(message.contains("Song"), "{message}");
     assert!(!app.status_message_is_error());
+  }
+
+  /// A queue slot whose track just ended, the driver's advance latch set, on
+  /// a player with no audio device; the Qobuz item it advances to is popped.
+  #[cfg(feature = "qobuz")]
+  async fn advance_from_an_ended_slot() -> (
+    Arc<Mutex<App>>,
+    std::sync::mpsc::Receiver<IoEvent>,
+    tokio::sync::oneshot::Sender<anyhow::Result<(tempfile::NamedTempFile, String)>>,
+    u64,
+  ) {
+    use crate::infra::queue::{DecodedQueuePlayback, QueueNowPlaying};
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.queue_now = Some(QueueNowPlaying::Decoded(DecodedQueuePlayback {
+      player: Arc::new(LocalPlayer::without_device()),
+      track: track("file:///ended.flac", "Ended"),
+      advancing: true,
+      fetch_id: next_fetch_id(),
+      tempfile: None,
+      abort_handle: None,
+      quality: None,
+    }));
+    let app = Arc::new(Mutex::new(app));
+    // The fetch waits, as the first one of a process does for the constants.
+    let (answer, fetch) = tokio::sync::oneshot::channel();
+    let fetch = async move { fetch.await.expect("an answer") };
+    let next = track("qobuz:track:1", "Next");
+    assert!(play_queued_qobuz_fetch(&app, &next, fetch).await);
+    let fetch_id = match app.lock().await.queue_now.as_ref() {
+      Some(QueueNowPlaying::Decoded(slot)) => {
+        assert_eq!(slot.track.name, "Next");
+        assert!(slot.advancing, "the driver does not advance again");
+        slot.fetch_id
+      }
+      _ => panic!("no pending slot"),
+    };
+    assert!(rx.try_recv().is_err());
+    (app, rx, answer, fetch_id)
+  }
+
+  #[cfg(feature = "qobuz")]
+  async fn slot_latch(app: &Arc<Mutex<App>>) -> Option<(u64, bool)> {
+    match app.lock().await.queue_now.as_ref() {
+      Some(crate::infra::queue::QueueNowPlaying::Decoded(slot)) => {
+        Some((slot.fetch_id, slot.advancing))
+      }
+      _ => None,
+    }
+  }
+
+  #[cfg(feature = "qobuz")]
+  async fn fetch_finished(app: &Arc<Mutex<App>>) {
+    for _ in 0..200 {
+      let waiting = match app.lock().await.queue_now.as_ref() {
+        Some(crate::infra::queue::QueueNowPlaying::Decoded(slot)) => {
+          slot.advancing
+            && slot
+              .abort_handle
+              .as_ref()
+              .is_some_and(|h| !h.0.is_finished())
+        }
+        _ => false,
+      };
+      if !waiting {
+        return;
+      }
+      tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    panic!("the fetch task did not finish");
+  }
+
+  /// One second of silence as a WAV file.
+  #[cfg(feature = "qobuz")]
+  fn silence() -> tempfile::NamedTempFile {
+    use std::io::Write;
+    let (rate, samples) = (8_000u32, 8_000u32);
+    let mut file = tempfile::Builder::new().suffix(".wav").tempfile().unwrap();
+    let data_len = samples * 2;
+    file.write_all(b"RIFF").unwrap();
+    file.write_all(&(36 + data_len).to_le_bytes()).unwrap();
+    file.write_all(b"WAVEfmt ").unwrap();
+    file.write_all(&16u32.to_le_bytes()).unwrap();
+    file.write_all(&1u16.to_le_bytes()).unwrap();
+    file.write_all(&1u16.to_le_bytes()).unwrap();
+    file.write_all(&rate.to_le_bytes()).unwrap();
+    file.write_all(&(rate * 2).to_le_bytes()).unwrap();
+    file.write_all(&2u16.to_le_bytes()).unwrap();
+    file.write_all(&16u16.to_le_bytes()).unwrap();
+    file.write_all(b"data").unwrap();
+    file.write_all(&data_len.to_le_bytes()).unwrap();
+    file.write_all(&vec![0u8; data_len as usize]).unwrap();
+    file.flush().unwrap();
+    file
+  }
+
+  #[cfg(feature = "qobuz")]
+  #[tokio::test]
+  async fn a_qobuz_queue_resume_clears_the_saved_position_before_repeat_one_replay() {
+    use crate::infra::qobuz::{QobuzPlaybackState, ResumePoint};
+    use crate::infra::queue::{DecodedQueuePlayback, QueueNowPlaying};
+
+    let player = Arc::new(LocalPlayer::without_device_with_consumer());
+    let file = silence();
+    player.stage_file(file.path()).unwrap();
+    let app = test_app();
+    {
+      let mut guard = app.lock().await;
+      guard.qobuz_playback = Some(QobuzPlaybackState {
+        player: Arc::clone(&player),
+        tracks: vec![track("qobuz:track:1", "Context")],
+        index: 0,
+        advancing: true,
+        tempfile: Some(file),
+        complete: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+        quality: None,
+        shuffle_backup: None,
+        fetch_id: 7,
+        resume_at: Some(ResumePoint {
+          position_ms: 800,
+          paused: false,
+        }),
+        fetch: None,
+      });
+      guard.suspend_active_decoded_context_mid_track();
+      guard.queue_now = Some(QueueNowPlaying::Decoded(DecodedQueuePlayback {
+        player: Arc::clone(&player),
+        track: track("qobuz:track:2", "Queued"),
+        advancing: false,
+        fetch_id: 8,
+        tempfile: None,
+        abort_handle: None,
+        quality: None,
+      }));
+      guard.queue_slot_desired_playing = false;
+    }
+    assert!(route_queue_event(&app, &IoEvent::AdvanceNativeQueue).await);
+    {
+      let guard = app.lock().await;
+      assert!(guard.queue_now.is_none() && guard.queue_suspended.is_none());
+      let session = guard.qobuz_playback.as_ref().unwrap();
+      assert!(!session.advancing);
+      assert_eq!(
+        session.resume_at, None,
+        "the queue resume consumed the parked intent"
+      );
+      assert_eq!(
+        player.position(),
+        Duration::from_millis(800),
+        "suspending a pending change keeps its parked position"
+      );
+      assert!(player.is_paused());
+    }
+    // Repeat-one dispatches this event after the context track ends.
+    player.stop();
+    assert!(
+      crate::infra::qobuz::dispatch::route_qobuz_event(&app, &IoEvent::ReplayCurrentTrack).await
+    );
+    assert_eq!(
+      player.position(),
+      Duration::ZERO,
+      "repeat-one starts at the beginning"
+    );
+    assert!(player.is_paused(), "the old saved play flag is gone too");
+    let guard = app.lock().await;
+    let session = guard.qobuz_playback.as_ref().unwrap();
+    assert_eq!(session.resume_at, None);
+    assert!(!session.advancing);
+  }
+
+  #[cfg(feature = "qobuz")]
+  #[tokio::test]
+  async fn an_advance_to_qobuz_during_the_scrape_advances_once_and_releases_the_latch() {
+    let (app, rx, answer, fetch_id) = advance_from_an_ended_slot().await;
+
+    answer
+      .send(Ok((silence(), "FLAC".to_string())))
+      .ok()
+      .unwrap();
+    fetch_finished(&app).await;
+    assert_eq!(slot_latch(&app).await, Some((fetch_id, false)));
+    assert!(rx.try_recv().is_err(), "nothing advanced past the track");
+  }
+
+  #[cfg(feature = "qobuz")]
+  #[tokio::test]
+  async fn a_failed_scrape_under_a_queue_advance_moves_on_once_and_releases_the_latch() {
+    let (app, rx, answer, _fetch_id) = advance_from_an_ended_slot().await;
+
+    answer
+      .send(Err(anyhow::anyhow!("web player constants: offline")))
+      .ok()
+      .unwrap();
+    fetch_finished(&app).await;
+    tokio::task::yield_now().await;
+    let message = app
+      .lock()
+      .await
+      .status_message()
+      .unwrap_or_default()
+      .to_string();
+    assert!(
+      message.contains("web player constants: offline"),
+      "{message}"
+    );
+    // The normal failed-fetch path: one advance, which finds the queue empty,
+    // drops the slot and its latch, and ends the queue.
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::AdvanceNativeQueue)));
+    assert!(rx.try_recv().is_err());
+    assert!(route_queue_event(&app, &IoEvent::AdvanceNativeQueue).await);
+    assert_eq!(slot_latch(&app).await, None);
+  }
+
+  #[cfg(feature = "qobuz")]
+  #[tokio::test]
+  async fn a_skip_during_the_scrape_cancels_the_waiting_queue_fetch() {
+    let (app, rx, answer, fetch_id) = advance_from_an_ended_slot().await;
+
+    // The user skips: the slot is republished for the next item, which aborts
+    // the waiting fetch, and its late answer finds another stamp.
+    let (_later, fetch) = tokio::sync::oneshot::channel();
+    let fetch = async move { fetch.await.expect("an answer") };
+    assert!(play_queued_qobuz_fetch(&app, &track("qobuz:track:2", "Later"), fetch).await);
+    tokio::task::yield_now().await;
+    assert!(answer.send(Ok((silence(), "FLAC".to_string()))).is_err());
+    finish_decoded_fetch(&app, fetch_id, Err(anyhow::anyhow!("late")), "Next").await;
+
+    let (newer, advancing) = slot_latch(&app).await.unwrap();
+    assert!(newer != fetch_id && advancing);
+    assert_eq!(app.lock().await.status_message(), None);
+    assert!(rx.try_recv().is_err());
   }
 
   fn test_app() -> Arc<Mutex<App>> {

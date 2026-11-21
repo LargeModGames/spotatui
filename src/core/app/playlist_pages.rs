@@ -114,6 +114,7 @@ impl App {
       self.browse_apple_music(crate::infra::apple_music::Browse::Tracks(uri));
       return;
     }
+    let request = uri.clone();
     let (context, event) = if uri.starts_with("file:") {
       (
         TrackTableContext::LocalPlaylist,
@@ -141,6 +142,32 @@ impl App {
     self.dispatch(event);
     self.source_table_uri = None;
     self.show_tracks_in_table(Vec::new(), context);
+    self.source_table_request = Some((request, self.track_table_epoch));
+  }
+
+  /// Whether the track table still waits for the rows of the source list
+  /// `uri`: no other list opened in it since. A source that answers off the
+  /// pump asks before it writes the rows.
+  #[cfg(feature = "qobuz")]
+  pub(crate) fn source_table_awaits(&self, uri: &str) -> bool {
+    self
+      .source_table_request
+      .as_ref()
+      .is_some_and(|(asked, epoch)| asked == uri && *epoch == self.track_table_epoch)
+  }
+
+  /// Name the search the user just asked for.
+  pub(crate) fn begin_search(&mut self, source: Source, query: &str) {
+    self.search_request = Some((source, query.to_string()));
+  }
+
+  /// Whether `query` on `source` is still the last search the user asked for.
+  #[cfg(feature = "qobuz")]
+  pub(crate) fn search_is_current(&self, source: Source, query: &str) -> bool {
+    self
+      .search_request
+      .as_ref()
+      .is_some_and(|(s, q)| *s == source && q == query)
   }
 
   /// Show the rows of the decoded-source list `uri` in the shared track table.
