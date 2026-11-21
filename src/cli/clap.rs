@@ -52,6 +52,13 @@ spotify:playlist: or spotify:show: URI";
   }
 }
 
+fn parse_volume(value: &str) -> Result<String, String> {
+  match value.parse::<u8>() {
+    Ok(0..=100) => Ok(value.to_string()),
+    _ => Err("volume must be between 0 and 100".to_string()),
+  }
+}
+
 /// Reads a playlist URI or `open.spotify.com` link as a `spotify:playlist:` URI,
 /// so `list --playlist-tracks` refuses anything else before boot.
 fn parse_playlist_uri(input: &str) -> Result<String, String> {
@@ -235,6 +242,7 @@ seconds backwards and `spotatui pb --seek 10` to the tenth second of the track."
         .short('v')
         .long("volume")
         .value_name("VOLUME")
+        .value_parser(parse_volume)
         .help("Sets the volume of a device to VOLUME (0 - 100)"),
     )
     .group(
@@ -504,6 +512,49 @@ specify it.",
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn playback_volume_over_100_is_refused_before_any_action_runs() {
+    for volume in ["101", "150", "256", "99999999999"] {
+      let error = playback_subcommand()
+        .try_get_matches_from(["playback", "-t", "-v", volume])
+        .unwrap_err();
+      assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
+      assert!(
+        error
+          .to_string()
+          .contains("volume must be between 0 and 100"),
+        "{error}"
+      );
+    }
+  }
+
+  #[test]
+  fn playback_volume_refuses_text() {
+    for volume in ["abc", "1.5", ""] {
+      let error = playback_subcommand()
+        .try_get_matches_from(["playback", "--volume", volume])
+        .unwrap_err();
+      assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
+      assert!(
+        error
+          .to_string()
+          .contains("volume must be between 0 and 100"),
+        "{error}"
+      );
+    }
+  }
+
+  #[test]
+  fn playback_volume_accepts_0_and_100() {
+    for volume in ["0", "40", "100"] {
+      let matches = playback_subcommand()
+        .try_get_matches_from(["playback", "-t", "-v", volume])
+        .unwrap();
+      assert_eq!(matches.get_one::<String>("volume").unwrap(), volume);
+      assert!(matches.get_flag("toggle"));
+    }
+  }
 
   #[test]
   fn playback_seek_accepts_signed_and_absolute_seconds() {

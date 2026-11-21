@@ -58,58 +58,24 @@ impl CliApp {
   // Basically copy-pasted the 'copy_song_url' function
   pub async fn share_track_or_episode(&mut self) -> Result<String> {
     let app = self.net.app.lock().await;
-    if let Some(CurrentPlaybackContext {
-      item: Some(item), ..
-    }) = &app.current_playback_context
-    {
-      match item {
-        PlayableItem::Track(track) => {
-          if let Some(id) = &track.id {
-            Ok(format!("https://open.spotify.com/track/{}", id.id()))
-          } else {
-            Err(anyhow!("track has no ID"))
-          }
-        }
-        PlayableItem::Episode(episode) => Ok(format!(
-          "https://open.spotify.com/episode/{}",
-          episode.id.id()
-        )),
-        _ => Err(anyhow!("unknown playable item type")),
-      }
-    } else {
-      Err(anyhow!(
-        "failed to generate a shareable url for the current song"
-      ))
-    }
+    track_share_url(
+      app
+        .current_playback_context
+        .as_ref()
+        .and_then(|c| c.item.as_ref()),
+    )
   }
 
   // spotatui pb --share-album (share the current album)
   // Basically copy-pasted the 'copy_album_url' function
   pub async fn share_album_or_show(&mut self) -> Result<String> {
     let app = self.net.app.lock().await;
-    if let Some(CurrentPlaybackContext {
-      item: Some(item), ..
-    }) = &app.current_playback_context
-    {
-      match item {
-        PlayableItem::Track(track) => {
-          if let Some(id) = &track.album.id {
-            Ok(format!("https://open.spotify.com/album/{}", id.id()))
-          } else {
-            Err(anyhow!("album has no ID"))
-          }
-        }
-        PlayableItem::Episode(episode) => Ok(format!(
-          "https://open.spotify.com/show/{}",
-          episode.show.id.id()
-        )),
-        _ => Err(anyhow!("unknown playable item type")),
-      }
-    } else {
-      Err(anyhow!(
-        "failed to generate a shareable url for the current song"
-      ))
-    }
+    album_share_url(
+      app
+        .current_playback_context
+        .as_ref()
+        .and_then(|c| c.item.as_ref()),
+    )
   }
 
   // spotatui ... -d ... (specify device to control)
@@ -845,11 +811,52 @@ fn playable_format_type(item: PlayableInfo) -> FormatType {
   }
 }
 
+fn track_share_url(item: Option<&PlayableItem>) -> Result<String> {
+  match item {
+    Some(PlayableItem::Track(track)) => {
+      if let Some(id) = &track.id {
+        Ok(format!("https://open.spotify.com/track/{}", id.id()))
+      } else {
+        Err(anyhow!("track has no ID"))
+      }
+    }
+    Some(PlayableItem::Episode(episode)) => Ok(format!(
+      "https://open.spotify.com/episode/{}",
+      episode.id.id()
+    )),
+    Some(_) => Err(anyhow!("unknown playable item type")),
+    None => Err(anyhow!(
+      "nothing is playing, so there is no song or episode to share"
+    )),
+  }
+}
+
+fn album_share_url(item: Option<&PlayableItem>) -> Result<String> {
+  match item {
+    Some(PlayableItem::Track(track)) => {
+      if let Some(id) = &track.album.id {
+        Ok(format!("https://open.spotify.com/album/{}", id.id()))
+      } else {
+        Err(anyhow!("album has no ID"))
+      }
+    }
+    Some(PlayableItem::Episode(episode)) => Ok(format!(
+      "https://open.spotify.com/show/{}",
+      episode.show.id.id()
+    )),
+    Some(_) => Err(anyhow!("unknown playable item type")),
+    None => Err(anyhow!(
+      "nothing is playing, so there is no album or show to share"
+    )),
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::{
-    device_id_by_name, first_result_uri, parse_query_limit, parse_track_limit,
-    playable_format_type, playlist_items_total, random_offset, seek_target, SearchResult, Type,
+    album_share_url, device_id_by_name, first_result_uri, parse_query_limit, parse_track_limit,
+    playable_format_type, playlist_items_total, random_offset, seek_target, track_share_url,
+    SearchResult, Type,
   };
   use crate::cli::util::{render_format, Format};
   use crate::core::plugin_api::{EpisodeInfo, PlayableInfo};
@@ -926,7 +933,7 @@ mod tests {
   use crate::core::pagination::Paged;
   use crate::core::plugin_api::{AlbumInfo, ArtistInfo, ShowInfo, TrackInfo};
   use crate::core::test_helpers::{full_track, playlist_info};
-  use rspotify::model::{Device, DeviceType};
+  use rspotify::model::{AlbumId, Device, DeviceType, PlayableItem};
 
   fn search_results_with_hits() -> SearchResult {
     SearchResult {
@@ -1237,6 +1244,40 @@ mod tests {
     assert_eq!(
       device_id_by_name(&[], "Kitchn").unwrap_err().to_string(),
       "no device with name 'Kitchn'"
+    );
+  }
+
+  #[test]
+  fn track_share_url_with_nothing_playing_says_nothing_is_playing() {
+    let err = track_share_url(None).unwrap_err();
+    assert_eq!(
+      err.to_string(),
+      "nothing is playing, so there is no song or episode to share"
+    );
+  }
+
+  #[test]
+  fn album_share_url_with_nothing_playing_says_nothing_is_playing() {
+    let err = album_share_url(None).unwrap_err();
+    assert_eq!(
+      err.to_string(),
+      "nothing is playing, so there is no album or show to share"
+    );
+    assert!(!err.to_string().contains("song"));
+  }
+
+  #[test]
+  fn album_share_url_of_a_playing_track_is_its_album_link() {
+    let mut track = full_track("4uLU6hMCjMI75M1A2tKUQC", "Song");
+    track.album.id = Some(
+      AlbumId::from_id("4aawyAB9vmqN3uQ7FjRGTy")
+        .unwrap()
+        .into_static(),
+    );
+    let item = PlayableItem::Track(track);
+    assert_eq!(
+      album_share_url(Some(&item)).unwrap(),
+      "https://open.spotify.com/album/4aawyAB9vmqN3uQ7FjRGTy"
     );
   }
 }
