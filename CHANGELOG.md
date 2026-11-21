@@ -10,6 +10,7 @@
 - **The recap share card shows where you listened**: a Sources line names the three services with the most plays and their share, such as "Spotify 78% · Qobuz 21% · YouTube <1%", from the history spotatui already keeps. The card of the year recap shows the year in its badge, and the card footer names `spotatui.com`.
 - **Sort the playlists sidebar**: order the Spotify playlists by Spotify's own order, by what you played last in spotatui, or by name. Press `,` in the playlists sidebar or choose the order in Your Library in the GUI. The choice is saved in `state.yml`; folders keep their positions and the community playlist stays pinned first ([#657](https://github.com/LargeModGames/spotatui/issues/657)).
 - **Scroll to change the volume in the GUI**: the mouse wheel over the volume bar in the desktop app and the browser GUI steps the volume up or down by the same step as the arrow keys. A trackpad swipe adds up its small scroll events instead of stepping on each one, and the seek bar still ignores the wheel ([#1059](https://github.com/LargeModGames/spotatui/issues/1059)).
+- **Eliminated vendored CA certificate roots**: all dependencies on `webpki-roots` have been replaced with alternatives that load system CA certificates to improve security. This means that we now require certificate roots to be installed on the system, and `SSL_CERT_FILE` and `SSL_CERT_DIR` are respected for the system CA bundle. Android builds are an exception: they continue using bundled webpki roots, so system certificate roots are not required there and `SSL_CERT_FILE` and `SSL_CERT_DIR` configuration through the system store does not apply.
 
 ### Changed
 
@@ -17,6 +18,7 @@
 
 ### Fixed
 
+- **English UI text uses one ellipsis style**: loading and progress strings ended with either the single ellipsis character `…` or three dots `...`, and one screen could show both at once. Every English UI string now uses `…`, including the party status line, and a test keeps it that way. The console-only onboarding strings keep three dots for older Windows consoles ([#1054](https://github.com/LargeModGames/spotatui/issues/1054)).
 - Playlist pin changes keep the selected playlist in the terminal sidebar. Failed additions can be retried, pin write errors use the normal error screen, and refreshes keep pins for followed playlists omitted from the rootlist.
 - **`playback --help` names every option**: the list of options that can be used together now includes `--dislike` and `--seek`, says that `--like` and `--dislike` exclude each other, says that `--next` and `--previous` work with `--seek`, and says that `--share-track` and `--share-album` ignore `--seek` ([#1045](https://github.com/LargeModGames/spotatui/issues/1045)).
 - **`spotatui plugin update` exits non-zero when an update fails**: a plugin whose git fetch or reset failed was reported on stdout and the command still exited 0, also when updating one plugin by name. Each failure now goes to stderr, the lockfile still records the plugins that did update, and the command ends with "N plugin(s) failed to update" and a non-zero exit ([#1047](https://github.com/LargeModGames/spotatui/issues/1047)).
@@ -41,6 +43,7 @@
 - **Clearing an icon in Settings no longer saves an empty icon**: Active Source Icon and List Highlight Icon keep their current value when cleared, and padded icons are trimmed like `config.yml` does ([#1062](https://github.com/LargeModGames/spotatui/issues/1062)).
 - **Typing q no longer closes the Create Playlist form**: Previously, pressing q while creating a playlist would close the form while preserving the entered value. Now, only Esc closes the form, clearing the entered value ([#1037](https://github.com/LargeModGames/spotatui/issues/1037)).
 - **CLI `--seek` with a huge or invalid value**: clap now refuses a value that is not whole seconds before spotatui starts, and a huge value no longer overflows into a seek near the start of the track ([#1044](https://github.com/LargeModGames/spotatui/issues/1044)).
+- **Typing q no longer closes the Friends search or the add-friend box**: the back key reached the runner before the Friends screen could read it, so a typed `q` left the screen with the half-typed search or open dialog kept for the next visit. `q` now types a `q` while a Friends text box is up, and still goes back on the idle list ([#1039](https://github.com/LargeModGames/spotatui/issues/1039)).
 
 ### Documentation
 
