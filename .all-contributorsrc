@@ -803,6 +803,16 @@
       "contributions": [
         "code"
       ]
+    },
+    {
+      "login": "akshit-bansal11",
+      "name": "Akshit Bansal",
+      "avatar_url": "https://avatars.githubusercontent.com/u/164723482?v=4",
+      "profile": "https://akshitbansal.me",
+      "contributions": [
+        "code",
+        "doc"
+      ]
     }
   ],
   "contributorsPerLine": 7,
