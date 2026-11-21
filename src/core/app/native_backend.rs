@@ -163,8 +163,11 @@ impl App {
 
     self.set_status_message(self.strings().status.app.native_disconnected, 8);
     if let Some(tx) = &self.streaming_recovery_tx {
+      self.native_recovery_generation = self.native_recovery_generation.wrapping_add(1);
+      let generation = self.native_recovery_generation;
       self.native_backend_pending = tx
         .send(crate::infra::player::StreamingRecoveryRequest {
+          generation,
           reselect_device,
           restore_playback: true,
           continue_after_track: None,
@@ -217,8 +220,11 @@ impl App {
       return false;
     }
     if !self.native_backend_pending {
+      self.native_recovery_generation = self.native_recovery_generation.wrapping_add(1);
+      let generation = self.native_recovery_generation;
       self.native_backend_pending = self.streaming_recovery_tx.as_ref().is_some_and(|tx| {
         tx.send(crate::infra::player::StreamingRecoveryRequest {
+          generation,
           reselect_device: false,
           restore_playback: true,
           continue_after_track: None,

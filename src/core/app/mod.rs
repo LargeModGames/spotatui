@@ -677,6 +677,10 @@ pub struct App {
   #[cfg(feature = "streaming")]
   pub native_restore_pending: Option<NativePlaybackRestoreAttempt>,
   #[cfg(feature = "streaming")]
+  /// Identity of the currently requested native backend rebuild. Recovery tasks
+  /// must match this before writing shared state or installing a player.
+  #[cfg(feature = "streaming")]
+  pub(crate) native_recovery_generation: u64,
   native_playback_generation: u64,
   /// Reference to MPRIS manager for emitting Seeked signals after native seeks
   #[cfg(all(feature = "mpris", target_os = "linux"))]

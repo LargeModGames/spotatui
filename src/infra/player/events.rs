@@ -43,6 +43,9 @@ fn session_disconnect_recovery(reason: SessionDisconnectReason) -> SessionDiscon
 
 #[derive(Clone, Default)]
 pub struct StreamingRecoveryRequest {
+  /// Identity of the rebuild request that owns writes made by its recovery chain.
+  /// A newer request supersedes an older build even if the old build finishes first.
+  pub generation: u64,
   pub reselect_device: bool,
   pub restore_playback: bool,
   pub continue_after_track: Option<String>,
@@ -136,6 +139,9 @@ fn recovery_snapshot_summary(app: &App) -> String {
 /// (`restore_playback == false`) stickily vetoes restore/reselect: restoring
 /// over the user's handoff would steal playback back (#437).
 fn merge_recovery_requests(request: &mut StreamingRecoveryRequest, next: StreamingRecoveryRequest) {
+  // The latest request owns the rebuild identity. Intent is still merged below,
+  // but stale work from the previous identity must not install or clear state.
+  request.generation = request.generation.max(next.generation);
   request.reacquire |= next.reacquire;
   if !request.restore_playback || !next.restore_playback {
     request.reselect_device = false;
@@ -157,6 +163,8 @@ fn next_recovery_retry_delay(current: Duration) -> Duration {
 enum RebuildOutcome {
   /// A live player
   Built(StreamingPlayer),
+  /// A newer rebuild request superseded this chain.
+  Superseded,
   /// An error we give up on
   Failed(StreamingBuildError),
   /// A decoded owner interrupted the rebuild.
@@ -215,6 +223,9 @@ async fn rebuild_with_retries(
   loop {
     // Cancel if not native
     let app = ctx.app.lock().await;
+    if app.native_recovery_generation != request.generation {
+      return RebuildOutcome::Superseded;
+    }
     if let Some(outcome) = rebuild_cancellation(&app) {
       return outcome;
     }
@@ -253,6 +264,9 @@ async fn rebuild_with_retries(
           let error = e.to_string();
           let mut app = ctx.app.lock().await;
 
+          if app.native_recovery_generation != request.generation {
+            return RebuildOutcome::Superseded;
+          }
           if let Some(outcome) = rebuild_cancellation(&app) {
             return outcome;
           }
@@ -356,16 +370,23 @@ async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
     let outcome = rebuild_with_retries(&mut ctx, &mut request).await;
     // The retry chain can outlast a single player build. Not user's wait, so credit it
     // back to any start parked for this backend before replaying it on the built route.
-    ctx
-      .app
-      .lock()
-      .await
-      .exclude_recovery_time_from_parked_start(recovery_started.elapsed());
+    {
+      let mut app = ctx.app.lock().await;
+      if app.native_recovery_generation == request.generation {
+        app.exclude_recovery_time_from_parked_start(recovery_started.elapsed());
+      }
+    }
     match outcome {
       RebuildOutcome::Built(recovered_player) => {
         let recovered_player = Arc::new(recovered_player);
         let reacquired = {
           let mut app = ctx.app.lock().await;
+          if app.native_recovery_generation != request.generation {
+            drop(app);
+            recovered_player.shutdown();
+            tokio::task::spawn_blocking(move || drop(recovered_player));
+            continue;
+          }
           let reacquired = app.native_backend_parked();
           // The frontend is exiting, or a park gave the sink to another
           // source during the build: nothing would drive this player.
@@ -477,17 +498,24 @@ async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
           app.dispatch(IoEvent::GetPlaylists);
         }
       }
+      RebuildOutcome::Superseded => {
+        info!("native streaming recovery superseded by a newer rebuild request");
+      }
       RebuildOutcome::DecodedOwner | RebuildOutcome::Cancelled => {
         info!(
           "native streaming recovery cancelled: another owner took the sink or the frontend exited"
         );
         let mut app = ctx.app.lock().await;
-        finish_cancelled_recovery(&mut app, matches!(outcome, RebuildOutcome::DecodedOwner));
+        if app.native_recovery_generation == request.generation {
+          finish_cancelled_recovery(&mut app, matches!(outcome, RebuildOutcome::DecodedOwner));
+        }
       }
       RebuildOutcome::Failed(e) => {
         info!("native streaming recovery failed: {}", e);
         let mut app = ctx.app.lock().await;
-        if !app.native_engine_still_selected() {
+        if app.native_recovery_generation != request.generation
+          || !app.native_engine_still_selected()
+        {
           continue;
         }
         app.native_backend_pending = false;
@@ -1730,7 +1758,10 @@ async fn disconnect_streaming_player(
   shared_position.store(0, Ordering::Relaxed);
   shared_is_playing.store(false, Ordering::Relaxed);
 
+  app_lock.native_recovery_generation = app_lock.native_recovery_generation.wrapping_add(1);
+  let generation = app_lock.native_recovery_generation;
   Some(StreamingRecoveryRequest {
+    generation,
     reselect_device,
     restore_playback,
     continue_after_track,
@@ -2010,6 +2041,7 @@ mod tests {
     merge_recovery_requests(
       &mut request,
       StreamingRecoveryRequest {
+        generation: 2,
         reselect_device: true,
         restore_playback: true,
         continue_after_track: None,
@@ -2018,12 +2050,14 @@ mod tests {
     );
     assert!(request.reselect_device);
     assert!(request.restore_playback);
+    assert_eq!(request.generation, 2);
     // The newest non-None continuation wins; None does not erase it.
     assert_eq!(request.continue_after_track.as_deref(), Some("older"));
 
     merge_recovery_requests(
       &mut request,
       StreamingRecoveryRequest {
+        generation: 3,
         reselect_device: false,
         restore_playback: true,
         continue_after_track: Some("newer".to_string()),
@@ -2031,6 +2065,7 @@ mod tests {
       },
     );
     assert!(request.reselect_device);
+    assert_eq!(request.generation, 3);
     assert_eq!(request.continue_after_track.as_deref(), Some("newer"));
   }
 
@@ -2056,6 +2091,7 @@ mod tests {
   #[test]
   fn recovery_request_merge_handoff_vetoes_restore_intent() {
     let restore = StreamingRecoveryRequest {
+      generation: 1,
       reselect_device: true,
       restore_playback: true,
       continue_after_track: Some("track".to_string()),
