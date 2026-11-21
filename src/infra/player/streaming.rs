@@ -447,6 +447,21 @@ async fn run_spirc_supervisor(mut ctx: SpircSupervisorContext) {
   }
 }
 
+/// Windows picks our own sink (the fork's rodio one hangs when the device is
+/// unplugged, see `sink.rs`) unless the user explicitly names a backend.
+#[cfg(target_os = "windows")]
+fn native_backend(requested: Option<String>) -> Option<audio_backend::SinkBuilder> {
+  if requested.is_none() {
+    return Some(super::sink::mk_spotatui_sink);
+  }
+  audio_backend::find(requested)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn native_backend(requested: Option<String>) -> Option<audio_backend::SinkBuilder> {
+  audio_backend::find(requested)
+}
+
 struct RecoveringSink {
   inner: Option<Box<dyn audio_backend::Sink>>,
   make_sink: Box<dyn Fn() -> Box<dyn audio_backend::Sink>>,
@@ -748,7 +763,7 @@ impl StreamingPlayer {
 
     // Create audio backend
     let backend =
-      audio_backend::find(requested_backend.clone()).ok_or_else(|| match requested_backend {
+      native_backend(requested_backend.clone()).ok_or_else(|| match requested_backend {
         Some(name) => anyhow!(
           "Unknown audio backend '{}'. Available backends: {}",
           name,
