@@ -159,7 +159,9 @@ enum RebuildOutcome {
   Built(StreamingPlayer),
   /// An error we give up on
   Failed(StreamingBuildError),
-  /// a cancellation because another engine took over
+  /// A decoded owner interrupted the rebuild.
+  DecodedOwner,
+  /// The frontend exited or another engine took over.
   Cancelled,
 }
 
@@ -168,9 +170,17 @@ enum RebuildOutcome {
 /// This decides whether a rebuild is still useful.
 /// Condition has to be whether the frontend is alive, no decoded source
 /// or Soloist has taken the engine, and librespot is still the configured one.
-async fn native_backend_still_wanted(ctx: &StreamingRecoveryContext) -> bool {
-  let app = ctx.app.lock().await;
-  app.io_tx_clone().is_some() && app.native_should_drive() && app.native_engine_still_selected()
+fn rebuild_cancellation(app: &App) -> Option<RebuildOutcome> {
+  if app.io_tx_clone().is_none()
+    || !app.native_engine_still_selected()
+    || app.apple_music_owns_playback()
+  {
+    Some(RebuildOutcome::Cancelled)
+  } else if app.active_decoded_source() {
+    Some(RebuildOutcome::DecodedOwner)
+  } else {
+    None
+  }
 }
 
 /// Build a replacement Connect device, retrying transient failures with backoffs.
@@ -185,8 +195,9 @@ async fn rebuild_with_retries(
 
   loop {
     // Cancel if not native
-    if !native_backend_still_wanted(ctx).await {
-      return RebuildOutcome::Cancelled;
+    let app = ctx.app.lock().await;
+    if let Some(outcome) = rebuild_cancellation(&app) {
+      return outcome;
     }
 
     let initial_volume = ctx.app.lock().await.runtime_state.volume_percent;
@@ -219,7 +230,11 @@ async fn rebuild_with_retries(
       Err(e) => {
         // Handle retry
         let error = e.to_string();
-        if !e.is_retryable() || !native_backend_still_wanted(ctx).await {
+        let app = ctx.app.lock().await;
+        if let Some(outcome) = rebuild_cancellation(&app) {
+          return outcome;
+        }
+        if !e.is_retryable() {
           return RebuildOutcome::Failed(e);
         }
         // A bare resume would otherwise reach Spotify with no
@@ -436,6 +451,19 @@ async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
         // A playlist refresh while parked had no session for the folders.
         if reacquired && app.playlist_folder_nodes().is_none() {
           app.dispatch(IoEvent::GetPlaylists);
+        }
+      }
+      RebuildOutcome::DecodedOwner => {
+        let mut app = ctx.app.lock().await;
+        app.native_backend_pending = false;
+        if app.io_tx_clone().is_some()
+          && app.native_engine_still_selected()
+          && !app.apple_music_owns_playback()
+        {
+          app.park_cancelled_native_recovery_for_decoded();
+          if !app.active_decoded_source() {
+            app.reacquire_parked_backend();
+          }
         }
       }
       RebuildOutcome::Cancelled => {
@@ -1706,6 +1734,45 @@ mod tests {
   };
   use librespot_core::error::Error as LibrespotError;
   use std::time::Duration;
+
+  #[test]
+  fn decoded_owner_cancels_recovery_and_can_reacquire_after_release() {
+    use crate::core::{app::App, source::Source, user_config::UserConfig};
+    use std::sync::mpsc::channel;
+    use std::time::SystemTime;
+
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    let (recovery_tx, mut recovery_rx) = tokio::sync::mpsc::unbounded_channel();
+    app.streaming_recovery_tx = Some(recovery_tx);
+    app.claim_decoded_sink(Source::YouTube);
+    assert!(matches!(
+      super::rebuild_cancellation(&app),
+      Some(super::RebuildOutcome::DecodedOwner)
+    ));
+    app.park_cancelled_native_recovery_for_decoded();
+    assert!(app.native_backend_parked());
+    app.release_decoded_sink_claim();
+    assert!(app.reacquire_parked_backend());
+    assert!(recovery_rx.try_recv().unwrap().reacquire);
+  }
+
+  #[test]
+  fn frontend_shutdown_is_not_a_decoded_owner_cancellation() {
+    use crate::core::{app::App, source::Source, user_config::UserConfig};
+    use std::sync::mpsc::channel;
+    use std::time::SystemTime;
+
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.claim_decoded_sink(Source::YouTube);
+    app.close_io_channel();
+    assert!(matches!(
+      super::rebuild_cancellation(&app),
+      Some(super::RebuildOutcome::Cancelled)
+    ));
+    assert!(!app.native_backend_parked());
+  }
 
   #[test]
   fn a_dns_failure_keeps_retrying_the_connect_device_rebuild() {

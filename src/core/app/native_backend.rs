@@ -195,6 +195,14 @@ impl App {
     tokio::task::spawn_blocking(move || drop(player));
   }
 
+  /// Preserve the absent backend when a decoded owner interrupts recovery.
+  #[cfg(feature = "streaming")]
+  pub(crate) fn park_cancelled_native_recovery_for_decoded(&mut self) {
+    if self.streaming_player.is_none() {
+      self.native_parked = true;
+    }
+  }
+
   /// Whether the park took the player and no rebuild has installed a new one.
   #[cfg(feature = "streaming")]
   pub(crate) fn native_backend_parked(&self) -> bool {
@@ -258,6 +266,10 @@ impl App {
       self.park_native_backend();
       self.native_parked = true;
       self.native_backend_pending = false;
+      return false;
+    }
+    if self.active_decoded_source() {
+      self.park_cancelled_native_recovery_for_decoded();
       return false;
     }
     if self.native_parked && !self.native_should_drive() {
@@ -859,7 +871,7 @@ mod tests {
   }
 
   #[test]
-  fn a_rebuild_under_a_decoded_owner_is_refused_only_while_parked() {
+  fn a_rebuild_under_a_decoded_owner_is_parked_until_the_claim_is_released() {
     let (tx, _rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
     app.native_parked = true;
@@ -872,9 +884,10 @@ mod tests {
     assert!(app.accept_rebuilt_native_backend());
     assert!(!app.native_parked);
 
-    // A decoded queue slot over a Spotify context parks nothing.
+    // A rebuild started before a decoded claim must also be refused.
     app.claim_decoded_sink(Source::YouTube);
-    assert!(app.accept_rebuilt_native_backend());
+    assert!(!app.accept_rebuilt_native_backend());
+    assert!(app.native_backend_parked());
   }
 
   #[test]
