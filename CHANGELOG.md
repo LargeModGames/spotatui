@@ -17,6 +17,7 @@
 
 ### Fixed
 
+- **English UI text uses one ellipsis style**: loading and progress strings ended with either the single ellipsis character `…` or three dots `...`, and one screen could show both at once. Every English UI string now uses `…`, including the party status line, and a test keeps it that way. The console-only onboarding strings keep three dots for older Windows consoles ([#1054](https://github.com/LargeModGames/spotatui/issues/1054)).
 - Playlist pin changes keep the selected playlist in the terminal sidebar. Failed additions can be retried, pin write errors use the normal error screen, and refreshes keep pins for followed playlists omitted from the rootlist.
 - **`playback --help` names every option**: the list of options that can be used together now includes `--dislike` and `--seek`, says that `--like` and `--dislike` exclude each other, says that `--next` and `--previous` work with `--seek`, and says that `--share-track` and `--share-album` ignore `--seek` ([#1045](https://github.com/LargeModGames/spotatui/issues/1045)).
 - **`spotatui plugin update` exits non-zero when an update fails**: a plugin whose git fetch or reset failed was reported on stdout and the command still exited 0, also when updating one plugin by name. Each failure now goes to stderr, the lockfile still records the plugins that did update, and the command ends with "N plugin(s) failed to update" and a non-zero exit ([#1047](https://github.com/LargeModGames/spotatui/issues/1047)).
