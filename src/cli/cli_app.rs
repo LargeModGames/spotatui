@@ -246,10 +246,11 @@ impl CliApp {
   }
 
   pub async fn seek(&mut self, seconds_str: String) -> Result<()> {
-    let seconds = match seconds_str.parse::<i32>() {
-      Ok(s) => s.unsigned_abs(),
-      Err(_) => return Err(anyhow!("failed to convert seconds to i32")),
-    };
+    // Clap's value parser refuses a bad value before boot; `seek` stays safe
+    // for a caller that skips clap.
+    if seconds_str.parse::<i32>().is_err() {
+      return Err(anyhow!("failed to convert seconds to i32"));
+    }
 
     let (current_pos, duration) = {
       self
@@ -275,20 +276,8 @@ impl CliApp {
       }
     };
 
-    // Convert secs to ms
-    let ms = seconds * 1000;
     // Calculate new positon
-    let position_to_seek = if seconds_str.starts_with('+') {
-      current_pos + ms
-    } else if seconds_str.starts_with('-') {
-      // Jump to the beginning if the position_to_seek would be
-      // negative, must be checked before the calculation to avoid
-      // an 'underflow'
-      current_pos.saturating_sub(ms)
-    } else {
-      // Absolute value of the track
-      seconds * 1000
-    };
+    let position_to_seek = seek_target(&seconds_str, current_pos);
 
     // Check if position_to_seek is greater than duration (next track)
     if position_to_seek > duration {
@@ -791,6 +780,29 @@ fn parse_track_limit(max: &str) -> Result<u32> {
   }
 }
 
+/// The position `playback --seek` jumps to, in ms. Saturates instead of
+/// overflowing, so a huge value lands past the track's end and the caller
+/// skips to the next track instead of seeking back near the start.
+fn seek_target(seconds_str: &str, current_pos: u32) -> u32 {
+  let seconds = match seconds_str.parse::<i32>() {
+    Ok(s) => s.unsigned_abs(),
+    Err(_) => 0,
+  };
+  // Convert secs to ms
+  let ms = seconds.saturating_mul(1000);
+  if seconds_str.starts_with('+') {
+    current_pos.saturating_add(ms)
+  } else if seconds_str.starts_with('-') {
+    // Jump to the beginning if the position_to_seek would be
+    // negative, must be checked before the calculation to avoid
+    // an 'underflow'
+    current_pos.saturating_sub(ms)
+  } else {
+    // Absolute value of the track
+    ms
+  }
+}
+
 /// A playlist item as the format placeholders read it.
 fn playable_format_type(item: PlayableInfo) -> FormatType {
   match item {
@@ -843,7 +855,8 @@ fn album_share_url(item: Option<&PlayableItem>) -> Result<String> {
 mod tests {
   use super::{
     album_share_url, device_id_by_name, first_result_uri, parse_query_limit, parse_track_limit,
-    playable_format_type, playlist_items_total, random_offset, track_share_url, SearchResult, Type,
+    playable_format_type, playlist_items_total, random_offset, seek_target, track_share_url,
+    SearchResult, Type,
   };
   use crate::cli::util::{render_format, Format};
   use crate::core::plugin_api::{EpisodeInfo, PlayableInfo};
@@ -860,6 +873,18 @@ mod tests {
     for max in ["0", "-1", "ten", ""] {
       assert!(parse_track_limit(max).is_err(), "{max}");
     }
+  }
+
+  #[test]
+  fn seek_target_saturates_instead_of_overflowing() {
+    // A value past the track's end must stay past it so the caller skips to
+    // the next track; it must not wrap around to a position near 0.
+    assert_eq!(seek_target("4294968", 60_000), u32::MAX);
+    assert_eq!(seek_target("+4294968", 60_000), u32::MAX);
+    assert_eq!(seek_target("-2147483648", 60_000), 0);
+    assert_eq!(seek_target("+10", 60_000), 70_000);
+    assert_eq!(seek_target("-10", 60_000), 50_000);
+    assert_eq!(seek_target("10", 60_000), 10_000);
   }
 
   fn render_item(format: &str, item: PlayableInfo) -> String {
