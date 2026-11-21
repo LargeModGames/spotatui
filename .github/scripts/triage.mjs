@@ -15,7 +15,8 @@ import Anthropic from "@anthropic-ai/sdk";
 import { betaTool } from "@anthropic-ai/sdk/helpers/beta/json-schema";
 import { oidcFederationProvider } from "@anthropic-ai/sdk/lib/credentials/oidc-federation";
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 // Change here to try another model, for example "claude-fable-5-1".
 const MODEL = "claude-opus-5-5";
@@ -152,7 +153,14 @@ const agents = readFileSync("AGENTS.md", "utf8");
 const changelog = readFileSync("CHANGELOG.md", "utf8");
 // [Unreleased] plus the latest release: the third `## [` heading ends it.
 const releaseHeads = [...changelog.matchAll(/^## \[/gm)].map((m) => m.index);
-const recentChanges = clip(changelog.slice(releaseHeads[0] ?? 0, releaseHeads[2]), 20000);
+const fragments = readdirSync("changelog.d", { recursive: true })
+  .filter((f) => f.endsWith(".md") && f !== "README.md")
+  .map((f) => `[${dirname(f)}] ${readFileSync(join("changelog.d", f), "utf8").trim()}`);
+const recentChanges = clip(
+  `## Unreleased (changelog.d)\n\n${fragments.join("\n")}\n\n` +
+    changelog.slice(releaseHeads[0] ?? 0, releaseHeads[2]),
+  20000,
+);
 const sourceFiles = [...trackedFiles].filter((f) => /^(src|gui\/src|desktop\/src)\//.test(f));
 
 const searchCode = betaTool({
@@ -315,7 +323,7 @@ spotatui. The issue already says what to change, so do not repeat it. Fill these
 - contributor_steps: 5 to 9 steps in order, from nothing to an open PR. One action per step, in the
   imperative. First the setup from CONTRIBUTING.md plus anything this issue needs (system packages, the
   build features its code is behind). Then the code steps in the order to do them, naming files and
-  functions. Then the checks, a CHANGELOG line if users notice the change, and the PR: the template, and
+  functions. Then the checks, a changelog.d fragment if users notice the change, and the PR: the template, and
   the real output of the commands under Testing.
 - commands: the exact shell commands to run, one per entry, in order: every command under "Done when",
   then the checks from CONTRIBUTING.md that apply to the files this issue touches. Copy them exactly.
