@@ -160,6 +160,7 @@ impl App {
         }
       }
       Action::DeletePlaylist(uri) => self.dispatch(IoEvent::DeleteYouTubePlaylist(uri)),
+      Action::SetPlaylistPinned { uri, pinned } => self.set_playlist_pinned(&uri, pinned),
       Action::OpenPlaylistSyncPicker => self.begin_playlist_sync_picker(),
       Action::LinkPlaylistTo(source) => self.link_playlist_to(source),
       Action::RunPlaylistSync => self.dispatch(IoEvent::RunPlaylistSync {

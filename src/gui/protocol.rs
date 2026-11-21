@@ -15,6 +15,7 @@ use crate::core::plugin_api::{
   device_list, recently_played_snapshot, route_name, AlbumInfo, ArtistInfo, DeviceInfo,
   EpisodeInfo, PlaybackState, PlaylistInfo, QueueItemSnapshot, QueueSnapshot, ShowInfo, TrackInfo,
 };
+use crate::core::sort::{pinned_first, present_pins};
 use crate::core::source::Source;
 use crate::core::theme::{resolve, Color, Palette, Theme, ThemeField};
 use crate::core::update::{UpdateAsk, UpdateStatus};
@@ -463,6 +464,21 @@ pub(crate) struct StatusPayload {
   soloist_pairing: Option<SoloistPairingGuide>,
   /// The offer to set up Soloist to show in a modal.
   soloist_offer: Option<SoloistOffer>,
+  /// The monthly or year recap that waits for an answer, to show in a modal.
+  recap_prompt: Option<RecapPrompt>,
+}
+
+/// The page answers with `OpenRecap`, `DismissRecapPrompt` or `DisableRecapPrompt`.
+#[derive(Serialize)]
+#[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
+pub(crate) struct RecapPrompt {
+  title: String,
+  ready: String,
+  listens: String,
+  browser: &'static str,
+  open: &'static str,
+  later: &'static str,
+  disable: &'static str,
 }
 
 #[derive(Serialize)]
@@ -540,6 +556,8 @@ pub(crate) enum LibraryNode {
 #[cfg_attr(all(test, feature = "gui"), derive(ts_rs::TS))]
 pub(crate) struct SourcePlaylists {
   spotify: Vec<PlaylistInfo>,
+  /// Loaded Spotify playlist URIs, in local pin order.
+  pinned: Vec<String>,
   local: Vec<PlaylistInfo>,
   subsonic: Vec<PlaylistInfo>,
   qobuz: Vec<PlaylistInfo>,
@@ -1079,6 +1097,19 @@ fn channel_message(
             not_now: strings.soloist_offer_not_now,
           }
         }),
+        recap_prompt: app.recap_prompt().map(|prompt| {
+          let strings = &app.strings().popups;
+          let (title, ready, listens) = strings.recap_lines(prompt.year, prompt.listens);
+          RecapPrompt {
+            title: title.trim().to_string(),
+            ready,
+            listens,
+            browser: strings.recap_browser,
+            open: strings.recap_open,
+            later: strings.recap_later,
+            disable: strings.recap_disable,
+          }
+        }),
       },
     },
     DisplayDomain::Theme => ServerMessage::Theme {
@@ -1578,8 +1609,23 @@ fn liked(app: &App) -> LikedSongs {
 fn playlists(app: &App) -> SourcePlaylists {
   let mut spotify: Vec<_> = app.all_playlists().iter().collect();
   app.sort_sidebar_playlist_slots(&mut spotify, |playlist| Some(*playlist));
+  let pins = present_pins(app.pinned_playlist_uris(), |uri| {
+    app
+      .all_playlists()
+      .iter()
+      .any(|playlist| playlist.uri == uri)
+  });
+  spotify = pinned_first(
+    pins
+      .iter()
+      .filter_map(|uri| app.all_playlists().iter().find(|p| p.uri == *uri))
+      .collect(),
+    spotify,
+    |playlist| pins.contains(&playlist.uri.as_str()),
+  );
   SourcePlaylists {
     spotify: spotify.into_iter().cloned().collect(),
+    pinned: pins.iter().map(|uri| (*uri).to_string()).collect(),
     playlist_sidebar_order: app.runtime_state.playlist_sidebar_order,
     local: app
       .local_playlists()
@@ -1702,7 +1748,20 @@ fn playlists(app: &App) -> SourcePlaylists {
             children: Vec::new(),
           }),
       );
-      convert(&complete, app, &by_uri)
+      let rest = pinned_first(Vec::new(), complete, |node| {
+        matches!(
+          node.node_type,
+          crate::core::app::PlaylistFolderNodeType::Playlist
+        ) && pins.contains(&node.uri.as_str())
+      });
+      let mut pinned: Vec<_> = pins
+        .iter()
+        .map(|uri| LibraryNode::Playlist {
+          uri: (*uri).to_string(),
+        })
+        .collect();
+      pinned.extend(convert(&rest, app, &by_uri));
+      pinned
     }),
   }
 }
@@ -1794,6 +1853,95 @@ pub(crate) fn pushed(messages: &[ServerMessage], kind: &str) -> serde_json::Valu
 
 #[cfg(test)]
 mod tests {
+
+  #[test]
+  fn pinned_playlists_lead_the_flat_list_and_tree_in_pin_order() {
+    use crate::core::app::{PlaylistFolderNode, PlaylistFolderNodeType};
+    use crate::core::sort::SidebarPlaylistOrder;
+    let (mut app, _rx) = app();
+    *app.all_playlists_mut() = ["Zulu", "Alpha", "Inner"]
+      .iter()
+      .enumerate()
+      .map(|(i, name)| {
+        crate::core::test_helpers::playlist_info(&format!("p{i}"), name, "me", false)
+      })
+      .collect();
+    let node = |i| PlaylistFolderNode {
+      name: None,
+      node_type: PlaylistFolderNodeType::Playlist,
+      uri: format!("spotify:playlist:p{i}"),
+      children: vec![],
+    };
+    *app.playlist_folder_nodes_mut() = Some(vec![
+      node(0),
+      PlaylistFolderNode {
+        name: Some("Folder".into()),
+        node_type: PlaylistFolderNodeType::Folder,
+        uri: "folder:1".into(),
+        children: vec![node(2)],
+      },
+      node(1),
+    ]);
+    app.runtime_state.pinned_playlists = vec![
+      "spotify:playlist:p2".into(),
+      "spotify:playlist:p0".into(),
+      "spotify:playlist:gone".into(),
+      "spotify:playlist:p0".into(),
+    ];
+    for order in [
+      SidebarPlaylistOrder::Spotify,
+      SidebarPlaylistOrder::RecentlyPlayed,
+      SidebarPlaylistOrder::Name,
+    ] {
+      app.runtime_state.playlist_sidebar_order = order;
+      let payload = serde_json::to_value(playlists(&app)).unwrap();
+      assert_eq!(
+        payload["pinned"],
+        serde_json::json!(["spotify:playlist:p2", "spotify:playlist:p0"])
+      );
+      assert_eq!(payload["spotify"][0]["uri"], "spotify:playlist:p2");
+      assert_eq!(payload["spotify"][1]["uri"], "spotify:playlist:p0");
+      let tree = &payload["folders"];
+      assert_eq!(tree.as_array().unwrap().len(), 4);
+      assert_eq!(tree[0]["uri"], "spotify:playlist:p2");
+      assert_eq!(tree[1]["uri"], "spotify:playlist:p0");
+      assert_eq!(tree[2]["uri"], "folder:1");
+      assert_eq!(tree[2]["children"][0]["uri"], "spotify:playlist:p2");
+      assert_eq!(tree[3]["uri"], "spotify:playlist:p1");
+    }
+    *app.playlist_folder_nodes_mut() = None;
+    let payload = serde_json::to_value(playlists(&app)).unwrap();
+    assert!(payload["folders"].is_null());
+    assert_eq!(payload["spotify"][0]["uri"], "spotify:playlist:p2");
+  }
+
+  #[test]
+  fn playlist_pin_intent_arrives_on_the_wire_and_pushes_the_library() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut app, _rx) = app();
+    app.state_path = Some(dir.path().join("state.yml"));
+    *app.all_playlists_mut() = vec![crate::core::test_helpers::playlist_info(
+      "p1", "One", "me", false,
+    )];
+    let before = app.display_revisions();
+    let ClientMessage::Action { action } = serde_json::from_value(serde_json::json!({
+      "type": "action", "action": {"SetPlaylistPinned": {"uri": "spotify:playlist:p1", "pinned": true}}
+    })).unwrap() else { panic!("expected a pin action") };
+    app.apply(*action);
+    let payload = &pushed(&diff(&before, &app, Language::En), "library")["payload"];
+    assert_eq!(
+      payload["pinned"],
+      serde_json::json!(["spotify:playlist:p1"])
+    );
+    app.apply(Action::SetPlaylistPinned {
+      uri: "spotify:playlist:p1".into(),
+      pinned: false,
+    });
+    assert!(serde_json::to_value(playlists(&app)).unwrap()["pinned"]
+      .as_array()
+      .unwrap()
+      .is_empty());
+  }
 
   #[test]
   fn sidebar_playlist_order_updates_the_gui_library_tree_without_moving_folders() {
@@ -2236,6 +2384,51 @@ mod tests {
       &action_frame(Action::AnswerSoloistOffer { set_up: false }),
     );
     assert!(pushed(&answered, "status")["payload"]["soloist_offer"].is_null());
+  }
+
+  #[test]
+  fn the_status_channel_carries_the_recap_prompt_until_the_page_answers_it() {
+    use crate::core::app::{RecapPromptState, RouteId};
+    let prompt = |year| RecapPromptState {
+      path: std::path::PathBuf::from("recap.html"),
+      listens: 42,
+      year,
+    };
+    let (mut app, _rx) = app();
+    let home = app.get_current_route().id.clone();
+    let before = app.display_revisions();
+    app.show_recap_prompt(prompt(None));
+    let status = pushed(&diff(&before, &app, Language::En), "status");
+    assert_eq!(
+      status["payload"]["recap_prompt"],
+      serde_json::json!({
+        "title": "Monthly Recap",
+        "ready": "Your monthly listening recap is ready! 🎉",
+        "listens": "42 listens made it into your 30-day recap.",
+        "browser": "Open it in the browser to view and download your share card.",
+        "open": "Open",
+        "later": "Later",
+        "disable": "Don't show this again",
+      })
+    );
+
+    let later = apply_from_page(&mut app, &action_frame(Action::DismissRecapPrompt));
+    assert!(pushed(&later, "status")["payload"]["recap_prompt"].is_null());
+    assert_eq!(app.get_current_route().id, home);
+
+    let before = app.display_revisions();
+    app.show_recap_prompt(prompt(Some(2026)));
+    let year = &pushed(&diff(&before, &app, Language::En), "status")["payload"]["recap_prompt"];
+    assert_eq!(year["title"], "2026 Recap");
+    assert_eq!(year["listens"], "42 listens made it into your 2026 recap.");
+
+    // A page that opened over the popup stays when the popup closes.
+    app.push_navigation_stack(RouteId::Settings, crate::core::app::ActiveBlock::Settings);
+    let closed = apply_from_page(&mut app, &action_frame(Action::DismissRecapPrompt));
+    assert!(pushed(&closed, "status")["payload"]["recap_prompt"].is_null());
+    assert_eq!(app.get_current_route().id, RouteId::Settings);
+    app.pop_navigation_stack();
+    assert_eq!(app.get_current_route().id, home);
   }
 
   fn apply_from_page(app: &mut App, text: &str) -> Vec<ServerMessage> {

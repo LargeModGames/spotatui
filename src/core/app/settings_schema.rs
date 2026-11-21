@@ -126,6 +126,7 @@ pub(crate) fn setting_requirement(id: &str) -> Requirement {
       Requirement::Source(Source::Radio),
     ]),
     "keys.search" => Requirement::Capability(Capability::Search),
+    "keys.pin_playlist" => Requirement::BrowseSource(Source::Spotify),
     _ => Requirement::None,
   }
 }
@@ -877,10 +878,10 @@ impl App {
     ]
   }
 
-  /// Load settings for the current category into settings_items
-  pub fn load_settings_for_category(&mut self) {
+  /// Build rows from the current config without resetting the Settings screen.
+  pub(super) fn settings_items_for_category(&self) -> Vec<SettingItem> {
     let strings = &self.strings().settings;
-    self.settings_items = match self.view.settings_category {
+    match self.view.settings_category {
       SettingsCategory::Behavior => self.behavior_setting_items(),
       SettingsCategory::Icons => vec![
         SettingItem {
@@ -1166,6 +1167,12 @@ impl App {
           value: SettingValue::Key(key_to_config_string(&self.user_config.keys.like_track)),
         },
         SettingItem {
+          id: "keys.pin_playlist".to_string(),
+          name: strings.keys_pin_playlist_name.to_string(),
+          description: strings.keys_pin_playlist_description.to_string(),
+          value: SettingValue::Key(key_to_config_string(&self.user_config.keys.pin_playlist)),
+        },
+        SettingItem {
           id: "keys.generate_recap".to_string(),
           name: strings.keys_generate_recap_name.to_string(),
           description: strings.keys_generate_recap_description.to_string(),
@@ -1345,7 +1352,12 @@ impl App {
           },
         ]
       }
-    };
+    }
+  }
+
+  /// Load settings for the current category into settings_items
+  pub fn load_settings_for_category(&mut self) {
+    self.settings_items = self.settings_items_for_category();
     self.view.settings_selected_index = self
       .settings_items
       .iter()
@@ -1603,6 +1615,27 @@ mod tests {
     assert_eq!(setting_requirement("keys.jump_to_end"), Requirement::None);
     app.spotify_connected = true;
     assert!(app.availability(requirement).is_available());
+  }
+
+  #[test]
+  fn the_playlist_pin_key_row_stays_visible_and_only_needs_spotify_browse_scope() {
+    let mut app = keybinding_rows_with_f5_help_and_home_search();
+    assert_eq!(
+      key_row(&app, "keys.pin_playlist"),
+      SettingValue::Key("t".into())
+    );
+    let requirement = setting_requirement("keys.pin_playlist");
+    assert_eq!(requirement, Requirement::BrowseSource(Source::Spotify));
+    assert!(!app.spotify_connected);
+
+    for source in Source::ALL {
+      app.active_source = source;
+      assert!(offered(&app, "keys.pin_playlist"));
+      assert_eq!(
+        app.availability(requirement).is_available(),
+        source == Source::Spotify
+      );
+    }
   }
 
   #[test]

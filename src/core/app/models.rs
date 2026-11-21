@@ -11,11 +11,13 @@ pub struct UserInfo {
   pub country: Option<String>,
 }
 
-/// State backing the monthly recap popup.
+/// State backing the recap popup.
 #[derive(Clone, Debug)]
 pub struct RecapPromptState {
   pub path: PathBuf,
   pub listens: usize,
+  /// The year of the December year recap; `None` for the monthly recap.
+  pub year: Option<i32>,
 }
 
 // Is it possible to compose enums?

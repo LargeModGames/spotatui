@@ -380,10 +380,15 @@ impl App {
   /// Cannot empty the stack: the bottom frame is `DEFAULT_ROUTE` (Home) or a
   /// `RouteId::STARTUP_OPTIONS` route, and `Error` is in neither.
   pub(super) fn drop_error_routes(&mut self) {
+    self.drop_routes(RouteId::Error, ActiveBlock::Error);
+  }
+
+  /// Remove every frame with this id and block, wherever it sits in the stack.
+  pub(super) fn drop_routes(&mut self, id: RouteId, block: ActiveBlock) {
     let before = self.navigation_stack.len();
     self
       .navigation_stack
-      .retain(|route| !(route.id == RouteId::Error && route.active_block == ActiveBlock::Error));
+      .retain(|route| !(route.id == id && route.active_block == block));
     if self.navigation_stack.len() != before {
       self.display_revisions.bump(DisplayDomain::Route);
     }
@@ -597,7 +602,7 @@ mod tests {
     assert!(rx.try_recv().is_err());
     assert_eq!(
       app.status_message(),
-      Some("The queued track has no album id")
+      Some("The queued track has no album ID")
     );
   }
 

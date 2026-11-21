@@ -52,6 +52,13 @@ spotify:playlist: or spotify:show: URI";
   }
 }
 
+fn parse_volume(value: &str) -> Result<String, String> {
+  match value.parse::<u8>() {
+    Ok(0..=100) => Ok(value.to_string()),
+    _ => Err("volume must be between 0 and 100".to_string()),
+  }
+}
+
 /// Reads a playlist URI or `open.spotify.com` link as a `spotify:playlist:` URI,
 /// so `list --playlist-tracks` refuses anything else before boot.
 fn parse_playlist_uri(input: &str) -> Result<String, String> {
@@ -84,6 +91,16 @@ fn parse_playlist_uri(input: &str) -> Result<String, String> {
   Ok(format!("spotify:playlist:{id}"))
 }
 
+/// Refuses a `--seek` value that is not whole seconds with an optional `+` or
+/// `-`, so it fails before boot. The string is returned unchanged because the
+/// sign decides between a relative and an absolute seek.
+fn parse_seek_seconds(value: &str) -> Result<String, String> {
+  match value.parse::<i32>() {
+    Ok(_) => Ok(value.to_string()),
+    Err(_) => Err("expected whole seconds, for example +10, -10 or 10".to_string()),
+  }
+}
+
 /// Refuses a `--queue` or `--random` that the kind of `--uri` cannot honor.
 ///
 /// Clap sees the kind of a `--name` search through its category flags, but the
@@ -112,9 +129,12 @@ spotatui will display the updated playback. The output format is configurable wi
 
 Here's a list:
 
-* `--next` and `--previous` cannot be used with other options
-* `--status`, `--toggle`, `--transfer`, `--volume`, `--like`, `--repeat` and `--shuffle` \
-can be used together
+* `--next` and `--previous` cannot be used together, and work only with `--seek`, \
+`--device` and `--format`
+* `--status`, `--toggle`, `--transfer`, `--volume`, `--like`, `--dislike`, `--repeat` and \
+`--shuffle` can be used together
+* `--like` and `--dislike` cannot be used together
+* `--seek` is accepted with every option, but `--share-track` and `--share-album` ignore it
 * `--share-track` and `--share-album` cannot be used with other options",
     )
     .visible_alias("pb")
@@ -209,6 +229,7 @@ two songs back, you can use `spotatui pb -ppp` and so on.",
       Arg::new("seek")
         .long("seek")
         .value_name("±SECONDS")
+        .value_parser(parse_seek_seconds)
         .allow_hyphen_values(true)
         .help("Jumps SECONDS forwards (+) or backwards (-)")
         .long_help(
@@ -221,6 +242,7 @@ seconds backwards and `spotatui pb --seek 10` to the tenth second of the track."
         .short('v')
         .long("volume")
         .value_name("VOLUME")
+        .value_parser(parse_volume)
         .help("Sets the volume of a device to VOLUME (0 - 100)"),
     )
     .group(
@@ -490,6 +512,88 @@ specify it.",
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn playback_volume_over_100_is_refused_before_any_action_runs() {
+    for volume in ["101", "150", "256", "99999999999"] {
+      let error = playback_subcommand()
+        .try_get_matches_from(["playback", "-t", "-v", volume])
+        .unwrap_err();
+      assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
+      assert!(
+        error
+          .to_string()
+          .contains("volume must be between 0 and 100"),
+        "{error}"
+      );
+    }
+  }
+
+  #[test]
+  fn playback_volume_refuses_text() {
+    for volume in ["abc", "1.5", ""] {
+      let error = playback_subcommand()
+        .try_get_matches_from(["playback", "--volume", volume])
+        .unwrap_err();
+      assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
+      assert!(
+        error
+          .to_string()
+          .contains("volume must be between 0 and 100"),
+        "{error}"
+      );
+    }
+  }
+
+  #[test]
+  fn playback_volume_accepts_0_and_100() {
+    for volume in ["0", "40", "100"] {
+      let matches = playback_subcommand()
+        .try_get_matches_from(["playback", "-t", "-v", volume])
+        .unwrap();
+      assert_eq!(matches.get_one::<String>("volume").unwrap(), volume);
+      assert!(matches.get_flag("toggle"));
+    }
+  }
+
+  #[test]
+  fn playback_seek_accepts_signed_and_absolute_seconds() {
+    for seek in ["+10", "-10", "10"] {
+      let matches = playback_subcommand()
+        .try_get_matches_from(["playback", "--seek", seek])
+        .unwrap();
+      assert_eq!(matches.get_one::<String>("seek").unwrap(), seek);
+    }
+  }
+
+  #[test]
+  fn playback_seek_refuses_a_value_that_is_not_whole_seconds() {
+    for seek in ["ten", "1.5", "+", "", "99999999999"] {
+      let error = playback_subcommand()
+        .try_get_matches_from(["playback", "--seek", seek])
+        .unwrap_err();
+      assert!(
+        error.to_string().contains("expected whole seconds"),
+        "{seek}: {error}"
+      );
+    }
+  }
+
+  #[test]
+  fn playback_long_help_names_dislike_and_seek() {
+    let help = playback_subcommand()
+      .get_long_about()
+      .expect("playback must have a long help")
+      .to_string();
+    for line in [
+      "work only with `--seek`, `--device` and `--format`",
+      "`--like`, `--dislike`, `--repeat` and `--shuffle` can be used together",
+      "`--like` and `--dislike` cannot be used together",
+      "`--seek` is accepted with every option, but `--share-track` and `--share-album` ignore it",
+    ] {
+      assert!(help.contains(line), "missing {line:?} in:\n{help}");
+    }
+  }
 
   #[test]
   fn play_uri_accepts_the_spotify_kinds_it_can_start() {

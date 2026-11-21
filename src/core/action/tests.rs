@@ -3984,6 +3984,25 @@ fn dismiss_announcement_persists_it_as_seen_and_shows_the_next_until_none_is_lef
 }
 
 #[test]
+fn an_announcement_dismissed_under_the_recap_popup_leaves_no_prompt_frame() {
+  let (mut app, _rx, _dir) = announcement_app();
+  let depth = app.navigation_depth();
+  app.show_recap_prompt(crate::core::app::RecapPromptState {
+    path: std::path::PathBuf::from("recap.html"),
+    listens: 1,
+    year: None,
+  });
+
+  for id in ["first", "second"] {
+    app.apply(Action::DismissAnnouncement { id: id.to_string() });
+  }
+  assert_eq!(app.get_current_route().id, RouteId::RecapPrompt);
+  app.apply(Action::DismissRecapPrompt);
+
+  assert_eq!(app.navigation_depth(), depth - 1);
+}
+
+#[test]
 fn dismiss_announcement_with_an_id_that_is_not_active_changes_nothing() {
   let (mut app, _rx, dir) = announcement_app();
   let rev = app.display_revisions().get(DisplayDomain::Announcement);
@@ -4001,4 +4020,93 @@ fn dismiss_announcement_with_an_id_that_is_not_active_changes_nothing() {
     rev
   );
   assert_eq!(app.get_current_route().id, RouteId::AnnouncementPrompt);
+}
+
+#[test]
+fn set_playlist_pinned_is_idempotent_and_saves_without_debouncing() {
+  let dir = tempfile::tempdir().unwrap();
+  let (mut app, rx) = session_free_app_with_channel();
+  app.state_path = Some(dir.path().join("state.yml"));
+  *app.all_playlists_mut() = vec![crate::core::test_helpers::playlist_info(
+    "p1", "One", "me", false,
+  )];
+  let uri = "spotify:playlist:p1".to_string();
+  for _ in 0..2 {
+    app.apply(Action::SetPlaylistPinned {
+      uri: uri.clone(),
+      pinned: true,
+    });
+  }
+  assert_eq!(app.pinned_playlist_uris(), [uri.clone()]);
+  assert_eq!(
+    crate::core::state::load(app.state_path.as_ref().unwrap())
+      .unwrap()
+      .pinned_playlists,
+    Some(vec![uri.clone()])
+  );
+  app.apply(Action::SetPlaylistPinned {
+    uri: uri.clone(),
+    pinned: false,
+  });
+  app.apply(Action::SetPlaylistPinned {
+    uri: uri.clone(),
+    pinned: false,
+  });
+  // An unrelated pending write cannot bring the removed pin back.
+  app.schedule_state_save(
+    crate::core::state::PersistedRuntimeState::playlist_sidebar_order(
+      crate::core::sort::SidebarPlaylistOrder::Name,
+    ),
+  );
+  app.flush_state_save(true);
+  assert!(crate::core::state::load(app.state_path.as_ref().unwrap())
+    .unwrap()
+    .pinned_playlists
+    .unwrap()
+    .is_empty());
+  assert!(rx.try_recv().is_err());
+}
+
+#[test]
+fn unfollowing_a_pinned_playlist_drops_only_its_pin() {
+  let dir = tempfile::tempdir().unwrap();
+  let (mut app, _rx) = app_with_channel();
+  app.state_path = Some(dir.path().join("state.yml"));
+  *app.all_playlists_mut() = ["p1", "p2"]
+    .map(|id| crate::core::test_helpers::playlist_info(id, id, "me", false))
+    .to_vec();
+  for id in ["p1", "p2"] {
+    app.apply(Action::SetPlaylistPinned {
+      uri: format!("spotify:playlist:{id}"),
+      pinned: true,
+    });
+  }
+  app.forget_playlist_pin("spotify:playlist:p1");
+  assert_eq!(app.pinned_playlist_uris(), ["spotify:playlist:p2"]);
+  assert_eq!(
+    crate::core::state::load(app.state_path.as_ref().unwrap())
+      .unwrap()
+      .pinned_playlists
+      .unwrap(),
+    ["spotify:playlist:p2"]
+  );
+}
+
+#[test]
+fn a_failed_pin_action_rolls_back_and_reports_the_error() {
+  let dir = tempfile::tempdir().unwrap();
+  let (mut app, _rx) = app_with_channel();
+  let blocker = dir.path().join("file");
+  std::fs::write(&blocker, "not a directory").unwrap();
+  app.state_path = Some(blocker.join("state.yml"));
+  *app.all_playlists_mut() = vec![crate::core::test_helpers::playlist_info(
+    "p1", "One", "me", false,
+  )];
+  app.apply(Action::SetPlaylistPinned {
+    uri: "spotify:playlist:p1".into(),
+    pinned: true,
+  });
+  assert!(!app.is_playlist_pinned("spotify:playlist:p1"));
+  assert!(app.api_error().contains("Failed to save state"));
+  assert_eq!(app.get_current_route().id, RouteId::Error);
 }

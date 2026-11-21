@@ -12,6 +12,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/spotatui.svg)](https://crates.io/crates/spotatui)
 [![Discord](https://img.shields.io/discord/1534820237122207815?logo=discord&logoColor=white&label=Discord&color=5865F2)](https://spotatui.com/discord)
+[![GitHub downloads](https://img.shields.io/github/downloads/LargeModGames/spotatui/total?logo=github&label=GitHub%20downloads&color=1ed760&style=flat-square)](https://github.com/LargeModGames/spotatui/releases)
 [![Songs played using spotatui](https://img.shields.io/badge/dynamic/json?url=https://spotatui-counter.spotatui.workers.dev&query=count&label=Songs%20played%20using%20spotatui&labelColor=0b0f14&color=1ed760&style=flat-square&cacheSeconds=600)](#song-history)
 [![spotatui Contributors](https://img.shields.io/badge/dynamic/json?url=https://raw.githubusercontent.com/LargeModGames/spotatui/main/.all-contributorsrc&query=%24.contributors.length&label=spotatui%20contributors&color=1ed760&style=flat-square)](#spotatui-contributors)
 
@@ -280,6 +281,7 @@ Everyone who helped, with code or without. To get on this list, see [Recognition
       <td align="center" valign="top" width="14.28%"><a href="https://tejeshvaish.com"><img src="https://avatars.githubusercontent.com/u/188414140?v=4&size=100" width="100px" height="100px" alt="Tejesh"/><br /><sub><b>Tejesh</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=tridev-tej" title="Code">💻</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/bfs2021"><img src="https://avatars.githubusercontent.com/u/101915083?v=4&size=100" width="100px" height="100px" alt="zgy"/><br /><sub><b>zgy</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=bfs2021" title="Code">💻</a></td>
       <td align="center" valign="top" width="14.28%"><a href="http://tree.jaopd.dev"><img src="https://avatars.githubusercontent.com/u/177440418?v=4&size=100" width="100px" height="100px" alt="João Pedro"/><br /><sub><b>João Pedro</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=jaopdc11" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/Vansh170707"><img src="https://avatars.githubusercontent.com/u/219549318?v=4&size=100" width="100px" height="100px" alt="Vansh"/><br /><sub><b>Vansh</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=Vansh170707" title="Code">💻</a></td>
     </tr>
   </tbody>
 </table>
