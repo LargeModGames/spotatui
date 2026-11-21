@@ -822,7 +822,10 @@ mod tests {
     app.park_start_playback(Some("spotify:playlist:p".to_string()), None, None);
     let chain = Duration::from_secs(180);
     if let Some(pending) = app.pending_start_playback.as_mut() {
-      pending.parked_at = Instant::now() - max_parked_age() - chain;
+      // Leave a small margin below the expiry boundary: the replay assertion
+      // runs after a few clock reads, so placing it exactly at max_parked_age()
+      // makes this test timing-sensitive.
+      pending.parked_at = Instant::now() - max_parked_age() - chain + Duration::from_secs(1);
     }
 
     app.exclude_recovery_time_from_parked_start(chain);
