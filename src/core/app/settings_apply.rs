@@ -469,24 +469,27 @@ impl App {
         | "behavior.sort_ascending_icon"
         | "behavior.sort_descending_icon" => {
           if let SettingValue::String(v) = &setting.value {
-            if UnicodeWidthStr::width(v.as_str()) == 1 {
+            let icon = v.trim();
+            if UnicodeWidthStr::width(icon) == 1 {
               match setting.id.as_str() {
                 "behavior.gauge_filled_icon" => {
-                  self.user_config.behavior.gauge_filled_icon = v.clone()
+                  self.user_config.behavior.gauge_filled_icon = icon.to_string()
                 }
                 "behavior.gauge_unfilled_icon" => {
-                  self.user_config.behavior.gauge_unfilled_icon = v.clone()
+                  self.user_config.behavior.gauge_unfilled_icon = icon.to_string()
                 }
                 "behavior.episode_played_icon" => {
-                  self.user_config.behavior.episode_played_icon = v.clone()
+                  self.user_config.behavior.episode_played_icon = icon.to_string()
                 }
                 "behavior.sort_ascending_icon" => {
-                  self.user_config.behavior.sort_ascending_icon = v.clone()
+                  self.user_config.behavior.sort_ascending_icon = icon.to_string()
                 }
                 "behavior.sort_descending_icon" => {
-                  self.user_config.behavior.sort_descending_icon = v.clone()
+                  self.user_config.behavior.sort_descending_icon = icon.to_string()
                 }
-                "behavior.playing_icon" => self.user_config.behavior.playing_icon = v.clone(),
+                "behavior.playing_icon" => {
+                  self.user_config.behavior.playing_icon = icon.to_string()
+                }
                 _ => {}
               }
             } else {
@@ -496,12 +499,18 @@ impl App {
         }
         "behavior.active_source_icon" => {
           if let SettingValue::String(v) = &setting.value {
-            self.user_config.behavior.active_source_icon = v.clone();
+            let icon = v.trim();
+            if !icon.is_empty() {
+              self.user_config.behavior.active_source_icon = icon.to_string();
+            }
           }
         }
         "behavior.list_highlight_icon" => {
           if let SettingValue::String(v) = &setting.value {
-            self.user_config.behavior.list_highlight_icon = v.clone();
+            let icon = v.trim();
+            if !icon.is_empty() {
+              self.user_config.behavior.list_highlight_icon = icon.to_string();
+            }
           }
         }
         #[cfg(feature = "cover-art")]
@@ -1159,6 +1168,52 @@ mod tests {
     )];
     app.apply_settings_changes();
     assert_eq!(app.user_config.behavior.playing_icon, "▶");
+  }
+
+  #[test]
+  fn clearing_the_active_source_or_list_highlight_icon_keeps_the_current_icon() {
+    let mut app = make_app_simple();
+    for value in ["", "   "] {
+      app.settings_items = vec![
+        setting(
+          "behavior.active_source_icon",
+          SettingValue::String(value.into()),
+        ),
+        setting(
+          "behavior.list_highlight_icon",
+          SettingValue::String(value.into()),
+        ),
+      ];
+      app.apply_settings_changes();
+      assert_eq!(app.user_config.behavior.active_source_icon, "●");
+      assert_eq!(app.user_config.behavior.list_highlight_icon, "▶");
+    }
+
+    app.settings_items = vec![
+      setting(
+        "behavior.active_source_icon",
+        SettingValue::String("  ◆ ".into()),
+      ),
+      setting(
+        "behavior.list_highlight_icon",
+        SettingValue::String("  ◆ ".into()),
+      ),
+    ];
+    app.apply_settings_changes();
+    assert_eq!(app.user_config.behavior.active_source_icon, "◆");
+    assert_eq!(app.user_config.behavior.list_highlight_icon, "◆");
+  }
+
+  #[test]
+  fn a_padded_one_cell_icon_is_saved_trimmed() {
+    let mut app = make_app_simple();
+    app.settings_items = vec![setting(
+      "behavior.playing_icon",
+      SettingValue::String(" » ".into()),
+    )];
+    app.apply_settings_changes();
+    assert_eq!(app.user_config.behavior.playing_icon, "»");
+    assert_eq!(app.status_message(), None);
   }
 
   #[test]
