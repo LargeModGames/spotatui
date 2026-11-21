@@ -32,6 +32,11 @@
 
 - **Document `SPOTATUI_PAUSE_ON_PANIC`**: explain how setting `SPOTATUI_PAUSE_ON_PANIC` keeps the Windows console window open after a panic to read the crash message and log path ([#1065](https://github.com/LargeModGames/spotatui/issues/1065)).
 
+### Internal
+
+- **`cargo test` leaves the developer's own spotatui files alone**: tests that saved state without a path of their own wrote the real `state.yml`, so the next launch could open in whatever source the last test picked. Under `cfg(test)` the state, config, cache and log paths now resolve inside a private temporary directory, and the file-path environment overrides are ignored.
+- Unix test roots use a separate private parent for each effective user ID, so another user's test run cannot block initialization in a shared temporary directory.
+
 ## [v0.48.0] 2026-11-07
 
 ### Added
