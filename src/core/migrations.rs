@@ -410,21 +410,216 @@ pub(crate) fn apply_legacy_client_config_migration(
 
 /// Adds keys under `behavior:` and leaves the rest of the file as it was.
 fn write_behavior_keys(path: &Path, config: Option<Value>, keys: Mapping) -> Result<()> {
-  let mut config = config.unwrap_or_else(|| Value::Mapping(Mapping::new()));
+  let mut config = config.unwrap_or(Value::Null);
+  let has_behavior = config
+    .as_mapping()
+    .is_some_and(|map| map.contains_key(yaml_key("behavior")));
+  let target = if has_behavior {
+    config["behavior"].clone()
+  } else {
+    config.clone()
+  };
+  let additions = if has_behavior {
+    keys.clone()
+  } else {
+    Mapping::from_iter([(yaml_key("behavior"), Value::Mapping(keys.clone()))])
+  };
+  if config.is_null() {
+    config = Value::Mapping(Mapping::new());
+  }
   let map = config
     .as_mapping_mut()
     .ok_or_else(|| anyhow!("{} is not a YAML mapping", path.display()))?;
-  let behavior = map
-    .entry(yaml_key("behavior"))
-    .or_insert_with(|| Value::Mapping(Mapping::new()))
+  let behavior = map.entry(yaml_key("behavior")).or_insert(Value::Null);
+  if behavior.is_null() {
+    *behavior = Value::Mapping(Mapping::new());
+  }
+  let behavior = behavior
     .as_mapping_mut()
     .ok_or_else(|| anyhow!("`behavior` in {} is not a YAML mapping", path.display()))?;
   behavior.extend(keys);
+
+  let original = match fs::read_to_string(path) {
+    Ok(text) => text,
+    Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+    Err(error) => return Err(error).with_context(|| format!("reading {}", path.display())),
+  };
+  let offset = skip_node_properties(
+    &original,
+    migration_node_offset(&original, has_behavior)?,
+    !target.is_null(),
+  );
+  let tail = &original[offset..];
+  let newline = if original.contains("\r\n") {
+    "\r\n"
+  } else {
+    "\n"
+  };
+  let flow = serde_json::to_string(&additions)?;
+  let mut updated = original.clone();
+  if target.is_null() {
+    let length = ["null", "Null", "NULL", "~"]
+      .into_iter()
+      .find(|&token| tail.starts_with(token))
+      .map_or(0, str::len);
+    let replacement = if has_behavior {
+      format!(" {flow}")
+    } else {
+      let separator = if offset > 0 && !original[..offset].ends_with('\n') {
+        newline
+      } else {
+        ""
+      };
+      format!("{separator}{flow}{newline}")
+    };
+    updated.replace_range(offset..offset + length, &replacement);
+  } else if tail.starts_with('{') {
+    let mut insertion = offset + 1;
+    // Keep any opening flow-map comment before the new entries.
+    loop {
+      while original
+        .as_bytes()
+        .get(insertion)
+        .is_some_and(u8::is_ascii_whitespace)
+      {
+        insertion += 1;
+      }
+      if !original[insertion..].starts_with('#') {
+        break;
+      }
+      insertion += original[insertion..]
+        .find('\n')
+        .context("unterminated flow-mapping comment")?;
+    }
+    let comma = if target.as_mapping().is_some_and(Mapping::is_empty) {
+      ""
+    } else {
+      ","
+    };
+    let entries = &flow[1..flow.len() - 1];
+    let line_start = original[..insertion]
+      .rfind('\n')
+      .map_or(0, |index| index + 1);
+    if line_start > offset {
+      let indent = &original[line_start..insertion];
+      updated.insert_str(line_start, &format!("{indent}{entries}{comma}{newline}"));
+    } else {
+      updated.insert_str(insertion, &format!("{entries}{comma} "));
+    }
+  } else {
+    let block = serde_yaml::to_string(&additions)?;
+    let prefixed = format!("{block}{original}");
+    if !has_behavior && serde_yaml::from_str::<Value>(&prefixed).is_ok_and(|value| value == config)
+    {
+      updated = prefixed;
+    } else {
+      let line_start = original[..offset].rfind('\n').map_or(0, |index| index + 1);
+      let indent = &original[line_start..offset];
+      anyhow::ensure!(
+        indent.bytes().all(|byte| byte == b' '),
+        "cannot safely insert settings into {}",
+        path.display()
+      );
+      let insertion: String = block
+        .lines()
+        .map(|line| format!("{indent}{line}{newline}"))
+        .collect();
+      updated.insert_str(line_start, &insertion);
+    }
+  }
+  let verified: Value = serde_yaml::from_str(&updated)
+    .context("edited config is invalid YAML; the original was not written")?;
+  anyhow::ensure!(
+    verified == config,
+    "edited config changes unrelated settings; the original was not written"
+  );
   if let Some(dir) = path.parent() {
     fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
   }
-  crate::core::auth::write_private_file_atomic(path, serde_yaml::to_string(&config)?.as_bytes())
+  crate::core::auth::write_private_file_atomic(path, updated.as_bytes())
     .with_context(|| format!("writing {}", path.display()))
+}
+
+fn migration_node_offset(text: &str, has_behavior: bool) -> Result<usize> {
+  #[derive(serde::Deserialize)]
+  struct Config {
+    #[serde(rename = "behavior", deserialize_with = "mark_node")]
+    _behavior: (),
+  }
+
+  fn mark_node<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<(), D::Error> {
+    struct Marker;
+    impl<'de> serde::de::Visitor<'de> for Marker {
+      type Value = ();
+      fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("a migration position marker")
+      }
+    }
+    // The default visitor rejects every node; serde_yaml attaches its start mark.
+    deserializer.deserialize_any(Marker)
+  }
+
+  let error = if has_behavior {
+    serde_yaml::from_str::<Config>(text).err()
+  } else {
+    mark_node(serde_yaml::Deserializer::from_str(text)).err()
+  };
+  let offset = error
+    .and_then(|error| error.location())
+    .context("locating the YAML migration target")?
+    .index();
+  anyhow::ensure!(
+    text.is_char_boundary(offset),
+    "invalid YAML source position"
+  );
+  Ok(offset)
+}
+
+/// Moves past the anchor and tag (`&name`, `!tag`, `!<uri>`) serde_yaml's
+/// start mark points at. With `to_content`, it also moves past the line break
+/// and comments between them and a block mapping's first key. Without
+/// properties the offset is returned unchanged.
+fn skip_node_properties(text: &str, mut offset: usize, to_content: bool) -> usize {
+  let start = offset;
+  let mut skipped = false;
+  loop {
+    let rest = &text[offset..];
+    if !rest.starts_with(['&', '!']) {
+      break;
+    }
+    let end = if rest.starts_with("!<") {
+      rest.find('>').map_or(rest.len(), |index| index + 1)
+    } else {
+      rest
+        .find(|c: char| c.is_whitespace() || "[]{},".contains(c))
+        .unwrap_or(rest.len())
+    };
+    offset += end;
+    skipped = true;
+    let rest = &text[offset..];
+    let after = rest.trim_start_matches([' ', '\t']);
+    if !after.is_empty() && !after.starts_with(['\r', '\n', '#']) {
+      offset += rest.len() - after.len();
+    }
+  }
+  if skipped && to_content {
+    // Properties followed by a key on the same line, as in `&step volume_step: 7`,
+    // belong to that key; the block mapping starts at them.
+    let rest = &text[offset..];
+    if !rest.is_empty() && !rest.starts_with(['\r', '\n', '#', ' ', '\t', '{']) {
+      return start;
+    }
+    loop {
+      let rest = &text[offset..];
+      let after = rest.trim_start();
+      offset += rest.len() - after.len();
+      if !after.starts_with('#') {
+        break;
+      }
+      offset += after.find('\n').unwrap_or(after.len());
+    }
+  }
+  offset
 }
 
 fn path_exists(path: &Path) -> Result<bool> {
@@ -808,6 +1003,225 @@ behavior:
       persisted,
     );
     (dir, result, behavior, runtime)
+  }
+
+  fn assert_legacy_client_migration_preserves_text(config_yml: &str, fragments: &[&str]) {
+    let mut expected: Value = serde_yaml::from_str(config_yml).unwrap();
+    if expected.is_null() {
+      expected = Value::Mapping(Mapping::new());
+    }
+    let expected_behavior = expected
+      .as_mapping_mut()
+      .unwrap()
+      .entry(yaml_key("behavior"))
+      .or_insert(Value::Null);
+    if expected_behavior.is_null() {
+      *expected_behavior = Value::Mapping(Mapping::new());
+    }
+    for (key, value) in [
+      ("streaming_device_name", yaml_key("Desk: #1")),
+      ("streaming_bitrate", Value::from(160)),
+      ("streaming_audio_cache", Value::Bool(true)),
+    ] {
+      expected_behavior
+        .as_mapping_mut()
+        .unwrap()
+        .entry(yaml_key(key))
+        .or_insert(value);
+    }
+
+    let client_yml =
+      "streaming_device_name: 'Desk: #1'\nstreaming_bitrate: 160\nstreaming_audio_cache: true\n";
+    let (dir, result, _, _) = client_migration(
+      client_yml,
+      Some(config_yml),
+      &PersistedRuntimeState::default(),
+    );
+    result.expect("a valid config must remain migratable");
+    let written = std::fs::read_to_string(dir.path().join("config.yml")).unwrap();
+    let actual: Value = serde_yaml::from_str(&written).expect("the edited YAML must parse");
+    assert_eq!(actual, expected, "only missing legacy settings may change");
+    let mut remaining = written.as_str();
+    for &fragment in fragments {
+      let offset = remaining
+        .find(fragment)
+        .unwrap_or_else(|| panic!("original text must survive in order: {fragment:?}"));
+      remaining = &remaining[offset + fragment.len()..];
+    }
+    assert_eq!(
+      std::fs::read_to_string(dir.path().join("client.yml")).unwrap(),
+      client_yml,
+      "the downgrade copy must remain untouched"
+    );
+  }
+
+  #[test]
+  fn legacy_client_migration_preserves_block_mapping_text() {
+    assert_legacy_client_migration_preserves_text(
+      "# Personal preferences 中文 🎧\nbehavior: # Playback\n  # streaming_device_name: Keep this example\n  streaming_bitrate: 96 # Explicit value wins\n  volume_step: 7\n\n# Appearance\ntheme:\n  preset: 'Dracula' # Keep the quotes\nformat:\n  window_title: '{title} # literal'\n",
+      &[
+        "# Personal preferences 中文 🎧\nbehavior: # Playback\n",
+        "  # streaming_device_name: Keep this example\n",
+        "  streaming_bitrate: 96 # Explicit value wins\n  volume_step: 7\n",
+        "\n# Appearance\ntheme:\n  preset: 'Dracula' # Keep the quotes\nformat:\n  window_title: '{title} # literal'\n",
+      ],
+    );
+  }
+
+  #[test]
+  fn legacy_client_migration_preserves_null_behavior_comments() {
+    for null in ["", "null", "Null", "NULL", "~"] {
+      let config_yml = format!(
+        "# Personal preferences\nbehavior: {null} # Fill this section\n  # streaming_bitrate: 96\n\n# Appearance\ntheme:\n  preset: 'Dracula'\n"
+      );
+      assert_legacy_client_migration_preserves_text(
+        &config_yml,
+        &[
+          "# Personal preferences\n",
+          "# Fill this section\n",
+          "  # streaming_bitrate: 96\n\n# Appearance\ntheme:\n  preset: 'Dracula'\n",
+        ],
+      );
+    }
+  }
+
+  #[test]
+  fn legacy_client_migration_preserves_flow_mapping_text() {
+    for (config_yml, fragments) in [
+      (
+        "behavior: {} # Empty mapping\ntheme: {preset: 'Dracula'}\n",
+        vec!["behavior: {", "} # Empty mapping\ntheme: {preset: 'Dracula'}\n"],
+      ),
+      (
+        "# Flow preferences\nbehavior: {volume_step: 7, streaming_bitrate: 96} # Playback\ntheme: {preset: 'Dracula'}\n",
+        vec!["# Flow preferences\nbehavior: {", "volume_step: 7, streaming_bitrate: 96", "} # Playback\ntheme: {preset: 'Dracula'}\n"],
+      ),
+      (
+        "{behavior: {volume_step: 7}, theme: {preset: 'Dracula'}} # Root mapping\n",
+        vec!["behavior: {", "volume_step: 7", "theme: {preset: 'Dracula'}", "} # Root mapping\n"],
+      ),
+      (
+        "{theme: {preset: 'Dracula'}, format: {window_title: 'literal }, # behavior: {'}} # No behavior\n",
+        vec!["theme: {preset: 'Dracula'}, format: {window_title: 'literal }, # behavior: {'}", "} # No behavior\n"],
+      ),
+      (
+        "behavior: { # Multiline flow\n  volume_step: 7, # Keep the comma\n  streaming_bitrate: 96,\n}\ntheme: {preset: 'Dracula'}\n",
+        vec!["behavior: { # Multiline flow\n", "  volume_step: 7, # Keep the comma\n  streaming_bitrate: 96,\n", "}\ntheme: {preset: 'Dracula'}\n"],
+      ),
+    ] {
+      assert_legacy_client_migration_preserves_text(config_yml, &fragments);
+    }
+  }
+
+  #[test]
+  fn legacy_client_migration_skips_anchors_and_tags() {
+    for (config_yml, fragments) in [
+      (
+        "behavior: &playback {volume_step: 7} # Anchored\ntheme: {preset: 'Dracula'}\n",
+        vec!["behavior: &playback {", "volume_step: 7", "} # Anchored\ntheme: {preset: 'Dracula'}\n"],
+      ),
+      (
+        "behavior: !!map {volume_step: 7}\ntheme: {preset: 'Dracula'}\n",
+        vec!["behavior: !!map {", "volume_step: 7", "}\ntheme: {preset: 'Dracula'}\n"],
+      ),
+      (
+        "behavior: &playback # Anchored block\n  # First key\n  volume_step: 7\ntheme: {preset: 'Dracula'}\n",
+        vec!["behavior: &playback # Anchored block\n  # First key\n", "  volume_step: 7\n", "theme: {preset: 'Dracula'}\n"],
+      ),
+      (
+        "behavior: &playback !!map\n  volume_step: 7\ntheme: {preset: 'Dracula'}\n",
+        vec!["behavior: &playback !!map\n", "  volume_step: 7\n", "theme: {preset: 'Dracula'}\n"],
+      ),
+      (
+        "behavior: &playback\ntheme: {preset: 'Dracula'}\n",
+        vec!["behavior: &playback", "\ntheme: {preset: 'Dracula'}\n"],
+      ),
+      (
+        "behavior:\n  &step volume_step: 7\ntheme: {preset: 'Dracula'}\n",
+        vec!["behavior:\n", "  &step volume_step: 7\n", "theme: {preset: 'Dracula'}\n"],
+      ),
+      (
+        "behavior: &playback\n  &step !!str volume_step: 7\ntheme: {preset: 'Dracula'}\n",
+        vec!["behavior: &playback\n", "  &step !!str volume_step: 7\n", "theme: {preset: 'Dracula'}\n"],
+      ),
+    ] {
+      assert_legacy_client_migration_preserves_text(config_yml, &fragments);
+    }
+  }
+
+  #[test]
+  fn legacy_client_migration_preserves_quoted_keys() {
+    for key in ["'behavior'", "\"behavior\"", "\"behav\\u0069or\""] {
+      let config_yml = format!(
+        "# Quoted keys\n{key}: # Playback\n  'streaming_bitrate': 96 # Explicit value wins\n  \"volume_step\": 7\ntheme: {{preset: 'Dracula'}}\n"
+      );
+      assert_legacy_client_migration_preserves_text(
+        &config_yml,
+        &[
+          "# Quoted keys\n",
+          key,
+          ": # Playback\n",
+          "  'streaming_bitrate': 96 # Explicit value wins\n  \"volume_step\": 7\n",
+          "theme: {preset: 'Dracula'}\n",
+        ],
+      );
+    }
+  }
+
+  #[test]
+  fn legacy_client_migration_inserts_before_document_end() {
+    for behavior in ["", "behavior: {}\n", "behavior: null\n"] {
+      let config_yml = format!(
+        "---\n# Config document\n{behavior}theme: {{preset: 'Dracula'}}\n... # End of config\n# Keep the trailing comment\n"
+      );
+      assert_legacy_client_migration_preserves_text(
+        &config_yml,
+        &[
+          "---\n# Config document\n",
+          "theme: {preset: 'Dracula'}\n",
+          "... # End of config\n# Keep the trailing comment\n",
+        ],
+      );
+    }
+  }
+
+  #[test]
+  fn legacy_client_migration_ignores_behavior_in_comments_and_scalars() {
+    let config_yml = "# behavior: {streaming_device_name: Comment}\n#   streaming_bitrate: 96\nformat:\n  window_title: |-\n    behavior:\n      streaming_device_name: Literal\ncustom:\n  behavior: {streaming_bitrate: 96}\ntheme: {preset: 'Dracula'} # Appearance\n";
+    assert_legacy_client_migration_preserves_text(config_yml, &[config_yml]);
+  }
+
+  #[test]
+  fn legacy_client_migration_preserves_empty_document_comments() {
+    for config_yml in [
+      "",
+      " \n \n",
+      "# Config preferences\n# behavior:\n#   streaming_bitrate: 96\n",
+      "---\n# Config preferences\n... # Empty document\n# Keep the trailing comment\n",
+    ] {
+      let fragments: Vec<&str> = config_yml.split_inclusive('\n').collect();
+      assert_legacy_client_migration_preserves_text(config_yml, &fragments);
+    }
+  }
+
+  #[test]
+  fn legacy_client_settings_fill_a_null_behavior_mapping() {
+    let (dir, result, behavior, _) = client_migration(
+      "streaming_device_name: Desk\ndevice_id: saved-device\n",
+      Some("behavior:\n  # streaming_bitrate: 320\ntheme:\n  preset: Dracula\n"),
+      &PersistedRuntimeState::default(),
+    );
+    let patch = result.unwrap();
+    assert_eq!(patch.spotify_device_id.as_deref(), Some("saved-device"));
+    assert_eq!(behavior.streaming_device_name, "Desk");
+    let config: Value =
+      serde_yaml::from_str(&std::fs::read_to_string(dir.path().join("config.yml")).unwrap())
+        .unwrap();
+    assert_eq!(
+      config["behavior"]["streaming_device_name"].as_str(),
+      Some("Desk")
+    );
+    assert_eq!(config["theme"]["preset"].as_str(), Some("Dracula"));
   }
 
   #[test]

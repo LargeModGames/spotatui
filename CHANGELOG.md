@@ -12,6 +12,11 @@
 
 ### Fixed
 
+- Initial `--reconfigure-auth` setup selects Spotify even when a legacy config selected another source. Migrating legacy streaming settings preserves config comments and commented-out settings.
+- The first-run source setup still appears after CLI subcommands or an interrupted first launch. Existing installations with a state file, its recovery backup or legacy `client.yml` keep their completed setup. Starting with `--reconfigure-auth` completes source setup before the Spotify login, as picking Spotify does.
+- The global song counter answer is saved when `behavior:` is empty or null, and commented-out answers no longer suppress the question. Legacy streaming settings also migrate into an empty `behavior:` section.
+- Missing parent directories under `XDG_CONFIG_HOME` are created on launch, and directory errors include the path.
+- Auto-update delays that overflow the seconds conversion are rejected with an error instead of panicking or wrapping.
 - **`playback --help` names every option**: the list of options that can be used together now includes `--dislike` and `--seek`, says that `--like` and `--dislike` exclude each other, says that `--next` and `--previous` work with `--seek`, and says that `--share-track` and `--share-album` ignore `--seek` ([#1045](https://github.com/LargeModGames/spotatui/issues/1045)).
 - **`spotatui plugin update` exits non-zero when an update fails**: a plugin whose git fetch or reset failed was reported on stdout and the command still exited 0, also when updating one plugin by name. Each failure now goes to stderr, the lockfile still records the plugins that did update, and the command ends with "N plugin(s) failed to update" and a non-zero exit ([#1047](https://github.com/LargeModGames/spotatui/issues/1047)).
 - **Text Emphasis off no longer bolds the selected row**: with `behavior.enable_text_emphasis: false`, the highlighted row in every list and table keeps its reversed colors but is no longer drawn bold ([#822](https://github.com/LargeModGames/spotatui/issues/822)).

@@ -16,7 +16,7 @@ use crate::core::user_config::{
   validate_tick_rate_milliseconds, BehaviorConfig, StartupBehavior, UserConfig, UserConfigPaths,
 };
 use crate::infra::network::IoEvent;
-use anyhow::Result;
+use anyhow::{anyhow, Context, Result};
 use backtrace::Backtrace;
 use log::info;
 use std::{
@@ -220,7 +220,10 @@ fn prompt_global_song_count_opt_in(
   // when the config predates the setting.
   let config_has_answer = config_paths.config_file_path.exists() && {
     let config_string = fs::read_to_string(&config_paths.config_file_path)?;
-    !config_string.trim().is_empty() && config_string.contains("enable_global_song_count")
+    let config: serde_yaml::Value = serde_yaml::from_str(&config_string)?;
+    config["behavior"]["enable_global_song_count"]
+      .as_bool()
+      .is_some()
   };
 
   if !should_prompt_global_song_count(first_run, config_has_answer) {
@@ -316,10 +319,12 @@ fn global_song_counter_prompt(strings: &crate::core::i18n::Strings) -> Onboardin
 /// `UserConfig::save_config` on purpose: a full save writes every default back
 /// into a config that predates the setting, and a written key reads as chosen.
 fn persist_global_song_count(config_file_path: &Path, enable: bool) -> Result<()> {
-  let config_yml = if config_file_path.exists() {
-    fs::read_to_string(config_file_path).unwrap_or_default()
-  } else {
-    String::new()
+  let config_yml = match fs::read_to_string(config_file_path) {
+    Ok(config) => config,
+    Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+    Err(error) => {
+      return Err(error).with_context(|| format!("reading {}", config_file_path.display()))
+    }
   };
 
   let mut config: serde_yaml::Value = if config_yml.trim().is_empty() {
@@ -328,18 +333,25 @@ fn persist_global_song_count(config_file_path: &Path, enable: bool) -> Result<()
     serde_yaml::from_str(&config_yml)?
   };
 
-  if let serde_yaml::Value::Mapping(ref mut map) = config {
-    let behavior = map
-      .entry(serde_yaml::Value::String("behavior".to_string()))
-      .or_insert(serde_yaml::Value::Mapping(serde_yaml::Mapping::new()));
-
-    if let serde_yaml::Value::Mapping(ref mut behavior_map) = behavior {
-      behavior_map.insert(
-        serde_yaml::Value::String("enable_global_song_count".to_string()),
-        serde_yaml::Value::Bool(enable),
-      );
-    }
+  let map = config
+    .as_mapping_mut()
+    .ok_or_else(|| anyhow!("{} is not a YAML mapping", config_file_path.display()))?;
+  let behavior = map
+    .entry(serde_yaml::Value::String("behavior".to_string()))
+    .or_insert(serde_yaml::Value::Null);
+  if behavior.is_null() {
+    *behavior = serde_yaml::Value::Mapping(serde_yaml::Mapping::new());
   }
+  let behavior_map = behavior.as_mapping_mut().ok_or_else(|| {
+    anyhow!(
+      "`behavior` in {} is not a YAML mapping",
+      config_file_path.display()
+    )
+  })?;
+  behavior_map.insert(
+    serde_yaml::Value::String("enable_global_song_count".to_string()),
+    serde_yaml::Value::Bool(enable),
+  );
 
   let updated_config = serde_yaml::to_string(&config)?;
   auth::write_private_file_atomic(config_file_path, updated_config.as_bytes())?;
@@ -481,6 +493,7 @@ pub(super) async fn boot(
       log::warn!("[state] runtime state path is unavailable: {e}");
     }
   }
+  runtime_state.first_run_complete = !first_run;
   let default_fields =
     apply_configured_runtime_defaults(&mut runtime_state, &persisted_state, &user_config.behavior);
   let legacy_radio_fields = apply_legacy_config_radio_station_migration(
@@ -528,7 +541,7 @@ pub(super) async fn boot(
     },
     _ => PersistedRuntimeState::default(),
   };
-  let state = if should_save_initial_state {
+  let mut state = if should_save_initial_state {
     runtime_state.to_persisted()
   } else {
     let mut state = default_fields;
@@ -537,6 +550,11 @@ pub(super) async fn boot(
     state.merge_patch(&legacy_client_fields);
     state
   };
+  // Pin the legacy decision once. Future saves must distinguish an old saved
+  // source from the default source written before the first picker completes.
+  if persisted_state.first_run_complete.is_none() {
+    state.first_run_complete = Some(!first_run);
+  }
   if can_save_initial_state && !state.is_empty() {
     if let Some(path) = &state_path {
       if let Err(e) = crate::core::state::save(path, &state) {
@@ -591,14 +609,26 @@ pub(super) async fn boot(
   // First-run source picker (interactive UI launch only): picking Spotify logs
   // in below; picking only free sources starts without Spotify.
   let mut picked_spotify = false;
-  if first_run && options.subcommand.is_none() && !options.reconfigure_auth {
-    picked_spotify = crate::core::first_run::run_first_run_picker(
-      &mut user_config,
-      &mut runtime_state,
-      state_path.as_deref(),
-      onboarding.as_ref(),
-    )
-    .await?;
+  if first_run && options.subcommand.is_none() {
+    if options.reconfigure_auth {
+      // Asking to log in to Spotify already chooses a source, just like the
+      // picker completing setup before boot starts the Spotify login.
+      runtime_state.active_source = crate::core::source::Source::Spotify;
+      crate::core::first_run::complete_first_run(
+        &user_config,
+        &mut runtime_state,
+        state_path.as_deref(),
+        onboarding.as_ref(),
+      )?;
+    } else {
+      picked_spotify = crate::core::first_run::run_first_run_picker(
+        &mut user_config,
+        &mut runtime_state,
+        state_path.as_deref(),
+        onboarding.as_ref(),
+      )
+      .await?;
+    }
   }
 
   let reconfigure_auth = options.reconfigure_auth;
@@ -816,6 +846,232 @@ mod tests {
     config
   }
 
+  fn boot_options(subcommand: Option<&str>) -> super::BootOptions {
+    super::BootOptions {
+      system_language: Some(crate::core::i18n::Language::En),
+      config_path: None,
+      tick_rate: None,
+      subcommand: subcommand.map(str::to_string),
+      reconfigure_auth: false,
+      play_file: None,
+      no_update: true,
+    }
+  }
+
+  #[test]
+  fn a_legacy_client_install_stays_complete_across_repeated_boots() {
+    if !crate::core::test_helpers::in_isolated_process(
+      "runtime::bootstrap::tests::a_legacy_client_install_stays_complete_across_repeated_boots",
+      "config",
+    ) {
+      return;
+    }
+    let client = crate::core::paths::legacy_client_config_path().unwrap();
+    std::fs::create_dir_all(client.parent().unwrap()).unwrap();
+    std::fs::write(
+      &client,
+      "streaming_device_name: Desk\ndevice_id: saved-device\n",
+    )
+    .unwrap();
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+      let mut lock = None;
+      for _ in 0..2 {
+        let onboarding = std::sync::Arc::new(ScriptedOnboarding::non_interactive(&[]));
+        assert!(
+          super::boot(boot_options(Some("sync")), onboarding, &mut lock)
+            .await
+            .is_ok()
+        );
+        let path = crate::core::state::default_state_path().unwrap();
+        assert!(!crate::core::first_run::is_first_run(&path, Some(&client)));
+        let saved = crate::core::state::load(&path).unwrap();
+        assert_eq!(saved.first_run_complete, Some(true));
+        assert_eq!(saved.spotify_device_id.as_deref(), Some("saved-device"));
+      }
+    });
+  }
+
+  #[test]
+  fn subcommands_and_interrupted_prompts_keep_the_first_run_pending() {
+    if !crate::core::test_helpers::in_isolated_process(
+      "runtime::bootstrap::tests::subcommands_and_interrupted_prompts_keep_the_first_run_pending",
+      "config",
+    ) {
+      return;
+    }
+
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+      let state_path = crate::core::state::default_state_path().unwrap();
+      let mut lock = None;
+      for subcommand in ["sync", "playback", "list"] {
+        let onboarding = std::sync::Arc::new(ScriptedOnboarding::non_interactive(&[]));
+        let result = super::boot(
+          boot_options(Some(subcommand)),
+          onboarding.clone(),
+          &mut lock,
+        )
+        .await;
+        assert_eq!(result.is_ok(), subcommand == "sync");
+        assert!(onboarding.asked.lock().unwrap().is_empty());
+        assert!(crate::core::first_run::is_first_run(&state_path, None));
+      }
+
+      // Running out of scripted answers interrupts boot at the consent prompt,
+      // after the initial state save and before the source picker.
+      let interrupted = std::sync::Arc::new(ScriptedOnboarding::with_answers(&[]));
+      assert!(
+        super::boot(boot_options(None), interrupted.clone(), &mut lock)
+          .await
+          .is_err()
+      );
+      assert_eq!(interrupted.asked.lock().unwrap().len(), 1);
+      assert!(crate::core::first_run::is_first_run(&state_path, None));
+    });
+  }
+
+  #[test]
+  fn recovering_corrupt_state_does_not_repeat_onboarding_on_the_next_boot() {
+    if !crate::core::test_helpers::in_isolated_process(
+      "runtime::bootstrap::tests::recovering_corrupt_state_does_not_repeat_onboarding_on_the_next_boot",
+      "config",
+    ) {
+      return;
+    }
+    let config = crate::core::paths::app_config_dir()
+      .unwrap()
+      .join("config.yml");
+    std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+    std::fs::write(&config, "behavior:\n  enable_global_song_count: false\n").unwrap();
+    let state = crate::core::state::default_state_path().unwrap();
+    std::fs::create_dir_all(state.parent().unwrap()).unwrap();
+    std::fs::write(&state, "volume_percent: 300\n").unwrap();
+    assert!(!crate::core::paths::legacy_client_config_path()
+      .unwrap()
+      .exists());
+
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+      let mut lock = None;
+      let initial = super::boot(
+        boot_options(Some("sync")),
+        std::sync::Arc::new(ScriptedOnboarding::non_interactive(&[])),
+        &mut lock,
+      )
+      .await
+      .unwrap();
+      assert!(initial.runtime_state.first_run_complete);
+      crate::core::state::save(&state, &PersistedRuntimeState::volume_percent(42)).unwrap();
+
+      let onboarding = std::sync::Arc::new(ScriptedOnboarding::with_answers(&[]));
+      let rebooted = super::boot(boot_options(None), onboarding.clone(), &mut lock)
+        .await
+        .unwrap();
+      assert!(onboarding.asked.lock().unwrap().is_empty());
+      assert!(rebooted.runtime_state.first_run_complete);
+      assert_eq!(
+        crate::core::state::load(&state).unwrap().first_run_complete,
+        Some(true)
+      );
+    });
+  }
+
+  // No real pairing page is opened: this build reports a failed login, just
+  // as a first-run Spotify selection can complete setup before login fails.
+  #[cfg(not(feature = "spotify-session"))]
+  #[test]
+  fn reconfiguring_auth_first_does_not_repeat_onboarding_on_the_next_boot() {
+    if !crate::core::test_helpers::in_isolated_process(
+      "runtime::bootstrap::tests::reconfiguring_auth_first_does_not_repeat_onboarding_on_the_next_boot",
+      "config",
+    ) {
+      return;
+    }
+
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+      let mut lock = None;
+      let mut options = boot_options(None);
+      options.reconfigure_auth = true;
+      let onboarding = std::sync::Arc::new(ScriptedOnboarding::with_answers(&["n"]));
+      let initial = super::boot(options, onboarding.clone(), &mut lock)
+        .await
+        .unwrap();
+      assert_eq!(onboarding.asked.lock().unwrap().len(), 1);
+      assert!(initial.runtime_state.first_run_complete);
+
+      let onboarding = std::sync::Arc::new(ScriptedOnboarding::with_answers(&[]));
+      let rebooted = super::boot(boot_options(None), onboarding.clone(), &mut lock)
+        .await
+        .unwrap();
+      assert!(onboarding.asked.lock().unwrap().is_empty());
+      assert!(rebooted.runtime_state.first_run_complete);
+      let state = crate::core::state::default_state_path().unwrap();
+      assert_eq!(
+        crate::core::state::load(&state).unwrap().first_run_complete,
+        Some(true)
+      );
+    });
+  }
+
+  #[cfg(not(feature = "spotify-session"))]
+  #[test]
+  fn reconfiguring_auth_selects_spotify_over_a_legacy_source() {
+    if !crate::core::test_helpers::in_isolated_process(
+      "runtime::bootstrap::tests::reconfiguring_auth_selects_spotify_over_a_legacy_source",
+      "config",
+    ) {
+      return;
+    }
+    let config = crate::core::paths::app_config_dir()
+      .unwrap()
+      .join("config.yml");
+    std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+    std::fs::write(&config, "behavior:\n  active_source: Local\n").unwrap();
+    let state = crate::core::state::default_state_path().unwrap();
+    assert!(!state.exists());
+    assert!(!crate::core::paths::legacy_client_config_path()
+      .unwrap()
+      .exists());
+
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+      let mut lock = None;
+      let mut options = boot_options(None);
+      options.reconfigure_auth = true;
+      let initial = super::boot(
+        options,
+        std::sync::Arc::new(ScriptedOnboarding::with_answers(&["n"])),
+        &mut lock,
+      )
+      .await
+      .unwrap();
+      let saved = crate::core::state::load(&state).unwrap();
+      assert_eq!(saved.first_run_complete, Some(true));
+      assert_eq!(
+        saved.active_source,
+        Some(crate::core::source::Source::Spotify)
+      );
+      assert_eq!(
+        initial.runtime_state.active_source,
+        crate::core::source::Source::Spotify
+      );
+      assert_eq!(
+        initial.app.lock().await.active_source,
+        crate::core::source::Source::Spotify
+      );
+
+      let rebooted = super::boot(
+        boot_options(None),
+        std::sync::Arc::new(ScriptedOnboarding::with_answers(&[])),
+        &mut lock,
+      )
+      .await
+      .unwrap();
+      assert!(rebooted.runtime_state.first_run_complete);
+      assert_eq!(
+        rebooted.app.lock().await.active_source,
+        crate::core::source::Source::Spotify
+      );
+    });
+  }
+
   #[test]
   fn global_song_counter_prompt_predicate_matches_first_run_and_stale_configs() {
     // Genuine first run, nothing answered.
@@ -917,6 +1173,85 @@ mod tests {
       config_path.display()
     )));
     assert!(!onboarding.saw("Thank you for participating!\n"));
+  }
+
+  #[test]
+  fn a_null_behavior_records_the_song_counter_answer_only_once() {
+    for (answer, enable) in [("y", true), ("n", false)] {
+      let dir = tempfile::tempdir().unwrap();
+      let config_path = dir.path().join("config.yml");
+      std::fs::write(
+        &config_path,
+        "behavior:\n  # seek_milliseconds: 5000\ntheme:\n  preset: Dracula\n",
+      )
+      .unwrap();
+      let mut config = user_config_at(config_path.clone());
+      config.load_config().unwrap();
+      let onboarding = ScriptedOnboarding::with_answers(&[answer]);
+
+      prompt_global_song_count_opt_in(&mut config, false, &onboarding).unwrap();
+
+      let saved: serde_yaml::Value =
+        serde_yaml::from_str(&std::fs::read_to_string(&config_path).unwrap()).unwrap();
+      assert_eq!(
+        saved["behavior"]["enable_global_song_count"].as_bool(),
+        Some(enable)
+      );
+      assert_eq!(saved["theme"]["preset"].as_str(), Some("Dracula"));
+      let mut reloaded = user_config_at(config_path);
+      reloaded.load_config().unwrap();
+      assert_eq!(reloaded.behavior.enable_global_song_count, enable);
+      let second_launch = ScriptedOnboarding::with_answers(&[]);
+      prompt_global_song_count_opt_in(&mut reloaded, false, &second_launch).unwrap();
+      assert!(second_launch.asked.lock().unwrap().is_empty());
+    }
+  }
+
+  #[test]
+  fn invalid_song_counter_config_shapes_fail_without_rewriting_the_file() {
+    for contents in ["null\n", "[]\n", "behavior: []\n", "behavior: invalid\n"] {
+      let dir = tempfile::tempdir().unwrap();
+      let path = dir.path().join("config.yml");
+      std::fs::write(&path, contents).unwrap();
+
+      assert!(persist_global_song_count(&path, true).is_err());
+      assert_eq!(std::fs::read_to_string(path).unwrap(), contents);
+    }
+  }
+
+  #[test]
+  fn commented_or_null_song_counter_keys_still_need_an_answer() {
+    for contents in [
+      "behavior:\n  # enable_global_song_count: true\n",
+      "behavior:\n  enable_global_song_count: null\n",
+    ] {
+      let dir = tempfile::tempdir().unwrap();
+      let path = dir.path().join("config.yml");
+      std::fs::write(&path, contents).unwrap();
+      let mut config = user_config_at(path.clone());
+      config.load_config().unwrap();
+      let onboarding = ScriptedOnboarding::with_answers(&["n"]);
+
+      prompt_global_song_count_opt_in(&mut config, false, &onboarding).unwrap();
+
+      assert_eq!(onboarding.asked.lock().unwrap().len(), 1);
+      let saved: serde_yaml::Value =
+        serde_yaml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+      assert_eq!(
+        saved["behavior"]["enable_global_song_count"].as_bool(),
+        Some(false)
+      );
+    }
+  }
+
+  #[test]
+  fn unreadable_song_counter_config_bytes_are_preserved() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.yml");
+    let contents = [0xff, 0xfe];
+    std::fs::write(&path, contents).unwrap();
+    assert!(persist_global_song_count(&path, true).is_err());
+    assert_eq!(std::fs::read(path).unwrap(), contents);
   }
 
   #[test]
