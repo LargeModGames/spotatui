@@ -3600,7 +3600,7 @@ fn parse_rootlist_items(
       let (group_id, name) = match rest.find(':') {
         Some(pos) => (
           rest[..pos].to_string(),
-          percent_decode_str(&rest[pos + 1..]).replace('+', " "))
+          percent_decode_str(&rest[pos + 1..].replace('+', " "))
             .decode_utf8_lossy()
             .into_owned(),
         ),
