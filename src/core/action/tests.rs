@@ -1098,7 +1098,7 @@ mod dj_actions {
   }
 
   #[test]
-  fn queue_tracks_reports_the_accepted_count() {
+  fn queue_tracks_reports_each_accepted_track() {
     let (mut app, _rx) = app_with_channel();
 
     let outcome = app.apply(Action::QueueTracks(vec![
@@ -1106,7 +1106,12 @@ mod dj_actions {
       dj_track(Some("subsonic:track:b"), "B"),
     ]));
 
-    assert_eq!(outcome, ActionOutcome::Queued { accepted: 2 });
+    assert_eq!(
+      outcome,
+      ActionOutcome::Queued {
+        accepted: vec![true, true]
+      }
+    );
     assert_eq!(app.native_queue.len(), 2);
     assert!(app.dj.queued_uris.contains("subsonic:track:a"));
   }
@@ -1120,7 +1125,12 @@ mod dj_actions {
       dj_track(None, "No URI"),
     ]));
 
-    assert_eq!(outcome, ActionOutcome::Queued { accepted: 1 });
+    assert_eq!(
+      outcome,
+      ActionOutcome::Queued {
+        accepted: vec![true, false]
+      }
+    );
     assert_eq!(app.native_queue.len(), 1);
   }
 

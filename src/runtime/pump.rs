@@ -112,7 +112,7 @@ pub(super) async fn start_tokio(io_rx: std::sync::mpsc::Receiver<IoEvent>, netwo
   tokio::spawn(run_spotify_lane(lane_rx));
 
   loop {
-    let deferred_deadline = network.deferred_deadline().await;
+    let deferred_deadline = network.deferred_deadline();
     let io_event = tokio::select! {
       maybe_event = bridge_rx.recv() => match maybe_event {
         Some(io_event) => io_event,

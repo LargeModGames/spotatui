@@ -5,11 +5,9 @@ use reqwest::{Method, StatusCode};
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 use std::{
-  sync::Arc,
-  sync::OnceLock,
+  sync::{Arc, Mutex, OnceLock},
   time::{Duration, Instant},
 };
-use tokio::sync::Mutex;
 
 static SHARED_HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 
@@ -211,22 +209,29 @@ pub struct RateLimitGate {
 
 impl RateLimitGate {
   /// Time left in the window, if one is open.
-  pub(crate) async fn rate_limit_remaining(&self) -> Option<Duration> {
+  pub(crate) fn rate_limit_remaining(&self) -> Option<Duration> {
     self
-      .rate_limit_deadline()
-      .await?
+      .rate_limit_deadline()?
       .checked_duration_since(Instant::now())
   }
 
-  pub(crate) async fn rate_limit_deadline(&self) -> Option<Instant> {
-    (*self.rate_limited_until.lock().await).filter(|until| *until > Instant::now())
+  /// A synchronous snapshot so the DJ can check it while holding the app lock.
+  pub(crate) fn rate_limit_deadline(&self) -> Option<Instant> {
+    self
+      .rate_limited_until
+      .lock()
+      .unwrap_or_else(|e| e.into_inner())
+      .filter(|until| *until > Instant::now())
   }
 
   /// Open (or extend) the window: a shorter one that lands during a longer
   /// one must not cut the longer one short.
-  pub(crate) async fn rate_limit_for(&self, window: Duration) {
+  pub(crate) fn rate_limit_for(&self, window: Duration) {
     let until = Instant::now() + window.min(MAX_RETRY_AFTER);
-    let mut slot = self.rate_limited_until.lock().await;
+    let mut slot = self
+      .rate_limited_until
+      .lock()
+      .unwrap_or_else(|e| e.into_inner());
     *slot = Some(slot.map_or(until, |current| current.max(until)));
   }
 }
@@ -370,7 +375,7 @@ async fn request_with(
   let endpoint = format!("{method} {}", redacted_target(path, query));
   // Inside the window every call fails here at once: a sleep would park the
   // serial pump and every event behind it.
-  if let Some(left) = gate.rate_limit_remaining().await {
+  if let Some(left) = gate.rate_limit_remaining() {
     debug!(
       "Spotify API {endpoint} not sent: rate limited for another {}s",
       left.as_secs().max(1)
@@ -404,7 +409,7 @@ async fn request_with(
     Err(error) => {
       let error = match error.downcast::<SpotifyApiError>() {
         Ok(api_error) if api_error.status == StatusCode::TOO_MANY_REQUESTS => {
-          gate.rate_limit_for(ROUTED_RATE_LIMIT_WINDOW).await;
+          gate.rate_limit_for(ROUTED_RATE_LIMIT_WINDOW);
           rate_limited_error(ROUTED_RATE_LIMIT_WINDOW, endpoint.clone())
         }
         Ok(mut api_error) => {
@@ -1304,7 +1309,7 @@ mod tests {
     assert!(is_rate_limited_error(&first));
     assert!(is_rate_limited_error(&second));
     assert!(second.to_string().contains("retry in"), "{second}");
-    let left = gate.rate_limit_remaining().await.unwrap();
+    let left = gate.rate_limit_remaining().unwrap();
     assert!(left <= ROUTED_RATE_LIMIT_WINDOW, "{left:?}");
   }
 
@@ -1375,22 +1380,22 @@ mod tests {
     );
   }
 
-  #[tokio::test]
-  async fn a_shorter_window_never_cuts_a_longer_one_short() {
+  #[test]
+  fn a_shorter_window_never_cuts_a_longer_one_short() {
     let gate = RateLimitGate::default();
-    gate.rate_limit_for(Duration::from_secs(30)).await;
-    gate.rate_limit_for(Duration::from_secs(1)).await;
+    gate.rate_limit_for(Duration::from_secs(30));
+    gate.rate_limit_for(Duration::from_secs(1));
 
-    let left = gate.rate_limit_remaining().await.unwrap();
+    let left = gate.rate_limit_remaining().unwrap();
     assert!(left > Duration::from_secs(20), "{left:?}");
   }
 
-  #[tokio::test]
-  async fn an_extreme_window_is_bounded() {
+  #[test]
+  fn an_extreme_window_is_bounded() {
     let gate = RateLimitGate::default();
-    gate.rate_limit_for(Duration::MAX).await;
+    gate.rate_limit_for(Duration::MAX);
 
-    let left = gate.rate_limit_remaining().await.unwrap();
+    let left = gate.rate_limit_remaining().unwrap();
     assert!(left <= MAX_RETRY_AFTER, "{left:?}");
   }
 }

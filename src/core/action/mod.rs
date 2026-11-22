@@ -437,9 +437,9 @@ pub enum Action {
 pub enum ActionOutcome {
   /// The action was applied (or routed); nothing further to report.
   Applied,
-  /// [`Action::QueueTracks`]: how many offered tracks entered the queue.
+  /// [`Action::QueueTracks`]: whether each track was queued locally or sent to Spotify.
   #[cfg_attr(not(feature = "dj-core"), allow(dead_code))]
-  Queued { accepted: usize },
+  Queued { accepted: Vec<bool> },
   /// [`Action::SaveSettings`]: whether `config.yml` was written.
   SettingsSaved { saved: bool },
 }

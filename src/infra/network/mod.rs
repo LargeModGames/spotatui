@@ -1223,7 +1223,7 @@ impl Network {
     if Self::event_bypasses_spotify_auth(&io_event) {
       return Some(io_event);
     }
-    let left = self.rate_gate.rate_limit_remaining().await;
+    let left = self.rate_gate.rate_limit_remaining();
     let Some(left) = left else {
       return Some(io_event);
     };
@@ -1267,11 +1267,11 @@ impl Network {
   }
 
   /// When the pump must flush the held-back events: the window's end.
-  pub(crate) async fn deferred_deadline(&self) -> Option<std::time::Instant> {
+  pub(crate) fn deferred_deadline(&self) -> Option<std::time::Instant> {
     if self.deferred.is_empty() {
       return None;
     }
-    let left = self.rate_gate.rate_limit_remaining().await;
+    let left = self.rate_gate.rate_limit_remaining();
     Some(std::time::Instant::now() + left.unwrap_or_default())
   }
 
@@ -2376,10 +2376,7 @@ mod tests {
     network.spotify = Some(SpotifyLogin::new());
     network.defers_rate_limited = true;
     network.rate_gate = requests::RateLimitGate::default();
-    network
-      .rate_gate
-      .rate_limit_for(Duration::from_secs(30))
-      .await;
+    network.rate_gate.rate_limit_for(Duration::from_secs(30));
     network
   }
 
@@ -2471,7 +2468,7 @@ mod tests {
 
     network.handle_network_event(IoEvent::GetPlaylists).await;
     network.handle_network_event(IoEvent::GetUser).await;
-    assert!(network.deferred_deadline().await.is_some());
+    assert!(network.deferred_deadline().is_some());
     network.flush_deferred().await;
 
     assert!(network.deferred.is_empty());

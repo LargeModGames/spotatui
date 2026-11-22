@@ -1951,6 +1951,11 @@ fn every_typed_message_fills_its_placeholders_and_preserves_all_arguments() {
       ["SENTINEL_NAMES_中"]
     );
     check!(
+      "tools.queue_refused",
+      strings.status.tools.queue_refused("SENTINEL_NAMES_中"),
+      ["SENTINEL_NAMES_中"]
+    );
+    check!(
       "tools.no_tracks",
       strings.status.tools.no_tracks("SENTINEL_QUERY_中"),
       ["SENTINEL_QUERY_中"]

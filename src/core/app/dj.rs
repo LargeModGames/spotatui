@@ -24,7 +24,7 @@ impl App {
     keys
   }
 
-  /// Queue a batch of DJ-chosen tracks, returning how many were accepted.
+  /// Queue a batch of DJ-chosen tracks, reporting acceptance in input order.
   ///
   /// Routes every track through [`Self::add_track_to_native_queue`] rather than
   /// pushing into `native_queue` directly, so the no-URI guard, the radio
@@ -37,30 +37,25 @@ impl App {
   /// caller overwrites them with a single aggregate message afterwards.
   #[cfg(feature = "dj-core")]
   #[cfg_attr(not(any(feature = "mcp-server", feature = "ai-dj")), allow(dead_code))]
-  pub fn extend_native_queue_from_dj(&mut self, tracks: Vec<TrackInfo>) -> usize {
+  pub fn extend_native_queue_from_dj(&mut self, tracks: Vec<TrackInfo>) -> Vec<bool> {
     if self.apple_music_owns_playback() {
       self.set_status_message(self.strings().status.app.music_cannot_queue, 4);
-      return 0;
+      return vec![false; tracks.len()];
     }
-    let mut accepted = 0usize;
+    let mut accepted = Vec::with_capacity(tracks.len());
     for track in tracks {
-      // Mirror `add_track_to_native_queue`'s rejections so the count we report
-      // is honest, rather than inferring them from a length change.
-      let Some(uri) = track.uri.clone() else {
-        continue;
-      };
-      if uri.starts_with("radio:") || uri.starts_with("applemusic:") {
-        continue;
-      }
       let before = self.native_queue.len();
-      self.add_track_to_native_queue(track);
-      accepted += 1;
+      accepted.push(self.add_track_to_native_queue(track));
       // A Spotify track on an external Connect device is dispatched to the Web
       // API queue instead of pushed locally, so only remember what a vibe shift
       // would actually be able to drop again. Remembered by URI, not position:
       // the queue can be reordered, appended to, or pruned by hand before the
       // shift happens.
-      if self.native_queue.len() > before {
+      if let Some(uri) = self
+        .native_queue
+        .get(before)
+        .and_then(|track| track.uri.clone())
+      {
         self.dj.queued_uris.insert(uri);
       }
     }
@@ -230,6 +225,7 @@ impl App {
         self.native_queue.len(),
         &self.dj,
         self.dj_refill_paused(),
+        crate::infra::network::requests::shared_rate_gate().rate_limit_deadline(),
       ) {
         let turn_seq = self.dj.begin_turn(TurnKind::Refill);
         self.dispatch_without_spinner(IoEvent::DjTopUp(generation, turn_seq));
@@ -419,7 +415,7 @@ mod tests {
       }
       app.apply(Action::ToggleDjAutoQueue);
       assert!(app.dj.auto_queue);
-      assert!(!wants_top_up(0, &app.dj, app.dj_refill_paused()));
+      assert!(!wants_top_up(0, &app.dj, app.dj_refill_paused(), None));
       assert!(events.try_recv().is_err());
       assert_eq!(app.dj.refill_failures, 0);
       if apple_music {
@@ -428,7 +424,7 @@ mod tests {
       } else {
         app.current_playback_context = None;
       }
-      assert!(wants_top_up(0, &app.dj, app.dj_refill_paused()));
+      assert!(wants_top_up(0, &app.dj, app.dj_refill_paused(), None));
     }
   }
 
