@@ -21,13 +21,12 @@
 //!
 //! ## Streaming
 //!
-//! Each track is downloaded from `stream.view` to a tempfile off the pump,
-//! then staged in pump order through the shared [`LocalPlayer`]. The download
+//! Each track is downloaded from `stream.view` to a tempfile (off the `App`
+//! lock), then played from disk through the shared [`LocalPlayer`]. The download
 //! window is much longer than a local decode, so the `advancing` guard is
 //! load-bearing, and a download failure tears the session down rather than
 //! skipping past (avoids cascading the whole queue when the network is down).
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -35,14 +34,13 @@ use anyhow::{Context, Result};
 use tempfile::NamedTempFile;
 use tokio::sync::Mutex;
 
-use super::{track_id_from_uri, PendingDownload, SubsonicPlaybackState, SubsonicSource};
+use super::{track_id_from_uri, SubsonicPlaybackState, SubsonicSource};
 use crate::core::app::{App, TrackTableContext};
 use crate::core::source::{MediaSource, Searcher, Source};
 use crate::infra::audio::LocalPlayer;
 use crate::infra::network::IoEvent;
 use crate::infra::queue::{
-  advance_index, apply_resolved, placeholder_uri, replay_file, restage, snapshot_tracks,
-  DownloadAbortHandle, ResumePoint,
+  advance_index, apply_resolved, placeholder_uri, replay_file, snapshot_tracks,
 };
 
 /// Environment variable that overrides the configured Subsonic password. Prefer
@@ -83,24 +81,42 @@ pub async fn route_subsonic_event(app: &Arc<Mutex<App>>, event: &IoEvent) -> boo
     IoEvent::StartPlayback(None, Some(uris), offset)
       if uris.first().is_some_and(|u| is_subsonic_uri(u)) =>
     {
-      start_subsonic_queue(app, uris, offset.unwrap_or(0), None).await;
+      start_subsonic_queue(app, uris, offset.unwrap_or(0)).await;
       true
     }
     // A single subsonic track with no surrounding playlist: a one-track queue.
     IoEvent::StartPlayback(Some(uri), _, _) if is_subsonic_uri(uri) => {
-      start_subsonic_queue(app, std::slice::from_ref(uri), 0, None).await;
+      start_subsonic_queue(app, std::slice::from_ref(uri), 0).await;
       true
     }
     // Bare "resume current" — ours only while subsonic owns the session.
-    IoEvent::StartPlayback(None, None, None) => set_paused(app, false).await,
+    IoEvent::StartPlayback(None, None, None) => match player(app).await {
+      Some(p) => {
+        p.resume();
+        true
+      }
+      None => false,
+    },
     // Any other start is a local/Spotify play: relinquish the device, then let
     // the normal dispatch run.
     IoEvent::StartPlayback(..) => {
       teardown_subsonic(app).await;
       false
     }
-    IoEvent::PausePlayback => set_paused(app, true).await,
-    IoEvent::Seek(position_ms) => seek(app, u64::from(*position_ms)).await,
+    IoEvent::PausePlayback => match player(app).await {
+      Some(p) => {
+        p.pause();
+        true
+      }
+      None => false,
+    },
+    IoEvent::Seek(position_ms) => match player(app).await {
+      Some(p) => {
+        let _ = p.seek(Duration::from_millis(*position_ms as u64));
+        true
+      }
+      None => false,
+    },
     IoEvent::ChangeVolume(volume) => match player(app).await {
       Some(p) => {
         p.set_volume(*volume);
@@ -274,30 +290,6 @@ async fn player(app: &Arc<Mutex<App>>) -> Option<Arc<LocalPlayer>> {
     .map(|s| Arc::clone(&s.player))
 }
 
-async fn set_paused(app: &Arc<Mutex<App>>, paused: bool) -> bool {
-  let mut guard = app.lock().await;
-  let Some(session) = guard.subsonic_playback.as_mut() else {
-    return false;
-  };
-  session.set_paused(paused);
-  true
-}
-
-async fn seek(app: &Arc<Mutex<App>>, position_ms: u64) -> bool {
-  let mut guard = app.lock().await;
-  let Some(session) = guard.subsonic_playback.as_mut() else {
-    return false;
-  };
-  if session.fetch.is_some() {
-    session.resume_at.get_or_insert_default().position_ms = position_ms;
-  } else {
-    let player = Arc::clone(&session.player);
-    drop(guard);
-    let _ = player.seek(Duration::from_millis(position_ms));
-  }
-  true
-}
-
 /// Release the other backends so only subsonic holds the output device.
 async fn release_other_backends(app: &Arc<Mutex<App>>) {
   // Take the sink from native Spotify so no rebuild resumes it under this
@@ -316,7 +308,8 @@ async fn release_other_backends(app: &Arc<Mutex<App>>) {
 }
 
 /// Reuse the live subsonic player, or open a fresh output device for one. A
-/// freshly opened player is published by the caller with the pending download.
+/// freshly opened player is **not** published to `App` here — the caller
+/// publishes the session only on a successful first play.
 async fn acquire_player(app: &Arc<Mutex<App>>) -> Option<Arc<LocalPlayer>> {
   if let Some(p) = player(app).await {
     return Some(p);
@@ -371,12 +364,7 @@ pub(crate) async fn download_for_queue(
 
 /// Begin playing a queue of subsonic tracks, taking over the session and
 /// starting at `start_idx` (clamped into range).
-pub(crate) async fn start_subsonic_queue(
-  app: &Arc<Mutex<App>>,
-  uris: &[String],
-  start_idx: usize,
-  resume: Option<ResumePoint>,
-) {
+async fn start_subsonic_queue(app: &Arc<Mutex<App>>, uris: &[String], start_idx: usize) {
   // Snapshot the track metadata under one short lock, from whichever browse view
   // the request came from (track table for browse, search results for search).
   let tracks = {
@@ -433,59 +421,102 @@ pub(crate) async fn start_subsonic_queue(
     return;
   };
 
-  // The old context's file must survive until the reused player stops.
-  let previous = app.lock().await.subsonic_playback.take();
-  if let Some(mut previous) = previous {
-    previous.cancel_download();
-    if previous.tempfile.is_some() {
-      previous.player.pause();
-      let _ = tokio::task::spawn_blocking(move || {
-        previous.player.stop();
-        drop(previous);
-      })
+  // Download off the lock, then decode on the blocking pool.
+  let tmp = match download_track(&source, &track_id).await {
+    Ok(t) => t,
+    Err(e) => {
+      set_error(
+        app,
+        crate::infra::app_strings(app)
+          .await
+          .status
+          .infra
+          .subsonic_download_failed(&e.to_string()),
+      )
       .await;
+      return;
+    }
+  };
+  let path = tmp.path().to_path_buf();
+  let decode_player = Arc::clone(&player);
+  let result = tokio::task::spawn_blocking(move || decode_player.play_file(&path)).await;
+
+  match result {
+    Ok(Ok(())) => {
+      let volume = app.lock().await.runtime_state.volume_percent;
+      player.set_volume(volume);
+
+      let display = tracks[index].name.clone();
+      let mut guard = app.lock().await;
+      // Publish the session exactly once, now that the source is decoding.
+      let mut state = SubsonicPlaybackState {
+        player,
+        source,
+        tracks,
+        index,
+        advancing: false,
+        tempfile: tmp,
+        shuffle_backup: None,
+        resume_at: None,
+      };
+      // Honor the player-global decoded shuffle for the freshly-built queue.
+      if guard.decoded_shuffle {
+        state.set_shuffle(true);
+      }
+      spawn_resolve(app, &state);
+      guard.subsonic_playback = Some(state);
+      guard.set_status_message(format!("\u{266a} {display}"), 4);
+    }
+    Ok(Err(e)) => {
+      set_error(
+        app,
+        crate::infra::app_strings(app)
+          .await
+          .status
+          .infra
+          .subsonic_play_failed(&e.to_string()),
+      )
+      .await
+    }
+    Err(e) => {
+      set_error(
+        app,
+        crate::infra::app_strings(app)
+          .await
+          .status
+          .infra
+          .subsonic_task_failed(&e.to_string()),
+      )
+      .await
     }
   }
-
-  // Publish the pending context so transport can address it during the download.
-  let mut guard = app.lock().await;
-  let mut state = SubsonicPlaybackState {
-    player,
-    source,
-    tracks,
-    index,
-    advancing: true,
-    tempfile: None,
-    shuffle_backup: None,
-    resume_at: resume,
-    fetch: None,
-  };
-  if guard.decoded_shuffle {
-    state.set_shuffle(true);
-  }
-  let index = state.index;
-  spawn_download(app, &mut state, index, track_id);
-  guard.subsonic_playback = Some(state);
 }
 
 /// Move the subsonic queue index in `direction` and play the new track. Returns
 /// `true` if subsonic owns the session (so the event is consumed).
 async fn skip(app: &Arc<Mutex<App>>, direction: Direction) -> bool {
-  let mut guard = app.lock().await;
-  if guard.subsonic_playback.is_some() && guard.queue_suspended.is_some() {
-    return true; // the frontend has already handed this context to the queue
-  }
-  // Repeat-all wraps at the ends; Off/Repeat-one clamp.
-  let mode = guard.decoded_repeat;
-  let Some(s) = guard.subsonic_playback.as_mut() else {
-    return false; // not ours
+  let target = {
+    let mut guard = app.lock().await;
+    // Repeat-all wraps at the ends; Off/Repeat-one clamp.
+    let mode = guard.decoded_repeat;
+    let Some(s) = guard.subsonic_playback.as_mut() else {
+      return false; // not ours
+    };
+    // Guard the empty-sink download window from spurious auto-advance.
+    s.advancing = true;
+    let forward = matches!(direction, Direction::Next);
+    advance_index(s.index, s.tracks.len(), mode, forward)
   };
-  let forward = matches!(direction, Direction::Next);
-  if let Some(index) = advance_index(s.requested_index(), s.tracks.len(), mode, forward) {
-    play_index(app, &mut guard, index, None);
-  } else {
-    // A boundary skip must not clear the latch for a download still in flight.
-    s.advancing = s.fetch.is_some();
+
+  match target {
+    Some(idx) => play_index(app, idx).await,
+    None => {
+      // Queue boundary: clear the optimistic guard so it doesn't wedge
+      // auto-advance off for the rest of the track.
+      if let Some(s) = app.lock().await.subsonic_playback.as_mut() {
+        s.advancing = false;
+      }
+    }
   }
   true
 }
@@ -501,17 +532,10 @@ async fn replay_current(app: &Arc<Mutex<App>>) -> bool {
     let Some(s) = guard.subsonic_playback.as_mut() else {
       return false; // not ours
     };
-    if s.fetch.is_some() {
-      // The in-flight download will apply the driver's recovery point.
-      return true;
-    }
-    let Some(tmp) = s.tempfile.as_ref() else {
-      return true;
-    };
     s.advancing = true;
     (
       Arc::clone(&s.player),
-      tmp.path().to_path_buf(),
+      s.tempfile.path().to_path_buf(),
       s.resume_at
         .take()
         .or(Some(crate::infra::queue::ResumePoint {
@@ -540,134 +564,137 @@ async fn replay_current(app: &Arc<Mutex<App>>) -> bool {
   true
 }
 
-/// Request the track at `target` in the published context. Called under the
-/// App lock so the target and its download stay in step with queue suspension.
-pub(crate) fn play_index(
-  app: &Arc<Mutex<App>>,
-  guard: &mut App,
-  target: usize,
-  resume: Option<ResumePoint>,
-) {
-  let Some(session) = guard.subsonic_playback.as_mut() else {
-    return;
-  };
-  let Some(track) = session.tracks.get(target) else {
-    session.advancing = session.fetch.is_some();
-    return;
-  };
-  let Some(Ok(track_id)) = track.uri.as_deref().map(track_id_from_uri) else {
-    let message = guard.strings().status.infra.subsonic_uri_invalid;
-    fail_playback(guard, message.to_string());
-    return;
-  };
-  let track_id = track_id.to_string();
-  session.resume_at = resume;
-  spawn_download(app, session, target, track_id);
+/// What the locked snapshot in [`play_index`] decided to do.
+enum Plan {
+  Play(Arc<LocalPlayer>, Arc<SubsonicSource>, String),
+  OutOfRange,
+  BadUri,
 }
 
-fn spawn_download(
-  app: &Arc<Mutex<App>>,
-  session: &mut SubsonicPlaybackState,
-  index: usize,
-  track_id: String,
-) {
-  static FETCH_SEQ: AtomicU64 = AtomicU64::new(0);
-  let id = FETCH_SEQ.fetch_add(1, Ordering::Relaxed);
-  let app = Arc::downgrade(app);
-  let source = Arc::clone(&session.source);
-  let task = tokio::spawn(async move {
-    let result = download_track(&source, &track_id).await;
-    if let Some(app) = app.upgrade() {
-      app
-        .lock()
-        .await
-        .dispatch_without_spinner(IoEvent::SubsonicDownloadFinished(id, result));
+/// Play the queued track at `target`, reusing the published session. Used by
+/// Next/Previous and the runner tick's auto-advance.
+///
+/// A download failure tears the session down (deliberate divergence from the
+/// local source's skip-past): on a network outage, walking the whole queue at
+/// tick speed would spray error toasts, so one failure ends playback instead.
+pub(crate) async fn play_index(app: &Arc<Mutex<App>>, target: usize) {
+  let plan = {
+    let guard = app.lock().await;
+    match guard.subsonic_playback.as_ref() {
+      None => return, // session torn down between dispatch and here
+      Some(s) => match s.tracks.get(target) {
+        None => Plan::OutOfRange,
+        Some(track) => match track.uri.as_deref().map(track_id_from_uri) {
+          Some(Ok(id)) => Plan::Play(Arc::clone(&s.player), Arc::clone(&s.source), id.to_string()),
+          _ => Plan::BadUri,
+        },
+      },
     }
-  });
-  session.advancing = true;
-  session.resume_at.get_or_insert_default();
-  session.fetch = Some(PendingDownload {
-    id,
-    index,
-    _abort: DownloadAbortHandle(task.abort_handle()),
-  });
-}
-
-fn current_download(app: &mut App, id: u64) -> Option<&mut SubsonicPlaybackState> {
-  if app.apple_music_owns_playback() || app.queue_owns_playback() || app.queue_suspended.is_some() {
-    return None;
-  }
-  app
-    .subsonic_playback
-    .as_mut()
-    .filter(|s| s.fetch.as_ref().is_some_and(|fetch| fetch.id == id))
-}
-
-/// Only the current download can stage audio. Keep staging on the pump in
-/// transport order, and re-check after the blocking stage before unpausing:
-/// the frontend can suspend the context for the native queue in the meantime.
-pub(crate) async fn finish_download(app: &Arc<Mutex<App>>, id: u64, result: Result<NamedTempFile>) {
-  let mut guard = app.lock().await;
-  let strings = guard.strings();
-  let Some(session) = current_download(&mut guard, id) else {
-    return;
   };
-  let tmp = match result {
-    Ok(t) => t,
-    Err(e) => {
-      fail_playback(
-        &mut guard,
-        strings
+
+  let (player, source, track_id) = match plan {
+    Plan::Play(p, s, id) => (p, s, id),
+    Plan::OutOfRange => {
+      if let Some(s) = app.lock().await.subsonic_playback.as_mut() {
+        s.advancing = false;
+      }
+      return;
+    }
+    Plan::BadUri => {
+      teardown_subsonic(app).await;
+      set_error(
+        app,
+        crate::infra::app_strings(app)
+          .await
           .status
           .infra
-          .subsonic_download_failed(&e.to_string()),
-      );
+          .subsonic_uri_invalid
+          .to_string(),
+      )
+      .await;
       return;
     }
   };
-  let resume = ResumePoint {
-    paused: true,
-    ..session.resume_at.unwrap_or_default()
+
+  let tmp = match download_track(&source, &track_id).await {
+    Ok(t) => t,
+    Err(e) => {
+      teardown_subsonic(app).await;
+      set_error(
+        app,
+        crate::infra::app_strings(app)
+          .await
+          .status
+          .infra
+          .subsonic_download_failed(&e.to_string()),
+      )
+      .await;
+      return;
+    }
   };
   let path = tmp.path().to_path_buf();
-  let player = Arc::clone(&session.player);
-  drop(guard);
-  let result = tokio::task::spawn_blocking(move || restage(&player, &path, Some(resume))).await;
-
-  let mut guard = app.lock().await;
-  let volume = guard.runtime_state.volume_percent;
-  let Some(session) = current_download(&mut guard, id) else {
-    return;
+  // Taken after the download: a device recovery during it leaves the pause
+  // to apply here.
+  let resume = {
+    let mut guard = app.lock().await;
+    guard
+      .subsonic_playback
+      .as_mut()
+      .and_then(|s| s.resume_at.take())
   };
+  let decode_player = Arc::clone(&player);
+  let result = tokio::task::spawn_blocking(move || {
+    crate::infra::queue::restage(&decode_player, &path, resume)
+  })
+  .await;
+
   match result {
-    Ok(Ok(())) => {
-      session.index = session.requested_index();
-      session.cancel_download();
-      session.tempfile = Some(tmp);
-      session.advancing = false;
-      session.player.set_volume(volume);
-      if !session.resume_at.take().unwrap_or_default().paused {
-        session.player.resume();
-      }
-      spawn_resolve(app, session);
-      let display = session.tracks[session.index].name.clone();
-      guard.set_status_message(format!("\u{266a} {display}"), 4);
+    Ok(Ok(())) => commit_index(app, target, tmp).await,
+    Ok(Err(e)) => {
+      teardown_subsonic(app).await;
+      set_error(
+        app,
+        crate::infra::app_strings(app)
+          .await
+          .status
+          .infra
+          .subsonic_play_failed(&e.to_string()),
+      )
+      .await;
     }
-    Ok(Err(e)) => fail_playback(
-      &mut guard,
-      strings.status.infra.subsonic_play_failed(&e.to_string()),
-    ),
-    Err(e) => fail_playback(
-      &mut guard,
-      strings.status.infra.subsonic_task_failed(&e.to_string()),
-    ),
+    Err(e) => {
+      teardown_subsonic(app).await;
+      set_error(
+        app,
+        crate::infra::app_strings(app)
+          .await
+          .status
+          .infra
+          .subsonic_task_failed(&e.to_string()),
+      )
+      .await;
+    }
   }
 }
 
-/// End on a failed download rather than storming the server with auto-skips.
-fn fail_playback(app: &mut App, message: String) {
-  stop_session(app.subsonic_playback.take());
-  app.set_status_message(message, 6);
+/// Commit `target` as the live index, clear the auto-advance guard, and swap in
+/// the new track's tempfile (dropping the previous one). Ordering is safe: the
+/// blocking `play_file` already cleared the old source from the sink, so rodio
+/// no longer holds the old file by the time it is dropped here.
+async fn commit_index(app: &Arc<Mutex<App>>, target: usize, tmp: NamedTempFile) {
+  let mut guard = app.lock().await;
+  let display = if let Some(s) = guard.subsonic_playback.as_mut() {
+    s.index = target;
+    s.advancing = false;
+    s.tempfile = tmp;
+    spawn_resolve(app, s);
+    s.tracks.get(target).map(|t| t.name.clone())
+  } else {
+    None
+  };
+  if let Some(display) = display {
+    guard.set_status_message(format!("\u{266a} {display}"), 4);
+  }
 }
 
 /// Look the current song up with `getSong` when it is a placeholder (a URI
@@ -712,12 +739,7 @@ fn spawn_resolve(app: &Arc<Mutex<App>>, session: &SubsonicPlaybackState) {
 async fn teardown_subsonic(app: &Arc<Mutex<App>>) {
   // Take under the lock, stop off it: a sink clear waits for the audio thread.
   let session = app.lock().await.subsonic_playback.take();
-  stop_session(session);
-}
-
-fn stop_session(session: Option<SubsonicPlaybackState>) {
-  if let Some(mut s) = session {
-    s.cancel_download();
+  if let Some(s) = session {
     // Dropping `s` drops the tempfile (cleanup) and, if it held the last
     // reference, the keepalive thread exits and the device is released.
     Arc::clone(&s.player).stop_detached_holding(s);
@@ -729,204 +751,8 @@ async fn set_error(app: &Arc<Mutex<App>>, message: String) {
 }
 
 #[cfg(test)]
-pub(crate) async fn finish_test_download(
-  app: &Arc<Mutex<App>>,
-  rx: &std::sync::mpsc::Receiver<IoEvent>,
-) {
-  let event = tokio::time::timeout(super::DOWNLOAD_TIMEOUT, async {
-    loop {
-      match rx.try_recv() {
-        Ok(event) => break event,
-        Err(std::sync::mpsc::TryRecvError::Empty) => {
-          tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        Err(e) => panic!("{e}"),
-      }
-    }
-  })
-  .await
-  .expect("the download should send a completion");
-  let IoEvent::SubsonicDownloadFinished(id, result) = event else {
-    panic!("expected a Subsonic download completion");
-  };
-  finish_download(app, id, result).await;
-}
-
-#[cfg(test)]
 mod tests {
   use super::*;
-  use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-  use tokio::net::{TcpListener, TcpStream};
-
-  const LOOPBACK_TIMEOUT: Duration = Duration::from_secs(5);
-
-  async fn loopback_context() -> (Arc<Mutex<App>>, TcpListener, Vec<String>) {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let base = format!("http://{}", listener.local_addr().unwrap());
-    let mut app = App::default();
-    app.user_config.behavior.subsonic_url = Some(base.clone());
-    let uris: Vec<_> = (0..3).map(|i| format!("subsonic:track:{i}")).collect();
-    app.subsonic_playback = Some(SubsonicPlaybackState {
-      player: Arc::new(LocalPlayer::disconnected_for_test()),
-      source: Arc::new(SubsonicSource::new(base, "alice", String::new())),
-      tracks: snapshot_tracks(&[], None, &uris),
-      index: 0,
-      advancing: false,
-      tempfile: None,
-      shuffle_backup: None,
-      resume_at: None,
-      fetch: None,
-    });
-    (Arc::new(Mutex::new(app)), listener, uris)
-  }
-
-  /// Keep a response body open after sending its first bytes.
-  async fn stalled_audio(listener: &TcpListener, id: usize) -> TcpStream {
-    tokio::time::timeout(LOOPBACK_TIMEOUT, async {
-      let (mut stream, _) = listener.accept().await.unwrap();
-      let mut reader = BufReader::new(&mut stream);
-      let mut line = String::new();
-      reader.read_line(&mut line).await.unwrap();
-      assert!(line.starts_with("GET /rest/stream.view?"));
-      assert!(
-        line.contains(&format!("&id={id} ")),
-        "expected a download for track {id}"
-      );
-      while line != "\r\n" {
-        line.clear();
-        assert_ne!(reader.read_line(&mut line).await.unwrap(), 0);
-      }
-      stream
-        .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nID3")
-        .await
-        .unwrap();
-      stream
-    })
-    .await
-    .expect("expected an audio request")
-  }
-
-  async fn route_without_waiting(app: &Arc<Mutex<App>>, event: &IoEvent) -> bool {
-    tokio::time::timeout(LOOPBACK_TIMEOUT, route_subsonic_event(app, event))
-      .await
-      .expect("the source router must return while the response is stalled")
-  }
-
-  async fn assert_download_cancelled(mut stream: TcpStream) {
-    let mut byte = [0];
-    let received = tokio::time::timeout(LOOPBACK_TIMEOUT, stream.read(&mut byte))
-      .await
-      .expect("the old HTTP request should be cancelled");
-    match received {
-      Ok(0) => (),
-      Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset => (),
-      other => panic!("expected the old connection to close, got {other:?}"),
-    }
-  }
-
-  #[tokio::test]
-  async fn subsonic_context_downloads_leave_transport_responsive() {
-    let (app, listener, uris) = loopback_context().await;
-    let start = IoEvent::StartPlayback(None, Some(uris), Some(0));
-    assert!(route_without_waiting(&app, &start).await);
-    let first = stalled_audio(&listener, 0).await;
-
-    assert!(route_without_waiting(&app, &IoEvent::PausePlayback).await);
-    assert!(route_without_waiting(&app, &IoEvent::Seek(5000)).await);
-    assert_eq!(
-      app
-        .lock()
-        .await
-        .subsonic_playback
-        .as_ref()
-        .unwrap()
-        .resume_at,
-      Some(ResumePoint {
-        position_ms: 5000,
-        paused: true
-      })
-    );
-
-    assert!(route_without_waiting(&app, &IoEvent::NextTrack).await);
-    let second = stalled_audio(&listener, 1).await;
-    assert_download_cancelled(first).await;
-    assert!(route_without_waiting(&app, &IoEvent::NextTrack).await);
-    let _third = stalled_audio(&listener, 2).await;
-    assert_download_cancelled(second).await;
-    assert!(route_without_waiting(&app, &IoEvent::NextTrack).await);
-    let guard = app.lock().await;
-    let session = guard.subsonic_playback.as_ref().unwrap();
-    assert_eq!(session.requested_index(), 2);
-    assert!(session.advancing);
-  }
-
-  #[tokio::test]
-  async fn subsonic_completions_after_a_skip_or_handoff_are_ignored() {
-    #[derive(Debug)]
-    enum Handoff {
-      Skip,
-      Queue,
-      OtherSource,
-    }
-
-    for handoff in [Handoff::Skip, Handoff::Queue, Handoff::OtherSource] {
-      let (app, listener, _) = loopback_context().await;
-      assert!(route_without_waiting(&app, &IoEvent::NextTrack).await);
-      let old = stalled_audio(&listener, 1).await;
-      let id = app
-        .lock()
-        .await
-        .subsonic_playback
-        .as_ref()
-        .unwrap()
-        .fetch
-        .as_ref()
-        .unwrap()
-        .id;
-      match handoff {
-        Handoff::Skip => assert!(route_without_waiting(&app, &IoEvent::PreviousTrack).await),
-        Handoff::Queue => {
-          app.lock().await.suspend_active_decoded_context_mid_track();
-          // A transport event already in the pump must not start another
-          // context download while the queue is taking over.
-          assert!(route_without_waiting(&app, &IoEvent::NextTrack).await);
-        }
-        Handoff::OtherSource => {
-          let event = IoEvent::StartPlayback(Some("spotify:track:x".to_string()), None, None);
-          assert!(!route_without_waiting(&app, &event).await);
-        }
-      }
-      assert_download_cancelled(old).await;
-
-      // A result already queued on the pump can still arrive after cancellation.
-      for result in [
-        Ok(NamedTempFile::new().unwrap()),
-        Err(anyhow::anyhow!("old request failed")),
-      ] {
-        finish_download(&app, id, result).await;
-        let guard = app.lock().await;
-        assert!(guard.status_message().is_none(), "{handoff:?}");
-        match handoff {
-          Handoff::Skip => {
-            let session = guard.subsonic_playback.as_ref().unwrap();
-            assert_eq!(session.requested_index(), 0);
-            assert!(session.fetch.is_some());
-          }
-          Handoff::Queue => {
-            assert!(guard.subsonic_playback.as_ref().unwrap().fetch.is_none());
-            assert!(matches!(
-              guard.queue_suspended,
-              Some(crate::core::queue::SuspendedContext::Subsonic {
-                resume_index: Some(1),
-                ..
-              })
-            ));
-          }
-          Handoff::OtherSource => assert!(guard.subsonic_playback.is_none()),
-        }
-      }
-    }
-  }
 
   /// End-to-end dispatch test: drive `route_subsonic_event` exactly as the
   /// runtime pump does — browse, play, advance the queue, and tear down on a
@@ -940,7 +766,7 @@ mod tests {
     use std::sync::mpsc::channel;
     use std::time::SystemTime;
 
-    let (tx, rx) = channel();
+    let (tx, _rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
     app.user_config.behavior.subsonic_url = Some("https://demo.navidrome.org".to_string());
     app.user_config.behavior.subsonic_username = Some("demo".to_string());
@@ -976,7 +802,6 @@ mod tests {
       route_subsonic_event(&app, &IoEvent::StartPlayback(None, Some(uris), Some(0))).await,
       "subsonic StartPlayback must be consumed"
     );
-    finish_test_download(&app, &rx).await;
     {
       let guard = app.lock().await;
       let s = guard.subsonic_playback.as_ref().expect("session published");
@@ -986,7 +811,6 @@ mod tests {
 
     // Advance — downloads + plays the next track, moving the index.
     assert!(route_subsonic_event(&app, &IoEvent::NextTrack).await);
-    finish_test_download(&app, &rx).await;
     {
       let guard = app.lock().await;
       let s = guard
@@ -1022,7 +846,7 @@ mod tests {
     use std::sync::mpsc::channel;
     use std::time::SystemTime;
 
-    let (tx, rx) = channel();
+    let (tx, _rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
     app.user_config.behavior.subsonic_url = Some("https://demo.navidrome.org".to_string());
     app.user_config.behavior.subsonic_username = Some("demo".to_string());
@@ -1048,7 +872,6 @@ mod tests {
     assert!(app.lock().await.track_table.tracks.is_empty());
 
     assert!(route_subsonic_event(&app, &IoEvent::StartPlayback(None, Some(uris), Some(0))).await);
-    finish_test_download(&app, &rx).await;
     let guard = app.lock().await;
     let s = guard
       .subsonic_playback

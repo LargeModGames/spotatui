@@ -151,9 +151,14 @@ impl App {
       return;
     }
 
+    // Subsonic playback owns the session the same way: toggle its sink directly.
     #[cfg(feature = "subsonic")]
-    if let Some(subsonic) = &mut self.subsonic_playback {
-      subsonic.toggle_playback();
+    if let Some(subsonic) = &self.subsonic_playback {
+      if subsonic.player.is_paused() {
+        subsonic.player.resume();
+      } else {
+        subsonic.player.pause();
+      }
       return;
     }
 

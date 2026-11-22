@@ -33,7 +33,7 @@ use anyhow::Result;
 use log::info;
 use std::sync::Arc;
 // Used by `restore_playback_session`'s per-source position seeks.
-#[cfg(any(feature = "local-files", feature = "youtube"))]
+#[cfg(any(feature = "local-files", feature = "subsonic", feature = "youtube"))]
 use std::time::Duration;
 use tokio::sync::Mutex;
 
@@ -654,21 +654,15 @@ pub(super) async fn prepare_frontend(boot: Boot) -> FrontendHandles {
       network.app.lock().await.native_queue = restore_queue;
     }
     if let Some(session) = restore_playback {
+      // Resume off the event pump: a slow source (yt-dlp download, remote
+      // fetch) must not stall the Spotify startup events the UI's first render
+      // queues (user, playlists, current playback). The restore drives the
+      // source's own start path, which serializes on the `App` lock like every
+      // other event, so running it concurrently is safe.
       let restore_app = Arc::clone(&network.app);
-      match session {
-        // Register the restore before later playback requests reach the pump.
-        // The Subsonic start launches its download in the background.
-        #[cfg(feature = "subsonic")]
-        session @ crate::core::persisted_playback::PersistedPlayback::Subsonic { .. } => {
-          restore_playback_session(&restore_app, session, initial_startup_behavior).await;
-        }
-        session => {
-          // Other restores may wait for a download, so let the pump start.
-          tokio::spawn(async move {
-            restore_playback_session(&restore_app, session, initial_startup_behavior).await;
-          });
-        }
-      }
+      tokio::spawn(async move {
+        restore_playback_session(&restore_app, session, initial_startup_behavior).await;
+      });
     } else if network.spotify.is_some() {
       // Spotify startup play/pause only applies with a Spotify session; a
       // free-source launch has nothing to activate here. When native
@@ -962,17 +956,23 @@ async fn restore_playback_session(
       }
       // Seed the browse table so the start path's snapshot resolves metadata.
       app.lock().await.track_table.tracks = tracks;
-      let resume = crate::infra::queue::ResumePoint {
-        position_ms,
-        paused: resolve_paused(paused),
-      };
-      crate::infra::subsonic::dispatch::start_subsonic_queue(app, &uris, index, Some(resume)).await;
+      crate::infra::subsonic::dispatch::route_subsonic_event(
+        app,
+        &IoEvent::StartPlayback(None, Some(uris), Some(index)),
+      )
+      .await;
       let mut guard = app.lock().await;
       if guard.subsonic_playback.is_some() {
         guard.decoded_repeat = repeat;
         guard.decoded_shuffle = shuffle_on;
       }
       if let Some(s) = guard.subsonic_playback.as_mut() {
+        if position_ms > 0 {
+          let _ = s.player.seek(Duration::from_millis(position_ms));
+        }
+        if resolve_paused(paused) {
+          s.player.pause();
+        }
         s.shuffle_backup = shuffle;
       }
     }

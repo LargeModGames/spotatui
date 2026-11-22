@@ -186,16 +186,6 @@ pub(super) async fn start_tokio(io_rx: std::sync::mpsc::Receiver<IoEvent>, netwo
         }
         io_event
       };
-      #[cfg(feature = "subsonic")]
-      let io_event = match io_event {
-        IoEvent::SubsonicDownloadFinished(id, result) => {
-          crate::infra::subsonic::dispatch::finish_download(&network.app, id, result).await;
-          network.app.lock().await.note_display_changes();
-          events_handled().notify_one();
-          continue;
-        }
-        event => event,
-      };
       // The native queue router runs first: it owns `AdvanceNativeQueue` and
       // the queue slot's transport controls, and relinquishes the slot on an
       // unrelated `StartPlayback` (returning false so the per-source
