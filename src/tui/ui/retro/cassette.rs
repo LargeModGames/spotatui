@@ -67,48 +67,51 @@ pub fn draw(cells: &mut Cells, frame: &Frame, state: &mut State, dt: f32) {
       Some(LABEL_STRIP),
       true,
     );
-    let (rx0, ry0, rw, rh) = (wx + 10, wy + 5, ww - 20, (wh - 7).max(3));
-    cells.fill(rx0, ry0, rw, rh, WINDOW);
+    let rh = wh - 7;
+    if rh >= 3 && ww > 20 {
+      let (rx0, ry0, rw) = (wx + 10, wy + 5, ww - 20);
+      cells.fill(rx0, ry0, rw, rh, WINDOW);
 
-    let progress = match (view.progress_ms, view.duration_ms) {
-      (Some(p), Some(d)) if d > 0 => (p as f32 / d as f32).clamp(0.0, 1.0),
-      _ => 0.3,
-    };
-    let mut dots = Dots::new(rw, rh);
-    let (cw, ch) = (dots.width as f32, dots.height as f32);
-    let max_r = (ch / 2.0 - 1.0).max(4.0);
-    let hub_r = (max_r * 0.46).max(3.0);
-    // Tape moves from the left (supply) reel to the right (take-up) reel.
-    let packs = [
-      hub_r + 1.0 + (max_r - hub_r - 1.0) * (1.0 - progress),
-      hub_r + 1.0 + (max_r - hub_r - 1.0) * progress,
-    ];
-    if view.is_playing {
-      advance_reels(&mut state.reel_angles, packs, max_r, dt);
-    }
-    for (k, (cx, pack)) in [(cw * 0.22, packs[0]), (cw * 0.78, packs[1])]
-      .into_iter()
-      .enumerate()
-    {
-      let cy = ch / 2.0;
-      disc(&mut dots, cx, cy, pack, TAPE);
-      disc_clear(&mut dots, cx, cy, hub_r + 0.5);
-      ring(&mut dots, cx, cy, hub_r, HUB);
-      // Six teeth inside the hub, turning with the reel.
-      let spin = state.reel_angles[k] + k as f32 * 30.0;
-      for t in 0..6 {
-        let a = (t as f32 * 60.0 + spin) * PI / 180.0;
-        dots.line(
-          cx + hub_r * 0.55 * a.cos(),
-          cy + hub_r * 0.55 * a.sin(),
-          cx + hub_r * a.cos(),
-          cy + hub_r * a.sin(),
-          HUB,
-        );
+      let progress = match (view.progress_ms, view.duration_ms) {
+        (Some(p), Some(d)) if d > 0 => (p as f32 / d as f32).clamp(0.0, 1.0),
+        _ => 0.3,
+      };
+      let mut dots = Dots::new(rw, rh);
+      let (cw, ch) = (dots.width as f32, dots.height as f32);
+      let max_r = (ch / 2.0 - 1.0).max(4.0);
+      let hub_r = (max_r * 0.46).max(3.0);
+      // Tape moves from the left (supply) reel to the right (take-up) reel.
+      let packs = [
+        hub_r + 1.0 + (max_r - hub_r - 1.0) * (1.0 - progress),
+        hub_r + 1.0 + (max_r - hub_r - 1.0) * progress,
+      ];
+      if view.is_playing {
+        advance_reels(&mut state.reel_angles, packs, max_r, dt);
       }
+      for (k, (cx, pack)) in [(cw * 0.22, packs[0]), (cw * 0.78, packs[1])]
+        .into_iter()
+        .enumerate()
+      {
+        let cy = ch / 2.0;
+        disc(&mut dots, cx, cy, pack, TAPE);
+        disc_clear(&mut dots, cx, cy, hub_r + 0.5);
+        ring(&mut dots, cx, cy, hub_r, HUB);
+        // Six teeth inside the hub, turning with the reel.
+        let spin = state.reel_angles[k] + k as f32 * 30.0;
+        for t in 0..6 {
+          let a = (t as f32 * 60.0 + spin) * PI / 180.0;
+          dots.line(
+            cx + hub_r * 0.55 * a.cos(),
+            cy + hub_r * 0.55 * a.sin(),
+            cx + hub_r * a.cos(),
+            cy + hub_r * a.sin(),
+            HUB,
+          );
+        }
+      }
+      dots.line(cw * 0.22, ch - 1.0, cw * 0.78, ch - 1.0, TAPE);
+      cells.dots(&dots, rx0, ry0);
     }
-    dots.line(cw * 0.22, ch - 1.0, cw * 0.78, ch - 1.0, TAPE);
-    cells.dots(&dots, rx0, ry0);
   }
 
   // LED level bars.
@@ -242,12 +245,18 @@ mod tests {
       };
       draw(&mut cells, &frame, &mut State::default(), 0.0);
       let shell = Color::Rgb(SHELL.0, SHELL.1, SHELL.2);
+      let window = Color::Rgb(WINDOW.0, WINDOW.1, WINDOW.2);
       for y in (h - 8)..h {
         for x in 0..80 {
           assert_ne!(
             buf[(x, y)].bg,
             shell,
             "the shell reaches meter row {y} at height {h}"
+          );
+          assert_ne!(
+            buf[(x, y)].bg,
+            window,
+            "the cassette window reaches meter row {y} at height {h}"
           );
         }
       }
