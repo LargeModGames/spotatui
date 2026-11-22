@@ -1,0 +1,1 @@
+- **Lua callbacks read current playback and devices**. Timers and screen callbacks get fresh snapshots without event handlers. Running a plugin command leaves pending events available for the next tick.

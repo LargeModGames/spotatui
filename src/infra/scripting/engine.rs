@@ -50,11 +50,12 @@ pub struct ScriptEngine {
   last_playback: Option<crate::core::plugin_api::PlaybackState>,
   /// Previous queue item uris, for diffing on tick.
   last_queue: Option<Vec<String>>,
+  /// Previous device list, for diffing on tick.
+  last_devices: Vec<plugin_api::DeviceInfo>,
   /// Previous route name, for `route_change` diffing.
   last_route: String,
-  /// Set when the Search generation advanced since the last tick diff
-  /// (consumed by the `search_results` event).
-  search_gen_advanced: bool,
+  /// Search generation at the last tick, independent of read-cache refreshes.
+  last_search_generation: Option<u64>,
   /// Data requests dispatched but not yet resolved.
   pending_data: Vec<PendingDataRequest>,
   /// Armed plugin timers, fired from the tick pass.
@@ -146,8 +147,9 @@ impl ScriptEngine {
       shared,
       last_playback: None,
       last_queue: None,
+      last_devices: Vec::new(),
       last_route: String::new(),
-      search_gen_advanced: false,
+      last_search_generation: None,
       pending_data: Vec::new(),
       timers: Vec::new(),
       last_cache_gens: [u64::MAX; PluginDataKind::COUNT],
@@ -256,66 +258,67 @@ impl ScriptEngine {
   /// Refresh caches, emit Start, drain effects.
   pub fn on_start(&mut self, app: &mut App) {
     self.refresh_caches(app);
-    self.refresh_data_caches(app);
+    self.last_playback = self.shared.playback.borrow().clone();
+    self.last_queue = Some(queue_uris(app));
+    self.last_devices = self.shared.devices.borrow().clone();
+    self.last_route = self.shared.current_route.borrow().clone();
+    self.last_search_generation = Some(app.plugin_data_generations.get(PluginDataKind::Search));
     self.emit(ScriptEvent::Start);
     self.drain_http_callbacks();
     self.process_data_requests(app);
     self.drain_effects(app);
   }
 
-  /// On tick: if there are no handlers at all, return cheaply. Otherwise refresh caches,
-  /// diff against the previous snapshot, emit each derived event, then drain.
+  /// Refresh script reads before callbacks and advance the event baselines each tick.
   pub fn on_tick(&mut self, app: &mut App) {
+    self.refresh_caches(app);
     self.drain_http_callbacks();
     self.process_data_requests(app);
     self.process_timers();
     self.flush_storage(false);
-    self.refresh_data_caches(app);
+
+    let last_playback = std::mem::replace(
+      &mut self.last_playback,
+      self.shared.playback.borrow().clone(),
+    );
+    let last_queue = self.last_queue.replace(queue_uris(app));
+    let last_devices =
+      std::mem::replace(&mut self.last_devices, self.shared.devices.borrow().clone());
+    let search_generation = app.plugin_data_generations.get(PluginDataKind::Search);
+    let search_gen_advanced = self
+      .last_search_generation
+      .replace(search_generation)
+      .is_some_and(|last| last != search_generation);
+
     if !self.has_any_handlers() {
       // Still drain effects and track route transitions: screens and timers
-      // work without any event handlers registered.
+      // work without any event handlers registered. Settle the transition
+      // already applied (a screen key that opened another screen) before the
+      // effects a timer queued can navigate away again.
+      self.sync_route_and_emit_change(app);
       self.drain_effects(app);
       self.sync_route_and_emit_change(app);
       return;
     }
 
-    let new_playback = plugin_api::playback_state(app);
-    let new_queue = Some(queue_uris(app));
-
     let mut events = diff_events(
+      &last_playback,
+      &last_queue,
       &self.last_playback,
       &self.last_queue,
-      &new_playback,
-      &new_queue,
     );
-
-    // Non-playback state diffs: route, devices, search generation. The device
-    // diff must read the old cache before it is overwritten below.
-    let new_route = plugin_api::route_name(app.get_current_route());
-    let new_devices = plugin_api::device_list(app);
-    let search_gen_advanced = self.search_gen_advanced;
-    self.search_gen_advanced = false;
-    {
-      let old_devices = self.shared.devices.borrow();
-      events.extend(diff_state_events(
-        &self.last_route,
-        &new_route,
-        &old_devices,
-        &new_devices,
-        search_gen_advanced,
-      ));
-    }
-
-    *self.shared.playback.borrow_mut() = new_playback.clone();
-    *self.shared.devices.borrow_mut() = new_devices;
+    let new_route = self.shared.current_route.borrow().clone();
+    events.extend(diff_state_events(
+      &self.last_route,
+      &new_route,
+      &last_devices,
+      &self.last_devices,
+      search_gen_advanced,
+    ));
     if self.last_route != new_route {
       let old_route = std::mem::replace(&mut self.last_route, new_route.clone());
       self.handle_screen_transition(&old_route, &new_route);
     }
-    *self.shared.current_route.borrow_mut() = new_route;
-
-    self.last_playback = new_playback;
-    self.last_queue = new_queue;
 
     for ev in events {
       self.emit(ev);
@@ -336,15 +339,12 @@ impl ScriptEngine {
     self.flush_storage(true);
   }
 
+  /// Update what Lua reads without consuming changes for the tick's events.
   fn refresh_caches(&mut self, app: &App) {
-    let pb = plugin_api::playback_state(app);
-    *self.shared.playback.borrow_mut() = pb.clone();
+    *self.shared.playback.borrow_mut() = plugin_api::playback_state(app);
     *self.shared.devices.borrow_mut() = plugin_api::device_list(app);
-    self.last_playback = pb;
-    self.last_queue = Some(queue_uris(app));
-    let route = plugin_api::route_name(app.get_current_route());
-    self.last_route.clone_from(&route);
-    *self.shared.current_route.borrow_mut() = route;
+    *self.shared.current_route.borrow_mut() = plugin_api::route_name(app.get_current_route());
+    self.refresh_data_caches(app);
   }
 
   /// Detect a route change outside the tick diff (plugin commands and the key
@@ -354,7 +354,7 @@ impl ScriptEngine {
     let new_route = plugin_api::route_name(app.get_current_route());
     if new_route != self.last_route {
       let old_route = std::mem::replace(&mut self.last_route, new_route.clone());
-      *self.shared.current_route.borrow_mut() = new_route.clone();
+      self.refresh_caches(app);
       self.handle_screen_transition(&old_route, &new_route);
       self.emit(ScriptEvent::RouteChange(new_route));
       self.drain_effects(app);
@@ -514,6 +514,11 @@ impl ScriptEngine {
   /// have navigated.
   pub fn run_pending_commands(&mut self, app: &mut App) {
     self.sync_route_and_emit_change(app);
+    // Rebuild the snapshots only when Lua is about to run: most key events
+    // queue no screen key and no command.
+    if !app.pending_plugin_screen_keys.is_empty() || !app.pending_plugin_commands.is_empty() {
+      self.refresh_caches(app);
+    }
     self.dispatch_screen_keys(app);
     if app.pending_plugin_commands.is_empty() {
       self.drain_http_callbacks();
@@ -521,7 +526,6 @@ impl ScriptEngine {
       self.drain_effects(app);
       return;
     }
-    self.refresh_caches(app);
     let names: Vec<String> = std::mem::take(&mut app.pending_plugin_commands);
     let commands: mlua::Table = match self.lua.named_registry_value(COMMANDS_KEY) {
       Ok(t) => t,
@@ -910,16 +914,11 @@ impl ScriptEngine {
     *self.shared.config_cache.borrow_mut() =
       plugin_api::config_snapshot(&app.user_config, &app.runtime_state);
 
-    let search_was = self.last_cache_gens[PluginDataKind::Search.index()];
     if refresh(
       &mut self.last_cache_gens[PluginDataKind::Search.index()],
       PluginDataKind::Search,
     ) {
       *self.shared.search_results_cache.borrow_mut() = plugin_api::search_results_snapshot(app);
-      // Feed the `search_results` event, but not off the startup sentinel.
-      if search_was != u64::MAX {
-        self.search_gen_advanced = true;
-      }
     }
   }
 
