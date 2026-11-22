@@ -1267,35 +1267,27 @@ async fn resume_subsonic(
   // Same track and its tempfile is still loaded (mid-track Enter-jump): replay
   // the retained tempfile and seek, avoiding a re-download. Otherwise re-download
   // the target index through the existing play_index machinery.
-  let replay = {
+  let (player, path) = {
     let mut guard = app.lock().await;
-    match guard.subsonic_playback.as_mut() {
-      Some(s) if index == s.index => {
-        s.advancing = true;
-        Some((Arc::clone(&s.player), s.tempfile.path().to_path_buf()))
-      }
-      Some(s) => {
-        s.index = index;
-        s.advancing = true;
-        s.resume_at = Some(resume);
-        None
-      }
-      None => None,
-    }
+    let Some(s) = guard.subsonic_playback.as_mut() else {
+      return;
+    };
+    let Some(tmp) = s.tempfile.as_ref().filter(|_| index == s.index) else {
+      crate::infra::subsonic::dispatch::play_index(app, &mut guard, index, Some(resume));
+      return;
+    };
+    s.advancing = true;
+    s.resume_at = None;
+    (Arc::clone(&s.player), tmp.path().to_path_buf())
   };
   // The queue slot shares the context player (reused at acquire time), so it is
   // never stopped here — the same sink is reloaded on resume.
   let _ = queue_player;
-  match replay {
-    Some((player, path)) => {
-      super::replay_file(player, path, Some(resume)).await;
-      // Clear the latch either way: on failure the sink is empty, so leaving
-      // `advancing = true` would wedge the runner tick's advance off forever.
-      if let Some(s) = app.lock().await.subsonic_playback.as_mut() {
-        s.advancing = false;
-      }
-    }
-    None => crate::infra::subsonic::dispatch::play_index(app, index).await,
+  super::replay_file(player, path, Some(resume)).await;
+  // Clear the latch either way: on failure the sink is empty, so leaving
+  // `advancing = true` would wedge the runner tick's advance off forever.
+  if let Some(s) = app.lock().await.subsonic_playback.as_mut() {
+    s.advancing = false;
   }
 }
 
@@ -2038,15 +2030,15 @@ mod tests {
   #[tokio::test]
   #[ignore = "hits the live demo server AND requires an audio output device"]
   async fn live_queue_suspends_and_preserves_subsonic_context() {
-    use crate::infra::subsonic::dispatch::route_subsonic_event;
+    use crate::infra::subsonic::dispatch::{finish_test_download, route_subsonic_event};
 
-    let app = {
-      let (tx, _rx) = channel();
+    let (app, rx) = {
+      let (tx, rx) = channel();
       let mut a = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
       a.user_config.behavior.subsonic_url = Some("https://demo.navidrome.org".to_string());
       a.user_config.behavior.subsonic_username = Some("demo".to_string());
       a.user_config.behavior.subsonic_password = Some("demo".to_string());
-      Arc::new(Mutex::new(a))
+      (Arc::new(Mutex::new(a)), rx)
     };
 
     assert!(route_subsonic_event(&app, &IoEvent::GetSubsonicPlaylists).await);
@@ -2065,6 +2057,7 @@ mod tests {
 
     // Start the playlist at index 0.
     assert!(route_subsonic_event(&app, &IoEvent::StartPlayback(None, Some(uris), Some(0))).await);
+    finish_test_download(&app, &rx).await;
 
     // Queue a track from later in the playlist, then advance the native queue
     // (as an end-of-track suspension would).

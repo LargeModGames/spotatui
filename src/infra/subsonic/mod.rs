@@ -82,9 +82,8 @@ const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 /// (position, paused) is read **live** from `player`, so it is never mirrored
 /// into Spotify/librespot fields and cannot desync.
 ///
-/// Two fields are specific to a *remote* source: it holds the
-/// [`SubsonicSource`] (to authenticate and download each track on Next/advance)
-/// and the downloaded [`tempfile::NamedTempFile`] for the current track. The
+/// The session holds the [`SubsonicSource`] to authenticate and download each
+/// track and the downloaded [`tempfile::NamedTempFile`] for the current track. The
 /// tempfile is kept alive here because `rodio` reads it incrementally during
 /// playback; it is dropped (and cleaned up) when replaced or on teardown.
 pub struct SubsonicPlaybackState {
@@ -104,21 +103,56 @@ pub struct SubsonicPlaybackState {
   /// The download window is much longer than local's decode, so this guard is
   /// load-bearing for remote playback.
   pub advancing: bool,
-  /// The downloaded audio for the current track, kept alive while it plays.
-  pub tempfile: tempfile::NamedTempFile,
+  /// The downloaded audio for `index`, kept alive while it plays. Empty until
+  /// the first download finishes.
+  pub tempfile: Option<tempfile::NamedTempFile>,
   /// Backup of the pre-shuffle track order while shuffle is on (`None` in natural
   /// order). Set by [`set_shuffle(true)`](Self::set_shuffle); restored exactly by
   /// `set_shuffle(false)`.
   pub shuffle_backup: Option<crate::infra::queue::ShuffleBackup>,
-  /// A seek and pause to apply when the next track is staged (device
-  /// recovery, the native queue's resume).
+  /// The seek and pause to apply when the next track is staged.
   pub resume_at: Option<crate::infra::queue::ResumePoint>,
+  /// Dropping this cancels the fetch on a skip, suspension, or teardown.
+  fetch: Option<PendingDownload>,
+}
+
+struct PendingDownload {
+  id: u64,
+  index: usize,
+  _abort: crate::infra::queue::DownloadAbortHandle,
 }
 
 impl SubsonicPlaybackState {
   /// The currently playing track, if `index` is in range.
   pub fn current(&self) -> Option<&TrackInfo> {
     self.tracks.get(self.index)
+  }
+
+  /// Repeated skips advance from the requested track even while it downloads.
+  pub(crate) fn requested_index(&self) -> usize {
+    self.fetch.as_ref().map_or(self.index, |fetch| fetch.index)
+  }
+
+  pub(crate) fn cancel_download(&mut self) {
+    self.fetch = None;
+  }
+
+  pub(crate) fn toggle_playback(&mut self) {
+    let paused = self
+      .resume_at
+      .map_or_else(|| self.player.is_paused(), |r| r.paused);
+    self.set_paused(!paused);
+  }
+
+  fn set_paused(&mut self, paused: bool) {
+    if let Some(resume) = self.resume_at.as_mut() {
+      resume.paused = paused;
+    }
+    if paused {
+      self.player.pause();
+    } else if self.fetch.is_none() {
+      self.player.resume();
+    }
   }
 
   /// Turn in-place shuffle on or off — see
@@ -319,7 +353,7 @@ impl SubsonicSource {
   /// Streaming (rather than buffering the whole body with `.bytes()`) avoids a
   /// multi-hundred-MB RAM spike per track change for large lossless FLAC or
   /// audiobook files. The total deadline covers the response body as well as
-  /// connection and headers. Some playback paths wait for this on the pump.
+  /// connection and headers.
   ///
   /// Async (reqwest), so it must be awaited **without** holding `App`'s lock.
   pub async fn download_track(&self, track_id: &str, dest: &std::path::Path) -> Result<()> {
@@ -1476,7 +1510,7 @@ mod tests {
   async fn serve_slow_response(
     chunks: usize,
     delay: Duration,
-  ) -> (String, tokio::task::JoinHandle<()>) {
+  ) -> (SubsonicSource, tokio::task::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     let server = tokio::spawn(async move {
@@ -1503,13 +1537,13 @@ mod tests {
         }
       }
     });
-    (base, server)
+    let password = rand::random::<u128>().to_string();
+    (SubsonicSource::new(base, "alice", password), server)
   }
 
   #[tokio::test]
   async fn a_subsonic_download_can_finish_after_the_api_deadline() {
-    let (base, server) = serve_slow_response(17, Duration::from_secs(2)).await;
-    let source = SubsonicSource::new(base, "alice", "private-password");
+    let (source, server) = serve_slow_response(17, Duration::from_secs(2)).await;
     let dest = tempfile::NamedTempFile::new().unwrap();
     tokio::time::timeout(
       REQUEST_TIMEOUT + Duration::from_secs(10),
@@ -1524,8 +1558,7 @@ mod tests {
 
   #[tokio::test]
   async fn a_subsonic_download_times_out_when_the_body_stalls() {
-    let (base, server) = serve_slow_response(2, READ_TIMEOUT + Duration::from_secs(10)).await;
-    let source = SubsonicSource::new(base, "alice", "private-password");
+    let (source, server) = serve_slow_response(2, READ_TIMEOUT + Duration::from_secs(10)).await;
     let dest = tempfile::NamedTempFile::new().unwrap();
     let error = tokio::time::timeout(
       READ_TIMEOUT + Duration::from_secs(5),
@@ -1541,8 +1574,7 @@ mod tests {
 
   #[tokio::test]
   async fn a_subsonic_download_times_out_even_when_the_body_trickles() {
-    let (base, server) = serve_slow_response(40, Duration::from_millis(40)).await;
-    let source = SubsonicSource::new(base, "alice", "private-password");
+    let (source, server) = serve_slow_response(40, Duration::from_millis(40)).await;
     let dest = tempfile::NamedTempFile::new().unwrap();
     // Use a short total timeout on the same request path as normal downloads.
     let error = source
@@ -1558,8 +1590,7 @@ mod tests {
 
   #[tokio::test]
   async fn a_subsonic_api_call_times_out_even_when_the_body_trickles() {
-    let (base, server) = serve_slow_response(40, Duration::from_secs(1)).await;
-    let source = SubsonicSource::new(base, "alice", "private-password");
+    let (source, server) = serve_slow_response(40, Duration::from_secs(1)).await;
     let error = tokio::time::timeout(REQUEST_TIMEOUT + Duration::from_secs(5), source.ping())
       .await
       .expect("short API calls should keep their total timeout")

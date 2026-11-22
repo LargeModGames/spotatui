@@ -198,6 +198,24 @@ impl LocalPlayer {
     })
   }
 
+  #[cfg(all(test, feature = "subsonic"))]
+  pub(crate) fn disconnected_for_test() -> Self {
+    let (player, _) = Player::new();
+    Self {
+      sink: Mutex::new(Sink {
+        player: Arc::new(player),
+        _keepalive: mpsc::channel().0,
+        lost: Arc::new(AtomicBool::new(true)),
+        device_name: None,
+      }),
+      volume_percent: AtomicU8::new(100),
+      device_check: Mutex::new(None),
+      reopen: Mutex::new(ReopenState::default()),
+      stage_generation: AtomicU64::new(0),
+      stage_transition: Mutex::new(()),
+    }
+  }
+
   /// Start a stage: the generation it must still hold at each sink transition.
   fn begin_stage(&self) -> u64 {
     self.stage_generation.fetch_add(1, Ordering::SeqCst) + 1
@@ -423,7 +441,7 @@ impl LocalPlayer {
   /// `internet-radio` uses [`prepare_stream`](Self::prepare_stream) plus
   /// [`play_prepared`](Self::play_prepared) instead, and Qobuz stages.
   #[cfg_attr(
-    not(any(feature = "local-files", feature = "subsonic", feature = "youtube")),
+    not(any(feature = "local-files", feature = "youtube")),
     allow(dead_code)
   )]
   pub fn play_file(&self, path: &Path) -> Result<()> {

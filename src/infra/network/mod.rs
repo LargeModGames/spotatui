@@ -242,6 +242,9 @@ pub enum IoEvent {
   /// by `infra::subsonic::dispatch`; an inert no-op without the `subsonic` feature.
   #[cfg_attr(not(feature = "subsonic"), allow(dead_code))]
   GetSubsonicSearchResults(String),
+  /// A context download finished. The pump stages it if its fetch ID is current.
+  #[cfg(feature = "subsonic")]
+  SubsonicDownloadFinished(u64, anyhow::Result<tempfile::NamedTempFile>),
   /// List the Qobuz sidebar rows: favorites, playlists, albums (handled by
   /// `infra::qobuz::dispatch`; a no-op on the Spotify network).
   GetQobuzPlaylists,
@@ -522,6 +525,10 @@ impl Network {
   /// source dispatchers handle upstream (only reaching here as no-ops when their
   /// feature is disabled).
   fn event_bypasses_spotify_auth(io_event: &IoEvent) -> bool {
+    #[cfg(feature = "subsonic")]
+    if matches!(io_event, IoEvent::SubsonicDownloadFinished(..)) {
+      return true;
+    }
     #[cfg(feature = "art-decode")]
     if matches!(io_event, IoEvent::FetchCoverArt(_)) {
       return true;
@@ -1140,6 +1147,8 @@ impl Network {
       IoEvent::GetSubsonicPlaylists
       | IoEvent::GetSubsonicTracks(_)
       | IoEvent::GetSubsonicSearchResults(_) => {}
+      #[cfg(feature = "subsonic")]
+      IoEvent::SubsonicDownloadFinished(..) => {} // consumed by the pump
       // Qobuz browse/search/login events are handled by infra::qobuz::dispatch
       // before reaching the network; they only arrive here when the feature is off.
       IoEvent::GetQobuzPlaylists

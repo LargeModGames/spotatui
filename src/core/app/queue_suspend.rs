@@ -41,8 +41,13 @@ impl App {
     #[cfg(feature = "subsonic")]
     #[allow(clippy::needless_return)]
     if let Some(s) = self.subsonic_playback.as_mut() {
-      let resume_index =
-        crate::infra::queue::resume_index_after_queue(s.index, s.tracks.len(), repeat, cause);
+      let resume_index = crate::infra::queue::resume_index_after_queue(
+        s.requested_index(),
+        s.tracks.len(),
+        repeat,
+        cause,
+      );
+      s.cancel_download();
       s.advancing = true;
       self.queue_suspended = Some(crate::core::queue::SuspendedContext::Subsonic {
         resume_index,
@@ -107,8 +112,12 @@ impl App {
     #[cfg(feature = "subsonic")]
     #[allow(clippy::needless_return)]
     if let Some(s) = self.subsonic_playback.as_mut() {
-      let position_ms = s.player.position().as_millis() as u64;
-      let index = s.index;
+      let index = s.requested_index();
+      let position_ms = s.resume_at.map_or_else(
+        || s.player.position().as_millis() as u64,
+        |resume| resume.position_ms,
+      );
+      s.cancel_download();
       s.advancing = true;
       self.queue_suspended = Some(crate::core::queue::SuspendedContext::Subsonic {
         resume_index: Some(index),
