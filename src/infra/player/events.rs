@@ -422,10 +422,18 @@ async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
       merge_recovery_requests(&mut request, next_request);
     }
 
-    if active_streaming_player(&ctx.app).await.is_some() {
+    if let Some(live_player) = active_streaming_player(&ctx.app).await {
       // A live player already exists (e.g. a queued duplicate request): the
       // pending window is over, so replay anything parked against it.
       let mut app = ctx.app.lock().await;
+      // The player seen above can be parked, force-recovered or replaced before
+      // this lock is taken. Only the request that still owns the slot may clear
+      // the pending latch and replay its intent; a superseded one would
+      // continue playback for a player nobody drives.
+      if !owns_published_player(app.streaming_player.as_ref(), &live_player) {
+        info!("recovery over a superseded player: skipping the replay");
+        continue;
+      }
       app.native_backend_pending = false;
       info!(
         "recovery over a live player: reselect={} continue_after={:?} {}",
@@ -510,6 +518,18 @@ async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
         });
 
         let mut app = ctx.app.lock().await;
+        // Installing the player released the lock, so a park, a forced
+        // recovery, a Soloist switch or a newer request can supersede this
+        // rebuild in the gap. Replay only for the player this request
+        // installed; the request is stale and its intent was already voided or
+        // replaced by whoever took the slot.
+        if !owns_published_player(app.streaming_player.as_ref(), &recovered_player) {
+          drop(app);
+          info!("recovery superseded after the rebuild: skipping the replay");
+          recovered_player.shutdown();
+          tokio::task::spawn_blocking(move || drop(recovered_player));
+          continue;
+        }
         // Queue replay over an otherwise idle app also needs the serialized
         // ownership check. Auto-selection can then clear the slot before the
         // replay event if another device became active during the rebuild.
@@ -1695,10 +1715,18 @@ fn spawn_end_of_track_continuation(
 
 async fn is_current_streaming_player(app: &Arc<Mutex<App>>, player: &Arc<StreamingPlayer>) -> bool {
   let app_lock = app.lock().await;
-  app_lock
-    .streaming_player
-    .as_ref()
-    .is_some_and(|current| Arc::ptr_eq(current, player))
+  owns_published_player(app_lock.streaming_player.as_ref(), player)
+}
+
+/// Whether `player` is still the one the app publishes.
+///
+/// Every replay a recovery request triggers runs after the lock that installed
+/// its player was released, so a park, a forced recovery, a Soloist switch or a
+/// newer request can replace or clear the slot in that gap. Checked under the
+/// replay's own lock, so the answer cannot change before the intent is
+/// dispatched.
+fn owns_published_player<T>(current: Option<&Arc<T>>, player: &Arc<T>) -> bool {
+  current.is_some_and(|current| Arc::ptr_eq(current, player))
 }
 
 fn current_playback_matches_native(app: &App, player: &StreamingPlayer) -> bool {
@@ -1807,9 +1835,9 @@ async fn disconnect_streaming_player(
 #[cfg(test)]
 mod tests {
   use super::{
-    merge_recovery_requests, next_recovery_retry_delay, recovery_needs_native_selection,
-    recovery_watchdog_should_escalate, session_disconnect_recovery,
-    should_replay_published_queue_slot, stop_disarms_watchdog,
+    merge_recovery_requests, next_recovery_retry_delay, owns_published_player,
+    recovery_needs_native_selection, recovery_watchdog_should_escalate,
+    session_disconnect_recovery, should_replay_published_queue_slot, stop_disarms_watchdog,
     unavailable_is_for_the_loading_track, unavailable_is_transport_related, BuildAttempt,
     RebuildOutcome, SessionDisconnectReason, SessionDisconnectRecovery, StreamingBuildError,
     StreamingConfig, StreamingConnectionState, StreamingRecoveryContext, StreamingRecoveryRequest,
@@ -1851,6 +1879,16 @@ mod tests {
   /// What a wake usually loses: DNS or the socket, not the login.
   fn transient_build_failure() -> StreamingBuildError {
     StreamingBuildError::Spirc(LibrespotError::unavailable(anyhow::anyhow!("dns error")))
+  }
+
+  #[test]
+  fn a_replaced_or_cleared_player_is_no_longer_owned() {
+    let installed = Arc::new(());
+    let other = Arc::new(());
+
+    assert!(owns_published_player(Some(&installed), &installed));
+    assert!(!owns_published_player(Some(&other), &installed));
+    assert!(!owns_published_player(None, &installed));
   }
 
   #[test]
