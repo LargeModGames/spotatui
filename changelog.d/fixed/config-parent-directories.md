@@ -1,0 +1,1 @@
+- **Launch creates missing parent directories for `XDG_CONFIG_HOME`**. If the app config directory cannot be created, the error includes its path.

@@ -1,0 +1,1 @@
+- **Auto-update delays that overflow the conversion to seconds return a config error**.

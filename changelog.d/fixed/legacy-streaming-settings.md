@@ -1,0 +1,1 @@
+- **Legacy streaming settings migrate into an empty or null `behavior:` section**. Settings already specified in `config.yml` take priority. The saved Connect device is copied to `state.yml` when the state has no device.

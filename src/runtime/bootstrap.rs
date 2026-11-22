@@ -220,10 +220,12 @@ fn prompt_global_song_count_opt_in(
   // when the config predates the setting.
   let config_has_answer = config_paths.config_file_path.exists() && {
     let config_string = fs::read_to_string(&config_paths.config_file_path)?;
-    let config: serde_yaml::Value = serde_yaml::from_str(&config_string)?;
-    config["behavior"]["enable_global_song_count"]
-      .as_bool()
-      .is_some()
+    // The typed config loader can accept keys that a YAML Value rejects.
+    serde_yaml::from_str::<serde_yaml::Value>(&config_string).is_ok_and(|config| {
+      config["behavior"]["enable_global_song_count"]
+        .as_bool()
+        .is_some()
+    })
   };
 
   if !should_prompt_global_song_count(first_run, config_has_answer) {
@@ -868,20 +870,20 @@ mod tests {
     }
     let client = crate::core::paths::legacy_client_config_path().unwrap();
     std::fs::create_dir_all(client.parent().unwrap()).unwrap();
-    std::fs::write(
-      &client,
-      "streaming_device_name: Desk\ndevice_id: saved-device\n",
-    )
-    .unwrap();
     tokio::runtime::Runtime::new().unwrap().block_on(async {
       let mut lock = None;
-      for _ in 0..2 {
+      for contents in [
+        "streaming_device_name: Desk\ndevice_id: saved-device\n",
+        "streaming_device_name: Other\ndevice_id: other-device\n",
+      ] {
+        std::fs::write(&client, contents).unwrap();
         let onboarding = std::sync::Arc::new(ScriptedOnboarding::non_interactive(&[]));
-        assert!(
-          super::boot(boot_options(Some("sync")), onboarding, &mut lock)
-            .await
-            .is_ok()
-        );
+        let booted = super::boot(boot_options(Some("sync")), onboarding, &mut lock)
+          .await
+          .unwrap();
+        let app = booted.app.lock().await;
+        assert_eq!(app.user_config.behavior.streaming_device_name, "Desk");
+        assert_eq!(std::fs::read_to_string(&client).unwrap(), contents);
         let path = crate::core::state::default_state_path().unwrap();
         assert!(!crate::core::first_run::is_first_run(&path, Some(&client)));
         let saved = crate::core::state::load(&path).unwrap();
@@ -1154,6 +1156,25 @@ mod tests {
     assert!(!onboarding.saw("Would you like to participate?"));
     assert!(!onboarding.saw("Opted out. You can change this anytime in Settings -> Behavior.\n"));
     assert!(!onboarding.saw("Thank you for participating!\n"));
+  }
+
+  #[test]
+  fn duplicate_plugin_commands_are_treated_as_no_saved_song_counter_answer() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("config.yml");
+    let contents =
+      "behavior:\n  enable_global_song_count: true\nplugin_commands:\n  example: x\n  example: y\n";
+    std::fs::write(&config_path, contents).unwrap();
+    let mut config = user_config_at(config_path.clone());
+    config.load_config().unwrap();
+    assert!(config.behavior.enable_global_song_count);
+    let onboarding = ScriptedOnboarding::with_answers(&["n"]);
+
+    prompt_global_song_count_opt_in(&mut config, false, &onboarding).unwrap();
+
+    assert!(onboarding.saw("Would you like to participate?"));
+    assert!(!config.behavior.enable_global_song_count);
+    assert_eq!(std::fs::read_to_string(config_path).unwrap(), contents);
   }
 
   #[test]
