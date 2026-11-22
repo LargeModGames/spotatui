@@ -592,25 +592,18 @@ mod tests {
     .expect("failed playlist test timed out");
   }
 
-  #[tokio::test]
-  async fn playlist_tracks_refuses_a_zero_limit_before_any_request() {
-    tokio::time::timeout(std::time::Duration::from_secs(30), async {
-      let (result, seen) = list_against(
-        &["--playlist-tracks", PLAYLIST_URI, "--limit", "0"],
-        "200 OK",
-        playlist_page(&["One"]),
-      )
-      .await;
-
-      let error = result.unwrap_err().to_string();
-      assert!(
-        error.contains("limit must be a number of tracks"),
-        "{error}"
-      );
-      assert!(seen.is_empty(), "{seen:?}");
-    })
-    .await
-    .expect("zero limit test timed out");
+  #[test]
+  fn playlist_tracks_refuses_a_zero_limit_before_any_request() {
+    let error = crate::cli::list_subcommand()
+      .try_get_matches_from(["list", "--playlist-tracks", PLAYLIST_URI, "--limit", "0"])
+      .unwrap_err();
+    assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
+    assert!(
+      error
+        .to_string()
+        .contains("limit must be a whole number, 1 or more"),
+      "{error}"
+    );
   }
 
   #[tokio::test]

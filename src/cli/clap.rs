@@ -1,5 +1,7 @@
 use clap::{builder::ArgPredicate, Arg, ArgAction, ArgGroup, Command};
 
+use crate::infra::network::search::SPOTIFY_SEARCH_LIMIT;
+
 fn device_arg() -> Arg {
   Arg::new("device")
     .short('d')
@@ -98,6 +100,26 @@ fn parse_seek_seconds(value: &str) -> Result<String, String> {
   match value.parse::<i32>() {
     Ok(_) => Ok(value.to_string()),
     Err(_) => Err("expected whole seconds, for example +10, -10 or 10".to_string()),
+  }
+}
+
+/// `list --limit` before boot: a whole number of 1 or more. The ceiling of 50
+/// for plain `list` stays in `update_query_limits`, because `--playlist-tracks`
+/// shares this argument and takes any number of tracks.
+fn parse_list_limit(value: &str) -> Result<String, String> {
+  match value.parse::<u32>() {
+    Ok(1..) => Ok(value.to_string()),
+    _ => Err("limit must be a whole number, 1 or more".to_string()),
+  }
+}
+
+/// `search --limit` before boot: a search returns at most one page.
+fn parse_search_limit(value: &str) -> Result<String, String> {
+  match value.parse::<u32>() {
+    Ok(num) if (1..=SPOTIFY_SEARCH_LIMIT).contains(&num) => Ok(value.to_string()),
+    _ => Err(format!(
+      "limit must be between 1 and {SPOTIFY_SEARCH_LIMIT}"
+    )),
   }
 }
 
@@ -425,6 +447,7 @@ way you want. The format option will be applied to every item found.",
     .arg(
       Arg::new("limit")
         .long("limit")
+        .value_parser(parse_list_limit)
         .help("Specifies the maximum number of results (1 - 50, any number of playlist tracks)"),
     )
     .group(
@@ -499,6 +522,7 @@ specify it.",
     .arg(
       Arg::new("limit")
         .long("limit")
+        .value_parser(parse_search_limit)
         .help("Specifies the maximum number of results (1 - 10)"),
     )
     .group(
@@ -542,6 +566,52 @@ mod tests {
           .contains("volume must be between 0 and 100"),
         "{error}"
       );
+    }
+  }
+
+  #[test]
+  fn list_limit_refuses_what_is_not_a_positive_whole_number_before_boot() {
+    for limit in ["abc", "0", "1.5", ""] {
+      let error = list_subcommand()
+        .try_get_matches_from(["list", "--playlists", "--limit", limit])
+        .unwrap_err();
+      assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
+      assert!(
+        error
+          .to_string()
+          .contains("limit must be a whole number, 1 or more"),
+        "{error}"
+      );
+    }
+  }
+
+  #[test]
+  fn list_limit_leaves_the_ceiling_to_the_listing() {
+    for limit in ["1", "50", "51", "500"] {
+      let matches = list_subcommand()
+        .try_get_matches_from(["list", "--playlists", "--limit", limit])
+        .unwrap();
+      assert_eq!(matches.get_one::<String>("limit").unwrap(), limit);
+    }
+  }
+
+  #[test]
+  fn search_limit_refuses_a_value_outside_1_to_10_before_boot() {
+    for limit in ["abc", "0", "11", ""] {
+      let error = search_subcommand()
+        .try_get_matches_from(["search", "--tracks", "--limit", limit, "foo"])
+        .unwrap_err();
+      assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
+      assert!(
+        error.to_string().contains("limit must be between 1 and 10"),
+        "{error}"
+      );
+    }
+    for limit in ["1", "10"] {
+      let matches = search_subcommand()
+        .try_get_matches_from(["search", "--tracks", "--limit", limit, "foo"])
+        .unwrap();
+      assert_eq!(matches.get_one::<String>("limit").unwrap(), limit);
     }
   }
 
