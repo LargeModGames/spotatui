@@ -88,6 +88,13 @@ fn friends_captures_key_before_back(app: &App) -> bool {
     && (app.view.friend_add_dialog_visible || !app.view.friend_search_input.is_empty())
 }
 
+/// The Party popup's join code and guest name take text: while either holds
+/// input, a typed `q` is the letter, not "back". The idle menu keeps `q`.
+fn party_captures_key_before_back(app: &App) -> bool {
+  app.get_current_route().active_block == ActiveBlock::Party
+    && (!app.view.party_input.is_empty() || !app.view.party_join_name.is_empty())
+}
+
 /// Blocks that must see the configurable back key *before* the runner acts on it
 /// themselves. Ordering is the whole point, so this is one predicate rather than
 /// two conditions spelled out at the call site: a screen that is missing here has
@@ -98,6 +105,9 @@ fn key_reaches_handlers_before_back(app: &App, key: Key) -> bool {
     return true;
   }
   if friends_captures_key_before_back(app) {
+    return true;
+  }
+  if party_captures_key_before_back(app) {
     return true;
   }
   if modal_captures_key_before_back(app) {
@@ -975,5 +985,42 @@ mod tests {
     dispatch_key(Key::Char('q'), &mut app);
 
     assert_ne!(app.get_current_route().id, RouteId::Friends);
+  }
+
+  #[test]
+  fn typing_q_into_the_party_code_types_it() {
+    let mut app = app();
+    app.push_navigation_stack(RouteId::Party, ActiveBlock::Party);
+
+    dispatch_key(Key::Char('2'), &mut app);
+    dispatch_key(Key::Char('q'), &mut app);
+
+    assert!(app.view.party_input.contains(&'Q'));
+    assert_eq!(app.get_current_route().id, RouteId::Party);
+  }
+
+  #[test]
+  fn typing_q_into_the_party_guest_name_types_it() {
+    let mut app = app();
+    app.push_navigation_stack(RouteId::Party, ActiveBlock::Party);
+
+    dispatch_key(Key::Char('2'), &mut app);
+    for c in "ABCDEF".chars() {
+      dispatch_key(Key::Char(c), &mut app);
+    }
+    dispatch_key(Key::Char('q'), &mut app);
+
+    assert_eq!(app.view.party_join_name, vec!['q']);
+    assert_eq!(app.get_current_route().id, RouteId::Party);
+  }
+
+  #[test]
+  fn q_on_the_idle_party_menu_goes_back() {
+    let mut app = app();
+    app.push_navigation_stack(RouteId::Party, ActiveBlock::Party);
+
+    dispatch_key(Key::Char('q'), &mut app);
+
+    assert_ne!(app.get_current_route().id, RouteId::Party);
   }
 }
