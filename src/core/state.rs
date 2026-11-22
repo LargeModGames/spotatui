@@ -646,12 +646,11 @@ pub fn save_removing_radio_station(path: &Path, url: &str) -> Result<()> {
 fn write_state(path: &Path, state: &PersistedRuntimeState) -> Result<()> {
   let state = sanitized_persisted_state(state);
   let yaml = serde_yaml::to_string(&state).context("serializing runtime state")?;
-  if let Some(dir) = path.parent() {
-    crate::core::paths::ensure_private_dir(dir)?;
-  }
-  crate::core::auth::write_private_file_atomic(path, yaml.as_bytes())
-    .with_context(|| format!("writing {}", path.display()))?;
-  Ok(())
+  path
+    .parent()
+    .map_or(Ok(()), crate::core::paths::ensure_private_dir)
+    .and_then(|()| crate::core::auth::write_private_file_atomic(path, yaml.as_bytes()))
+    .with_context(|| format!("writing {}", path.display()))
 }
 
 fn sanitized_persisted_state(state: &PersistedRuntimeState) -> PersistedRuntimeState {

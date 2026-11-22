@@ -27,7 +27,7 @@ exclude = [
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-rspotify = { version = "0.16", default-features = false, features = ["cli", "env-file", "client-reqwest", "reqwest-rustls-tls"] }
+rspotify = { version = "0.16", default-features = false, features = ["cli", "env-file", "client-reqwest"] }
 ratatui = { version = "0.30", features = ["crossterm", "layout-cache"], default-features = false, optional = true }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -54,7 +54,7 @@ open = "5.3"
 self_update = { version = "1.3.3", features = ["archive-tar", "archive-zip", "compression-tar-gz", "compression-zip-deflate", "checksums"], optional = true }
 sha2 = { version = "0.11", optional = true }
 hex = { version = "0.4", optional = true }
-reqwest = { version = "0.12", features = ["json", "rustls-tls", "blocking"], default-features = false }
+reqwest = { version = "0.12", features = ["json", "rustls-tls-native-roots", "blocking"], default-features = false }
 openssl = { version = "0.10", optional = true }
 cpal = { version = "0.17", optional = true }
 realfft = { version = "3.4", optional = true }
@@ -94,6 +94,12 @@ lofty = { version = "0.25", optional = true }
 # on all three platforms; the macOS gate in `LocalPlayer` is gone since rodio
 # 0.22 / cpal 0.17 were measured on CoreAudio. Unrelated to librespot's own
 # rodio-backend, which is why librespot keeps portaudio-backend on macOS.
+# Build cost: this entry keeps rodio's default features on purpose (cpal `playback`, which links
+# ALSA on Linux and CoreAudio on macOS, plus the symphonia flac/mp3/mp4/vorbis/wav codecs; YouTube
+# needs `mp4` for M4A). It is gated by `audio-decode` (the sources), not `streaming`, so it cannot
+# be tied to `streaming`, and it cannot be `default-features = false` without dropping those
+# codecs. Slim, headless and streaming-only builds do not compile it, except on Windows.
+# The non-optional target entry below pulls rodio + cpal into every Windows build.
 rodio = { version = "0.22", optional = true }
 
 # Streaming dependencies: our maintained librespot fork, published on crates.io
@@ -118,7 +124,7 @@ mdns-sd = { version = "0.21", optional = true }
 rustls = { version = "0.23", optional = true, default-features = false, features = ["ring", "std", "tls12"] }
 tokio-rustls = { version = "0.26", optional = true, default-features = false, features = ["ring", "tls12"] }
 futures = "0.3.32"
-tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
+tokio-tungstenite = { version = "0.30", features = ["rustls-tls-native-roots"] }
 # The GUI page server's request-head parser.
 httparse = { version = "1.10", optional = true }
 url = "2.5"
@@ -153,6 +159,10 @@ arboard = "3.4"
 # to stdout (breaking the TUI and producing no audible output).
 librespot-playback = { version = "=0.8.7", package = "spotatui-librespot-playback", optional = true, default-features = false, features = ["rodio-backend"] }
 smtc-tokio = { version = "0.1.0", optional = true }
+# Our own librespot sink (`infra/player/sink.rs`) replaces the fork's rodio 0.21 one, which
+# hangs forever when the output device is unplugged. Windows only, so the Linux and macOS
+# graphs are unchanged. Unifies with the optional `audio-decode` entry above.
+rodio = { version = "0.22", default-features = false, features = ["playback"] }
 
 # MPRIS D-Bus support (Linux only)
 [target.'cfg(target_os = "linux")'.dependencies]

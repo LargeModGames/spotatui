@@ -1,5 +1,10 @@
 ### Native streaming (feature `streaming`, in `default`)
 
+On Windows, the default native playback path uses `sink.rs`, a rodio 0.22
+sink that bounds queue waits and reports output-device loss so recovery can
+reconnect. It only handles unplugged/unavailable devices; changing the system
+default while the old device remains available is outside its scope.
+
 - Direct spirc `load` is the **primary** route for all native starts, context ones
   included - a `me/player/play` round trip would head-of-line-block the serial
   pump (#386). The Web API route (`start_native_context_via_api`) is a fallback

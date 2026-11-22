@@ -1725,7 +1725,7 @@ fn search_playlist_tracks_records_the_pending_search_and_dispatches() {
   );
   assert_eq!(
     app.status_message(),
-    Some("Searching playlist for \"queen rock\"...")
+    Some("Searching playlist for \"queen rock\"…")
   );
   match rx.try_recv() {
     Ok(IoEvent::SearchPlaylistTracks(id, query)) => {

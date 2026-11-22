@@ -90,7 +90,7 @@ mod tests {
         disabled,
         "Global song counter disabled (Settings -> Behavior)."
       );
-      assert_eq!(loading, "Loading global song count...");
+      assert_eq!(loading, "Loading global song count…");
       assert_eq!(failed, "Global song counter unavailable right now.");
       assert_eq!(counted, "Global songs played with spotatui: 42");
     } else {
