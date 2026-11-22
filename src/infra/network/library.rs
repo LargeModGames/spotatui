@@ -3600,7 +3600,7 @@ fn parse_rootlist_items(
       let (group_id, name) = match rest.find(':') {
         Some(pos) => (
           rest[..pos].to_string(),
-          percent_decode_str(&rest[pos + 1..])
+          percent_decode_str(&rest[pos + 1..]).replace('+', " "))
             .decode_utf8_lossy()
             .into_owned(),
         ),
@@ -3970,7 +3970,7 @@ mod rootlist_only_tests {
 
   #[test]
   fn encoded_colon_in_the_name_does_not_split_the_group_id() {
-    let folder = parse_folder("spotify:start-group:g1:Mix%3A%20Chill");
+    let folder = parse_folder("spotify:start-group:g1:Mix%3A+Chill");
 
     assert_eq!(folder.name.as_deref(), Some("Mix: Chill"));
     assert_eq!(folder.uri, "spotify:folder:g1");
@@ -3980,8 +3980,16 @@ mod rootlist_only_tests {
   fn double_encoded_colon_is_decoded_only_once() {
     // `%253A` is an encoded `%3A`; a single decode leaves the literal `%3A`.
     // Decoding twice would turn it into `:` and change the displayed name.
-    let folder = parse_folder("spotify:start-group:g1:100%253A%20Hits");
+    let folder = parse_folder("spotify:start-group:g1:100%253A+Hits");
 
     assert_eq!(folder.name.as_deref(), Some("100%3A Hits"));
+  }
+
+  #[test]
+  fn encoded_plus_stays_a_plus() {
+    // `+` means space, but `%2B` is a literal plus and must survive.
+    let folder = parse_folder("spotify:start-group:g1:C%2B%2B+Hits");
+
+    assert_eq!(folder.name.as_deref(), Some("C++ Hits"));
   }
 }
