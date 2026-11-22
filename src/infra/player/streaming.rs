@@ -69,9 +69,13 @@ impl StreamingBuildError {
 /// generic local-state error, so only the login5 detail counts. `Login5Error` is
 /// private in librespot-core, which leaves its `Display` as the only handle on the
 /// code.
+///
+/// `PermissionDenied` is not always a rejection: six access points that all
+/// answer `TryAnotherAP` surface as `LoginFailed(TryAnotherAP)`, a retryable cause.
 fn login_was_rejected(error: &librespot_core::error::Error) -> bool {
   match error.kind {
-    ErrorKind::Unauthenticated | ErrorKind::PermissionDenied => true,
+    ErrorKind::Unauthenticated => true,
+    ErrorKind::PermissionDenied => !error.error.to_string().contains("Try another access point"),
     ErrorKind::FailedPrecondition => {
       let detail = error.error.to_string();
       detail.contains("INVALID_CREDENTIALS") || detail.contains("UNKNOWN_IDENTIFIER")

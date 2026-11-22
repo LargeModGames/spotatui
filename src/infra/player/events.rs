@@ -2029,6 +2029,19 @@ mod tests {
     );
   }
 
+  /// Six access points that all answer `TryAnotherAP` are not a rejected
+  /// login: librespot surfaces the last one as `PermissionDenied`, and the
+  /// classification keeps both the cached credentials and the retries.
+  #[test]
+  fn an_exhausted_access_point_list_is_not_a_rejected_login() {
+    assert!(
+      StreamingBuildError::Spirc(LibrespotError::permission_denied(anyhow::anyhow!(
+        "Login failed with reason: Try another access point"
+      )))
+      .is_retryable()
+    );
+  }
+
   /// A refused login ends the chain on its first attempt.
   #[tokio::test]
   async fn a_login5_rejected_login_ends_the_recovery_chain_without_retrying() {
