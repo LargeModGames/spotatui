@@ -411,7 +411,7 @@ mod tests {
     );
     assert_eq!(
       app.status_message(),
-      Some("Searching playlist for \"queen rock\"...")
+      Some("Searching playlist for \"queen rock\"…")
     );
   }
 

@@ -651,6 +651,7 @@ pub struct KeyBindingsString {
   save_settings: Option<String>,
   listening_party: Option<String>,
   like_track: Option<String>,
+  pin_playlist: Option<String>,
   generate_recap: Option<String>,
   detach_pane: Option<String>,
   close_pane: Option<String>,
@@ -726,6 +727,7 @@ pub struct KeyBindings {
   pub save_settings: Key,
   pub listening_party: Key,
   pub like_track: Key,
+  pub pin_playlist: Key,
   pub generate_recap: Key,
   pub detach_pane: Key,
   pub close_pane: Key,
@@ -1414,6 +1416,7 @@ impl UserConfig {
         save_settings: Key::Alt('s'),
         listening_party: Key::Ctrl('p'),
         like_track: Key::Char('F'),
+        pin_playlist: Key::Char('t'),
         generate_recap: Key::Char('R'),
         detach_pane: Key::Alt('d'),
         close_pane: Key::Alt('x'),
@@ -1641,6 +1644,7 @@ impl UserConfig {
     to_keys!(save_settings);
     to_keys!(listening_party);
     to_keys!(like_track);
+    to_keys!(pin_playlist);
     to_keys!(generate_recap);
     to_keys!(detach_pane);
     to_keys!(close_pane);
@@ -2396,6 +2400,7 @@ impl UserConfig {
       k.save_settings,
       k.listening_party,
       k.like_track,
+      k.pin_playlist,
       k.generate_recap,
       k.detach_pane,
       k.close_pane,
@@ -2735,6 +2740,7 @@ impl UserConfig {
       save_settings: Some(key_to_config_string(self.keys.save_settings)),
       listening_party: Some(key_to_config_string(self.keys.listening_party)),
       like_track: Some(key_to_config_string(self.keys.like_track)),
+      pin_playlist: Some(key_to_config_string(self.keys.pin_playlist)),
       generate_recap: Some(key_to_config_string(self.keys.generate_recap)),
       detach_pane: Some(key_to_config_string(self.keys.detach_pane)),
       close_pane: Some(key_to_config_string(self.keys.close_pane)),
@@ -3033,6 +3039,38 @@ mod tests {
       .unwrap_err();
     assert!(error.to_string().contains("Invalid auto-update delay"));
     assert!(error.to_string().contains("too large"));
+  }
+
+  #[test]
+  fn the_playlist_pin_key_is_free_by_default_and_round_trips_config() {
+    use super::{KeyBindingsString, UserConfig};
+    use crate::core::input::Key;
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = UserConfig::new();
+    assert_eq!(config.keys.pin_playlist, Key::Char('t'));
+    assert_eq!(
+      config
+        .named_action_keys()
+        .iter()
+        .filter(|key| **key == Key::Char('t'))
+        .count(),
+      1
+    );
+    config.path_to_config = Some(super::UserConfigPaths {
+      config_file_path: dir.path().join("config.yml"),
+    });
+    config
+      .load_keybindings(KeyBindingsString {
+        pin_playlist: Some("u".into()),
+        ..Default::default()
+      })
+      .unwrap();
+    assert_eq!(config.keys.pin_playlist, Key::Char('u'));
+    config.save_config().unwrap();
+    let saved: serde_yaml::Value =
+      serde_yaml::from_str(&std::fs::read_to_string(dir.path().join("config.yml")).unwrap())
+        .unwrap();
+    assert_eq!(saved["keybindings"]["pin_playlist"].as_str(), Some("u"));
   }
 
   #[test]
@@ -4014,6 +4052,50 @@ dj_api_key: null
     entries.insert("my_cmd".to_string(), "x".to_string());
     config.load_plugin_commands(entries);
     assert!(!config.plugin_command_keys.contains_key(&Key::Char('x')));
+  }
+
+  #[test]
+  fn plugin_commands_cannot_shadow_the_default_or_rebound_playlist_pin_key() {
+    use super::{KeyBindingsString, UserConfig};
+    use crate::core::input::Key;
+    use std::collections::HashMap;
+
+    for (pin_key, free_key) in [('t', 'u'), ('u', 't')] {
+      let mut config = UserConfig::new();
+      config
+        .load_keybindings(KeyBindingsString {
+          pin_playlist: Some(pin_key.to_string()),
+          ..Default::default()
+        })
+        .unwrap();
+      config.load_plugin_commands(HashMap::from([
+        ("pin_collision".to_string(), pin_key.to_string()),
+        ("free_command".to_string(), free_key.to_string()),
+      ]));
+
+      assert!(!config.plugin_command_keys.contains_key(&Key::Char(pin_key)));
+      assert_eq!(
+        config.plugin_command_keys.get(&Key::Char(free_key)),
+        Some(&"free_command".to_string())
+      );
+    }
+  }
+
+  #[test]
+  fn loading_a_navigation_key_on_t_preserves_the_configured_binding() {
+    use super::{KeyBindingsString, UserConfig};
+    use crate::core::input::Key;
+
+    let mut config = UserConfig::new();
+    config
+      .load_keybindings(KeyBindingsString {
+        move_up: Some("t".into()),
+        ..Default::default()
+      })
+      .unwrap();
+
+    assert_eq!(config.keys.move_up, Key::Char('t'));
+    assert_eq!(config.keys.pin_playlist, Key::Char('t'));
   }
 
   #[test]

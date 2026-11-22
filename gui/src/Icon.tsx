@@ -38,6 +38,7 @@ const PATHS = {
     </>
   ),
   library: <path d="M4 4v16M9 4v16M14 4l6 16" />,
+  pin: <path d="M9 3h6l-1 7 4 4H6l4-4-1-7zM12 14v7" />,
   back: <path d="m15 5-7 7 7 7" />,
   forward: <path d="m9 5 7 7-7 7" />,
   play: <path d="M7 4.5v15l12-7.5z" fill="currentColor" stroke="none" />,

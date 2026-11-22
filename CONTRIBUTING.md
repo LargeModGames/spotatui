@@ -34,7 +34,7 @@ Run spotatui again with `--debug`, make the bug happen, and attach the log:
 spotatui --debug
 ```
 
-spotatui prints the log path when it starts and when it exits: `spotatui_logs/spotatuilog<pid>` in your temp directory. If it crashed, `spotatui_panic.log` in the state directory has the panic, a backtrace and the end of the log. Skim the log before you post it: tokens are never written, but a log can contain your display name. See [Logging](docs/configuration.md#logging).
+spotatui prints the log path when it starts and when it exits: `spotatui_logs/spotatui_<timestamp>.log` in your temp directory. If it crashed, `spotatui_panic.log` in the state directory has the panic, a backtrace and the end of the log. Skim the log before you post it: tokens are never written, but a log can contain your display name. See [Logging](docs/configuration.md#logging).
 
 Tell us the frontend (terminal or desktop app), the source, your OS, how you installed spotatui, and the version. Report what you see on the spotatui tracker, even when the cause may be in the librespot fork; we move it if it is.
 
@@ -114,7 +114,7 @@ Also run, when they apply:
 
 CI then checks eight feature combinations on Linux plus one macOS job ([`ci.yml`](.github/workflows/ci.yml)). The desktop app builds on macOS and Windows only after the merge. Code coverage is reported but never blocks a PR.
 
-Add or update tests when you change behavior, add a line under `## [Unreleased]` in [`CHANGELOG.md`](CHANGELOG.md) for a change users notice, and add screenshots for a UI change.
+Add or update tests when you change behavior, add a changelog fragment in [`changelog.d/`](changelog.d/README.md) for a change users notice, and add screenshots for a UI change.
 
 ## Adding interface text
 

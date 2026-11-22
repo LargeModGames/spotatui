@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use chrono::{DateTime, Utc};
 use std::{
   ffi::OsString,
   path::{Path, PathBuf},
@@ -259,11 +260,22 @@ pub(crate) fn fresh_private_dir(temp: &Path, prefix: &str) -> Option<PathBuf> {
   })
 }
 
+fn format_log_file_name(now: DateTime<Utc>) -> String {
+  // Timestamp-only is an acceptable tradeoff of log collision for code simplicity
+  // and UX ease of use
+  now.format("spotatui_%Y-%m-%d_%H-%M-%SZ.log").to_string()
+}
+
 /// Path of this process's log file. Callers on both the writing side
 /// (`setup_logging`) and the reporting side (the help screen) use this so the
 /// path shown to a user is always the path actually written.
 pub(crate) fn app_log_path() -> PathBuf {
-  app_log_dir().join(format!("spotatuilog{}", std::process::id()))
+  static LOG_FILENAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+  let filename = LOG_FILENAME.get_or_init(|| {
+    let now = Utc::now();
+    format_log_file_name(now)
+  });
+  app_log_dir().join(filename)
 }
 
 /// Ensure a directory that stores credentials or other private app data exists
@@ -314,6 +326,7 @@ fn valid_xdg_home(value: OsString) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use chrono::TimeZone;
 
   #[cfg(unix)]
   #[test]
@@ -558,6 +571,48 @@ mod tests {
     assert_eq!(
       app_dir_from(None, Some(home.clone()), &FALLBACK_STATE_DIR,),
       Some(home.join(".local").join("state").join(APP_DIR))
+    );
+  }
+
+  #[test]
+  fn test_log_filename_format_specifiers() {
+    // Use a fixed timestamp where year, month, day, hour, minute, and second
+    // are all distinct numbers to catch flipped specifiers (like %m vs %M).
+    let fixed_time = Utc.with_ymd_and_hms(2026, 11, 20, 14, 45, 59).unwrap();
+    let filename = format_log_file_name(fixed_time);
+
+    // Regress against typos:
+    // - %m (month = 11) vs %M (minute = 45)
+    // - Missing %S (seconds = 59)
+    // - Missing 'Z' UTC indicator
+    assert_eq!(filename, "spotatui_2026-11-20_14-45-59Z.log");
+  }
+
+  #[test]
+  fn test_app_log_path_is_idempotent_and_valid() {
+    let path1 = app_log_path();
+    let path2 = app_log_path();
+
+    // Must return the exact same PathBuf across calls (OnceLock check)
+    assert_eq!(path1, path2);
+
+    // Verify basic structure
+    let file_name = path1.file_name().unwrap().to_str().unwrap();
+    assert!(file_name.starts_with("spotatui_"));
+    assert!(file_name.ends_with(".log"));
+
+    // Verify the timestamp portion actually parses cleanly back to UTC
+    let date_part = file_name
+      .strip_prefix("spotatui_")
+      .unwrap()
+      .strip_suffix(".log")
+      .unwrap();
+
+    let parsed = chrono::NaiveDateTime::parse_from_str(date_part, "%Y-%m-%d_%H-%M-%SZ");
+    assert!(
+      parsed.is_ok(),
+      "Filename timestamp '{date_part}' does not match expected format: {:?}",
+      parsed.err()
     );
   }
 }

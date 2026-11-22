@@ -32,6 +32,7 @@ const episode: EpisodeInfo = {
 };
 const lists: SourcePlaylists = {
   playlist_sidebar_order: "spotify",
+  pinned: [],
   spotify: [],
   local: [],
   subsonic: [],

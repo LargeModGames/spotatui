@@ -6,7 +6,7 @@ Version bump and changelog for vX.Y.Z. No code changes.
 
 # Checklist
 
-- [ ] `CHANGELOG.md`: `## [Unreleased]` renamed to `## [vX.Y.Z] YYYY-MM-DD`, every user-facing PR since the last tag has an entry
+- [ ] `tools/assemble_changelog.sh vX.Y.Z` ran, and every user-facing PR since the last tag has an entry
 - [ ] `Cargo.toml` version bumped and `Cargo.lock` regenerated (`cargo update -p spotatui --offline`)
 - [ ] `cargo metadata --locked` passes (every CI leg runs with `--locked`)
 

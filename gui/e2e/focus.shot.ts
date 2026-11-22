@@ -67,7 +67,7 @@ const likedArrived: ServerMessage = {
   },
 };
 
-test("a sidebar click keeps focus on the control until the list lands, then hands the keyboard to it", async ({
+test("a sidebar activation keeps focus on the control until the list lands, then hands the keyboard to it", async ({
   page,
 }) => {
   const send = await openLive(page, [
@@ -79,7 +79,9 @@ test("a sidebar click keeps focus on the control until the list lands, then hand
   const liked = page.locator("button.library-row", { hasText: "Liked Songs" });
   await liked.waitFor();
 
-  await liked.click();
+  // Keyboard activation retains the opener in every engine, including WebKit.
+  await liked.focus();
+  await liked.press("Enter");
   await expect(liked).toBeFocused();
   await expect(page.getByRole("listbox")).toHaveCount(0);
 
@@ -111,7 +113,8 @@ test("a list that lands after focus moved elsewhere never steals the keyboard", 
   const liked = page.locator("button.library-row", { hasText: "Liked Songs" });
   await liked.waitFor();
 
-  await liked.click();
+  await liked.focus();
+  await liked.press("Enter");
 
   // The user tabs to the next control while the list is still loading.
   await page.keyboard.press("Tab");

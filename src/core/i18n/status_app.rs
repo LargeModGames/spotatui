@@ -14,6 +14,9 @@ pub struct AppStatusStrings {
 
   pub loading_playlist: &'static str,
   pub community_pin_hidden: &'static str,
+  pub playlist_pinned: &'static str,
+  pub playlist_unpinned: &'static str,
+  pub playlist_pin_limit: &'static str,
   pub native_disconnected: &'static str,
   pub native_reconnecting: &'static str,
   pub native_request_expired: &'static str,
@@ -145,6 +148,9 @@ pub const EN: AppStatusStrings = AppStatusStrings {
 
   loading_playlist: "Loading playlist…",
   community_pin_hidden: "Community playlist pin hidden (re-enable in Settings)",
+  playlist_pinned: "Pinned {name}",
+  playlist_unpinned: "Unpinned {name}",
+  playlist_pin_limit: "You can pin up to {max} playlists",
   native_disconnected: "Native streaming disconnected; attempting recovery.",
   native_reconnecting: "Reconnecting native streaming…",
   native_request_expired: "Playback request expired during native recovery.",
@@ -162,10 +168,10 @@ pub const EN: AppStatusStrings = AppStatusStrings {
   remove_requires_playlist: "Remove only works in selected playlist views",
   remove_position_unknown: "Cannot resolve track position for removal",
   settings_shortcut_fallback: "Ctrl+, not detected in this terminal; using Alt+, for this session",
-  queued_no_album: "The queued track has no album id",
+  queued_no_album: "The queued track has no album ID",
   jump_album_spotify: "Jump to album needs a Spotify track playing",
-  playing_no_artist: "The playing track has no artist id",
-  queued_no_artist: "The queued track has no artist id",
+  playing_no_artist: "The playing track has no artist ID",
+  queued_no_artist: "The queued track has no artist ID",
   jump_artist_spotify: "Jump to artist needs a Spotify track playing",
   queue_no_context: "The queue slot has no play context",
   jump_context_spotify: "Jump to context needs a Spotify track playing",
@@ -207,7 +213,7 @@ pub const EN: AppStatusStrings = AppStatusStrings {
   dj_everything: "DJ: recommending from everything",
   dj_busy: "The DJ is already working on something",
   dj_shifting: "Shifting the vibe",
-  dj_keep_brain: "keeping the current DJ brain",
+  dj_keep_brain: "Keeping the current DJ brain",
   nothing_playing: "Nothing is playing",
   spotify_parked: "Press play to resume Spotify",
   spotify_not_connected: "Spotify not connected. Press `d` and pick Spotify to log in.",
@@ -227,21 +233,21 @@ pub const EN: AppStatusStrings = AppStatusStrings {
   state_save_failed: "Failed to save state: {error}",
   shortcut_save_failed: "Failed to save keybinding fallback: {error}",
   shortcut_saved: "Saved open settings shortcut as {key}",
-  clipboard_set_failed: "failed to set clipboard content: {error}",
+  clipboard_set_failed: "Failed to set clipboard content: {error}",
   queued: "Queued: {name}",
   recap_browser_failed: "Recap saved at {path} (couldn't open browser)",
   dj_shift_dropped: "Shifting the vibe (dropped {dropped} queued track(s))",
   dj_brain: "DJ brain: {name}",
   dj_brain_not_ready: "DJ brain: {name} (not usable yet: install it, or set its API key)",
   dj_save_failed: "DJ: could not save that choice: {error}",
-  playlist_searching: "Searching playlist for \"{query}\"...",
+  playlist_searching: "Searching playlist for \"{query}\"…",
   unfollow_profile_loading: "Cannot unfollow: user profile not loaded yet",
   no_playback_device_selected: "No playback device selected",
   no_playback_devices: "No playback devices found",
   playback_device_unavailable: "Selected playback device is no longer available",
-  playback_device_no_id: "Selected playback device has no Spotify device id",
+  playback_device_no_id: "Selected playback device has no Spotify device ID",
   entry_not_playable: "This entry can't be played directly",
-  liked_loading: "Liked songs are still loading, please wait...",
+  liked_loading: "Liked songs are still loading, please wait…",
   no_radio_selected: "No radio station selected",
   switching_device: "Switching playback to {device}",
   source_selected: "Source: {source}",
@@ -279,6 +285,9 @@ pub const ZH_HANS: AppStatusStrings = AppStatusStrings {
 
   loading_playlist: "正在加载播放列表…",
   community_pin_hidden: "已隐藏社区播放列表置顶（可在设置中重新开启）",
+  playlist_pinned: "已置顶 {name}",
+  playlist_unpinned: "已取消置顶 {name}",
+  playlist_pin_limit: "最多可置顶 {max} 个播放列表",
   native_disconnected: "内置播放已断开，正在尝试恢复。",
   native_reconnecting: "正在重新连接内置播放…",
   native_request_expired: "等待内置播放恢复时，播放请求已过期。",
@@ -414,6 +423,9 @@ pub const ZH_HANT: AppStatusStrings = AppStatusStrings {
 
   loading_playlist: "正在載入播放清單…",
   community_pin_hidden: "已隱藏社群播放清單置頂（可在設定中重新開啟）",
+  playlist_pinned: "已置頂 {name}",
+  playlist_unpinned: "已取消置頂 {name}",
+  playlist_pin_limit: "最多可置頂 {max} 個播放清單",
   native_disconnected: "內建串流已中斷，正在嘗試恢復。",
   native_reconnecting: "正在重新連線內建串流…",
   native_request_expired: "播放要求在內建串流恢復期間已過期。",
@@ -557,6 +569,15 @@ impl AppStatusStrings {
   }
   pub fn audio_backend_failed(&self, error: &str) -> String {
     super::format_template(self.audio_backend_failed, &[("error", error)])
+  }
+  pub fn playlist_pinned(&self, name: &str) -> String {
+    super::format_template(self.playlist_pinned, &[("name", name)])
+  }
+  pub fn playlist_unpinned(&self, name: &str) -> String {
+    super::format_template(self.playlist_unpinned, &[("name", name)])
+  }
+  pub fn playlist_pin_limit(&self, max: usize) -> String {
+    super::format_template(self.playlist_pin_limit, &[("max", &max.to_string())])
   }
   pub fn friend_code_copied(&self, code: &str) -> String {
     crate::core::i18n::format_template(self.friend_code_copied, &[("code", code)])

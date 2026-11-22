@@ -333,7 +333,7 @@ navigation. Adding a binding means fields on both `KeyBindings` and
 ### Requirements
 
 `core/requirement.rs` says what a row or key needs (`Requirement::{None,
-SpotifySession, Capability(_), Source(_), AnyOf(_)}`) and `App::availability(req)`
+SpotifySession, Capability(_), Source(_), BrowseSource(_), AnyOf(_)}`) and `App::availability(req)`
 answers for the active source and the session. Three tables carry it: the
 sidebar (`library_row_requirements()` in `core/app/library.rs`), the help menu
 (`help_entries()` in `tui/keymap.rs`) and the settings rows
@@ -341,6 +341,8 @@ sidebar (`library_row_requirements()` in `core/app/library.rs`), the help menu
 surface: a row with a rebindable key stays visible with the `hint()` as a
 suffix, a row with a fixed key or a sidebar row is hidden. Gate a key on the
 same predicate the row uses, so the two cannot disagree.
+`BrowseSource(Spotify)` allows local changes to cached Spotify rows without a
+login; `Source(Spotify)` also requires a Spotify session.
 
 ### Config & on-disk files
 
@@ -446,7 +448,10 @@ reads a file in that directory. Other agents must open it.
 ### Alternative sources (Local / Subsonic / Radio / YouTube / Qobuz)
 
 - All five decode through **one** shared rodio sink, `LocalPlayer`
-  (`src/infra/audio/player.rs`) - the only file where rodio types appear.
+  (`src/infra/audio/player.rs`), where the decoded-source rodio types live. The
+  only other file that names them is the Windows-only native-streaming sink,
+  `src/infra/player/sink.rs` (see Native streaming below); nothing on the
+  decoded-source path touches rodio outside `audio/player.rs`.
   Subsonic and YouTube download each track to a `NamedTempFile` first (YouTube by
   shelling out to `yt-dlp`); Radio streams through a non-seekable ring buffer.
 - Set the `advancing` flag synchronously before dispatching a track change: the

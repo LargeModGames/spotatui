@@ -214,6 +214,8 @@ pub const EN: SettingsStrings = SettingsStrings {
   keys_remove_from_queue_description: "Remove the selected track from the queue",
   keys_like_track_name: "Like Track",
   keys_like_track_description: "Toggle saved state for the currently playing track or episode",
+  keys_pin_playlist_name: "Pin / Unpin Playlist",
+  keys_pin_playlist_description: "Pin or unpin the selected Spotify sidebar playlist on this device",
   keys_generate_recap_name: "Generate Listening Recap",
   keys_generate_recap_description: "Generate and open the listening recap HTML card (uses the selected period on the Stats screen, 30 days elsewhere)",
   keys_copy_song_url_name: "Copy Song URL",

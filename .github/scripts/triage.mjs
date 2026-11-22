@@ -152,7 +152,14 @@ const agents = readFileSync("AGENTS.md", "utf8");
 const changelog = readFileSync("CHANGELOG.md", "utf8");
 // [Unreleased] plus the latest release: the third `## [` heading ends it.
 const releaseHeads = [...changelog.matchAll(/^## \[/gm)].map((m) => m.index);
-const recentChanges = clip(changelog.slice(releaseHeads[0] ?? 0, releaseHeads[2]), 20000);
+const fragments = [...trackedFiles]
+  .filter((f) => /^changelog\.d\/[^/]+\/.+\.md$/.test(f))
+  .map((f) => `[${f.split("/")[1]}] ${readFileSync(f, "utf8").trim()}`);
+const recentChanges = clip(
+  `## Unreleased (changelog.d)\n\n${fragments.join("\n")}\n\n` +
+    changelog.slice(releaseHeads[0] ?? 0, releaseHeads[2]),
+  20000,
+);
 const sourceFiles = [...trackedFiles].filter((f) => /^(src|gui\/src|desktop\/src)\//.test(f));
 
 const searchCode = betaTool({
@@ -315,7 +322,7 @@ spotatui. The issue already says what to change, so do not repeat it. Fill these
 - contributor_steps: 5 to 9 steps in order, from nothing to an open PR. One action per step, in the
   imperative. First the setup from CONTRIBUTING.md plus anything this issue needs (system packages, the
   build features its code is behind). Then the code steps in the order to do them, naming files and
-  functions. Then the checks, a CHANGELOG line if users notice the change, and the PR: the template, and
+  functions. Then the checks, a changelog.d fragment if users notice the change, and the PR: the template, and
   the real output of the commands under Testing.
 - commands: the exact shell commands to run, one per entry, in order: every command under "Done when",
   then the checks from CONTRIBUTING.md that apply to the files this issue touches. Copy them exactly.
