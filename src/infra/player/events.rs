@@ -427,11 +427,18 @@ async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
       // pending window is over, so replay anything parked against it.
       let mut app = ctx.app.lock().await;
       // The player seen above can be parked, force-recovered or replaced before
-      // this lock is taken. Only the request that still owns the slot may clear
-      // the pending latch and replay its intent; a superseded one would
-      // continue playback for a player nobody drives.
-      if !owns_published_player(app.streaming_player.as_ref(), &live_player) {
-        info!("recovery over a superseded player: skipping the replay");
+      // this lock is taken, and this request can be a delayed send from an
+      // older identity whose newer replacement already finished. Only the
+      // request that still owns the recovery identity and the published slot
+      // may clear the pending latch and replay its intent; a superseded one
+      // would continue playback for a player nobody drives.
+      if !request_may_replay_over(
+        app.native_recovery_generation(),
+        request.generation,
+        app.streaming_player.as_ref(),
+        &live_player,
+      ) {
+        info!("recovery over a superseded player or a stale request: skipping the replay");
         continue;
       }
       app.native_backend_pending = false;
@@ -520,10 +527,16 @@ async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
         let mut app = ctx.app.lock().await;
         // Installing the player released the lock, so a park, a forced
         // recovery, a Soloist switch or a newer request can supersede this
-        // rebuild in the gap. Replay only for the player this request
-        // installed; the request is stale and its intent was already voided or
-        // replaced by whoever took the slot.
-        if !owns_published_player(app.streaming_player.as_ref(), &recovered_player) {
+        // rebuild in the gap. Replay only while this request still owns the
+        // recovery identity and the player it installed is still published;
+        // the request is stale and its intent was already voided or replaced
+        // by whoever took the slot.
+        if !request_may_replay_over(
+          app.native_recovery_generation(),
+          request.generation,
+          app.streaming_player.as_ref(),
+          &recovered_player,
+        ) {
           drop(app);
           info!("recovery superseded after the rebuild: skipping the replay");
           recovered_player.shutdown();
@@ -1722,11 +1735,20 @@ async fn is_current_streaming_player(app: &Arc<Mutex<App>>, player: &Arc<Streami
 ///
 /// Every replay a recovery request triggers runs after the lock that installed
 /// its player was released, so a park, a forced recovery, a Soloist switch or a
-/// newer request can replace or clear the slot in that gap. Checked under the
-/// replay's own lock, so the answer cannot change before the intent is
-/// dispatched.
+/// newer request can replace or clear the slot in that gap.
 fn owns_published_player<T>(current: Option<&Arc<T>>, player: &Arc<T>) -> bool {
   current.is_some_and(|current| Arc::ptr_eq(current, player))
+}
+
+/// Whether a recovery request may still replay: it carries the current
+/// recovery identity, and the player it would replay over is still published.
+fn request_may_replay_over<T>(
+  current_generation: u64,
+  request_generation: u64,
+  published_player: Option<&Arc<T>>,
+  player: &Arc<T>,
+) -> bool {
+  current_generation == request_generation && owns_published_player(published_player, player)
 }
 
 fn current_playback_matches_native(app: &App, player: &StreamingPlayer) -> bool {
@@ -1836,7 +1858,7 @@ async fn disconnect_streaming_player(
 mod tests {
   use super::{
     merge_recovery_requests, next_recovery_retry_delay, owns_published_player,
-    recovery_needs_native_selection, recovery_watchdog_should_escalate,
+    recovery_needs_native_selection, recovery_watchdog_should_escalate, request_may_replay_over,
     session_disconnect_recovery, should_replay_published_queue_slot, stop_disarms_watchdog,
     unavailable_is_for_the_loading_track, unavailable_is_transport_related, BuildAttempt,
     RebuildOutcome, SessionDisconnectReason, SessionDisconnectRecovery, StreamingBuildError,
@@ -1889,6 +1911,22 @@ mod tests {
     assert!(owns_published_player(Some(&installed), &installed));
     assert!(!owns_published_player(Some(&other), &installed));
     assert!(!owns_published_player(None, &installed));
+  }
+
+  /// A delayed request from an older identity must not replay over the player
+  /// a newer recovery published, even though that player is the one it sees.
+  #[test]
+  fn a_stale_request_does_not_replay_over_a_newer_published_player() {
+    let published = Arc::new(());
+    // The newer recovery owns generation 2 and its player is published.
+    assert!(request_may_replay_over(2, 2, Some(&published), &published));
+    // The delayed generation-1 request is stale: the identity check alone
+    // would pass, because the published player is the one it observed.
+    assert!(!request_may_replay_over(2, 1, Some(&published), &published));
+    // A current generation whose player was replaced or removed is still refused.
+    assert!(!request_may_replay_over(2, 2, None, &published));
+    let other = Arc::new(());
+    assert!(!request_may_replay_over(2, 2, Some(&other), &published));
   }
 
   #[test]
