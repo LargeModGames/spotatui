@@ -1,0 +1,1 @@
+- **YouTube search and playback ignore automatic yt-dlp configuration**. This prevents download settings from skipping a video or changing its audio output. Pass required options with `SPOTATUI_YTDLP_ARGS`. A successful yt-dlp exit with missing or empty audio now reports a download error.

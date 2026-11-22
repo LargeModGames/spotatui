@@ -63,6 +63,9 @@ pub struct InfraStatusStrings {
   pub youtube_add_failed: &'static str,
   pub youtube_remove_failed: &'static str,
   pub youtube_download_failed: &'static str,
+  pub youtube_config_ignored: &'static str,
+  pub youtube_invalid_ytdlp_args: &'static str,
+  pub youtube_no_audio_file: &'static str,
   pub youtube_task_failed: &'static str,
   pub youtube_created: &'static str,
   pub youtube_deleted: &'static str,
@@ -547,6 +550,9 @@ impl InfraStatusStrings {
   pub fn youtube_download_failed(&self, error: &str) -> String {
     super::format_template(self.youtube_download_failed, &[("error", error)])
   }
+  pub fn youtube_config_ignored(&self, error: &str) -> String {
+    super::format_template(self.youtube_config_ignored, &[("error", error)])
+  }
   pub fn youtube_task_failed(&self, error: &str) -> String {
     super::format_template(self.youtube_task_failed, &[("error", error)])
   }
@@ -957,6 +963,9 @@ pub const EN: InfraStatusStrings = InfraStatusStrings {
   youtube_add_failed: "Cannot add video to playlist: {error}",
   youtube_remove_failed: "Cannot remove video from playlist: {error}",
   youtube_download_failed: "Cannot download YouTube audio: {error}",
+  youtube_config_ignored: "yt-dlp config files are ignored. Pass required options in SPOTATUI_YTDLP_ARGS. {error}",
+  youtube_invalid_ytdlp_args: "Set SPOTATUI_YTDLP_ARGS to a JSON array of yt-dlp option names and values.",
+  youtube_no_audio_file: "yt-dlp exited successfully, but the audio file is missing or empty. Check SPOTATUI_YTDLP_ARGS and any wrapper options.",
   youtube_task_failed: "YouTube playback task failed: {error}",
   youtube_created: "Created YouTube playlist \"{name}\"",
   youtube_deleted: "Deleted YouTube playlist \"{name}\"",
@@ -1278,6 +1287,9 @@ pub const ZH_HANS: InfraStatusStrings = InfraStatusStrings {
   youtube_add_failed: "无法将视频添加到播放列表：{error}",
   youtube_remove_failed: "无法从播放列表移除视频：{error}",
   youtube_download_failed: "无法下载 YouTube 音频：{error}",
+  youtube_config_ignored: "已忽略 yt-dlp 配置文件。请通过 SPOTATUI_YTDLP_ARGS 传递所需选项。{error}",
+  youtube_invalid_ytdlp_args: "请将 SPOTATUI_YTDLP_ARGS 设为 JSON 字符串数组，填入 yt-dlp 的选项名和值。",
+  youtube_no_audio_file: "yt-dlp 已成功退出，但音频文件缺失或为空。请检查 SPOTATUI_YTDLP_ARGS 和包装脚本的选项。",
   youtube_task_failed: "YouTube 播放任务失败：{error}",
   youtube_created: "已创建 YouTube 播放列表“{name}”",
   youtube_deleted: "已删除 YouTube 播放列表“{name}”",
@@ -1600,6 +1612,9 @@ pub const ZH_HANT: InfraStatusStrings = InfraStatusStrings {
   youtube_add_failed: "無法將影片加入播放清單：{error}",
   youtube_remove_failed: "無法從播放清單移除影片：{error}",
   youtube_download_failed: "無法下載 YouTube 音訊：{error}",
+  youtube_config_ignored: "已忽略 yt-dlp 設定檔。請透過 SPOTATUI_YTDLP_ARGS 傳遞所需選項。{error}",
+  youtube_invalid_ytdlp_args: "請將 SPOTATUI_YTDLP_ARGS 設為 JSON 字串陣列，填入 yt-dlp 的選項名稱和值。",
+  youtube_no_audio_file: "yt-dlp 已成功結束，但音訊檔案遺失或為空。請檢查 SPOTATUI_YTDLP_ARGS 和包裝指令稿的選項。",
   youtube_task_failed: "YouTube 播放工作失敗：{error}",
   youtube_created: "已建立 YouTube 播放清單「{name}」",
   youtube_deleted: "已刪除 YouTube 播放清單「{name}」",
