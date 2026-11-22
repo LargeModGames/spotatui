@@ -211,6 +211,11 @@ impl App {
       self.dj.bump_generation()
     };
     if self.dj.auto_queue {
+      if let Some(message) = self.dj.refill_stop_status.take() {
+        if self.status_message_is_error() && self.status_message() == Some(message.as_str()) {
+          self.clear_status_message();
+        }
+      }
       // Same rule the driver tick applies, so the immediate refill and the ongoing
       // ones cannot disagree — on an external Connect device the native queue never
       // fills, and refilling on its length would queue a batch per brain call
@@ -221,7 +226,11 @@ impl App {
       } else {
         self.set_status_message(self.strings().status.app.dj_auto_queue_on, 4);
       }
-      if crate::infra::network::dj::wants_top_up(self.native_queue.len(), &self.dj, external) {
+      if crate::infra::network::dj::wants_top_up(
+        self.native_queue.len(),
+        &self.dj,
+        self.dj_refill_paused(),
+      ) {
         let turn_seq = self.dj.begin_turn(TurnKind::Refill);
         self.dispatch_without_spinner(IoEvent::DjTopUp(generation, turn_seq));
       }
@@ -235,6 +244,12 @@ impl App {
       }
       self.set_status_message(self.strings().status.app.dj_auto_queue_off, 4);
     }
+  }
+
+  /// These players have their own queues. The DJ cannot refill them by native queue depth.
+  #[cfg(feature = "dj-core")]
+  pub(crate) fn dj_refill_paused(&self) -> bool {
+    self.apple_music_owns_playback() || self.spotify_external_device_active()
   }
 
   /// Toggle "only tracks I do not already have", warming the index when on.
@@ -353,6 +368,69 @@ impl App {
 mod tests {
   use super::*;
   use crate::core::app::test_support::*;
+
+  #[cfg(feature = "ai-dj")]
+  #[test]
+  fn each_refill_guard_can_independently_make_a_turn_stale() {
+    use crate::infra::dj::{DjTurn, TurnKind};
+
+    let changes: [(&str, fn(&mut App)); 6] = [
+      ("finished", |app| app.dj.finish_turn(app.dj.turn_seq)),
+      ("generation changed", |app| {
+        app.dj.bump_generation();
+      }),
+      ("turn replaced", |app| {
+        app.dj.begin_turn(TurnKind::Refill);
+      }),
+      ("auto-queue off", |app| app.dj.auto_queue = false),
+      ("external device", |app| {
+        app.current_playback_context = Some(make_external_context())
+      }),
+      ("Apple Music", |app| {
+        app.claim_apple_music();
+      }),
+    ];
+    for (reason, change) in changes {
+      let mut app = App::default();
+      app.dj.auto_queue = true;
+      let turn = DjTurn {
+        generation: app.dj.generation,
+        seq: app.dj.begin_turn(TurnKind::Refill),
+      };
+      assert!(turn.is_current(&app));
+      change(&mut app);
+      assert!(!turn.is_current(&app), "{reason}");
+    }
+  }
+
+  #[cfg(feature = "ai-dj")]
+  #[test]
+  fn dj_refills_wait_for_apple_music_or_connect_to_hand_playback_back() {
+    use crate::core::action::Action;
+    use crate::infra::network::dj::wants_top_up;
+
+    for apple_music in [false, true] {
+      let (tx, events) = channel();
+      let mut app = App::new(tx, UserConfig::new(), None);
+      if apple_music {
+        app.claim_apple_music();
+      } else {
+        app.current_playback_context = Some(make_external_context());
+      }
+      app.apply(Action::ToggleDjAutoQueue);
+      assert!(app.dj.auto_queue);
+      assert!(!wants_top_up(0, &app.dj, app.dj_refill_paused()));
+      assert!(events.try_recv().is_err());
+      assert_eq!(app.dj.refill_failures, 0);
+      if apple_music {
+        let generation = app.begin_apple_music_handoff();
+        assert!(app.finish_apple_music_handoff(generation));
+      } else {
+        app.current_playback_context = None;
+      }
+      assert!(wants_top_up(0, &app.dj, app.dj_refill_paused()));
+    }
+  }
 
   #[cfg(feature = "ai-dj")]
   #[test]

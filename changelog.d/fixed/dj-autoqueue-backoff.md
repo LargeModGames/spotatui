@@ -1,1 +1,1 @@
-- **DJ auto-queue backs off after a failed refill.** Retries wait 5, 10, 20, then 30 seconds. After five consecutive refills add no tracks, auto-queue turns off and shows the cause.
+- **DJ auto-queue backs off after a failed refill.** Retries wait 5, 10, 20, then 30 seconds, or longer during a Spotify rate limit. Auto-queue turns off after five consecutive failures and shows the cause. Adding tracks or sending a playback request resets the streak. Refills pause during Apple Music or external Spotify Connect playback.

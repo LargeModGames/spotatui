@@ -320,10 +320,8 @@ impl App {
       Action::SetDjVibe(vibe) => {
         #[cfg(feature = "dj-core")]
         {
-          // A new standing direction invalidates any refill already in
-          // flight for the old one. Exactly one bump: the in-TUI agent
-          // tells its own set_dj_vibe bump apart from the listener's by
-          // asserting the generation moved by exactly 1.
+          // A new direction invalidates refills for the old one. The in-TUI
+          // agent advances its expected generation by one after this succeeds.
           self.dj.bump_generation();
           self.dj.vibe = vibe;
         }

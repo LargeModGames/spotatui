@@ -212,8 +212,14 @@ pub struct RateLimitGate {
 impl RateLimitGate {
   /// Time left in the window, if one is open.
   pub(crate) async fn rate_limit_remaining(&self) -> Option<Duration> {
-    let until = (*self.rate_limited_until.lock().await)?;
-    until.checked_duration_since(Instant::now())
+    self
+      .rate_limit_deadline()
+      .await?
+      .checked_duration_since(Instant::now())
+  }
+
+  pub(crate) async fn rate_limit_deadline(&self) -> Option<Instant> {
+    (*self.rate_limited_until.lock().await).filter(|until| *until > Instant::now())
   }
 
   /// Open (or extend) the window: a shorter one that lands during a longer
@@ -535,7 +541,15 @@ impl Network {
     query: &[(&str, String)],
     body: Option<Value>,
   ) -> anyhow::Result<Value> {
-    spotify_api_request_json_for(method, path, query, body).await
+    request_with(
+      &self.rate_gate,
+      SPOTIFY_REQUEST_DEADLINE,
+      method,
+      path,
+      query,
+      body,
+    )
+    .await
   }
 
   pub async fn spotify_get_typed<T: DeserializeOwned>(
@@ -543,7 +557,11 @@ impl Network {
     path: &str,
     query: &[(&str, String)],
   ) -> anyhow::Result<T> {
-    spotify_get_typed_for(path, query).await
+    parse_spotify_response(
+      self
+        .spotify_api_request_json(Method::GET, path, query, None)
+        .await?,
+    )
   }
 }
 pub fn normalize_spotify_payload(value: &mut Value) {
@@ -769,7 +787,10 @@ pub async fn spotify_get_typed_for<T: DeserializeOwned>(
   path: &str,
   query: &[(&str, String)],
 ) -> anyhow::Result<T> {
-  let mut value = spotify_api_request_json_for(Method::GET, path, query, None).await?;
+  parse_spotify_response(spotify_api_request_json_for(Method::GET, path, query, None).await?)
+}
+
+fn parse_spotify_response<T: DeserializeOwned>(mut value: Value) -> anyhow::Result<T> {
   normalize_spotify_payload(&mut value);
   Ok(serde_json::from_value(value)?)
 }

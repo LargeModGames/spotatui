@@ -1935,6 +1935,22 @@ fn every_typed_message_fills_its_placeholders_and_preserves_all_arguments() {
       ["SENTINEL_ERROR_中"]
     );
     check!(
+      "tools.queue_filter_failed",
+      strings
+        .status
+        .tools
+        .queue_filter_failed("SENTINEL_ERROR_中"),
+      ["SENTINEL_ERROR_中"]
+    );
+    check!(
+      "tools.queue_streaming_unavailable",
+      strings
+        .status
+        .tools
+        .queue_streaming_unavailable("SENTINEL_NAMES_中"),
+      ["SENTINEL_NAMES_中"]
+    );
+    check!(
       "tools.no_tracks",
       strings.status.tools.no_tracks("SENTINEL_QUERY_中"),
       ["SENTINEL_QUERY_中"]

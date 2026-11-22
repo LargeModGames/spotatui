@@ -167,28 +167,25 @@ impl<E: ToolExecutor> Turn<'_, E> {
       // something it can correct on the next step, which is the entire benefit of
       // running a loop.
       Err(e) => {
-        let detail = match &e {
-          ToolCallError::UnknownTool(name) => {
-            format!("There is no tool called {name}. Use one of the tools listed above.")
-          }
-          ToolCallError::InvalidArguments(detail) => format!("Invalid arguments: {detail}"),
-        };
-        self
+        let outcome = ToolOutcome::error_localized(|strings| match &e {
+          ToolCallError::UnknownTool(name) => strings.status.tools.unknown_tool(name),
+          ToolCallError::InvalidArguments(detail) => strings.status.tools.invalid_arguments(detail),
+        });
+        if !self
           .show_call(&call.name, |language| {
-            let strings = language.strings();
-            match &e {
-              ToolCallError::UnknownTool(name) => strings.status.tools.unknown_tool(name),
-              ToolCallError::InvalidArguments(detail) => {
-                strings.status.tools.invalid_arguments(detail)
-              }
-            }
+            outcome.display_text(language).to_owned()
           })
-          .await;
+          .await
+        {
+          return CallResult::Abandoned;
+        }
+        let result = outcome.text.clone();
+        *tool_error = Some(Box::new(outcome));
         return CallResult::Ran {
           exchange: ToolExchange {
             name: call.name.clone(),
             arguments: call.arguments.clone(),
-            result: detail,
+            result,
           },
           mutated: false,
           set_vibe: false,

@@ -39,6 +39,8 @@ pub struct ToolStrings {
   pub session_unavailable: &'static str,
   pub uneditable: &'static str,
   pub queue_filter_failed: &'static str,
+  pub queue_filter_retry_without: &'static str,
+  pub queue_streaming_unavailable: &'static str,
   pub nothing_queued: &'static str,
   pub unknown_tool: &'static str,
   pub invalid_arguments: &'static str,
@@ -123,7 +125,9 @@ pub const EN: ToolStrings = ToolStrings {
   catalogue_unavailable: "spotatui has no Spotify session, so the catalogue is unavailable. Log in from the spotatui UI, then try again.",
   session_unavailable: "spotatui has no Spotify session. Log in from the spotatui UI, then try again.",
   uneditable: "\"{name}\" is not a playlist the user owns or collaborates on, so it cannot be edited",
-  queue_filter_failed: "Could not read your playlists, so exclude_owned cannot be honoured and nothing was queued. Try again in a moment, or call queue_tracks without exclude_owned to queue these anyway.",
+  queue_filter_failed: "Could not read your playlists ({error}), so exclude_owned cannot be honoured and nothing was queued. Try again in a moment.",
+  queue_filter_retry_without: " To queue anyway, call queue_tracks without exclude_owned.",
+  queue_streaming_unavailable: "The native queue needs the `streaming` feature to play these Spotify tracks: {names}",
   nothing_queued: "Nothing was queued.\n{detail}",
   unknown_tool: "There is no tool called {name}. Use one of the tools listed above.",
   invalid_arguments: "Invalid arguments: {detail}",
@@ -190,7 +194,9 @@ pub const ZH_HANS: ToolStrings = ToolStrings {
   catalogue_unavailable: "spotatui 尚未登录 Spotify，无法访问曲库。请在 spotatui 界面中登录后重试。",
   session_unavailable: "spotatui 尚未登录 Spotify。请在 spotatui 界面中登录后重试。",
   uneditable: "“{name}”不属于用户，也不是协作播放列表，无法编辑",
-  queue_filter_failed: "无法读取播放列表以执行 exclude_owned，未加入任何歌曲。请稍后重试，或在 queue_tracks 中关闭 exclude_owned 后加入。",
+  queue_filter_failed: "无法读取播放列表（{error}），未能执行 exclude_owned，未加入任何歌曲。请稍后重试。",
+  queue_filter_retry_without: " 如需直接加入，可在 queue_tracks 中关闭 exclude_owned。",
+  queue_streaming_unavailable: "本机队列需要 `streaming` 功能才能播放这些 Spotify 歌曲：{names}",
   nothing_queued: "未加入任何歌曲。\n{detail}",
   unknown_tool: "没有名为 {name} 的工具。请使用上方列出的工具。",
   invalid_arguments: "参数无效：{detail}",
@@ -258,7 +264,9 @@ pub const ZH_HANT: ToolStrings = ToolStrings {
   catalogue_unavailable: "spotatui 尚未登入 Spotify，無法存取曲庫。請在 spotatui 介面中登入後重試。",
   session_unavailable: "spotatui 尚未登入 Spotify。請在 spotatui 介面中登入後重試。",
   uneditable: "「{name}」不屬於使用者，也不是協作播放清單，無法編輯",
-  queue_filter_failed: "無法讀取播放清單以執行 exclude_owned，未加入任何歌曲。請稍後重試，或在 queue_tracks 中關閉 exclude_owned 後加入。",
+  queue_filter_failed: "無法讀取播放清單（{error}），未能執行 exclude_owned，未加入任何歌曲。請稍後重試。",
+  queue_filter_retry_without: " 如需直接加入，可在 queue_tracks 中關閉 exclude_owned。",
+  queue_streaming_unavailable: "本機佇列需要 `streaming` 功能才能播放這些 Spotify 歌曲：{names}",
   nothing_queued: "未加入任何歌曲。\n{detail}",
   unknown_tool: "沒有名為 {name} 的工具。請使用上方列出的工具。",
   invalid_arguments: "參數無效：{detail}",
@@ -355,6 +363,12 @@ impl ToolStrings {
   }
   pub fn search_failed(&self, error: &str) -> String {
     super::format_template(self.search_failed, &[("error", error)])
+  }
+  pub fn queue_filter_failed(&self, error: &str) -> String {
+    super::format_template(self.queue_filter_failed, &[("error", error)])
+  }
+  pub fn queue_streaming_unavailable(&self, names: &str) -> String {
+    super::format_template(self.queue_streaming_unavailable, &[("names", names)])
   }
   pub fn no_tracks(&self, query: &str) -> String {
     super::format_template(self.no_tracks, &[("query", query)])

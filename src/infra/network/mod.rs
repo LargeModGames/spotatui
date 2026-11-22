@@ -608,12 +608,10 @@ impl Network {
 
   /// Events that run on the concurrent service lane in `start_tokio`: a strict
   /// subset of [`Self::event_bypasses_spotify_auth`] whose handlers touch only
-  /// `self.app` (plus their own HTTP clients / `spawn_blocking`) — never the
-  /// Spotify client, API pacing, or `Network` state (party connection, pending
-  /// login, search limits) — so they can execute on a detached task with a
-  /// throwaway `Network` instead of head-of-line-blocking the serial pump.
-  /// Keep in sync with the handlers: an event listed here MUST NOT read or
-  /// write anything on `Network` besides `app`.
+  /// `self.app` (plus their own HTTP clients / `spawn_blocking`), so they can
+  /// execute on detached tasks with a throwaway `Network`. The DJ also reads
+  /// the shared Spotify rate-limit deadline to schedule retries. These handlers
+  /// must not use the Spotify client or change the pump's `Network` state.
   pub fn runs_on_service_lane(io_event: &IoEvent) -> bool {
     if !Self::event_bypasses_spotify_auth(io_event) {
       return false;

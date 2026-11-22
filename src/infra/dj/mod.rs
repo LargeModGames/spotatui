@@ -201,6 +201,8 @@ pub enum RefillProgress {
   Waiting,
   #[cfg(feature = "ai-dj")]
   Reset,
+  #[cfg(feature = "ai-dj")]
+  PlaybackRequested,
   Queued,
 }
 
@@ -217,7 +219,7 @@ impl DjTurn {
     dj.thinking
       && dj.generation == self.generation
       && dj.turn_seq == self.seq
-      && (dj.turn_kind == TurnKind::Ask || (dj.auto_queue && !app.spotify_external_device_active()))
+      && (dj.turn_kind == TurnKind::Ask || (dj.auto_queue && !app.dj_refill_paused()))
   }
 }
 
@@ -227,9 +229,12 @@ impl DjTurn {
 pub struct DjState {
   /// Whether the DJ keeps the queue topped up as tracks finish.
   pub auto_queue: bool,
-  /// Consecutive refills that did not add a track, and their next retry time.
+  /// Consecutive failed refills and the earliest time to try another refill.
   pub refill_failures: u8,
   pub refill_retry_at: Option<std::time::Instant>,
+  /// The stop notice that can be dismissed by re-enabling auto-queue.
+  #[cfg(feature = "ai-dj")]
+  pub refill_stop_status: Option<String>,
   /// Only the current refill may report its additions or start a new delay.
   pub refill_progress: RefillProgress,
   /// Bumped whenever in-flight DJ work becomes irrelevant: DJ switched off, a
