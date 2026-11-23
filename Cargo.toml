@@ -120,7 +120,7 @@ librespot-metadata = { version = "=0.8.7", package = "spotatui-librespot-metadat
 librespot-protocol = { version = "=0.8.7", package = "spotatui-librespot-protocol", optional = true, default-features = false }
 protobuf = { version = "3.7", optional = true }
 # Google Cast speakers on the local network: the mDNS browse and the CASTV2 TLS link.
-mdns-sd = { version = "0.21", optional = true }
+mdns-sd = { version = "0.22", optional = true }
 rustls = { version = "0.23", optional = true, default-features = false, features = ["ring", "std", "tls12"] }
 tokio-rustls = { version = "0.26", optional = true, default-features = false, features = ["ring", "tls12"] }
 futures = "0.3.32"
