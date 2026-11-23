@@ -441,7 +441,7 @@ fn replay_recovery_over_live_player(app: &mut App, request: &StreamingRecoveryRe
 }
 
 /// The player-specific half of a recovery chain: what a rebuild attempts and
-/// what the app publishes. 
+/// what the app publishes.
 trait RecoveryBackend: Send + Sync {
   type Player: Send + 'static;
 
