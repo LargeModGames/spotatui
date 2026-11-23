@@ -437,7 +437,10 @@ fn replay_recovery_over_live_player(app: &mut App, request: &StreamingRecoveryRe
     request.continue_after_track,
     recovery_snapshot_summary(app)
   );
-  replay_recovery_intent(app, request, None, false);
+  // Over a live player no TrackChanged will reload a retained slot.
+  let replay_queue_slot = app.pending_start_playback.is_none()
+    && should_replay_published_queue_slot(request, app.queue_now_is_spotify());
+  replay_recovery_intent(app, request, None, replay_queue_slot);
 }
 
 /// The player-specific half of a recovery chain: what a rebuild attempts and
@@ -2660,6 +2663,64 @@ mod tests {
       io_rx.try_recv(),
       Ok(IoEvent::StartPlayback(Some(ref context), None, None))
         if context == "spotify:playlist:parked"
+    ));
+    assert!(matches!(io_rx.try_recv(), Err(TryRecvError::Empty)));
+  }
+
+  /// Replay a discarded slot load over the player startup publishes during backoff.
+  #[tokio::test(start_paused = true)]
+  async fn a_retained_spotify_slot_is_replayed_over_a_player_startup_published_during_backoff() {
+    use crate::core::test_helpers::queued_track;
+    use crate::core::user_config::UserConfig;
+    use crate::infra::network::IoEvent;
+    use crate::infra::queue::QueueNowPlaying;
+    use std::sync::mpsc::{channel, TryRecvError};
+    use std::time::SystemTime;
+
+    let (tx, io_rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    assert_eq!(app.begin_native_recovery(), 1);
+    app.queue_now = Some(QueueNowPlaying::Spotify {
+      track: queued_track("spotify:track:queued", "Queued"),
+    });
+    app.native_backend_pending = true;
+    let app = Arc::new(tokio::sync::Mutex::new(app));
+    let (ctx, recovery_tx) = recovery_context(Arc::clone(&app));
+
+    let script = move |attempt: u32, published: ScriptedSlot| -> BuildAttempt<ScriptedPlayer> {
+      Box::pin(async move {
+        if attempt == 1 {
+          // Deferred startup publishes a replacement while the first attempt
+          // fails and waits to retry.
+          published.publish(ScriptedPlayer::from_startup());
+          return Err(transient_build_failure());
+        }
+        Ok(ScriptedPlayer::new(attempt))
+      })
+    };
+    let backend = ScriptedBackend::new(script);
+    let record = backend.clone();
+    // An idle-app queue needs no native reselect, only restore intent.
+    recovery_tx
+      .send(StreamingRecoveryRequest {
+        generation: 1,
+        restore_playback: true,
+        ..StreamingRecoveryRequest::default()
+      })
+      .expect("the recovery channel is open");
+
+    run_recovery_handler_until_parked(handle_streaming_recovery(ctx, backend)).await;
+
+    assert_eq!(
+      record.attempts(),
+      1,
+      "the published player must end the retry chain"
+    );
+    assert_eq!(record.events(), []);
+    // The slot's direct load is replayed once over the published replacement.
+    assert!(matches!(
+      io_rx.try_recv(),
+      Ok(IoEvent::ReplayPublishedSpotifyQueueSlot)
     ));
     assert!(matches!(io_rx.try_recv(), Err(TryRecvError::Empty)));
   }
