@@ -1636,7 +1636,7 @@ mod tests {
       "https://example.com/a.jpg",
     ));
     let app = Arc::new(Mutex::new(app));
-    let outcome = execute_app_only(&app, &DjToolCall::GetNowPlaying)
+    let outcome = execute_app_only(&app, &DjToolCall::GetNowPlaying, None)
       .await
       .expect("get_now_playing is answered without the network");
     let data = outcome
