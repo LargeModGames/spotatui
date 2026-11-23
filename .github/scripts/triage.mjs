@@ -51,7 +51,7 @@ const PLAN_NAME = "How to start";
 const PLAN_URL_FILE = "plan-url.txt";
 
 const readTriage = () => JSON.parse(readFileSync("triage.json", "utf8"));
-const ghApi = (args, input) => JSON.parse(execFileSync("gh", ["api", ...args], { input, encoding: "utf8" }));
+const ghApi = (args) => JSON.parse(execFileSync("gh", ["api", ...args], { encoding: "utf8" }));
 
 // ---- planning mode ---------------------------------------------------------
 // The issue forms set the type. This fills only an empty status or Area, so a
@@ -138,7 +138,7 @@ if (process.argv.includes("--plan-artifact")) {
   try {
     const artifact =
       ghApi([url]).find((a) => a.name === PLAN_NAME) ??
-      ghApi(["-X", "POST", url, "--input", "-"], JSON.stringify({ type: "plan", name: PLAN_NAME, body: plan.join("\n").trim() }));
+      ghApi([url, "-f", "type=plan", "-f", `name=${PLAN_NAME}`, "-f", `body=${plan.join("\n").trim()}`]);
     writeFileSync(PLAN_URL_FILE, artifact.html_url);
     console.log(`plan: ${artifact.html_url}`);
   } catch (e) {
