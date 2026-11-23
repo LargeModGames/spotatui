@@ -6,6 +6,8 @@
 //                                 stdout (redirect to triage.json)
 //   node triage.mjs --render   -> reads triage.json and prints a Markdown block
 //                                 (posted as the bot comment)
+//   node triage.mjs --planning -> reads triage.json and sets the issue type, the status
+//                                 and the Area field through GraphQL (GH_TOKEN, REPO)
 //
 // Untrusted issue text is read from files written by `gh` (issue.json, open-issues.json,
 // closed-issues.json), never passed through shell interpolation. The tools only read
@@ -24,6 +26,95 @@ const MODEL = "claude-opus-5-5";
 // means "closed as a dup" — a human decision) and judgement labels like
 // `good first issue` / `help wanted`. Dedup results go in the comment, not a label.
 const ALLOWED_LABELS = ["bug", "enhancement", "question", "documentation"];
+
+// The issue type each category label sets. `question` sets none.
+const ISSUE_TYPES = { bug: "Bug", enhancement: "Feature", documentation: "Task" };
+
+// The options of the account's Area issue field, which the board uses for swimlanes.
+const AREAS = [
+  "TUI",
+  "GUI",
+  "Spotify",
+  "Sources",
+  "Audio",
+  "AI DJ / MCP",
+  "CLI / scripting",
+  "Core",
+  "Docs / i18n",
+  "Packaging",
+];
+
+// ---- planning mode ---------------------------------------------------------
+// Fills only what is empty, so a maintainer's choice is never overwritten. A reopened
+// issue whose status is closed (Done, Not planned, Duplicate) goes back on the board.
+if (process.argv.includes("--planning")) {
+  const r = JSON.parse(readFileSync("triage.json", "utf8"));
+  const [owner, name] = process.env.REPO.split("/");
+  const gql = async (query, variables) => {
+    const resp = await fetch("https://api.github.com/graphql", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${process.env.GH_TOKEN}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ query, variables }),
+    });
+    const json = await resp.json();
+    if (!resp.ok || json.errors) throw new Error(`GraphQL: ${JSON.stringify(json.errors ?? resp.status)}`);
+    return json.data;
+  };
+  const { repository: repo } = await gql(
+    `query($owner: String!, $name: String!, $n: Int!) {
+      repository(owner: $owner, name: $name) {
+        issueTypes(first: 25) { nodes { id name } }
+        planningStatuses(first: 20) { nodes { id name } }
+        issueFields(first: 25) { nodes { ... on IssueFieldSingleSelect { id name options { id name } } } }
+        issue(number: $n) {
+          id
+          issueType { name }
+          status { category { name } }
+          issueFieldValues(first: 25) {
+            nodes { ... on IssueFieldSingleSelectValue { field { ... on IssueFieldSingleSelect { name } } } }
+          }
+        }
+      }
+    }`,
+    { owner, name, n: r.issue },
+  );
+  const { issue: target } = repo;
+
+  const typeName = ISSUE_TYPES[r.category];
+  const type = repo.issueTypes.nodes.find((t) => t.name === typeName);
+  if (type && !target.issueType) {
+    await gql(
+      `mutation($i: ID!, $t: ID!) { updateIssueIssueType(input: { issueId: $i, issueTypeId: $t }) { clientMutationId } }`,
+      { i: target.id, t: type.id },
+    );
+    console.log(`type: ${type.name}`);
+  }
+
+  const openCategories = ["Backlog", "Planned", "Started"];
+  const statusName = r.good_first_issue ? "Todo" : "Backlog";
+  const status = repo.planningStatuses.nodes.find((s) => s.name === statusName);
+  if (status && !openCategories.includes(target.status?.category?.name)) {
+    await gql(`mutation($i: ID!, $s: ID!) { setIssueStatus(input: { issueId: $i, statusId: $s }) { clientMutationId } }`, {
+      i: target.id,
+      s: status.id,
+    });
+    console.log(`status: ${status.name}`);
+  }
+
+  const areaField = repo.issueFields.nodes.find((f) => f.name === "Area");
+  const option = areaField?.options.find((o) => o.name === r.likely_area);
+  const hasArea = target.issueFieldValues.nodes.some((v) => v.field?.name === "Area");
+  if (option && !hasArea) {
+    await gql(
+      `mutation($i: ID!, $f: ID!, $o: ID!) {
+        setIssueFieldValue(input: { issueId: $i, issueFields: [{ fieldId: $f, singleSelectOptionId: $o }] }) { clientMutationId }
+      }`,
+      { i: target.id, f: areaField.id, o: option.id },
+    );
+    console.log(`Area: ${option.name}`);
+  }
+  process.exit(0);
+}
 
 // ---- render mode -----------------------------------------------------------
 if (process.argv.includes("--render")) {
@@ -235,7 +326,7 @@ const TRIAGE_SCHEMA = {
     category: { anyOf: [{ type: "string", enum: ALLOWED_LABELS }, { type: "null" }] },
     summary: { type: "string" },
     key_points: { type: "array", items: { type: "string" } },
-    likely_area: { anyOf: [{ type: "string" }, { type: "null" }] },
+    likely_area: { anyOf: [{ type: "string", enum: AREAS }, { type: "null" }] },
     where_to_look: {
       type: "array",
       items: {
@@ -292,7 +383,11 @@ Your final reply is the JSON object that the output format describes:
   If the changelog below shows that it is already fixed or added, say so and name the version or "unreleased".
 - key_points: at most 5 concrete facts the issue states (platform, version, steps, expected and actual
   behavior, error text). Never add a fact the reporter did not state.
-- likely_area: a short name for the affected part of spotatui, in the words of the architecture below, or null.
+- likely_area: the part of spotatui the issue is about, or null when none fits. One of: TUI (the terminal UI),
+  GUI (the browser page and the desktop app), Spotify (login, the internal API, native streaming, Soloist),
+  Sources (Local, Subsonic, Radio, YouTube, Qobuz), Audio (output, EQ, the visualizer capture),
+  AI DJ / MCP, CLI / scripting (subcommands, Lua plugins), Core (config, state, shared logic),
+  Docs / i18n (documentation and translations), Packaging (installers, distro packages).
 - where_to_look: at most 3 files that you found with the tools and that a maintainer will want to read first,
   each with one short reason that says what the file does there. Do not guess a root cause. Empty when unsure.
 - missing_info: only for a bug, at most 5 details a maintainer needs that the report does not give
@@ -395,10 +490,7 @@ const strList = (v, max, n) =>
 
 // Hard-filter everything the model returned against reality.
 const category = ALLOWED_LABELS.includes(triage.category) ? triage.category : null;
-const likelyArea =
-  typeof triage.likely_area === "string" && triage.likely_area.trim()
-    ? triage.likely_area.trim().slice(0, 120)
-    : null;
+const likelyArea = AREAS.includes(triage.likely_area) ? triage.likely_area : null;
 const whereToLook = Array.isArray(triage.where_to_look)
   ? triage.where_to_look
       .filter((w) => w && trackedFiles.has(w.path))
