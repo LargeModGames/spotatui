@@ -186,6 +186,17 @@ pub(super) async fn start_tokio(io_rx: std::sync::mpsc::Receiver<IoEvent>, netwo
         }
         io_event
       };
+      // The reselect's rate-limit hold must reach the replay too, or the queue
+      // router loads the slot before the external-playback check runs.
+      #[cfg(feature = "streaming")]
+      let io_event = if matches!(&io_event, IoEvent::ReplayPublishedSpotifyQueueSlot) {
+        match network.hold_back_if_rate_limited(io_event).await {
+          Some(io_event) => io_event,
+          None => continue,
+        }
+      } else {
+        io_event
+      };
       // The native queue router runs first: it owns `AdvanceNativeQueue` and
       // the queue slot's transport controls, and relinquishes the slot on an
       // unrelated `StartPlayback` (returning false so the per-source
@@ -501,6 +512,97 @@ mod tests {
         "playback",
       );
       assert_eq!(playback["payload"]["item"]["title"], "Suspended");
+    }
+  }
+
+  /// The reselect is deferred by the rate window; the replay must wait with it.
+  #[cfg(feature = "streaming")]
+  #[tokio::test]
+  async fn a_rate_limited_reselect_holds_the_retained_slot_replay_back() {
+    use crate::core::app::App;
+    use crate::core::test_helpers::queued_track;
+    use crate::core::user_config::UserConfig;
+    use crate::infra::network::IoEvent;
+    use crate::infra::queue::QueueNowPlaying;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
+    let (app_tx, app_rx) = std::sync::mpsc::channel();
+    let mut app = App::new(app_tx, UserConfig::new(), None);
+    // A parked backend makes a slot replay observable before any player exists.
+    app.park_cancelled_native_recovery();
+    app.queue_now = Some(QueueNowPlaying::Spotify {
+      track: queued_track("spotify:track:queued", "Queued"),
+    });
+    app.current_playback_context = Some(external_playing_context());
+    let app = Arc::new(Mutex::new(app));
+    let mut network = Network::rate_limited_pump_network_for_test(&app).await;
+
+    let (pump_tx, pump_rx) = std::sync::mpsc::channel();
+    // Recovery dispatches the reselect before the retained-slot replay.
+    pump_tx
+      .send(IoEvent::AutoSelectStreamingDevice(
+        "spotatui".to_string(),
+        false,
+        true,
+      ))
+      .unwrap();
+    pump_tx
+      .send(IoEvent::ReplayPublishedSpotifyQueueSlot)
+      .unwrap();
+    drop(pump_tx);
+
+    start_tokio(pump_rx, &mut network).await;
+
+    {
+      let app = app.lock().await;
+      assert_eq!(
+        app.native_is_playing, None,
+        "the slot must not load before the reselect's external-playback check"
+      );
+      assert!(app.queue_now.is_some());
+    }
+
+    // Both waited, in dispatch order.
+    network.flush_deferred().await;
+    assert!(matches!(
+      app_rx.try_recv(),
+      Ok(IoEvent::AutoSelectStreamingDevice(_, false, true))
+    ));
+    assert!(matches!(
+      app_rx.try_recv(),
+      Ok(IoEvent::ReplayPublishedSpotifyQueueSlot)
+    ));
+    assert!(app_rx.try_recv().is_err());
+  }
+
+  #[cfg(feature = "streaming")]
+  #[allow(deprecated)]
+  fn external_playing_context() -> rspotify::model::context::CurrentPlaybackContext {
+    use rspotify::model::{
+      context::{Actions, CurrentPlaybackContext},
+      CurrentlyPlayingType, Device, DeviceType, RepeatState,
+    };
+
+    CurrentPlaybackContext {
+      device: Device {
+        id: Some("external-device".to_string()),
+        is_active: true,
+        is_private_session: false,
+        is_restricted: false,
+        name: "Phone".to_string(),
+        _type: DeviceType::Smartphone,
+        volume_percent: Some(50),
+      },
+      repeat_state: RepeatState::Off,
+      shuffle_state: false,
+      context: None,
+      timestamp: chrono::Utc::now(),
+      progress: None,
+      is_playing: true,
+      item: None,
+      currently_playing_type: CurrentlyPlayingType::Track,
+      actions: Actions::default(),
     }
   }
 }

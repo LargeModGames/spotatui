@@ -668,6 +668,11 @@ impl Network {
   /// it would reach the player that owned the sink when it was queued. A new
   /// transport event goes here too.
   pub fn event_is_transport(io_event: &IoEvent) -> bool {
+    // The retained-slot replay drives the sink too.
+    #[cfg(feature = "streaming")]
+    if matches!(io_event, IoEvent::ReplayPublishedSpotifyQueueSlot) {
+      return true;
+    }
     matches!(
       io_event,
       IoEvent::StartPlayback(..)
@@ -1221,7 +1226,9 @@ impl Network {
   /// for the pump's flush, or slept out where nothing flushes (the CLI).
   /// `None` when it was queued.
   pub(crate) async fn hold_back_if_rate_limited(&mut self, io_event: IoEvent) -> Option<IoEvent> {
-    if Self::event_bypasses_spotify_auth(&io_event) {
+    // A login-free transport still waits its turn: the replay must not load
+    // before the reselect it rode in behind.
+    if Self::event_bypasses_spotify_auth(&io_event) && !Self::event_is_transport(&io_event) {
       return Some(io_event);
     }
     let left = self.rate_gate.rate_limit_remaining().await;
@@ -1980,6 +1987,22 @@ fn report_request_error(app: &mut App, error: anyhow::Error) {
 }
 
 #[cfg(test)]
+impl Network {
+  /// A pump-mode network with a live login and an open rate-limit window.
+  pub(crate) async fn rate_limited_pump_network_for_test(app: &Arc<Mutex<App>>) -> Network {
+    let mut network = Network::new(None, app);
+    network.spotify = Some(SpotifyLogin::new());
+    network.defers_rate_limited = true;
+    network.rate_gate = requests::RateLimitGate::default();
+    network
+      .rate_gate
+      .rate_limit_for(std::time::Duration::from_secs(30))
+      .await;
+    network
+  }
+}
+
+#[cfg(test)]
 mod tests {
 
   #[tokio::test]
@@ -2104,6 +2127,8 @@ mod tests {
       !Network::runs_on_service_lane(&event),
       "the queue router owns replay ordering on the serial event pump"
     );
+    // It waits behind the recovery reselect, which a rate window can defer.
+    assert!(Network::event_is_transport(&event));
   }
 
   /// `DjToolCall` is the one event that bypasses the auth gate *without* moving
@@ -2372,15 +2397,7 @@ mod tests {
 
   /// A pump-mode network with a session and a private, open rate-limit window.
   async fn rate_limited_pump_network(app: &Arc<Mutex<App>>) -> Network {
-    let mut network = session_free_network(app);
-    network.spotify = Some(SpotifyLogin::new());
-    network.defers_rate_limited = true;
-    network.rate_gate = requests::RateLimitGate::default();
-    network
-      .rate_gate
-      .rate_limit_for(Duration::from_secs(30))
-      .await;
-    network
+    Network::rate_limited_pump_network_for_test(app).await
   }
 
   /// An app with a session whose pump channel the test can read.
