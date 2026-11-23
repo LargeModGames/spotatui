@@ -1,0 +1,1 @@
+- **Listening Party key without Spotify**: the key opened a popup that could not host or join. Without a Spotify session it now says that a session is needed. A party that is already running still opens ([#1041](https://github.com/LargeModGames/spotatui/issues/1041)).
