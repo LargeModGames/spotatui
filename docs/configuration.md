@@ -359,6 +359,7 @@ These keys also go under `behavior:`. Defaults below are the built-in values whe
 | `announcement_feed_url` | Unset | Override the remote JSON feed URL (HTTPS). |
 | `enable_lyrics` | `true` | Look up lyrics for each track. Spotify tracks try Spotify first, then fall back to LRCLIB if lyrics are unavailable or the request fails; LRCLIB receives the title, artist and length. |
 | `enable_monthly_recap_prompt` | `true` | Show a popup once a month when your listening recap is ready, and once in December for the recap of the year. |
+| `now_playing_panel_on_startup` | `false` | Open the terminal app's now playing panel (cover, details and up next beside the content, the panel `Enter` on the playbar toggles) when spotatui starts. It still hides while searching and when the content is narrower than 90 columns. |
 | `pin_community_playlist` | `true` | Pin the spotatui community playlist to the top of your Spotify playlists. |
 | `visualizer_style` | `Cava` | Visualizer look: `Cava`, `BarGraph`, `HeadUnit`, `AnalogVu`, `Winamp`, `PhosphorScope`, `Outrun`, `RackEq` or `Cassette` (case-sensitive). Older `Classic` and `Equalizer` values are accepted as aliases for `Cava`. |
 | `player_bar_visualizer` | `spectrum` | What the desktop app and the browser GUI draw behind the player bar: `off`, `spectrum` or `waveform`. Linux and Windows only (Linux builds require the `audio-viz` feature). A click on empty space in the bar also changes it. Its look is set in `visualizer.yml` (see the Themes guide). |

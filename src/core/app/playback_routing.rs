@@ -149,6 +149,17 @@ impl App {
     self.up_next_pending = true;
   }
 
+  /// Open the terminal's now playing panel when
+  /// `behavior.now_playing_panel_on_startup` is set, with the "Up next" fetch
+  /// Enter on the playbar requests. Runs before the first frame, so there is
+  /// no terminal size yet to warn about a narrow terminal.
+  pub(crate) fn open_now_playing_panel_on_startup(&mut self) {
+    if self.user_config.behavior.now_playing_panel_on_startup && !self.view.now_playing_panel {
+      self.view.now_playing_panel = true;
+      self.request_up_next();
+    }
+  }
+
   /// Send a requested "Up next" fetch when it is due, given the id of the item
   /// playing now. Only the queue screen fetched Spotify's queue before. A
   /// request stays pending while the panel is open and no fetch can go out, and
@@ -1344,6 +1355,22 @@ mod tests {
   }
 
   const PLAYING_ID: Option<&str> = Some("0000000000000000000001");
+
+  #[test]
+  fn the_now_playing_panel_opens_at_startup_only_when_configured() {
+    let (mut app, rx) = spotify_track_playing();
+    app.open_now_playing_panel_on_startup();
+    assert!(!app.view.now_playing_panel, "closed by default");
+
+    app.user_config.behavior.now_playing_panel_on_startup = true;
+    app.open_now_playing_panel_on_startup();
+    assert!(app.view.now_playing_panel);
+    app.follow_up_next(PLAYING_ID);
+    assert!(
+      matches!(rx.try_recv(), Ok(IoEvent::GetQueue)),
+      "up next loads as when Enter opens the panel"
+    );
+  }
 
   #[test]
   fn a_requested_up_next_fetches_the_spotify_queue_once() {
