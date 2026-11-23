@@ -4,8 +4,10 @@ name: Issue Triage
 # read-only tools: applies a category label and posts a summary, code pointers and
 # possible duplicates, acting as spotatui[bot]. It also fills the status and the
 # Area field when they are empty. A `good first issue` also gets
-# step-by-step start instructions for new contributors. No maintainer approval
-# step: the run generates and applies in one pass. See .github/scripts/triage.mjs.
+# step-by-step start instructions for new contributors, in a "How to start" plan
+# artifact that maintainers can edit (in the comment when the artifact fails).
+# No maintainer approval step: the run generates and applies in one pass.
+# See .github/scripts/triage.mjs.
 
 on:
   issues:
@@ -79,6 +81,7 @@ jobs:
           REPO: ${{ github.repository }}
           N: ${{ steps.n.outputs.number }}
         run: |
+          node .github/scripts/triage.mjs --plan-artifact
           node .github/scripts/triage.mjs --render | tee comment.md
           gh issue comment "$N" --repo "$REPO" --body-file comment.md
           labels=$(node -e 'process.stdout.write(require("./triage.json").labels.join(","))')
