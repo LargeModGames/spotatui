@@ -1,6 +1,7 @@
 name: Feature request
 description: An idea for spotatui.
 labels: ["enhancement"]
+type: Feature
 body:
   - type: textarea
     id: problem
