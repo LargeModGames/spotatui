@@ -45,8 +45,9 @@ const AREA_NAMES = Object.keys(AREAS);
 
 // ---- planning mode ---------------------------------------------------------
 // The issue forms set the type. This fills only an empty status or Area, so a
-// maintainer's choice is never overwritten. A reopened issue whose status is closed
-// (Done, Not planned, Duplicate) goes back on the board.
+// maintainer's choice is never overwritten. GitHub gives a new issue Backlog, which a
+// good first issue may replace with Todo. A reopened issue whose status is closed
+// (Done, Not planned, Duplicate) goes back on the board; a closed issue is left alone.
 if (process.argv.includes("--planning")) {
   const r = JSON.parse(readFileSync("triage.json", "utf8"));
   const [owner, name] = process.env.REPO.split("/");
@@ -65,6 +66,9 @@ if (process.argv.includes("--planning")) {
         issueFields(first: 25) { nodes { ... on IssueFieldSingleSelect { id name options { id name } } } }
         issue(number: $n) {
           id
+          state
+          viewerCanSetStatus
+          viewerCanSetFields
           status { category { name } }
           issueFieldValues(first: 25) {
             nodes { ... on IssueFieldSingleSelectValue { field { ... on IssueFieldSingleSelect { name } } } }
@@ -78,7 +82,10 @@ if (process.argv.includes("--planning")) {
 
   const statusName = r.good_first_issue ? "Todo" : "Backlog";
   const status = repo.planningStatuses.nodes.find((s) => s.name === statusName);
-  if (status && !["Backlog", "Planned", "Started"].includes(target.status?.category?.name)) {
+  const kept = r.good_first_issue ? ["Planned", "Started"] : ["Backlog", "Planned", "Started"];
+  if (!target.viewerCanSetStatus) {
+    console.log("::warning::This token cannot set the issue status.");
+  } else if (status && target.state === "OPEN" && !kept.includes(target.status?.category?.name)) {
     gql(`mutation($i: ID!, $s: ID!) { setIssueStatus(input: { issueId: $i, statusId: $s }) { clientMutationId } }`, {
       i: target.id,
       s: status.id,
@@ -92,6 +99,8 @@ if (process.argv.includes("--planning")) {
     const option = areaField?.options.find((o) => o.name === r.likely_area);
     if (!option) {
       console.log(`::warning::The Area field has no option "${r.likely_area}". Update AREAS in triage.mjs.`);
+    } else if (!target.viewerCanSetFields) {
+      console.log("::warning::This token cannot set issue fields.");
     } else {
       gql(
         `mutation($i: ID!, $f: ID!, $o: ID!) {
