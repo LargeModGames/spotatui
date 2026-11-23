@@ -2,8 +2,8 @@ name: Issue Triage
 
 # Auto-triages every opened issue with Claude, which reads the repository through
 # read-only tools: applies a category label and posts a summary, code pointers and
-# possible duplicates, acting as spotatui[bot]. It also fills the issue type, the
-# status and the Area field when they are empty. A `good first issue` also gets
+# possible duplicates, acting as spotatui[bot]. It also fills the status and the
+# Area field when they are empty. A `good first issue` also gets
 # step-by-step start instructions for new contributors. No maintainer approval
 # step: the run generates and applies in one pass. See .github/scripts/triage.mjs.
 
@@ -85,7 +85,7 @@ jobs:
           if [ -n "$labels" ]; then
             gh issue edit "$N" --repo "$REPO" --add-label "$labels"
           fi
-      - name: Set issue type, status and Area for the board
+      - name: Set status and Area for the board
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
