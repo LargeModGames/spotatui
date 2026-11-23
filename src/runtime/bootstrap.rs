@@ -220,12 +220,16 @@ fn prompt_global_song_count_opt_in(
   // when the config predates the setting.
   let config_has_answer = config_paths.config_file_path.exists() && {
     let config_string = fs::read_to_string(&config_paths.config_file_path)?;
-    // The typed config loader can accept keys that a YAML Value rejects.
-    serde_yaml::from_str::<serde_yaml::Value>(&config_string).is_ok_and(|config| {
-      config["behavior"]["enable_global_song_count"]
+    // The typed config loader can accept keys that a YAML Value rejects, such
+    // as a duplicate `plugin_commands` key. Saving the answer would fail on the
+    // same parse, so asking again would repeat on every launch: treat such a
+    // file as answered and keep the value the typed loader read.
+    match serde_yaml::from_str::<serde_yaml::Value>(&config_string) {
+      Ok(config) => config["behavior"]["enable_global_song_count"]
         .as_bool()
-        .is_some()
-    })
+        .is_some(),
+      Err(_) => true,
+    }
   };
 
   if !should_prompt_global_song_count(first_run, config_has_answer) {
@@ -1159,22 +1163,32 @@ mod tests {
   }
 
   #[test]
-  fn duplicate_plugin_commands_are_treated_as_no_saved_song_counter_answer() {
-    let dir = tempfile::tempdir().unwrap();
-    let config_path = dir.path().join("config.yml");
+  fn duplicate_plugin_commands_keep_the_saved_song_counter_answer() {
     let contents =
       "behavior:\n  enable_global_song_count: true\nplugin_commands:\n  example: x\n  example: y\n";
-    std::fs::write(&config_path, contents).unwrap();
-    let mut config = user_config_at(config_path.clone());
-    config.load_config().unwrap();
-    assert!(config.behavior.enable_global_song_count);
-    let onboarding = ScriptedOnboarding::with_answers(&["n"]);
+    for (interactive, label) in [(true, "interactive launch"), (false, "CLI run")] {
+      let dir = tempfile::tempdir().unwrap();
+      let config_path = dir.path().join("config.yml");
+      std::fs::write(&config_path, contents).unwrap();
+      let mut config = user_config_at(config_path.clone());
+      config.load_config().unwrap();
+      assert!(config.behavior.enable_global_song_count, "{label}");
+      let onboarding = if interactive {
+        ScriptedOnboarding::with_answers(&["n"])
+      } else {
+        ScriptedOnboarding::non_interactive(&[])
+      };
 
-    prompt_global_song_count_opt_in(&mut config, false, &onboarding).unwrap();
+      prompt_global_song_count_opt_in(&mut config, false, &onboarding).unwrap();
 
-    assert!(onboarding.saw("Would you like to participate?"));
-    assert!(!config.behavior.enable_global_song_count);
-    assert_eq!(std::fs::read_to_string(config_path).unwrap(), contents);
+      assert!(!onboarding.saw("Would you like to participate?"), "{label}");
+      assert!(config.behavior.enable_global_song_count, "{label}");
+      assert_eq!(
+        std::fs::read_to_string(config_path).unwrap(),
+        contents,
+        "{label}"
+      );
+    }
   }
 
   #[test]
