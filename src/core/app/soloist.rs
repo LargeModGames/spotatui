@@ -419,9 +419,33 @@ mod tests {
     let mut app = make_app_simple();
     let (link, mut rx) = SoloistLink::test_pair("soloist-device");
     app.install_soloist_link(link.clone());
+    app.apply_soloist_event(&link, &Event::Device { is_active: true });
     app.apply_soloist_event(&link, &Event::Playback(Status::Playing));
     app.pause_native_playback();
-    assert_eq!(rx.try_recv().ok(), Some(Command::Pause));
+    assert_eq!(rx.try_recv().unwrap().command, Command::Pause);
+  }
+
+  #[cfg(feature = "audio-decode")]
+  #[test]
+  fn a_decoded_owner_pauses_only_the_active_soloist() {
+    use crate::infra::soloist::protocol::PlaybackState;
+
+    let mut app = make_app_simple();
+    let (link, mut rx) = SoloistLink::test_pair("soloist-device");
+    app.install_soloist_link(link.clone());
+    app.claim_decoded_sink(crate::core::source::Source::Local);
+    for is_active in [false, true] {
+      app.apply_soloist_event(
+        &link,
+        &Event::State(Box::new(PlaybackState {
+          status: Status::Playing,
+          is_active,
+          ..Default::default()
+        })),
+      );
+      let expected = is_active.then_some(Command::Pause);
+      assert_eq!(rx.try_recv().ok().map(|queued| queued.command), expected);
+    }
   }
 
   fn with_config(app: &mut App, dir: &std::path::Path) {

@@ -1,10 +1,11 @@
 //! Starts, watches and stops the Soloist child, and bridges its WebSocket to the App.
 
 use std::collections::BTreeSet;
+use std::future::poll_fn;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex as StdMutex, OnceLock};
+use std::sync::{Arc, Mutex as StdMutex, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
 use futures::{Sink, SinkExt, StreamExt};
@@ -16,7 +17,7 @@ use tokio::sync::{oneshot, Mutex, Notify};
 use tokio_tungstenite::tungstenite::Message;
 
 use super::auth::ApiKey;
-use super::link::{SoloistLink, StreamQuality, VolumeGate};
+use super::link::{QueuedCommand, SoloistLink, StreamQuality, VolumeGate};
 use super::logline::{self, LogEvent};
 use super::process::{self, Exit, SpawnFailure, SpawnPlan};
 use super::protocol::{self, Command, Event, Status};
@@ -238,32 +239,50 @@ async fn drain(reader: impl AsyncRead + Unpin, events: UnboundedSender<LogEvent>
   }
 }
 
-async fn write_commands<S>(mut sink: S, mut commands: UnboundedReceiver<Command>)
-where
+async fn write_commands<S>(
+  mut sink: S,
+  mut commands: UnboundedReceiver<QueuedCommand>,
+  link: Weak<SoloistLink>,
+) where
   S: Sink<Message> + Unpin,
 {
   let mut gate = VolumeGate::default();
   loop {
     let deadline = gate.deadline();
-    let command = tokio::select! {
+    let queued = tokio::select! {
       command = commands.recv() => match command {
-        Some(Command::SetVolume(volume)) => match gate.offer(volume, Instant::now()) {
-          Some(volume) => Command::SetVolume(volume),
-          None => continue,
+        Some(queued @ QueuedCommand { command: Command::SetVolume(volume), .. }) => {
+          match gate.offer(volume, Instant::now()) {
+            Some(volume) => QueuedCommand { command: Command::SetVolume(volume), ..queued },
+            None => continue,
+          }
         },
         Some(command) => command,
         None => break,
       },
       _ = sleep_until(deadline) => match gate.due(Instant::now()) {
-        Some(volume) => Command::SetVolume(volume),
+        Some(volume) => QueuedCommand {
+          command: Command::SetVolume(volume),
+          activity_generation: None,
+        },
         None => continue,
       },
     };
-    if sink
-      .send(Message::Text(command.to_json().into()))
-      .await
-      .is_err()
-    {
+    // Check the activity generation after the sink is ready.
+    if poll_fn(|cx| sink.poll_ready_unpin(cx)).await.is_err() {
+      break;
+    }
+    let Some(link) = link.upgrade() else {
+      break;
+    };
+    let submitted = link.submit_if_current(queued, |command| {
+      sink.start_send_unpin(Message::Text(command.to_json().into()))
+    });
+    drop(link);
+    let Some(submitted) = submitted else {
+      continue;
+    };
+    if submitted.is_err() || sink.flush().await.is_err() {
       break;
     }
   }
@@ -531,8 +550,8 @@ async fn run_once(
   info!("soloist: running, WebSocket on port {port}");
   let (sink, mut stream) = socket.split();
   let (command_tx, command_rx) = mpsc::unbounded_channel();
-  let writer = tokio::spawn(write_commands(sink, command_rx));
   let link = Arc::new(SoloistLink::new(device_id, command_tx));
+  let writer = tokio::spawn(write_commands(sink, command_rx, Arc::downgrade(&link)));
   if let Ok(mut slot) = shared.link.lock() {
     *slot = Some(link.clone());
   }
@@ -698,6 +717,37 @@ mod job {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[tokio::test]
+  async fn queued_pauses_and_deactivation_do_not_survive_a_handoff() {
+    for reactivated in [false, true] {
+      let (link, mut commands) = SoloistLink::test_pair("dev");
+      link.apply(&Event::Device { is_active: true });
+      link.apply(&Event::Playback(Status::Playing));
+      link.pause();
+      link.send(Command::Deactivate);
+      link.apply(&Event::Device { is_active: false });
+      if reactivated {
+        link.apply(&Event::Device { is_active: true });
+        link.pause();
+        link.send(Command::Deactivate);
+      }
+      commands.close();
+
+      let (sink, mut written) = futures::channel::mpsc::unbounded::<Message>();
+      write_commands(sink, commands, Arc::downgrade(&link)).await;
+
+      if reactivated {
+        for command in [Command::Pause, Command::Deactivate] {
+          assert_eq!(
+            written.next().await,
+            Some(Message::Text(command.to_json().into()))
+          );
+        }
+      }
+      assert!(written.next().await.is_none());
+    }
+  }
 
   #[test]
   fn shutdown_leaves_playback_on_another_device_untouched() {

@@ -1,0 +1,1 @@
+- **Starting another source leaves Spotify playing on another device**: with the Soloist engine, spotatui only pauses the local device when it is active and playing or buffering. Queued pauses and deactivation are discarded after a device handoff ([#994](https://github.com/LargeModGames/spotatui/issues/994)).
