@@ -39,11 +39,14 @@ fn parse_spotify_uri(uri: &str) -> Result<String, String> {
     "spotify:playlist:",
     "spotify:show:",
   ];
-  if PLAYABLE.iter().any(|kind| uri.starts_with(kind)) {
-    return Ok(uri.to_string());
-  }
   let expected = "expected a spotify:track:, spotify:album:, spotify:artist:, \
 spotify:playlist: or spotify:show: URI";
+  if let Some(kind) = PLAYABLE.iter().find(|kind| uri.starts_with(**kind)) {
+    if uri[kind.len()..].trim().is_empty() {
+      return Err(format!("{expected}; {kind} has no id"));
+    }
+    return Ok(uri.to_string());
+  }
   match uri.split_once(':') {
     Some((scheme, _)) if OTHER_SOURCES.contains(&scheme) => Err(format!(
       "{scheme}: URIs play only in the running spotatui; {expected}"
@@ -634,6 +637,24 @@ mod tests {
     ] {
       let error = parse_spotify_uri(uri).unwrap_err();
       assert!(error.starts_with("expected a spotify:track:"), "{error}");
+    }
+  }
+
+  #[test]
+  fn play_uri_refuses_a_spotify_uri_without_an_id() {
+    for kind in ["track", "album", "artist", "playlist", "show"] {
+      for uri in [format!("spotify:{kind}:"), format!("spotify:{kind}: ")] {
+        let error = parse_spotify_uri(&uri).unwrap_err();
+        assert!(
+          error.starts_with("expected a spotify:track:"),
+          "{uri}: {error}"
+        );
+        assert!(
+          error.ends_with(&format!("spotify:{kind}: has no id")),
+          "{uri}: {error}"
+        );
+      }
+      assert!(parse_spotify_uri(&format!("spotify:{kind}:1")).is_ok());
     }
   }
 
