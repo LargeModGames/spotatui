@@ -868,6 +868,15 @@
       "contributions": [
         "code"
       ]
+    },
+    {
+      "login": "stellar-pxl",
+      "name": "stellar-pxl",
+      "avatar_url": "https://avatars.githubusercontent.com/u/37384673?v=4",
+      "profile": "https://reportbin.dev",
+      "contributions": [
+        "code"
+      ]
     }
   ],
   "contributorsPerLine": 7,
