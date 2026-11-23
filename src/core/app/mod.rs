@@ -746,15 +746,21 @@ impl App {
   }
 
   pub fn dispatch(&mut self, action: IoEvent) {
+    self.try_dispatch(action);
+  }
+
+  fn try_dispatch(&mut self, action: IoEvent) -> bool {
     // `is_loading` will be set to false again after the async action has finished in network.rs
     self.is_loading = true;
-    if let Some(io_tx) = &self.io_tx {
-      if let Err(e) = io_tx.send(action) {
-        self.is_loading = false;
-        log::error!("Error from dispatch {}", e);
-        // TODO: handle error
-      };
+    let Some(io_tx) = &self.io_tx else {
+      return false;
+    };
+    if let Err(e) = io_tx.send(action) {
+      self.is_loading = false;
+      log::error!("Error from dispatch {}", e);
+      return false;
     }
+    true
   }
 
   /// [`Self::dispatch`] without setting `is_loading`.

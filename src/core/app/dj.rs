@@ -24,7 +24,7 @@ impl App {
     keys
   }
 
-  /// Queue a batch of DJ-chosen tracks, returning how many were accepted.
+  /// Queue a batch of DJ-chosen tracks, reporting acceptance in input order.
   ///
   /// Routes every track through [`Self::add_track_to_native_queue`] rather than
   /// pushing into `native_queue` directly, so the no-URI guard, the radio
@@ -37,30 +37,25 @@ impl App {
   /// caller overwrites them with a single aggregate message afterwards.
   #[cfg(feature = "dj-core")]
   #[cfg_attr(not(any(feature = "mcp-server", feature = "ai-dj")), allow(dead_code))]
-  pub fn extend_native_queue_from_dj(&mut self, tracks: Vec<TrackInfo>) -> usize {
+  pub fn extend_native_queue_from_dj(&mut self, tracks: Vec<TrackInfo>) -> Vec<bool> {
     if self.apple_music_owns_playback() {
       self.set_status_message(self.strings().status.app.music_cannot_queue, 4);
-      return 0;
+      return vec![false; tracks.len()];
     }
-    let mut accepted = 0usize;
+    let mut accepted = Vec::with_capacity(tracks.len());
     for track in tracks {
-      // Mirror `add_track_to_native_queue`'s rejections so the count we report
-      // is honest, rather than inferring them from a length change.
-      let Some(uri) = track.uri.clone() else {
-        continue;
-      };
-      if uri.starts_with("radio:") || uri.starts_with("applemusic:") {
-        continue;
-      }
       let before = self.native_queue.len();
-      self.add_track_to_native_queue(track);
-      accepted += 1;
+      accepted.push(self.add_track_to_native_queue(track));
       // A Spotify track on an external Connect device is dispatched to the Web
       // API queue instead of pushed locally, so only remember what a vibe shift
       // would actually be able to drop again. Remembered by URI, not position:
       // the queue can be reordered, appended to, or pruned by hand before the
       // shift happens.
-      if self.native_queue.len() > before {
+      if let Some(uri) = self
+        .native_queue
+        .get(before)
+        .and_then(|track| track.uri.clone())
+      {
         self.dj.queued_uris.insert(uri);
       }
     }
@@ -193,6 +188,7 @@ impl App {
   pub(crate) fn toggle_dj_auto_queue(&mut self) {
     use crate::infra::dj::TurnKind;
     self.dj.auto_queue = !self.dj.auto_queue;
+    self.dj.reset_refill_backoff();
     self.dj.bump_revision();
     // Either direction invalidates a *refill* in flight: switching off should drop
     // a pending one, and switching on starts a fresh one.
@@ -210,6 +206,11 @@ impl App {
       self.dj.bump_generation()
     };
     if self.dj.auto_queue {
+      if let Some(message) = self.dj.refill_stop_status.take() {
+        if self.status_message_is_error() && self.status_message() == Some(message.as_str()) {
+          self.clear_status_message();
+        }
+      }
       // Same rule the driver tick applies, so the immediate refill and the ongoing
       // ones cannot disagree — on an external Connect device the native queue never
       // fills, and refilling on its length would queue a batch per brain call
@@ -220,7 +221,12 @@ impl App {
       } else {
         self.set_status_message(self.strings().status.app.dj_auto_queue_on, 4);
       }
-      if crate::infra::network::dj::wants_top_up(self.native_queue.len(), &self.dj, external) {
+      if crate::infra::network::dj::wants_top_up(
+        self.native_queue.len(),
+        &self.dj,
+        self.dj_refill_paused(),
+        crate::infra::network::requests::shared_rate_gate().rate_limit_deadline(),
+      ) {
         let turn_seq = self.dj.begin_turn(TurnKind::Refill);
         self.dispatch_without_spinner(IoEvent::DjTopUp(generation, turn_seq));
       }
@@ -236,10 +242,17 @@ impl App {
     }
   }
 
+  /// These players have their own queues. The DJ cannot refill them by native queue depth.
+  #[cfg(feature = "dj-core")]
+  pub(crate) fn dj_refill_paused(&self) -> bool {
+    self.apple_music_owns_playback() || self.spotify_external_device_active()
+  }
+
   /// Toggle "only tracks I do not already have", warming the index when on.
   #[cfg(feature = "ai-dj")]
   pub(crate) fn toggle_dj_fresh_only(&mut self) {
     self.dj.avoid_library = !self.dj.avoid_library;
+    self.dj.reset_refill_backoff();
     self.dj.bump_revision();
     if self.dj.avoid_library {
       self.set_status_message(self.strings().status.app.dj_fresh_only, 4);
@@ -259,6 +272,7 @@ impl App {
     }
     let generation = self.dj.bump_generation();
     let dropped = self.drop_dj_queued_tracks();
+    self.dj.reset_refill_backoff();
     let turn_seq = self.dj.begin_turn(TurnKind::Ask);
     self.dj.scroll = 0;
     self.dj.push_line(DjLine::system(if dropped > 0 {
@@ -315,6 +329,7 @@ impl App {
     self.dj.close_setup();
     // A batch already in flight came from the backend the user just replaced.
     self.dj.bump_generation();
+    self.dj.reset_refill_backoff();
     self.dj.push_line(DjLine::system(
       self.strings().status.app.dj_brain(&choice.describe()),
     ));
@@ -349,6 +364,111 @@ impl App {
 mod tests {
   use super::*;
   use crate::core::app::test_support::*;
+
+  #[cfg(feature = "ai-dj")]
+  #[test]
+  fn each_refill_guard_can_independently_make_a_turn_stale() {
+    use crate::infra::dj::{DjTurn, TurnKind};
+
+    let changes: [(&str, fn(&mut App)); 6] = [
+      ("finished", |app| app.dj.finish_turn(app.dj.turn_seq)),
+      ("generation changed", |app| {
+        app.dj.bump_generation();
+      }),
+      ("turn replaced", |app| {
+        app.dj.begin_turn(TurnKind::Refill);
+      }),
+      ("auto-queue off", |app| app.dj.auto_queue = false),
+      ("external device", |app| {
+        app.current_playback_context = Some(make_external_context())
+      }),
+      ("Apple Music", |app| {
+        app.claim_apple_music();
+      }),
+    ];
+    for (reason, change) in changes {
+      let mut app = App::default();
+      app.dj.auto_queue = true;
+      let turn = DjTurn {
+        generation: app.dj.generation,
+        seq: app.dj.begin_turn(TurnKind::Refill),
+      };
+      assert!(turn.is_current(&app));
+      change(&mut app);
+      assert!(!turn.is_current(&app), "{reason}");
+    }
+  }
+
+  #[cfg(feature = "ai-dj")]
+  #[test]
+  fn dj_refills_wait_for_apple_music_or_connect_to_hand_playback_back() {
+    use crate::core::action::Action;
+    use crate::infra::network::dj::wants_top_up;
+
+    for apple_music in [false, true] {
+      let (tx, events) = channel();
+      let mut app = App::new(tx, UserConfig::new(), None);
+      if apple_music {
+        app.claim_apple_music();
+      } else {
+        app.current_playback_context = Some(make_external_context());
+      }
+      app.apply(Action::ToggleDjAutoQueue);
+      assert!(app.dj.auto_queue);
+      assert!(!wants_top_up(0, &app.dj, app.dj_refill_paused(), None));
+      assert!(events.try_recv().is_err());
+      assert_eq!(app.dj.refill_failures, 0);
+      if apple_music {
+        let generation = app.begin_apple_music_handoff();
+        assert!(app.finish_apple_music_handoff(generation));
+      } else {
+        app.current_playback_context = None;
+      }
+      assert!(wants_top_up(0, &app.dj, app.dj_refill_paused(), None));
+    }
+  }
+
+  #[cfg(feature = "ai-dj")]
+  #[test]
+  fn dj_queue_edits_and_reenabling_auto_queue_reset_failed_refill_backoff() {
+    use crate::core::action::Action;
+    use std::time::Instant;
+    let first = "spotify:track:0000000000000000000001";
+    let second = "spotify:track:0000000000000000000002";
+    for action in [
+      Action::QueueTrack(queue_track(Some(second), "Second")),
+      Action::RemoveFromQueue {
+        uri: first.into(),
+        position: 0,
+      },
+      Action::MoveQueueItem {
+        uri: first.into(),
+        from: 0,
+        to: 1,
+      },
+      Action::ClearQueue,
+      Action::ToggleDjAutoQueue,
+    ] {
+      let (tx, _rx) = channel();
+      let mut app = App::new(tx, UserConfig::new(), None);
+      app.native_queue = vec![
+        queue_track(Some(first), "First"),
+        queue_track(Some(second), "Second"),
+      ];
+      app.dj.auto_queue = true;
+      app.dj.failed_refill(Instant::now());
+      app.apply(action);
+      assert_eq!(app.dj.refill_failures, 0);
+      assert_eq!(app.dj.refill_retry_at, None);
+    }
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), None);
+    app.dj.refill_failures = crate::infra::dj::REFILL_FAILURE_LIMIT;
+    app.apply(Action::ToggleDjAutoQueue);
+    assert!(app.dj.auto_queue);
+    assert_eq!(app.dj.refill_failures, 0);
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::DjTopUp(_, _))));
+  }
 
   /// A vibe shift drops the DJ's picks by identity, not by truncating a tail
   /// count: the DJ's tracks stop being a contiguous tail the moment the user

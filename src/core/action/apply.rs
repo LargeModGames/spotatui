@@ -74,7 +74,9 @@ impl App {
         self.transfer_playback_to_device(device_id, persist);
       }
       Action::AddToQueue(uri) => self.add_to_spotify_queue(uri),
-      Action::QueueTrack(track) => self.add_track_to_native_queue(track),
+      Action::QueueTrack(track) => {
+        self.add_track_to_native_queue(track);
+      }
       Action::PlayQueueItem { uri, position } => self.play_queue_item(&uri, position),
       Action::RemoveFromQueue { uri, position } => {
         self.remove_queue_item(&uri, position);
@@ -313,17 +315,16 @@ impl App {
         }
         #[cfg(not(feature = "dj-core"))]
         {
-          let _ = tracks;
-          return ActionOutcome::Queued { accepted: 0 };
+          return ActionOutcome::Queued {
+            accepted: vec![false; tracks.len()],
+          };
         }
       }
       Action::SetDjVibe(vibe) => {
         #[cfg(feature = "dj-core")]
         {
-          // A new standing direction invalidates any refill already in
-          // flight for the old one. Exactly one bump: the in-TUI agent
-          // tells its own set_dj_vibe bump apart from the listener's by
-          // asserting the generation moved by exactly 1.
+          // A new direction invalidates refills for the old one. The in-TUI
+          // agent advances its expected generation by one after this succeeds.
           self.dj.bump_generation();
           self.dj.vibe = vibe;
         }

@@ -28,24 +28,25 @@ impl App {
   /// Rejects tracks with no URI and radio streams (a live stream is not a finite
   /// track). Spotify tracks on an external Connect device keep today's Web-API
   /// queue behavior (there is no native sink to play them through); everything
-  /// else is pushed onto [`Self::native_queue`].
-  pub fn add_track_to_native_queue(&mut self, track: TrackInfo) {
+  /// else is pushed onto [`Self::native_queue`]. Returns whether the track was
+  /// queued locally or the external queue request was dispatched.
+  pub fn add_track_to_native_queue(&mut self, track: TrackInfo) -> bool {
     // Music keeps its own queue, which spotatui can't reach.
     if self.apple_music_owns_playback() {
       self.set_status_message(self.strings().status.app.music_cannot_queue, 4);
-      return;
+      return false;
     }
     let Some(uri) = track.uri.clone() else {
       self.set_status_message(self.strings().status.app.queue_no_uri, 3);
-      return;
+      return false;
     };
     if uri.starts_with("radio:") {
       self.set_status_message(self.strings().status.app.radio_cannot_queue, 3);
-      return;
+      return false;
     }
     if uri.starts_with("applemusic:") {
       self.set_status_message(self.strings().status.app.music_cannot_queue, 3);
-      return;
+      return false;
     }
     // A Spotify track controlled on an external device has no native sink to
     // play through, so fall back to the Spotify Web-API queue.
@@ -54,16 +55,17 @@ impl App {
       crate::core::queue::QueueItemSource::Spotify
     ) && self.spotify_external_device_active()
     {
-      self.dispatch(IoEvent::AddItemToQueue(uri));
-      return;
+      return self.try_dispatch(IoEvent::AddItemToQueue(uri));
     }
     // Soloist reports no track end, so nothing would take over after its current track.
     if self.soloist_is_target() {
       self.set_status_message(self.strings().status.infra.soloist_queue_refused, 4);
-      return;
+      return false;
     }
     let name = track.display_name(self.strings()).to_owned();
     self.native_queue.push(track);
+    #[cfg(feature = "ai-dj")]
+    self.dj.reset_refill_backoff();
     info!(
       "queued {uri} at position {} of the native queue",
       self.native_queue.len()
@@ -76,6 +78,7 @@ impl App {
     if self.is_native_streaming_active_for_playback() && !self.queue_owns_playback() {
       self.dispatch(IoEvent::GetQueue);
     }
+    true
   }
 
   /// The position while its URI still matches, else the first item with that
@@ -107,6 +110,8 @@ impl App {
     };
     // Drop the items before the selected one so it becomes the queue head.
     self.native_queue.drain(..skip);
+    #[cfg(feature = "ai-dj")]
+    self.dj.reset_refill_backoff();
     if !self.queue_owns_playback() {
       self.suspend_active_decoded_context_mid_track();
       // No decoded context recorded a suspension: a native-Spotify context may be
@@ -123,6 +128,8 @@ impl App {
   pub(crate) fn remove_queue_item(&mut self, uri: &str, position: usize) {
     if let Some(idx) = self.queue_position_for(uri, position) {
       self.native_queue.remove(idx);
+      #[cfg(feature = "ai-dj")]
+      self.dj.reset_refill_backoff();
     }
   }
 
@@ -131,16 +138,20 @@ impl App {
     let Some(from) = self.queue_position_for(uri, from) else {
       return;
     };
-    if to >= self.native_queue.len() {
+    if from == to || to >= self.native_queue.len() {
       return;
     }
     let item = self.native_queue.remove(from);
     self.native_queue.insert(to, item);
+    #[cfg(feature = "ai-dj")]
+    self.dj.reset_refill_backoff();
   }
 
   /// Empty the native queue; the playing slot and a suspended context stay.
   pub(crate) fn clear_native_queue(&mut self) {
     self.native_queue.clear();
+    #[cfg(feature = "ai-dj")]
+    self.dj.reset_refill_backoff();
   }
 
   /// Whether the native queue's playback slot currently owns the output (either a

@@ -177,6 +177,9 @@ pub const MAX_BATCH: usize = 8;
 #[cfg_attr(not(feature = "ai-dj"), allow(dead_code))]
 pub const QUEUE_LOW_WATER: usize = 2;
 
+#[cfg(feature = "ai-dj")]
+pub const REFILL_FAILURE_LIMIT: u8 = 5;
+
 /// Why a turn was started, which decides who may abandon it.
 ///
 /// A refill runs with nobody watching, so the auto-queue toggle is free to drop
@@ -192,12 +195,48 @@ pub enum TurnKind {
   Refill,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RefillProgress {
+  #[default]
+  Waiting,
+  #[cfg(feature = "ai-dj")]
+  Reset,
+  #[cfg(feature = "ai-dj")]
+  PlaybackRequested,
+  Queued,
+}
+
+#[derive(Clone, Copy)]
+pub struct DjTurn {
+  pub generation: u64,
+  pub seq: u64,
+}
+
+impl DjTurn {
+  /// Check under the same lock that publishes the turn's results.
+  pub fn is_current(self, app: &crate::core::app::App) -> bool {
+    let dj = &app.dj;
+    dj.thinking
+      && dj.generation == self.generation
+      && dj.turn_seq == self.seq
+      && (dj.turn_kind == TurnKind::Ask || (dj.auto_queue && !app.dj_refill_paused()))
+  }
+}
+
 /// Everything the DJ keeps on `App`.
 #[cfg_attr(not(feature = "ai-dj"), allow(dead_code))]
 #[derive(Clone, Debug, Default)]
 pub struct DjState {
   /// Whether the DJ keeps the queue topped up as tracks finish.
   pub auto_queue: bool,
+  /// Consecutive failed refills and the earliest time to try another refill.
+  pub refill_failures: u8,
+  pub refill_retry_at: Option<std::time::Instant>,
+  /// The stop notice that can be dismissed by re-enabling auto-queue.
+  #[cfg(feature = "ai-dj")]
+  pub refill_stop_status: Option<String>,
+  /// Only the current refill may report its additions or start a new delay.
+  pub refill_progress: RefillProgress,
   /// Bumped whenever in-flight DJ work becomes irrelevant: DJ switched off, a
   /// vibe shift, a source change.
   ///
@@ -291,11 +330,35 @@ impl DjState {
   /// the one thing allowed to clear `thinking` again.
   #[cfg_attr(not(feature = "ai-dj"), allow(dead_code))]
   pub fn begin_turn(&mut self, kind: TurnKind) -> u64 {
+    self.refill_progress = RefillProgress::Waiting;
     self.thinking = true;
     self.turn_kind = kind;
     self.turn_seq = self.turn_seq.wrapping_add(1);
     self.bump_revision();
     self.turn_seq
+  }
+
+  #[cfg(feature = "ai-dj")]
+  pub fn reset_refill_backoff(&mut self) {
+    self.refill_failures = 0;
+    self.refill_retry_at = None;
+    self.refill_progress = RefillProgress::Reset;
+  }
+
+  /// Returns true once auto-queue has stopped. The tick never retries before
+  /// the deadline: 5, 10, 20, then at most 30 seconds between empty refills.
+  #[cfg(feature = "ai-dj")]
+  pub fn failed_refill(&mut self, now: std::time::Instant) -> bool {
+    self.refill_failures = self.refill_failures.saturating_add(1);
+    if self.refill_failures >= REFILL_FAILURE_LIMIT {
+      self.auto_queue = false;
+      self.refill_retry_at = None;
+      self.bump_revision();
+      return true;
+    }
+    let seconds = (5u64 << (self.refill_failures - 1)).min(30);
+    self.refill_retry_at = Some(now + std::time::Duration::from_secs(seconds));
+    false
   }
 
   /// Whether the turn holding the progress flag is one the listener is waiting on.
@@ -311,7 +374,7 @@ impl DjState {
   /// Clear the progress flag, but only if `seq` still owns it.
   #[cfg_attr(not(feature = "ai-dj"), allow(dead_code))]
   pub fn finish_turn(&mut self, seq: u64) {
-    if self.turn_seq == seq {
+    if self.turn_seq == seq && self.thinking {
       self.thinking = false;
       self.step = None;
       self.bump_revision();
@@ -384,6 +447,29 @@ pub struct AskDjRequest {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[cfg(feature = "ai-dj")]
+  #[test]
+  fn dj_empty_refills_back_off_exponentially_then_stop_at_the_failure_limit() {
+    use std::time::{Duration, Instant};
+    let now = Instant::now();
+    let mut dj = DjState {
+      auto_queue: true,
+      ..DjState::default()
+    };
+    for seconds in [5, 10, 20, 30] {
+      assert!(!dj.failed_refill(now));
+      assert_eq!(dj.refill_retry_at, Some(now + Duration::from_secs(seconds)));
+      assert!(dj.auto_queue);
+    }
+    assert!(dj.failed_refill(now));
+    assert!(!dj.auto_queue);
+    assert_eq!(dj.refill_failures, REFILL_FAILURE_LIMIT);
+    assert_eq!(dj.refill_retry_at, None);
+    dj.reset_refill_backoff();
+    assert_eq!(dj.refill_failures, 0);
+    assert_eq!(dj.refill_retry_at, None);
+  }
 
   #[test]
   fn generation_bump_invalidates() {

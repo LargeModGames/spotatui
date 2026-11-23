@@ -368,6 +368,7 @@ pub enum IoEvent {
     Box<(
       crate::infra::dj::tools::DjToolCall,
       tokio::sync::oneshot::Sender<crate::infra::dj::tools::ToolOutcome>,
+      Option<crate::infra::dj::DjTurn>,
     )>,
   ),
   /// Ask the in-TUI DJ's brain for tracks. Optionally carries the listener's
@@ -604,12 +605,10 @@ impl Network {
 
   /// Events that run on the concurrent service lane in `start_tokio`: a strict
   /// subset of [`Self::event_bypasses_spotify_auth`] whose handlers touch only
-  /// `self.app` (plus their own HTTP clients / `spawn_blocking`) — never the
-  /// Spotify client, API pacing, or `Network` state (party connection, pending
-  /// login, search limits) — so they can execute on a detached task with a
-  /// throwaway `Network` instead of head-of-line-blocking the serial pump.
-  /// Keep in sync with the handlers: an event listed here MUST NOT read or
-  /// write anything on `Network` besides `app`.
+  /// `self.app` (plus their own HTTP clients / `spawn_blocking`), so they can
+  /// execute on detached tasks with a throwaway `Network`. The DJ also reads
+  /// the shared Spotify rate-limit deadline to schedule retries. These handlers
+  /// must not use the Spotify client or change the pump's `Network` state.
   pub fn runs_on_service_lane(io_event: &IoEvent) -> bool {
     if !Self::event_bypasses_spotify_auth(io_event) {
       return false;
@@ -1047,8 +1046,8 @@ impl Network {
       }
       #[cfg(any(feature = "mcp-server", feature = "ai-dj"))]
       IoEvent::DjToolCall(payload) => {
-        let (call, responder) = *payload;
-        self.run_dj_tool_call(call, responder).await;
+        let (call, responder, turn) = *payload;
+        self.run_dj_tool_call(call, responder, turn).await;
       }
       #[cfg(feature = "ai-dj")]
       IoEvent::AskDj(request) => {
@@ -1221,7 +1220,7 @@ impl Network {
     if Self::event_bypasses_spotify_auth(&io_event) {
       return Some(io_event);
     }
-    let left = self.rate_gate.rate_limit_remaining().await;
+    let left = self.rate_gate.rate_limit_remaining();
     let Some(left) = left else {
       return Some(io_event);
     };
@@ -1265,11 +1264,11 @@ impl Network {
   }
 
   /// When the pump must flush the held-back events: the window's end.
-  pub(crate) async fn deferred_deadline(&self) -> Option<std::time::Instant> {
+  pub(crate) fn deferred_deadline(&self) -> Option<std::time::Instant> {
     if self.deferred.is_empty() {
       return None;
     }
-    let left = self.rate_gate.rate_limit_remaining().await;
+    let left = self.rate_gate.rate_limit_remaining();
     Some(std::time::Instant::now() + left.unwrap_or_default())
   }
 
@@ -2119,6 +2118,7 @@ mod tests {
     let event = IoEvent::DjToolCall(Box::new((
       crate::infra::dj::tools::DjToolCall::GetNowPlaying,
       tx,
+      None,
     )));
     assert!(Network::event_bypasses_spotify_auth(&event));
     assert!(
@@ -2373,10 +2373,7 @@ mod tests {
     network.spotify = Some(SpotifyLogin::new());
     network.defers_rate_limited = true;
     network.rate_gate = requests::RateLimitGate::default();
-    network
-      .rate_gate
-      .rate_limit_for(Duration::from_secs(30))
-      .await;
+    network.rate_gate.rate_limit_for(Duration::from_secs(30));
     network
   }
 
@@ -2468,7 +2465,7 @@ mod tests {
 
     network.handle_network_event(IoEvent::GetPlaylists).await;
     network.handle_network_event(IoEvent::GetUser).await;
-    assert!(network.deferred_deadline().await.is_some());
+    assert!(network.deferred_deadline().is_some());
     network.flush_deferred().await;
 
     assert!(network.deferred.is_empty());

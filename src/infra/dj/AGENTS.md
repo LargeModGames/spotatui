@@ -22,10 +22,11 @@ are capped at `WRITE_BATCH`, and `remove_from_playlist` is the one
   of other sources' URIs is answered in the executor on a `Network` with no
   client, with no session needed. `exclude_owned` only checks Spotify tracks.
   A call whose caller already timed out (`responder.is_closed()`) runs nothing.
-- **Two staleness guards, both load-bearing**: `app.dj.generation` decides whether
-  a turn's results are still wanted (re-checked before every mutating tool call);
-  `dj.turn_seq` decides who may clear `dj.thinking` - without it an abandoned turn
-  clears its replacement's flag and the top-up fires a duplicate refill.
+- **Turn guards**: `DjTurn::is_current` requires `thinking` and a matching
+  generation and turn sequence. Refills also require auto-queue on and neither
+  external Spotify Connect nor Apple Music owning playback. Only the matching
+  `turn_seq` may clear `dj.thinking`. Without it, an abandoned turn clears its
+  replacement's flag and the top-up fires a duplicate refill.
 - **The filter is two gates, both needed**: `resolve_suggestions` rejects on the
   *name the model gave* before paying for a search; `reject_owned_tracks` rejects
   on the *resolved track ID* afterwards (the only gate that sees `uri` entries).

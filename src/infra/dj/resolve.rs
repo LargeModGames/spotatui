@@ -59,6 +59,12 @@ pub struct ResolveReport {
   /// Reported back to whichever model asked, so it can correct itself on its
   /// next step rather than naming the same nonexistent track again.
   pub unresolved: Vec<String>,
+  /// Catalogue requests that failed before a match could be decided.
+  pub lookup_errors: Vec<String>,
+  /// Tracks the current native queue could not play in this build.
+  pub unavailable: Vec<String>,
+  /// Resolved tracks the queue did not accept.
+  pub refused: Vec<String>,
   /// Suggestions dropped because they were already queued, playing, or recently
   /// played — see [`SkipSets::session`], which spans all three.
   pub duplicates: Vec<String>,
@@ -88,9 +94,9 @@ pub struct SkipSets<'a> {
 
 impl ResolveReport {
   /// One-line summary for a status message or an MCP tool result.
-  pub fn summary_with(&self, strings: &crate::core::i18n::Strings) -> String {
+  pub fn summary_with(&self, strings: &crate::core::i18n::Strings, queued: usize) -> String {
     let strings = &strings.status.infra;
-    let mut parts = vec![strings.dj_queued(self.resolved.len())];
+    let mut parts = vec![strings.dj_queued(queued)];
     if !self.unresolved.is_empty() {
       parts.push(strings.dj_not_found(self.unresolved.len()));
     }
@@ -142,12 +148,16 @@ pub async fn resolve_suggestions(
     }
 
     match resolve_one(net, suggestion, youtube_fallback).await {
-      Some(track) => report.resolved.push(track),
-      None => {
+      Ok(Some(track)) => report.resolved.push(track),
+      Ok(None) => {
         // Deliberately debug-level and never a toast: a model that invents a
         // track is routine, and surfacing it would be constant noise.
         log::debug!("DJ: no catalogue match for {label}");
         report.unresolved.push(label);
+      }
+      Err(error) => {
+        log::debug!("DJ: catalogue lookup failed for {label}: {error}");
+        report.lookup_errors.push(format!("{label}: {error}"));
       }
     }
   }
@@ -159,9 +169,10 @@ async fn resolve_one(
   net: &Network,
   suggestion: &DjSuggestion,
   youtube_fallback: Option<&YouTubeResolver>,
-) -> Option<TrackInfo> {
-  if let Some(track) = resolve_spotify(net, &suggestion.title, &suggestion.artist).await {
-    return Some(track);
+) -> anyhow::Result<Option<TrackInfo>> {
+  let spotify = resolve_spotify(net, &suggestion.title, &suggestion.artist).await;
+  if matches!(spotify, Ok(Some(_))) {
+    return spotify;
   }
   #[cfg(feature = "youtube")]
   if let Some(resolver) = youtube_fallback {
@@ -169,11 +180,11 @@ async fn resolve_one(
       .resolve(&suggestion.title, &suggestion.artist)
       .await
     {
-      return Some(track);
+      return Ok(Some(track));
     }
   }
   let _ = youtube_fallback;
-  None
+  spotify
 }
 
 /// Search Spotify for one track and return the best confident match.
@@ -181,7 +192,11 @@ async fn resolve_one(
 /// Unlike `SearchNetwork::get_search_results` and `search_tracks_for_playlist`,
 /// which are fire-and-forget and write into `App`, this **returns** its result —
 /// the DJ needs an answer, not a UI side effect.
-pub async fn resolve_spotify(net: &Network, title: &str, artist: &str) -> Option<TrackInfo> {
+async fn resolve_spotify(
+  net: &Network,
+  title: &str,
+  artist: &str,
+) -> anyhow::Result<Option<TrackInfo>> {
   // Spotify field filters keep the fuzzy matching honest; a bare concatenated
   // query happily returns a different artist's song with a similar name.
   let query = vec![
@@ -194,20 +209,10 @@ pub async fn resolve_spotify(net: &Network, title: &str, artist: &str) -> Option
     ("offset", "0".to_string()),
   ];
 
-  let response = match net
+  let response = net
     .spotify_get_typed::<TrackSearchResponse>("search", &query)
-    .await
-  {
-    Ok(response) => response,
-    Err(e) => {
-      // A resolve miss must never surface as the modal error page; the caller
-      // reports an aggregate count instead.
-      log::debug!("DJ: Spotify search failed for {title} — {artist}: {e}");
-      return None;
-    }
-  };
-
-  best_spotify_match(&response.tracks.items, title, artist)
+    .await?;
+  Ok(best_spotify_match(&response.tracks.items, title, artist))
 }
 
 /// Strip the characters that would break out of a quoted Spotify field filter.
@@ -389,28 +394,6 @@ impl YouTubeResolver {
 mod tests {
   use super::*;
 
-  /// `TrackInfo` has no `Default` (the plugin contract pins its shape), so
-  /// build a minimal placeholder for the report-shape tests.
-  fn stub_track() -> TrackInfo {
-    TrackInfo {
-      generated_name: None,
-      uri: Some("spotify:track:stub".to_string()),
-      name: "Stub".to_string(),
-      artists: vec!["Stub".to_string()],
-      album: String::new(),
-      duration_ms: 200_000,
-      id: Some("stub".to_string()),
-      album_id: None,
-      artist_refs: Vec::new(),
-      is_playable: true,
-      is_local: false,
-      track_number: 1,
-      explicit: false,
-      image_url: None,
-      release_date: None,
-    }
-  }
-
   #[test]
   fn exact_title_and_artist_scores_highest() {
     let exact = match_score("Weird Fishes", "Radiohead", "Weird Fishes", "Radiohead");
@@ -544,7 +527,7 @@ mod tests {
       in_library: vec!["a".into()],
       ..ResolveReport::default()
     };
-    let summary = owned.summary_with(&crate::core::i18n::EN);
+    let summary = owned.summary_with(&crate::core::i18n::EN, 0);
     assert!(summary.contains("1 already yours"));
     assert!(
       !summary.contains("already queued"),
@@ -553,31 +536,14 @@ mod tests {
   }
 
   #[test]
-  fn summary_counts_what_is_still_in_the_report() {
-    // `summary()` reads `resolved`, so a caller that takes the vector first gets
-    // "queued 0" no matter how many landed. Guards the ordering in `dj_queue`.
-    let mut report = ResolveReport {
-      resolved: vec![stub_track()],
-      ..ResolveReport::default()
-    };
-    assert!(report
-      .summary_with(&crate::core::i18n::EN)
-      .contains("queued 1"));
-    let _ = std::mem::take(&mut report.resolved);
-    assert!(report
-      .summary_with(&crate::core::i18n::EN)
-      .contains("queued 0"));
-  }
-
-  #[test]
   fn summary_mentions_every_bucket() {
     let report = ResolveReport {
-      resolved: vec![stub_track()],
       unresolved: vec!["ghost".into()],
       duplicates: vec!["dupe".into()],
       in_library: vec!["owned".into()],
+      ..ResolveReport::default()
     };
-    let summary = report.summary_with(&crate::core::i18n::EN);
+    let summary = report.summary_with(&crate::core::i18n::EN, 1);
     assert!(summary.contains("queued 1"));
     assert!(summary.contains("1 not found"));
     assert!(summary.contains("1 already queued"));

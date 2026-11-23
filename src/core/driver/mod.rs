@@ -636,7 +636,8 @@ impl Driver {
       if crate::infra::network::dj::wants_top_up(
         app.native_queue.len(),
         &app.dj,
-        app.spotify_external_device_active(),
+        app.dj_refill_paused(),
+        crate::infra::network::requests::shared_rate_gate().rate_limit_deadline(),
       ) {
         let turn_seq = app.dj.begin_turn(crate::infra::dj::TurnKind::Refill);
         let generation = app.dj.generation;

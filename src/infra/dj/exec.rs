@@ -7,6 +7,7 @@
 //! `oneshot`, because only the pump's `Network` has the real Spotify client.
 
 use super::tools::{self, DjToolCall, ToolOutcome};
+use super::DjTurn;
 use crate::core::app::App;
 use crate::infra::network::{IoEvent, Network};
 use std::sync::mpsc::Sender;
@@ -21,6 +22,11 @@ const TOOL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(45);
 
 pub trait ToolExecutor {
   async fn call(&self, call: DjToolCall) -> ToolOutcome;
+
+  #[cfg(feature = "ai-dj")]
+  async fn call_in_turn(&self, call: DjToolCall, _turn: DjTurn) -> ToolOutcome {
+    self.call(call).await
+  }
 }
 
 /// Executes against the live player.
@@ -63,10 +69,8 @@ impl AppExecutor {
     let strings = app.strings();
     app.set_status_message(strings.status.infra.mcp_status(&message), 5);
   }
-}
 
-impl ToolExecutor for AppExecutor {
-  async fn call(&self, call: DjToolCall) -> ToolOutcome {
+  async fn execute(&self, call: DjToolCall, turn: Option<DjTurn>) -> ToolOutcome {
     let spec = tools::spec(call.tool_name());
     let announce = self.announce && !spec.is_some_and(|spec| spec.read_only);
     // The tool table says which tools can need the network at all; a call of
@@ -78,9 +82,9 @@ impl ToolExecutor for AppExecutor {
 
     // Anything that needs no Spotify client is answered here and now.
     if !call.needs_network() {
-      let outcome = match tools::execute_app_only(&self.app, &call).await {
+      let outcome = match tools::execute_app_only(&self.app, &call, turn).await {
         Some(outcome) => outcome,
-        None => Network::answer_dj_tool_call_without_spotify(&self.app, call).await,
+        None => Network::answer_dj_tool_call_without_spotify(&self.app, call, turn).await,
       };
       if announce && !outcome.is_error {
         self.announce(&outcome).await;
@@ -95,7 +99,7 @@ impl ToolExecutor for AppExecutor {
     // would set the global `is_loading` spinner for the duration of the call.
     if self
       .io_tx
-      .send(IoEvent::DjToolCall(Box::new((call, tx))))
+      .send(IoEvent::DjToolCall(Box::new((call, tx, turn))))
       .is_err()
     {
       return ToolOutcome::error_localized(|strings| strings.status.tools.shutting_down);
@@ -103,13 +107,24 @@ impl ToolExecutor for AppExecutor {
 
     let outcome = match tokio::time::timeout(TOOL_TIMEOUT, rx).await {
       Ok(Ok(outcome)) => outcome,
-      Ok(Err(_)) => ToolOutcome::error_localized(|strings| strings.status.tools.dropped),
+      Ok(Err(_)) => ToolOutcome::dropped(),
       Err(_) => ToolOutcome::error_localized(|strings| strings.status.tools.timed_out),
     };
     if announce && !outcome.is_error {
       self.announce(&outcome).await;
     }
     outcome
+  }
+}
+
+impl ToolExecutor for AppExecutor {
+  async fn call(&self, call: DjToolCall) -> ToolOutcome {
+    self.execute(call, None).await
+  }
+
+  #[cfg(feature = "ai-dj")]
+  async fn call_in_turn(&self, call: DjToolCall, turn: DjTurn) -> ToolOutcome {
+    self.execute(call, Some(turn)).await
   }
 }
 
