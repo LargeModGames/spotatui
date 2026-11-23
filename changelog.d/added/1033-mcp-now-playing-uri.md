@@ -1,0 +1,1 @@
+- **MCP `get_now_playing` returns the track URI**: the response now includes a `uri` field (`null` when nothing is playing), so an agent can like or queue the current track without searching for it by name ([#1033](https://github.com/LargeModGames/spotatui/issues/1033)).
