@@ -2535,7 +2535,8 @@ mod tests {
     let area_width = controls_width + 2 * partial_free_space;
     let area = Rect::new(0, 0, area_width, 1);
 
-    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(area_width, 1)).unwrap();
+    let mut terminal =
+      ratatui::Terminal::new(ratatui::backend::TestBackend::new(area_width, 1)).unwrap();
     terminal
       .draw(|f| {
         draw_playbar_controls(f, &app, area);
