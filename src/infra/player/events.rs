@@ -266,7 +266,7 @@ where
     // Deferred startup can publish a player while this chain sleeps between
     // attempts. Its build is no longer needed; replay over the published one.
     if active_player(&app).is_some() {
-      replay_recovery_over_live_player(&mut app, request);
+      replay_recovery_over_live_player(&mut app, request, &ctx.streaming_config.device_name);
       return RebuildOutcome::Reused;
     }
 
@@ -361,8 +361,8 @@ where
 /// Replay what a recovery request still holds, now that a backend can act on it:
 /// parked start, then the published queue slot, then the restore snapshot.
 ///
-/// `rebuild_device` is the Connect device to reselect after a rebuild. Over a live
-/// player it is `None`: the queue slot and the reacquire restore are a rebuild's own.
+/// `rebuild_device` is the Connect device to reselect before replaying. The
+/// reselect yields to playback that moved to another device while recovering.
 fn replay_recovery_intent(
   app: &mut App,
   request: &StreamingRecoveryRequest,
@@ -429,7 +429,11 @@ fn replay_recovery_intent(
 
 /// Replay a request over a live player. The caller holds the app lock and has
 /// checked both the request's generation and the player's published identity.
-fn replay_recovery_over_live_player(app: &mut App, request: &StreamingRecoveryRequest) {
+fn replay_recovery_over_live_player(
+  app: &mut App,
+  request: &StreamingRecoveryRequest,
+  device_name: &str,
+) {
   app.native_backend_pending = false;
   info!(
     "recovery over a live player: reselect={} continue_after={:?} {}",
@@ -440,7 +444,7 @@ fn replay_recovery_over_live_player(app: &mut App, request: &StreamingRecoveryRe
   // Over a live player no TrackChanged will reload a retained slot.
   let replay_queue_slot = app.pending_start_playback.is_none()
     && should_replay_published_queue_slot(request, app.queue_now_is_spotify());
-  replay_recovery_intent(app, request, None, replay_queue_slot);
+  replay_recovery_intent(app, request, Some(device_name), replay_queue_slot);
 }
 
 /// The player-specific half of a recovery chain: what a rebuild attempts and
@@ -568,7 +572,7 @@ async fn handle_streaming_recovery<B: RecoveryBackend>(
         info!("recovery over a superseded player or a stale request: skipping the replay");
         continue;
       }
-      replay_recovery_over_live_player(&mut app, &request);
+      replay_recovery_over_live_player(&mut app, &request, &ctx.streaming_config.device_name);
       continue;
     }
 
@@ -602,7 +606,7 @@ async fn handle_streaming_recovery<B: RecoveryBackend>(
           // The retry can finish after deferred startup publishes a player.
           // Under the same install lock, keep that player and discard the build.
           if backend.available_published_player(&app).is_some() {
-            replay_recovery_over_live_player(&mut app, &request);
+            replay_recovery_over_live_player(&mut app, &request, &ctx.streaming_config.device_name);
             drop(app);
             info!("native rebuild not installed: a live player was published during the build");
             backend.discard(Arc::clone(&recovered_player));
@@ -2100,6 +2104,11 @@ mod tests {
       self.0.attempts.load(Ordering::SeqCst)
     }
 
+    /// A player deferred startup published, before the handler sees any request.
+    fn publish_startup_player(&self) {
+      self.0.published.publish(ScriptedPlayer::from_startup());
+    }
+
     fn events(&self) -> Vec<BuildEvent> {
       self.0.events.lock().unwrap().to_vec()
     }
@@ -2606,7 +2615,10 @@ mod tests {
       let app = app.lock().await;
       assert!(!app.native_backend_pending);
     }
-    // Over a live player there is no rebuilt device to reselect.
+    assert!(matches!(
+      io_rx.try_recv(),
+      Ok(IoEvent::AutoSelectStreamingDevice(_, false, true))
+    ));
     assert!(matches!(
       io_rx.try_recv(),
       Ok(IoEvent::StartPlayback(Some(ref context), None, None))
@@ -2658,7 +2670,10 @@ mod tests {
       let app = app.lock().await;
       assert!(!app.native_backend_pending);
     }
-    // Over a live player there is no rebuilt device to reselect.
+    assert!(matches!(
+      io_rx.try_recv(),
+      Ok(IoEvent::AutoSelectStreamingDevice(_, false, true))
+    ));
     assert!(matches!(
       io_rx.try_recv(),
       Ok(IoEvent::StartPlayback(Some(ref context), None, None))
@@ -2717,7 +2732,69 @@ mod tests {
       "the published player must end the retry chain"
     );
     assert_eq!(record.events(), []);
+    assert!(matches!(
+      io_rx.try_recv(),
+      Ok(IoEvent::AutoSelectStreamingDevice(_, false, true))
+    ));
     // The slot's direct load is replayed once over the published replacement.
+    assert!(matches!(
+      io_rx.try_recv(),
+      Ok(IoEvent::ReplayPublishedSpotifyQueueSlot)
+    ));
+    assert!(matches!(io_rx.try_recv(), Err(TryRecvError::Empty)));
+  }
+
+  /// A delayed duplicate from an older recovery identity must not replay the
+  /// slot a prior request already started over the live player.
+  #[tokio::test(start_paused = true)]
+  async fn a_stale_duplicate_does_not_replay_an_already_playing_slot() {
+    use crate::core::test_helpers::queued_track;
+    use crate::core::user_config::UserConfig;
+    use crate::infra::network::IoEvent;
+    use crate::infra::queue::QueueNowPlaying;
+    use std::sync::mpsc::{channel, TryRecvError};
+    use std::time::SystemTime;
+
+    let (tx, io_rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    assert_eq!(app.begin_native_recovery(), 1);
+    app.queue_now = Some(QueueNowPlaying::Spotify {
+      track: queued_track("spotify:track:queued", "Queued"),
+    });
+    let app = Arc::new(tokio::sync::Mutex::new(app));
+    let (ctx, recovery_tx) = recovery_context(Arc::clone(&app));
+
+    let backend = ScriptedBackend::new(|_attempt: u32, _slot: ScriptedSlot| {
+      Box::pin(async { Ok(ScriptedPlayer::new(1)) }) as BuildAttempt<ScriptedPlayer>
+    });
+    backend.publish_startup_player();
+    let record = backend.clone();
+
+    // The stale duplicate arrives after the current request has been handled.
+    let stale_tx = recovery_tx.clone();
+    tokio::spawn(async move {
+      tokio::time::sleep(Duration::from_millis(10)).await;
+      let _ = stale_tx.send(StreamingRecoveryRequest {
+        generation: 0,
+        restore_playback: true,
+        ..StreamingRecoveryRequest::default()
+      });
+    });
+    recovery_tx
+      .send(StreamingRecoveryRequest {
+        generation: 1,
+        restore_playback: true,
+        ..StreamingRecoveryRequest::default()
+      })
+      .expect("the recovery channel is open");
+
+    run_recovery_handler_until_parked(handle_streaming_recovery(ctx, backend)).await;
+
+    assert_eq!(record.attempts(), 0, "no build over the live player");
+    assert!(matches!(
+      io_rx.try_recv(),
+      Ok(IoEvent::AutoSelectStreamingDevice(_, false, true))
+    ));
     assert!(matches!(
       io_rx.try_recv(),
       Ok(IoEvent::ReplayPublishedSpotifyQueueSlot)
