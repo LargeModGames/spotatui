@@ -281,6 +281,9 @@ ai-dj = ["dj-core"]
 [dev-dependencies]
 tempfile = "3"
 ts-rs = "=12.0.1"
+# `#[tokio::test(start_paused = true)]`: a recovery chain's backoffs run on
+# virtual time. Not part of `full`.
+tokio = { version = "1", features = ["test-util"] }
 
 [target.'cfg(unix)'.dev-dependencies]
 libc = "0.2"

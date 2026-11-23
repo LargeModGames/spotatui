@@ -109,7 +109,7 @@ pub struct StreamingRecoveryContext {
 #[cfg_attr(not(any(feature = "tui", feature = "gui")), allow(dead_code))]
 pub fn spawn_streaming_recovery_handler(ctx: StreamingRecoveryContext) {
   tokio::spawn(async move {
-    handle_streaming_recovery(ctx).await;
+    handle_streaming_recovery(ctx, LibrespotBackend).await;
   });
 }
 
@@ -440,13 +440,113 @@ fn replay_recovery_over_live_player(app: &mut App, request: &StreamingRecoveryRe
   replay_recovery_intent(app, request, None, false);
 }
 
-async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
+/// The player-specific half of a recovery chain: what a rebuild attempts and
+/// what the app publishes. 
+trait RecoveryBackend: Send + Sync {
+  type Player: Send + 'static;
+
+  /// One rebuild attempt.
+  fn build(&self, config: StreamingConfig) -> BuildAttempt<Self::Player>;
+  /// The player the app publishes, under a held app lock.
+  fn published_player(&self, app: &App) -> Option<Arc<Self::Player>>;
+  /// Whether a player can take commands now.
+  fn is_available(player: &Self::Player) -> bool;
+  /// Publish a rebuilt player under the app lock, stopping the one it replaces.
+  fn publish(
+    &self,
+    app: &mut App,
+    ctx: &StreamingRecoveryContext,
+    player: Arc<Self::Player>,
+    reacquired: bool,
+  );
+  /// Start delivering a published player's events into the app.
+  fn watch(&self, ctx: &StreamingRecoveryContext, player: Arc<Self::Player>);
+  /// Stop a built player that will not be published.
+  fn discard(&self, player: Arc<Self::Player>);
+
+  /// The published player, when it can take commands.
+  fn available_published_player(&self, app: &App) -> Option<Arc<Self::Player>> {
+    self
+      .published_player(app)
+      .filter(|player| Self::is_available(player))
+  }
+}
+
+/// The native backend a frontend's recovery handler rebuilds.
+struct LibrespotBackend;
+
+impl RecoveryBackend for LibrespotBackend {
+  type Player = StreamingPlayer;
+
+  fn build(&self, config: StreamingConfig) -> BuildAttempt<Self::Player> {
+    Box::pin(StreamingPlayer::new_cache_only(config))
+  }
+
+  fn published_player(&self, app: &App) -> Option<Arc<Self::Player>> {
+    app.streaming_player.clone()
+  }
+
+  fn is_available(player: &Self::Player) -> bool {
+    player.is_available()
+  }
+
+  fn publish(
+    &self,
+    app: &mut App,
+    ctx: &StreamingRecoveryContext,
+    player: Arc<Self::Player>,
+    reacquired: bool,
+  ) {
+    // A disconnected old player may still be referenced here; shut its
+    // spirc down before replacing it so it can't leave a ghost device (#297).
+    if let Some(old) = app.streaming_player.take() {
+      if !Arc::ptr_eq(&old, &player) {
+        old.shutdown();
+      }
+    }
+    // The parked player's last events never reached the shared flag.
+    if reacquired {
+      ctx.shared_is_playing.store(false, Ordering::Relaxed);
+    }
+    app.streaming_player = Some(player);
+  }
+
+  fn watch(&self, ctx: &StreamingRecoveryContext, player: Arc<Self::Player>) {
+    spawn_player_event_handler(PlayerEventContext {
+      player,
+      app: Arc::clone(&ctx.app),
+      shared_position: Arc::clone(&ctx.shared_position),
+      shared_is_playing: Arc::clone(&ctx.shared_is_playing),
+      recovery_tx: ctx.recovery_tx.clone(),
+      #[cfg(all(feature = "mpris", target_os = "linux"))]
+      mpris_manager: ctx.mpris_manager.clone(),
+      #[cfg(all(feature = "macos-media", target_os = "macos"))]
+      macos_media_manager: ctx.macos_media_manager.clone(),
+      #[cfg(all(feature = "windows-media", target_os = "windows"))]
+      windows_media_manager: ctx.windows_media_manager.clone(),
+    });
+  }
+
+  fn discard(&self, player: Arc<Self::Player>) {
+    player.shutdown();
+    tokio::task::spawn_blocking(move || drop(player));
+  }
+}
+
+async fn handle_streaming_recovery<B: RecoveryBackend>(
+  mut ctx: StreamingRecoveryContext,
+  backend: B,
+) {
   while let Some(mut request) = ctx.recovery_rx.recv().await {
     while let Ok(next_request) = ctx.recovery_rx.try_recv() {
       merge_recovery_requests(&mut request, next_request);
     }
 
-    if let Some(live_player) = active_streaming_player(&ctx.app).await {
+    let live_player = {
+      let app = ctx.app.lock().await;
+      backend.available_published_player(&app)
+    };
+    if let Some(live_player) = live_player {
       // A live player already exists (e.g. a queued duplicate request): the
       // pending window is over, so replay anything parked against it.
       let mut app = ctx.app.lock().await;
@@ -459,7 +559,7 @@ async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
       if !request_may_replay_over(
         app.native_recovery_generation(),
         request.generation,
-        app.streaming_player.as_ref(),
+        backend.published_player(&app).as_ref(),
         &live_player,
       ) {
         info!("recovery over a superseded player or a stale request: skipping the replay");
@@ -474,10 +574,8 @@ async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
       &mut ctx,
       &mut request,
       RECOVERY_RETRY_BASE_DELAY,
-      |config| -> BuildAttempt<StreamingPlayer> {
-        Box::pin(StreamingPlayer::new_cache_only(config))
-      },
-      active_streaming_player_in_app,
+      |config| backend.build(config),
+      |app| backend.available_published_player(app),
     )
     .await;
     // The retry chain can outlast a single player build. Not user's wait, so credit it
@@ -489,24 +587,22 @@ async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
       }
     }
     match outcome {
-      RebuildOutcome::Built(recovered_player) => {
-        let recovered_player = Arc::new(recovered_player);
+      RebuildOutcome::Built(built) => {
+        let recovered_player = Arc::new(built);
         let reacquired = {
           let mut app = ctx.app.lock().await;
           if app.native_recovery_generation() != request.generation {
             drop(app);
-            recovered_player.shutdown();
-            tokio::task::spawn_blocking(move || drop(recovered_player));
+            backend.discard(Arc::clone(&recovered_player));
             continue;
           }
           // The retry can finish after deferred startup publishes a player.
           // Under the same install lock, keep that player and discard the build.
-          if active_streaming_player_in_app(&app).is_some() {
+          if backend.available_published_player(&app).is_some() {
             replay_recovery_over_live_player(&mut app, &request);
             drop(app);
             info!("native rebuild not installed: a live player was published during the build");
-            recovered_player.shutdown();
-            tokio::task::spawn_blocking(move || drop(recovered_player));
+            backend.discard(Arc::clone(&recovered_player));
             continue;
           }
           let reacquired = app.native_backend_parked();
@@ -518,39 +614,15 @@ async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
             }
             drop(app);
             info!("native rebuild not installed: exiting, or another source owns the sink");
-            recovered_player.shutdown();
-            tokio::task::spawn_blocking(move || drop(recovered_player));
+            backend.discard(Arc::clone(&recovered_player));
             continue;
           }
-          // A disconnected old player may still be referenced here; shut its
-          // spirc down before replacing it so it can't leave a ghost device (#297).
-          if let Some(old) = app.streaming_player.take() {
-            if !Arc::ptr_eq(&old, &recovered_player) {
-              old.shutdown();
-            }
-          }
-          // The parked player's last events never reached the shared flag.
-          if reacquired {
-            ctx.shared_is_playing.store(false, Ordering::Relaxed);
-          }
-          app.streaming_player = Some(Arc::clone(&recovered_player));
+          backend.publish(&mut app, &ctx, Arc::clone(&recovered_player), reacquired);
           app.native_backend_pending = false;
           reacquired
         };
 
-        spawn_player_event_handler(PlayerEventContext {
-          player: Arc::clone(&recovered_player),
-          app: Arc::clone(&ctx.app),
-          shared_position: Arc::clone(&ctx.shared_position),
-          shared_is_playing: Arc::clone(&ctx.shared_is_playing),
-          recovery_tx: ctx.recovery_tx.clone(),
-          #[cfg(all(feature = "mpris", target_os = "linux"))]
-          mpris_manager: ctx.mpris_manager.clone(),
-          #[cfg(all(feature = "macos-media", target_os = "macos"))]
-          macos_media_manager: ctx.macos_media_manager.clone(),
-          #[cfg(all(feature = "windows-media", target_os = "windows"))]
-          windows_media_manager: ctx.windows_media_manager.clone(),
-        });
+        backend.watch(&ctx, Arc::clone(&recovered_player));
 
         let mut app = ctx.app.lock().await;
         // Installing the player released the lock, so a park, a forced
@@ -562,13 +634,12 @@ async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
         if !request_may_replay_over(
           app.native_recovery_generation(),
           request.generation,
-          app.streaming_player.as_ref(),
+          backend.published_player(&app).as_ref(),
           &recovered_player,
         ) {
           drop(app);
           info!("recovery superseded after the rebuild: skipping the replay");
-          recovered_player.shutdown();
-          tokio::task::spawn_blocking(move || drop(recovered_player));
+          backend.discard(recovered_player);
           continue;
         }
         // Queue replay over an otherwise idle app also needs the serialized
@@ -644,19 +715,17 @@ async fn handle_streaming_recovery(mut ctx: StreamingRecoveryContext) {
   }
 }
 
-/// Get the currently active streaming player (if any), under an already-held app lock.
-fn active_streaming_player_in_app(app: &App) -> Option<Arc<StreamingPlayer>> {
-  app
-    .streaming_player
-    .as_ref()
-    .filter(|player| player.is_available())
-    .cloned()
-}
-
 /// Get the currently active streaming player (if any).
+#[cfg_attr(
+  not(any(
+    all(feature = "macos-media", target_os = "macos"),
+    all(feature = "windows-media", target_os = "windows")
+  )),
+  allow(dead_code)
+)]
 pub async fn active_streaming_player(app: &Arc<Mutex<App>>) -> Option<Arc<StreamingPlayer>> {
-  let app_lock = app.lock().await;
-  active_streaming_player_in_app(&app_lock)
+  let app = app.lock().await;
+  LibrespotBackend.available_published_player(&app)
 }
 
 pub fn spawn_player_event_handler(ctx: PlayerEventContext) {
@@ -1893,13 +1962,14 @@ async fn disconnect_streaming_player(
 #[cfg(test)]
 mod tests {
   use super::{
-    merge_recovery_requests, next_recovery_retry_delay, owns_published_player,
-    recovery_needs_native_selection, recovery_watchdog_should_escalate, request_may_replay_over,
-    session_disconnect_recovery, should_replay_published_queue_slot, stop_disarms_watchdog,
-    unavailable_is_for_the_loading_track, unavailable_is_transport_related, BuildAttempt,
-    RebuildOutcome, SessionDisconnectReason, SessionDisconnectRecovery, StreamingBuildError,
-    StreamingConfig, StreamingConnectionState, StreamingRecoveryContext, StreamingRecoveryRequest,
-    RECOVERY_RETRY_BASE_DELAY, RECOVERY_RETRY_MAX_DELAY, STALLED_PLAYBACK_RECOVERY_TIMEOUT,
+    handle_streaming_recovery, merge_recovery_requests, next_recovery_retry_delay,
+    owns_published_player, recovery_needs_native_selection, recovery_watchdog_should_escalate,
+    request_may_replay_over, session_disconnect_recovery, should_replay_published_queue_slot,
+    stop_disarms_watchdog, unavailable_is_for_the_loading_track, unavailable_is_transport_related,
+    BuildAttempt, RebuildOutcome, RecoveryBackend, SessionDisconnectReason,
+    SessionDisconnectRecovery, StreamingBuildError, StreamingConfig, StreamingConnectionState,
+    StreamingRecoveryContext, StreamingRecoveryRequest, RECOVERY_RETRY_BASE_DELAY,
+    RECOVERY_RETRY_MAX_DELAY, STALLED_PLAYBACK_RECOVERY_TIMEOUT,
   };
   use crate::core::app::App;
   use librespot_core::error::Error as LibrespotError;
@@ -1937,6 +2007,171 @@ mod tests {
   /// What a wake usually loses: DNS or the socket, not the login.
   fn transient_build_failure() -> StreamingBuildError {
     StreamingBuildError::Spirc(LibrespotError::unavailable(anyhow::anyhow!("dns error")))
+  }
+
+  /// What a transport drop asks for: restore what played on our device.
+  fn restore_request(generation: u64) -> StreamingRecoveryRequest {
+    StreamingRecoveryRequest {
+      generation,
+      reselect_device: true,
+      restore_playback: true,
+      continue_after_track: None,
+      reacquire: false,
+    }
+  }
+
+  /// What the recovery handler did with a built player, by build attempt.
+  #[derive(Clone, Debug, PartialEq)]
+  enum BuildEvent {
+    Stopped(u32),
+    Published(u32),
+    Watched(u32),
+  }
+
+  /// The player one scripted build returns.
+  struct ScriptedPlayer {
+    attempt: u32,
+    available: AtomicBool,
+  }
+
+  impl ScriptedPlayer {
+    fn new(attempt: u32) -> Self {
+      Self {
+        attempt,
+        available: AtomicBool::new(true),
+      }
+    }
+
+    /// The player deferred startup publishes in a script: no recovery build
+    /// made it, so it carries no attempt number.
+    fn from_startup() -> Arc<Self> {
+      Arc::new(Self::new(0))
+    }
+  }
+
+  /// Where a scripted backend's player is published. Every build gets a clone,
+  /// so a script can publish a player the way deferred startup does.
+  #[derive(Clone, Default)]
+  struct ScriptedSlot(Arc<std::sync::Mutex<Option<Arc<ScriptedPlayer>>>>);
+
+  impl ScriptedSlot {
+    /// As deferred startup does: whatever was published is replaced.
+    fn publish(&self, player: Arc<ScriptedPlayer>) {
+      *self.0.lock().unwrap() = Some(player);
+    }
+
+    /// Returns the player it replaced.
+    fn replace(&self, player: Arc<ScriptedPlayer>) -> Option<Arc<ScriptedPlayer>> {
+      self.0.lock().unwrap().replace(player)
+    }
+
+    fn player(&self) -> Option<Arc<ScriptedPlayer>> {
+      self.0.lock().unwrap().clone()
+    }
+  }
+
+  /// A backend without a session, so the recovery handler itself can run in a
+  /// test.
+  struct ScriptedBackend<S>(Arc<ScriptedSession<S>>);
+
+  struct ScriptedSession<S> {
+    script: S,
+    attempts: AtomicU32,
+    /// Like the app's slot: it keeps a stopped player until a rebuild
+    /// replaces it.
+    published: ScriptedSlot,
+    events: std::sync::Mutex<Vec<BuildEvent>>,
+  }
+
+  impl<S> ScriptedBackend<S> {
+    fn new(script: S) -> Self {
+      Self(Arc::new(ScriptedSession {
+        script,
+        attempts: AtomicU32::new(0),
+        published: ScriptedSlot::default(),
+        events: std::sync::Mutex::new(Vec::new()),
+      }))
+    }
+
+    fn attempts(&self) -> u32 {
+      self.0.attempts.load(Ordering::SeqCst)
+    }
+
+    fn events(&self) -> Vec<BuildEvent> {
+      self.0.events.lock().unwrap().to_vec()
+    }
+
+    fn record(&self, event: BuildEvent) {
+      self.0.events.lock().unwrap().push(event);
+    }
+
+    /// Recorded the first time only: a stop, like a real shutdown, is idempotent.
+    fn stop(&self, player: &ScriptedPlayer) {
+      if player.available.swap(false, Ordering::SeqCst) {
+        self.record(BuildEvent::Stopped(player.attempt));
+      }
+    }
+  }
+
+  impl<S> Clone for ScriptedBackend<S> {
+    fn clone(&self) -> Self {
+      Self(Arc::clone(&self.0))
+    }
+  }
+
+  impl<S> RecoveryBackend for ScriptedBackend<S>
+  where
+    S: Fn(u32, ScriptedSlot) -> BuildAttempt<ScriptedPlayer> + Send + Sync,
+  {
+    type Player = ScriptedPlayer;
+
+    fn build(&self, _config: StreamingConfig) -> BuildAttempt<Self::Player> {
+      let attempt = self.0.attempts.fetch_add(1, Ordering::SeqCst) + 1;
+      (self.0.script)(attempt, self.0.published.clone())
+    }
+
+    fn published_player(&self, _app: &App) -> Option<Arc<Self::Player>> {
+      self.0.published.player()
+    }
+
+    fn is_available(player: &Self::Player) -> bool {
+      player.available.load(Ordering::SeqCst)
+    }
+
+    fn publish(
+      &self,
+      _app: &mut App,
+      _ctx: &StreamingRecoveryContext,
+      player: Arc<Self::Player>,
+      _reacquired: bool,
+    ) {
+      // As the librespot backend does: the player it replaces is stopped.
+      if let Some(old) = self.0.published.replace(Arc::clone(&player)) {
+        if !Arc::ptr_eq(&old, &player) {
+          self.stop(&old);
+        }
+      }
+      self.record(BuildEvent::Published(player.attempt));
+    }
+
+    fn watch(&self, _ctx: &StreamingRecoveryContext, player: Arc<Self::Player>) {
+      self.record(BuildEvent::Watched(player.attempt));
+    }
+
+    fn discard(&self, player: Arc<Self::Player>) {
+      self.stop(&player);
+    }
+  }
+
+  /// Runs a recovery handler until it has handled every queued request and is
+  /// back on its channel.
+  async fn run_recovery_handler_until_parked<F: std::future::Future>(handler: F) {
+    assert!(
+      tokio::time::timeout(RECOVERY_RETRY_MAX_DELAY, handler)
+        .await
+        .is_err(),
+      "the recovery handler returned instead of waiting for the next request"
+    );
   }
 
   #[test]
@@ -2170,20 +2405,17 @@ mod tests {
     assert_eq!(attempts.load(Ordering::SeqCst), 1);
   }
 
-  /// A transient failure is retried; a newer request supersedes the older chain
-  /// and replays its parked start.
+  /// A transient failure is retried; a failed attempt that finds a newer
+  /// recovery identity ends the chain and leaves the newer request queued.
   #[tokio::test]
-  async fn recovery_retries_a_transient_failure_then_replays_the_parked_start_of_the_newer_request()
-  {
+  async fn recovery_retries_a_transient_failure_then_yields_to_a_newer_request() {
     use crate::core::user_config::UserConfig;
-    use crate::infra::network::IoEvent;
     use std::sync::mpsc::channel;
     use std::time::SystemTime;
 
-    let (tx, io_rx) = channel();
+    let (tx, _rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
     assert_eq!(app.begin_native_recovery(), 1);
-    app.park_start_playback(Some("spotify:playlist:parked".to_string()), None, None);
     let app = Arc::new(tokio::sync::Mutex::new(app));
     let (mut ctx, recovery_tx) = recovery_context(Arc::clone(&app));
 
@@ -2205,13 +2437,7 @@ mod tests {
               app.begin_native_recovery()
             };
             recovery_tx
-              .send(StreamingRecoveryRequest {
-                generation,
-                reselect_device: true,
-                restore_playback: true,
-                continue_after_track: None,
-                reacquire: false,
-              })
+              .send(restore_request(generation))
               .expect("the recovery channel is open");
             Err(transient_build_failure())
           }
@@ -2220,13 +2446,7 @@ mod tests {
       })
     };
 
-    let mut request = StreamingRecoveryRequest {
-      generation: 1,
-      reselect_device: true,
-      restore_playback: true,
-      continue_after_track: None,
-      reacquire: false,
-    };
+    let mut request = restore_request(1);
     let outcome = super::rebuild_with_retries(
       &mut ctx,
       &mut request,
@@ -2237,29 +2457,88 @@ mod tests {
     .await;
 
     assert!(matches!(outcome, RebuildOutcome::Superseded));
-    // One retry, then the second build loses the chain to the newer generation.
+    // One retry, then the second failure finds the chain taken over: nothing
+    // more is built for a request that no longer owns the recovery.
     assert_eq!(attempts.load(Ordering::SeqCst), 2);
 
-    let mut newer = ctx
+    // The newer request is the handler's next chain, not this one's.
+    let newer = ctx
       .recovery_rx
       .try_recv()
       .expect("the newer request is queued");
     assert_eq!(newer.generation, 2);
-    let outcome = super::rebuild_with_retries(
-      &mut ctx,
-      &mut newer,
-      Duration::from_millis(1),
-      &build,
-      |_| None,
-    )
-    .await;
-    assert!(matches!(outcome, RebuildOutcome::Built(())));
-    assert_eq!(attempts.load(Ordering::SeqCst), 3);
+    assert!(ctx.recovery_rx.try_recv().is_err());
+  }
 
-    // The rebuilt route reselects the device, then replays the parked start.
+  /// The retry chain the way a frontend runs it: through the handler, on its
+  /// own backoff. A transient failure is retried; a build that finishes after
+  /// a newer recovery took over is stopped and never published; and the
+  /// handler itself replays the newer request's parked start over its build.
+  #[tokio::test(start_paused = true)]
+  async fn recovery_retries_a_transient_failure_then_replays_the_parked_start_of_the_newer_request()
+  {
+    use crate::core::user_config::UserConfig;
+    use crate::infra::network::IoEvent;
+    use std::sync::mpsc::{channel, TryRecvError};
+    use std::time::SystemTime;
+
+    let (tx, io_rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    assert_eq!(app.begin_native_recovery(), 1);
+    app.park_start_playback(Some("spotify:playlist:parked".to_string()), None, None);
+    // A start asked for while the backend is gone waits on this flag.
+    app.native_backend_pending = true;
+    let app = Arc::new(tokio::sync::Mutex::new(app));
+    let (ctx, recovery_tx) = recovery_context(Arc::clone(&app));
+
+    let app_for_script = Arc::clone(&app);
+    let recovery_tx_for_script = recovery_tx.clone();
+    let script = move |attempt: u32, _published: ScriptedSlot| -> BuildAttempt<ScriptedPlayer> {
+      let app = Arc::clone(&app_for_script);
+      let recovery_tx = recovery_tx_for_script.clone();
+      Box::pin(async move {
+        match attempt {
+          // A DNS failure right after a wake is retried.
+          1 => return Err(transient_build_failure()),
+          // A transport drop owns a newer generation from here on, and the
+          // superseded build finishes anyway.
+          2 => {
+            let generation = app.lock().await.begin_native_recovery();
+            recovery_tx
+              .send(restore_request(generation))
+              .expect("the recovery channel is open");
+          }
+          // The newer recovery's own build.
+          _ => {}
+        }
+        Ok(ScriptedPlayer::new(attempt))
+      })
+    };
+    let backend = ScriptedBackend::new(script);
+    let record = backend.clone();
+    recovery_tx
+      .send(restore_request(1))
+      .expect("the recovery channel is open");
+
+    run_recovery_handler_until_parked(handle_streaming_recovery(ctx, backend)).await;
+
+    // One failure, the superseded build, then the newer recovery's build.
+    assert_eq!(record.attempts(), 3);
+    assert_eq!(
+      record.events(),
+      [
+        BuildEvent::Stopped(2),
+        BuildEvent::Published(3),
+        BuildEvent::Watched(3),
+      ],
+      "the build that lost its recovery is stopped, and only the newer one is published"
+    );
     {
-      let mut app = app.lock().await;
-      super::replay_recovery_intent(&mut app, &newer, Some("spotatui"), false);
+      let app = app.lock().await;
+      assert!(
+        !app.native_backend_pending,
+        "the published player ends the pending window"
+      );
     }
     assert!(matches!(
       io_rx.try_recv(),
@@ -2270,16 +2549,18 @@ mod tests {
       Ok(IoEvent::StartPlayback(Some(ref context), None, None))
         if context == "spotify:playlist:parked"
     ));
+    // Once only: nothing was replayed over the superseded build.
+    assert!(matches!(io_rx.try_recv(), Err(TryRecvError::Empty)));
   }
 
   /// Deferred startup can publish a player while recovery sleeps between
-  /// attempts. That player ends the chain and receives the parked intent.
-  #[tokio::test]
+  /// attempts. Through the handler: that player ends the chain, nothing is
+  /// built over it, and it receives the parked intent.
+  #[tokio::test(start_paused = true)]
   async fn a_player_published_during_backoff_ends_retries_and_replays_the_parked_start() {
     use crate::core::user_config::UserConfig;
     use crate::infra::network::IoEvent;
-    use std::sync::mpsc::channel;
-    use std::sync::OnceLock;
+    use std::sync::mpsc::{channel, TryRecvError};
     use std::time::SystemTime;
 
     let (tx, io_rx) = channel();
@@ -2288,58 +2569,99 @@ mod tests {
     app.park_start_playback(Some("spotify:playlist:parked".to_string()), None, None);
     app.native_backend_pending = true;
     let app = Arc::new(tokio::sync::Mutex::new(app));
-    let (mut ctx, _recovery_tx) = recovery_context(Arc::clone(&app));
+    let (ctx, recovery_tx) = recovery_context(Arc::clone(&app));
 
-    let attempts = Arc::new(AtomicU32::new(0));
-    let attempts_for_build = Arc::clone(&attempts);
-    let published = Arc::new(OnceLock::<Arc<()>>::new());
-    let published_for_build = Arc::clone(&published);
-    let build = move |_config: StreamingConfig| -> BuildAttempt<()> {
-      let attempt = attempts_for_build.fetch_add(1, Ordering::SeqCst) + 1;
-      let published = Arc::clone(&published_for_build);
+    let script = move |attempt: u32, published: ScriptedSlot| -> BuildAttempt<ScriptedPlayer> {
       Box::pin(async move {
         if attempt == 1 {
           // Deferred startup finishes while the failed attempt waits to retry.
-          let _ = published.set(Arc::new(()));
+          published.publish(ScriptedPlayer::from_startup());
           return Err(transient_build_failure());
         }
-        Ok(())
+        Ok(ScriptedPlayer::new(attempt))
       })
     };
-    let published_for_lookup = Arc::clone(&published);
-    let active_player = move |_: &App| published_for_lookup.get().cloned();
+    let backend = ScriptedBackend::new(script);
+    let record = backend.clone();
+    recovery_tx
+      .send(restore_request(1))
+      .expect("the recovery channel is open");
 
-    let mut request = StreamingRecoveryRequest {
-      generation: 1,
-      reselect_device: true,
-      restore_playback: true,
-      continue_after_track: None,
-      reacquire: false,
-    };
-    let outcome = super::rebuild_with_retries(
-      &mut ctx,
-      &mut request,
-      Duration::from_millis(1),
-      build,
-      active_player,
-    )
-    .await;
+    run_recovery_handler_until_parked(handle_streaming_recovery(ctx, backend)).await;
 
-    assert!(matches!(outcome, RebuildOutcome::Reused));
     assert_eq!(
-      attempts.load(Ordering::SeqCst),
+      record.attempts(),
       1,
       "the published player must end the retry chain"
+    );
+    assert_eq!(
+      record.events(),
+      [],
+      "nothing is published over the player startup published"
     );
     {
       let app = app.lock().await;
       assert!(!app.native_backend_pending);
     }
+    // Over a live player there is no rebuilt device to reselect.
     assert!(matches!(
       io_rx.try_recv(),
       Ok(IoEvent::StartPlayback(Some(ref context), None, None))
         if context == "spotify:playlist:parked"
     ));
+    assert!(matches!(io_rx.try_recv(), Err(TryRecvError::Empty)));
+  }
+
+  /// Deferred startup can publish a player while a recovery build is in
+  /// flight. The finished build gives way: it is stopped, never published,
+  /// and the parked intent replays over the player startup published.
+  #[tokio::test(start_paused = true)]
+  async fn a_build_that_outlives_startup_publishing_a_player_is_stopped_not_published() {
+    use crate::core::user_config::UserConfig;
+    use crate::infra::network::IoEvent;
+    use std::sync::mpsc::{channel, TryRecvError};
+    use std::time::SystemTime;
+
+    let (tx, io_rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    assert_eq!(app.begin_native_recovery(), 1);
+    app.park_start_playback(Some("spotify:playlist:parked".to_string()), None, None);
+    app.native_backend_pending = true;
+    let app = Arc::new(tokio::sync::Mutex::new(app));
+    let (ctx, recovery_tx) = recovery_context(Arc::clone(&app));
+
+    let script = move |attempt: u32, published: ScriptedSlot| -> BuildAttempt<ScriptedPlayer> {
+      Box::pin(async move {
+        // Deferred startup finishes while this attempt is still building.
+        published.publish(ScriptedPlayer::from_startup());
+        Ok(ScriptedPlayer::new(attempt))
+      })
+    };
+    let backend = ScriptedBackend::new(script);
+    let record = backend.clone();
+    recovery_tx
+      .send(restore_request(1))
+      .expect("the recovery channel is open");
+
+    run_recovery_handler_until_parked(handle_streaming_recovery(ctx, backend)).await;
+
+    assert_eq!(record.attempts(), 1);
+    assert_eq!(
+      record.events(),
+      [BuildEvent::Stopped(1)],
+      "the build gives way to the player startup published"
+    );
+    {
+      let app = app.lock().await;
+      assert!(!app.native_backend_pending);
+    }
+    // Over a live player there is no rebuilt device to reselect.
+    assert!(matches!(
+      io_rx.try_recv(),
+      Ok(IoEvent::StartPlayback(Some(ref context), None, None))
+        if context == "spotify:playlist:parked"
+    ));
+    assert!(matches!(io_rx.try_recv(), Err(TryRecvError::Empty)));
   }
 
   #[test]
