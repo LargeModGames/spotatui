@@ -129,19 +129,27 @@ fn add_plugin(config_dir: &Path, spec: &str, force: bool) -> Result<()> {
     .with_context(|| format!("creating {}", plugins_dir.display()))?;
   let dest = plugins_dir.join(&spec.name);
 
-  if dest.exists() {
-    if !force {
-      bail!(
-        "plugin '{}' is already installed. Use `--force` to reinstall.",
-        spec.name
-      );
-    }
-    std::fs::remove_dir_all(&dest)
-      .with_context(|| format!("removing existing {}", dest.display()))?;
+  if dest.exists() && !force {
+    bail!(
+      "plugin '{}' is already installed. Use `--force` to reinstall.",
+      spec.name
+    );
   }
 
+  // Clone next to the installed plugin and swap it in only once the clone
+  // worked, so a failed reinstall leaves the old one in place. Dot folders are
+  // never plugin names, never listed and never loaded.
+  let staged = plugins_dir.join(format!(".{}.new", spec.name));
+  remove_dir_if_present(&staged)?;
   println!("Cloning {} into {} ...", spec.url, dest.display());
-  git_clone(&spec.url, &dest)?;
+  if let Err(error) = git_clone(&spec.url, &staged) {
+    let _ = remove_dir_if_present(&staged);
+    return Err(error);
+  }
+  // Windows cannot rename onto a folder that exists, so the old one goes first.
+  remove_dir_if_present(&dest)?;
+  std::fs::rename(&staged, &dest)
+    .with_context(|| format!("moving {} to {}", staged.display(), dest.display()))?;
   let rev = git_head_rev(&dest).unwrap_or_default();
 
   let lock_path = lock_path(config_dir);
@@ -160,6 +168,15 @@ fn add_plugin(config_dir: &Path, spec: &str, force: bool) -> Result<()> {
 in config.yml."
   );
   Ok(())
+}
+
+fn remove_dir_if_present(dir: &Path) -> Result<()> {
+  match std::fs::remove_dir_all(dir) {
+    Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+      Err(error).with_context(|| format!("removing {}", dir.display()))
+    }
+    _ => Ok(()),
+  }
 }
 
 fn list_plugins(config_dir: &Path) -> Result<()> {
@@ -819,6 +836,47 @@ mod tests {
 
   fn origin_url(origin: &Path) -> String {
     url::Url::from_file_path(origin).unwrap().to_string()
+  }
+
+  #[test]
+  fn failed_force_reinstall_keeps_the_installed_plugin() {
+    if ensure_git().is_err() {
+      return;
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let plugin = temp.path().join("plugins").join("foo");
+    std::fs::create_dir_all(&plugin).unwrap();
+    std::fs::write(plugin.join("main.lua"), "-- installed\n").unwrap();
+
+    assert!(add_plugin(temp.path(), "file:///nonexistent/foo", true).is_err());
+
+    assert_eq!(
+      std::fs::read_to_string(plugin.join("main.lua")).unwrap(),
+      "-- installed\n"
+    );
+    assert!(!temp.path().join("plugins").join(".foo.new").exists());
+  }
+
+  #[test]
+  fn force_reinstall_replaces_the_installed_plugin_and_records_it() {
+    if ensure_git().is_err() {
+      return;
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let (_, origin) = fixture_origin(temp.path(), "foo", "main.lua");
+    let config = temp.path().join("config");
+    let plugin = config.join("plugins").join("foo");
+    std::fs::create_dir_all(&plugin).unwrap();
+    std::fs::write(plugin.join("stale.lua"), "-- old copy\n").unwrap();
+
+    add_plugin(&config, &origin_url(&origin), true).unwrap();
+
+    let main = std::fs::read_to_string(plugin.join("main.lua")).unwrap();
+    assert_eq!(main.trim_end(), "original");
+    assert!(!plugin.join("stale.lua").exists());
+    assert!(!config.join("plugins").join(".foo.new").exists());
+    let lock = load_lock(&lock_path(&config)).unwrap();
+    assert!(lock.plugins.iter().any(|p| p.name == "foo"));
   }
 
   #[test]
