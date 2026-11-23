@@ -1,7 +1,10 @@
 //! The Spotify login, as every build sees it, and private file writes.
 
 use anyhow::{anyhow, Result};
-use std::{fs, path::Path};
+use std::{fs, path::Path, time::Duration};
+
+/// How long the in-app Spotify login waits for approval in the browser.
+pub(crate) const LOGIN_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// A cached Spotify login exists. A build without the `spotify-session`
 /// feature never has one.
