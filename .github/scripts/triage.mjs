@@ -1,9 +1,12 @@
 // Issue triage for spotatui, powered by Claude.
 //
-// Three modes:
+// Four modes:
 //   node triage.mjs            -> lets the model read the repository through read-only
 //                                 tools, then prints a validated triage JSON object to
 //                                 stdout (redirect to triage.json)
+//   node triage.mjs --plan-artifact -> puts a good first issue's steps in a "How to start"
+//                                 plan artifact on the issue and adds its URL to
+//                                 triage.json (GH_TOKEN, REPO)
 //   node triage.mjs --render   -> reads triage.json and prints a Markdown block
 //                                 (posted as the bot comment)
 //   node triage.mjs --planning -> reads triage.json and sets the status and the Area
@@ -17,7 +20,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { betaTool } from "@anthropic-ai/sdk/helpers/beta/json-schema";
 import { oidcFederationProvider } from "@anthropic-ai/sdk/lib/credentials/oidc-federation";
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 
 // Change here to try another model, for example "claude-fable-5-1".
 const MODEL = "claude-opus-5-5";
@@ -114,6 +117,38 @@ if (process.argv.includes("--planning")) {
   process.exit(0);
 }
 
+/** A good first issue's start steps and commands, as Markdown lines. */
+const planLines = (r) => [
+  ...(r.contributor_steps.length
+    ? ["**New here? How to start**", "", ...r.contributor_steps.map((s, i) => `${i + 1}. ${s}`)]
+    : []),
+  ...(r.commands.length ? ["", "**Commands to run before you open the PR**", "", "```sh", ...r.commands, "```"] : []),
+];
+
+// ---- plan artifact mode ----------------------------------------------------
+// The steps go in an artifact so a maintainer can keep them current as the code moves.
+// A reopened issue reuses its plan. On failure the comment carries the steps instead.
+if (process.argv.includes("--plan-artifact")) {
+  const r = JSON.parse(readFileSync("triage.json", "utf8"));
+  const plan = r.good_first_issue ? planLines(r) : [];
+  if (plan.length) {
+    const url = `repos/${process.env.REPO}/issues/${r.issue}/artifacts`;
+    const gh = (args, input) => JSON.parse(execFileSync("gh", ["api", ...args], { input, encoding: "utf8" }));
+    try {
+      const existing = gh([url]).find((a) => a.name === "How to start");
+      r.plan_url = (
+        existing ??
+        gh(["-X", "POST", url, "--input", "-"], JSON.stringify({ type: "plan", name: "How to start", body: plan.join("\n") }))
+      ).html_url;
+      writeFileSync("triage.json", JSON.stringify(r));
+      console.log(`plan: ${r.plan_url}`);
+    } catch (e) {
+      console.log(`::warning::No How to start plan artifact, the comment keeps the steps: ${e.message.split("\n")[0]}`);
+    }
+  }
+  process.exit(0);
+}
+
 // ---- render mode -----------------------------------------------------------
 if (process.argv.includes("--render")) {
   const r = JSON.parse(readFileSync("triage.json", "utf8"));
@@ -129,17 +164,11 @@ if (process.argv.includes("--render")) {
   lines.push("");
   lines.push(r.summary || "_n/a_");
   if (r.good_first_issue) {
-    if (r.contributor_steps.length) {
-      lines.push("");
-      lines.push("**New here? How to start**");
-      lines.push("");
-      r.contributor_steps.forEach((s, i) => lines.push(`${i + 1}. ${s}`));
-    }
-    if (r.commands.length) {
-      lines.push("");
-      lines.push("**Commands to run before you open the PR**");
-      lines.push("");
-      lines.push("```sh", ...r.commands, "```");
+    const plan = planLines(r);
+    if (r.plan_url) {
+      lines.push("", `**New here?** The steps to start and the commands to run are in the [How to start](${r.plan_url}) plan on this issue.`);
+    } else if (plan.length) {
+      lines.push("", ...plan);
     }
     if (r.stale_pointers.length) {
       lines.push("");
