@@ -152,6 +152,8 @@ pub struct SubsonicSource {
   /// Stored in memory; never written to disk by this module.
   password: String,
   http: Client,
+  /// Total deadline for JSON API requests; tests shorten it.
+  request_timeout: Duration,
 }
 
 /// Process-wide Subsonic HTTP client. Dispatch constructs a fresh
@@ -194,7 +196,26 @@ impl SubsonicSource {
       username: username.into(),
       password: password.into(),
       http: shared_subsonic_client(),
+      request_timeout: REQUEST_TIMEOUT,
     }
+  }
+
+  /// A source with short deadlines, so timeout tests do not wait 30 s each.
+  #[cfg(test)]
+  fn with_timeouts(
+    base_url: impl Into<String>,
+    password: impl Into<String>,
+    request_timeout: Duration,
+    read_timeout: Duration,
+  ) -> Self {
+    let mut source = Self::new(base_url, "alice", password);
+    source.http = Client::builder()
+      .connect_timeout(CONNECT_TIMEOUT)
+      .read_timeout(read_timeout)
+      .build()
+      .unwrap();
+    source.request_timeout = request_timeout;
+    source
   }
 
   // -------------------------------------------------------------------------
@@ -255,7 +276,7 @@ impl SubsonicSource {
     let body = self
       .http
       .get(url)
-      .timeout(REQUEST_TIMEOUT)
+      .timeout(self.request_timeout)
       .send()
       .await
       .map_err(reqwest::Error::without_url)
@@ -1476,7 +1497,7 @@ mod tests {
   async fn serve_slow_response(
     chunks: usize,
     delay: Duration,
-  ) -> (SubsonicSource, tokio::task::JoinHandle<()>) {
+  ) -> (String, tokio::task::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     let server = tokio::spawn(async move {
@@ -1503,17 +1524,29 @@ mod tests {
         }
       }
     });
+    (base, server)
+  }
+
+  /// A source for `base` whose API and read deadlines are short, so a timeout
+  /// test waits milliseconds instead of the production 30 s.
+  fn slow_source(
+    base: String,
+    request_timeout: Duration,
+    read_timeout: Duration,
+  ) -> SubsonicSource {
     let password = rand::random::<u128>().to_string();
-    (SubsonicSource::new(base, "alice", password), server)
+    SubsonicSource::with_timeouts(base, password, request_timeout, read_timeout)
   }
 
   #[tokio::test]
   async fn a_subsonic_download_can_finish_after_the_api_deadline() {
-    let (source, server) = serve_slow_response(17, Duration::from_secs(2)).await;
+    // 17 chunks 60 ms apart take about 1 s, past the 300 ms API deadline.
+    let (base, server) = serve_slow_response(17, Duration::from_millis(60)).await;
+    let source = slow_source(base, Duration::from_millis(300), Duration::from_secs(2));
     let dest = tempfile::NamedTempFile::new().unwrap();
     tokio::time::timeout(
-      REQUEST_TIMEOUT + Duration::from_secs(10),
-      source.download_track("42", dest.path()),
+      Duration::from_secs(10),
+      source.download_track_with_timeout("42", dest.path(), Duration::from_secs(5)),
     )
     .await
     .expect("a progressing download should finish")
@@ -1524,11 +1557,14 @@ mod tests {
 
   #[tokio::test]
   async fn a_subsonic_download_times_out_when_the_body_stalls() {
-    let (source, server) = serve_slow_response(2, READ_TIMEOUT + Duration::from_secs(10)).await;
+    // The body stalls for 3 s; the 300 ms read timeout fires long before the
+    // 10 s total deadline.
+    let (base, server) = serve_slow_response(2, Duration::from_secs(3)).await;
+    let source = slow_source(base, Duration::from_secs(10), Duration::from_millis(300));
     let dest = tempfile::NamedTempFile::new().unwrap();
     let error = tokio::time::timeout(
-      READ_TIMEOUT + Duration::from_secs(5),
-      source.download_track("42", dest.path()),
+      Duration::from_secs(5),
+      source.download_track_with_timeout("42", dest.path(), Duration::from_secs(10)),
     )
     .await
     .expect("a stalled download should hit the read timeout")
@@ -1540,7 +1576,8 @@ mod tests {
 
   #[tokio::test]
   async fn a_subsonic_download_times_out_even_when_the_body_trickles() {
-    let (source, server) = serve_slow_response(40, Duration::from_millis(40)).await;
+    let (base, server) = serve_slow_response(40, Duration::from_millis(40)).await;
+    let source = slow_source(base, REQUEST_TIMEOUT, READ_TIMEOUT);
     let dest = tempfile::NamedTempFile::new().unwrap();
     // Use a short total timeout on the same request path as normal downloads.
     let error = source
@@ -1556,8 +1593,11 @@ mod tests {
 
   #[tokio::test]
   async fn a_subsonic_api_call_times_out_even_when_the_body_trickles() {
-    let (source, server) = serve_slow_response(40, Duration::from_secs(1)).await;
-    let error = tokio::time::timeout(REQUEST_TIMEOUT + Duration::from_secs(5), source.ping())
+    // Each chunk arrives inside the 2 s read timeout, but 40 chunks 40 ms apart
+    // outlast the 400 ms API deadline.
+    let (base, server) = serve_slow_response(40, Duration::from_millis(40)).await;
+    let source = slow_source(base, Duration::from_millis(400), Duration::from_secs(2));
+    let error = tokio::time::timeout(Duration::from_secs(5), source.ping())
       .await
       .expect("short API calls should keep their total timeout")
       .unwrap_err();
