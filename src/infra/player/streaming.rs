@@ -55,7 +55,7 @@ impl StreamingBuildError {
   pub fn is_retryable(&self) -> bool {
     match self {
       Self::Setup(_) => false,
-      Self::Spirc(error) => !login_was_rejected(error),
+      Self::Spirc(error) => !login_was_rejected(error) && !unsupported_login_challenge(error),
       Self::Timeout { .. } => true,
     }
   }
@@ -76,6 +76,16 @@ fn login_was_rejected(error: &librespot_core::error::Error) -> bool {
     }
     _ => false,
   }
+}
+
+/// librespot 0.8.7 surfaces an unanswerable login5 code challenge as
+/// `Unimplemented`. It is terminal, but the cached login is still valid.
+fn unsupported_login_challenge(error: &librespot_core::error::Error) -> bool {
+  error.kind == ErrorKind::Unimplemented
+    && error
+      .error
+      .to_string()
+      .contains("Code challenge is not supported")
 }
 
 impl From<anyhow::Error> for StreamingBuildError {
@@ -1407,6 +1417,28 @@ mod tests {
   use std::time::Duration;
 
   const ALSA_NO_DEFAULT: &str = "Audio Sink Error Connection Refused: <AlsaSink> Device default May be Invalid, Busy, or Already in Use, ALSA function 'snd_pcm_open' failed with error 'No such file or directory (2)'";
+
+  #[test]
+  fn an_unsupported_login5_challenge_is_terminal_but_not_a_credential_rejection() {
+    use anyhow::anyhow;
+    use librespot_core::error::Error as LibrespotError;
+
+    let challenge = LibrespotError::unimplemented(anyhow!("Code challenge is not supported"));
+    assert!(
+      !super::login_was_rejected(&challenge),
+      "the cached login is still valid"
+    );
+    assert!(!StreamingBuildError::Spirc(challenge).is_retryable());
+
+    // Other Unimplemented errors stay retryable; so do DNS errors and timeouts.
+    assert!(
+      StreamingBuildError::Spirc(LibrespotError::unimplemented(anyhow!("other"))).is_retryable()
+    );
+    assert!(
+      StreamingBuildError::Spirc(LibrespotError::unavailable(anyhow!("dns error"))).is_retryable()
+    );
+    assert!(StreamingBuildError::Timeout { secs: 45 }.is_retryable());
+  }
 
   #[test]
   fn backend_error_status_explains_a_missing_alsa_default_device() {
