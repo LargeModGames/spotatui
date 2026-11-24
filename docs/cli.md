@@ -22,7 +22,28 @@ Running `spotatui` with no subcommand starts the terminal UI. `spotatui --help` 
 
 ## Output format
 
-`--format` (on `playback`, `play`, `list` and `search`) takes these placeholders: `%a` artist, `%b` album, `%p` playlist, `%t` track, `%h` show, `%u` URI, `%f` flags, `%s` status, `%v` volume, `%d` device, `%r` progress.
+`-f, --format <FORMAT>` (on `playback`, `play`, `list` and `search`) takes these placeholders: `%a` artist, `%b` album, `%p` playlist, `%t` track, `%h` show, `%u` URI, `%f` flags, `%s` status, `%v` volume, `%d` device, `%r` progress.
+
+Without `--format`, each subcommand uses a default that depends on its other flags:
+
+| Subcommand | When | Default format |
+| --- | --- | --- |
+| `playback` | without `--seek`, `--volume` or `--transfer` | `%f %s %t - %a` |
+| `playback` | with `--seek` | `%f %s %t - %a %r` |
+| `playback` | with `--volume` | `%v% %f %s %t - %a` |
+| `playback` | with `--transfer` | `%f %s %t - %a on %d` |
+| `play` | always | `%f %s %t - %a` |
+| `list` | with `--devices` | `%v% %d` |
+| `list` | with `--liked` | `%t - %a (%u)` |
+| `list` | with `--playlists` | `%p (%u)` |
+| `list` | with `--playlist-tracks` | `%t - %a (%u)` |
+| `search` | with `--tracks` | `%t - %a (%u)` |
+| `search` | with `--playlists` | `%p (%u)` |
+| `search` | with `--artists` | `%a (%u)` |
+| `search` | with `--albums` | `%b - %a (%u)` |
+| `search` | with `--shows` | `%h - %a (%u)` |
+
+The `%` after `%v` is printed as is, so `%v% %d` prints `60% Kitchen speaker`.
 
 ## `playback` (alias `pb`)
 
@@ -78,7 +99,7 @@ spotatui play --playlist --name "Your Playlist" --random
 | `--playlist-tracks <URI>` | List the tracks of a playlist, given its `spotify:playlist:` URI or `open.spotify.com/playlist/` link |
 | `--limit <N>` | Maximum results: 1-50, or any number of tracks with `--playlist-tracks` |
 
-With `--playlist-tracks`, every track of the playlist is listed unless `--limit` stops it earlier, and the default format is `%t - %a (%u)`. A playlist episode fills `%t` with its name and `%h` with its show.
+With `--playlist-tracks`, every track of the playlist is listed unless `--limit` stops it earlier. A playlist episode fills `%t` with its name and `%h` with its show.
 
 ```bash
 spotatui list --liked --limit 50
