@@ -231,8 +231,12 @@ fn finish_cancelled_recovery(app: &mut App, interrupted_by_decoded: bool) {
     app.park_cancelled_native_recovery();
   }
   // Music or a decoded source may have let go between detection and cleanup.
-  // Requeue the parked backend so a play parked meanwhile is not stranded.
-  if app.native_backend_parked() && !app.apple_music_owns_playback() && !app.active_decoded_source()
+  // Only a parked start needs a requeue; otherwise the backend stays parked
+  // until an explicit Spotify start reacquires it.
+  if app.native_backend_parked()
+    && app.pending_start_playback.is_some()
+    && !app.apple_music_owns_playback()
+    && !app.active_decoded_source()
   {
     app.reacquire_parked_backend();
   }
@@ -2269,6 +2273,31 @@ mod tests {
     let request = recovery_rx.try_recv().expect("a rebuild is queued");
     assert!(request.reacquire);
     assert!(app.native_backend_pending);
+  }
+
+  /// Without a parked start, cleanup must leave the backend parked for an
+  /// explicit start instead of restoring playback on its own.
+  #[test]
+  fn a_music_release_without_a_parked_start_does_not_reacquire() {
+    use crate::core::{app::App, user_config::UserConfig};
+    use std::sync::mpsc::channel;
+    use std::time::SystemTime;
+
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    let (recovery_tx, mut recovery_rx) = tokio::sync::mpsc::unbounded_channel();
+    app.streaming_recovery_tx = Some(recovery_tx);
+    app.claim_apple_music();
+    super::park_for_apple_music_recovery(&mut app);
+    app.native_backend_pending = true;
+    let handoff = app.begin_apple_music_handoff();
+    assert!(app.finish_apple_music_handoff(handoff));
+
+    super::finish_cancelled_recovery(&mut app, false);
+
+    assert!(app.native_backend_parked());
+    assert!(!app.native_backend_pending);
+    assert!(recovery_rx.try_recv().is_err());
   }
 
   /// The claim can be released between detection and the handler's cleanup;
