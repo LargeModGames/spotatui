@@ -253,6 +253,11 @@ where
       return RebuildOutcome::Superseded;
     }
     if let Some(cancellation) = rebuild_cancellation(&app) {
+      // Music can release its claim before the handler's cleanup re-reads
+      // ownership; park now so the backend stays reacquirable either way.
+      if app.apple_music_owns_playback() {
+        app.park_cancelled_native_recovery();
+      }
       return cancellation.outcome();
     }
     // Startup can publish a player while the chain sleeps; replay over it,
@@ -299,6 +304,9 @@ where
             return RebuildOutcome::Superseded;
           }
           if let Some(cancellation) = rebuild_cancellation(&app) {
+            if app.apple_music_owns_playback() {
+              app.park_cancelled_native_recovery();
+            }
             return cancellation.outcome();
           }
 
@@ -2223,6 +2231,90 @@ mod tests {
     app.native_backend_pending = true;
     super::finish_cancelled_recovery(&mut app, false);
     assert!(!app.native_backend_pending);
+    assert!(app.native_backend_parked());
+  }
+
+  /// The claim can be released between detection and the handler's cleanup;
+  /// parking at detection keeps the absent backend reacquirable either way.
+  #[tokio::test]
+  async fn apple_music_cancellation_parks_before_the_claim_can_be_released() {
+    use crate::core::user_config::UserConfig;
+    use std::sync::mpsc::channel;
+    use std::time::SystemTime;
+
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    let generation = app.begin_native_recovery();
+    app.claim_apple_music();
+    assert!(app.apple_music_owns_playback());
+    let app = Arc::new(tokio::sync::Mutex::new(app));
+    let (mut ctx, _recovery_tx) = recovery_context(Arc::clone(&app));
+    let mut request = restore_request(generation);
+
+    let outcome = super::rebuild_with_retries(
+      &mut ctx,
+      &mut request,
+      Duration::from_millis(1),
+      Instant::now(),
+      |_config| -> BuildAttempt<()> {
+        Box::pin(async { unreachable!("no build starts while Music owns the sink") })
+      },
+      |_| None,
+    )
+    .await;
+    assert!(matches!(outcome, RebuildOutcome::Cancelled));
+
+    // Music releases before cleanup re-reads ownership.
+    let mut app = app.lock().await;
+    let handoff = app.begin_apple_music_handoff();
+    assert!(app.finish_apple_music_handoff(handoff));
+    assert!(!app.apple_music_owns_playback());
+    super::finish_cancelled_recovery(&mut app, false);
+    assert!(
+      app.native_backend_parked(),
+      "the backend must stay reacquirable after Music releases"
+    );
+  }
+
+  /// The failed-build branch detects cancellation too, under its own lock;
+  /// that park must survive a release before the handler's cleanup.
+  #[tokio::test]
+  async fn a_music_claim_during_a_failed_build_parks_before_cleanup_rechecks_ownership() {
+    use crate::core::user_config::UserConfig;
+    use std::sync::mpsc::channel;
+    use std::time::SystemTime;
+
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    let generation = app.begin_native_recovery();
+    let app = Arc::new(tokio::sync::Mutex::new(app));
+    let (mut ctx, _recovery_tx) = recovery_context(Arc::clone(&app));
+    let mut request = restore_request(generation);
+
+    let app_for_build = Arc::clone(&app);
+    let build = move |_config: StreamingConfig| -> BuildAttempt<()> {
+      let app = Arc::clone(&app_for_build);
+      Box::pin(async move {
+        app.lock().await.claim_apple_music();
+        Err(transient_build_failure())
+      })
+    };
+    let outcome = super::rebuild_with_retries(
+      &mut ctx,
+      &mut request,
+      Duration::from_millis(1),
+      Instant::now(),
+      build,
+      |_| None,
+    )
+    .await;
+    assert!(matches!(outcome, RebuildOutcome::Cancelled));
+
+    let mut app = app.lock().await;
+    assert!(app.apple_music_owns_playback());
+    let handoff = app.begin_apple_music_handoff();
+    assert!(app.finish_apple_music_handoff(handoff));
+    super::finish_cancelled_recovery(&mut app, false);
     assert!(app.native_backend_parked());
   }
 
