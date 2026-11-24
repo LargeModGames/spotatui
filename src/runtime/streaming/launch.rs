@@ -69,12 +69,15 @@ pub(crate) struct DeferredStreamingContext {
   pub(crate) windows_media_manager: Option<Arc<smtc_tokio::WindowsMediaManager>>,
 }
 
-/// End startup's pending window only while `generation` still owns it. A
-/// recovery that began during init must keep its own pending flag.
-fn finish_startup_pending(app: &mut App, generation: u64) {
-  if app.native_recovery_generation() == generation {
-    app.native_backend_pending = false;
+/// End startup's pending window only while it still owns it. Returns whether
+/// startup may still run its behavior and replay; a newer recovery or Soloist
+/// takes ownership without bumping the generation in Soloist's case.
+fn finish_startup_pending(app: &mut App, generation: u64) -> bool {
+  if !app.native_engine_still_selected() || app.native_recovery_generation() != generation {
+    return false;
   }
+  app.native_backend_pending = false;
+  true
 }
 
 /// Initialize native streaming in the background. The UI renders its
@@ -96,12 +99,13 @@ pub(crate) fn deferred_streaming_startup(ctx: DeferredStreamingContext) {
     // timed-out init), startup's pending window is over — unless a newer
     // recovery claimed it while init was running.
     let mut app = app.lock().await;
-    finish_startup_pending(&mut app, startup_generation);
-    // The Spotify startup Play/Pause runs here, after the device decision.
-    app.run_spotify_startup_behavior(spotify_startup_behavior, initial_shuffle_enabled);
-    // A StartPlayback parked during init replays now — against the native
-    // backend when it exists, else through the normal Connect path.
-    app.replay_pending_start_playback();
+    if finish_startup_pending(&mut app, startup_generation) {
+      // The Spotify startup Play/Pause runs here, after the device decision.
+      app.run_spotify_startup_behavior(spotify_startup_behavior, initial_shuffle_enabled);
+      // A StartPlayback parked during init replays now — against the native
+      // backend when it exists, else through the normal Connect path.
+      app.replay_pending_start_playback();
+    }
   });
 }
 
@@ -272,7 +276,7 @@ mod tests {
   #[test]
   fn startup_pending_window_clears_while_it_still_owns_the_flag() {
     let (mut app, generation) = startup_pending_app();
-    super::finish_startup_pending(&mut app, generation);
+    assert!(super::finish_startup_pending(&mut app, generation));
     assert!(!app.native_backend_pending);
   }
 
@@ -284,14 +288,43 @@ mod tests {
     app.native_backend_pending = true;
     assert_ne!(newer, generation);
 
-    super::finish_startup_pending(&mut app, generation);
+    assert!(!super::finish_startup_pending(&mut app, generation));
     assert!(
       app.native_backend_pending,
       "the newer recovery still owns the flag"
     );
 
     // Its own cleanup still ends the window.
-    super::finish_startup_pending(&mut app, newer);
+    assert!(super::finish_startup_pending(&mut app, newer));
     assert!(!app.native_backend_pending);
+  }
+
+  #[cfg(all(
+    feature = "soloist",
+    not(all(target_os = "macos", target_arch = "x86_64"))
+  ))]
+  #[test]
+  fn a_soloist_switch_keeps_its_pending_flag_and_skips_startup_replay() {
+    use crate::core::user_config::{PlaybackEngine, UserConfig};
+    use std::sync::mpsc::channel;
+    use std::time::SystemTime;
+
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.native_backend_pending = true;
+    let generation = app.begin_native_recovery();
+
+    // Soloist takes over the pending flag without bumping the recovery generation.
+    app.user_config.behavior.enable_streaming = true;
+    app.user_config.behavior.playback_engine = PlaybackEngine::Soloist;
+    assert!(app.apply_playback_engine().is_some());
+    assert!(app.native_backend_pending);
+    assert_eq!(app.native_recovery_generation(), generation);
+
+    assert!(!super::finish_startup_pending(&mut app, generation));
+    assert!(
+      app.native_backend_pending,
+      "Soloist owns the pending flag now"
+    );
   }
 }
