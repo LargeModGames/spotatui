@@ -67,9 +67,8 @@ pub fn draw(cells: &mut Cells, frame: &Frame, state: &mut State, dt: f32) {
       Some(LABEL_STRIP),
       true,
     );
-    let rh = wh - 7;
-    if rh >= 3 && ww > 20 {
-      let (rx0, ry0, rw) = (wx + 10, wy + 5, ww - 20);
+    if wh >= 8 && ww > 20 {
+      let (rx0, ry0, rw, rh) = (wx + 10, wy + 5, ww - 20, (wh - 7).max(3));
       cells.fill(rx0, ry0, rw, rh, WINDOW);
 
       let progress = match (view.progress_ms, view.duration_ms) {
@@ -228,7 +227,7 @@ mod tests {
       is_playing: true,
       ..HeadUnitView::default()
     };
-    for h in [12u16, 14, 15, 16, 17, 18, 19, 20, 22, 24, 30] {
+    for h in [12u16, 14, 15, 16, 17, 18, 19, 20, 21, 22, 24, 30] {
       let area = Rect::new(0, 0, 80, h);
       let mut buf = Buffer::empty(area);
       let frame = Frame {
@@ -260,6 +259,37 @@ mod tests {
           );
         }
       }
+    }
+  }
+
+  #[test]
+  fn the_window_is_drawn_at_heights_21_and_22() {
+    let bands = sample_bands(24);
+    let wave = sample_wave();
+    let view = HeadUnitView {
+      title: Some("Side A".into()),
+      is_playing: true,
+      ..HeadUnitView::default()
+    };
+    for h in [21u16, 22] {
+      let area = Rect::new(0, 0, 80, h);
+      let mut buf = Buffer::empty(area);
+      let frame = Frame {
+        audio: Audio {
+          bands: &bands,
+          wave: &wave,
+        },
+        view: &view,
+        now: Instant::now(),
+      };
+      let mut cells = Cells {
+        buf: &mut buf,
+        area,
+      };
+      draw(&mut cells, &frame, &mut State::default(), 0.0);
+      let window = Color::Rgb(WINDOW.0, WINDOW.1, WINDOW.2);
+      let window_drawn = (0..h).any(|y| (0..80).any(|x| buf[(x, y)].bg == window));
+      assert!(window_drawn, "window should be drawn at height {h}");
     }
   }
 
