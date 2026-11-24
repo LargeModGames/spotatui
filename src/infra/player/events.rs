@@ -577,11 +577,12 @@ async fn handle_streaming_recovery<B: RecoveryBackend>(
     .await;
     // The retry chain can outlast a single player build. Not user's wait, so credit it
     // back to any start parked for this backend before replaying it on the built route.
+    // A chain superseded mid-wait still credits its own elapsed time: the newer
+    // chain only knows about its own wait. The clamp in
+    // `exclude_recovery_time_from_parked_start` keeps repeated credits bounded.
     {
       let mut app = ctx.app.lock().await;
-      if app.native_recovery_generation() == request.generation {
-        app.exclude_recovery_time_from_parked_start(recovery_started.elapsed());
-      }
+      app.exclude_recovery_time_from_parked_start(recovery_started.elapsed());
     }
     match outcome {
       RebuildOutcome::Built(built) => {
@@ -2620,6 +2621,86 @@ mod tests {
     ));
     // Once only: nothing was replayed over the superseded build.
     assert!(matches!(io_rx.try_recv(), Err(TryRecvError::Empty)));
+  }
+
+  /// A superseded chain's retry wait is credited too, so the newer chain's
+  /// replay does not drop the same parked start as expired.
+  #[tokio::test(start_paused = true)]
+  async fn a_superseded_chain_credits_its_retry_time_to_the_parked_start() {
+    use crate::core::app::max_parked_age;
+    use crate::core::user_config::UserConfig;
+    use crate::infra::network::IoEvent;
+    use std::sync::mpsc::{channel, TryRecvError};
+    use std::time::SystemTime;
+
+    let (tx, io_rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    assert_eq!(app.begin_native_recovery(), 1);
+    app.park_start_playback(Some("spotify:playlist:parked".to_string()), None, None);
+    app.native_backend_pending = true;
+    let app = Arc::new(tokio::sync::Mutex::new(app));
+    let (ctx, recovery_tx) = recovery_context(Arc::clone(&app));
+
+    // std::time::Instant is frozen under paused Tokio time, so the superseded
+    // chain's credit has to come from real elapsed time. Age the start *after*
+    // that wait: only the credit can then keep it from expiring.
+    let wait = Duration::from_millis(300);
+    let app_for_script = Arc::clone(&app);
+    let recovery_tx_for_script = recovery_tx.clone();
+    let script = move |attempt: u32, _published: ScriptedSlot| -> BuildAttempt<ScriptedPlayer> {
+      let app = Arc::clone(&app_for_script);
+      let recovery_tx = recovery_tx_for_script.clone();
+      Box::pin(async move {
+        match attempt {
+          // A DNS failure right after a wake is retried.
+          1 => Err(transient_build_failure()),
+          // A transport drop owns a newer generation from here on.
+          2 => {
+            let generation = app.lock().await.begin_native_recovery();
+            recovery_tx
+              .send(restore_request(generation))
+              .expect("the recovery channel is open");
+            tokio::task::spawn_blocking(move || std::thread::sleep(wait))
+              .await
+              .expect("the blocking wait finished");
+            let mut app = app.lock().await;
+            if let Some(pending) = app.pending_start_playback.as_mut() {
+              pending.parked_at = Instant::now() - max_parked_age() - Duration::from_millis(100);
+            }
+            Ok(ScriptedPlayer::new(attempt))
+          }
+          // The newer recovery's own build.
+          _ => Ok(ScriptedPlayer::new(attempt)),
+        }
+      })
+    };
+    let backend = ScriptedBackend::new(script);
+    let record = backend.clone();
+    recovery_tx
+      .send(restore_request(1))
+      .expect("the recovery channel is open");
+
+    run_recovery_handler_until_parked(handle_streaming_recovery(ctx, backend)).await;
+
+    assert_eq!(record.attempts(), 3);
+    assert!(matches!(
+      io_rx.try_recv(),
+      Ok(IoEvent::AutoSelectStreamingDevice(_, false, true))
+    ));
+    assert!(
+      matches!(
+        io_rx.try_recv(),
+        Ok(IoEvent::StartPlayback(Some(ref context), None, None))
+          if context == "spotify:playlist:parked"
+      ),
+      "the parked start outlives the superseded chain's wait"
+    );
+    assert!(matches!(io_rx.try_recv(), Err(TryRecvError::Empty)));
+    let app = app.lock().await;
+    assert_ne!(
+      app.status_message(),
+      Some(crate::core::i18n::EN.status.app.native_request_expired)
+    );
   }
 
   /// A player published during backoff ends the chain and receives the parked intent.
