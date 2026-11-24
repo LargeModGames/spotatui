@@ -500,7 +500,7 @@ pub const ZH_HANS: HelpStrings = HelpStrings {
   context_queue: "队列",
   context_stats: "统计",
   context_playlist_sync: "播放列表同步",
-  context_sidebar_playlists: "Spotify 歌单侧栏",
+  context_sidebar_playlists: "Spotify 播放列表侧栏",
   context_sortable_lists: "歌曲／专辑／艺人列表",
   library_sidebar: "音乐库侧栏",
   title: "帮助",

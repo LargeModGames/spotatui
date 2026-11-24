@@ -429,7 +429,7 @@ pub const ZH_HANS: GuiStrings = GuiStrings {
   create_playlist: "创建播放列表",
   name: "名称",
   my_playlist: "我的播放列表",
-  sort_playlists: "歌单排序",
+  sort_playlists: "播放列表排序",
   sort_spotify: "Spotify",
   sort_recently_played: "最近播放",
   sort_albums: "专辑排序",
