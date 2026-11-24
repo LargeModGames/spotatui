@@ -591,10 +591,17 @@ pub(super) async fn prepare_frontend(boot: Boot) -> FrontendHandles {
     };
     // While init is running, a playback request that finds no active device
     // parks itself for replay instead of erroring (the task clears this and
-    // replays whatever parked when it finishes, whatever the outcome).
-    app.lock().await.native_backend_pending = true;
+    // replays whatever parked when it finishes, whatever the outcome). Claim
+    // a recovery identity so a newer recovery taking over mid-init keeps the
+    // pending flag when startup cleanup runs.
+    let startup_generation = {
+      let mut app = app.lock().await;
+      app.native_backend_pending = true;
+      app.begin_native_recovery()
+    };
     deferred_streaming_startup(DeferredStreamingContext {
       app: Arc::clone(&app),
+      startup_generation,
       streaming_config,
       device_startup_behavior,
       // A restored non-Spotify session owns the startup play/pause decision;
