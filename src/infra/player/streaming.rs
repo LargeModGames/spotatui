@@ -39,6 +39,73 @@ use tokio::time::{timeout, Duration};
 const FAST_SESSION_RECONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const PLAY_AFTER_TRANSFER_WINDOW: Duration = Duration::from_secs(15);
 
+/// Why building a Connect device failed.
+#[derive(Debug)]
+pub enum StreamingBuildError {
+  /// Setup before Spirc. Waiting cannot fix these without user action.
+  Setup(anyhow::Error),
+  /// Spirc creation failed.
+  Spirc(librespot_core::error::Error),
+  /// Timeout while waiting for Spotify.
+  Timeout { secs: u64 },
+}
+
+impl StreamingBuildError {
+  /// Whether a later build could succeed while everything else stays the same.
+  pub fn is_retryable(&self) -> bool {
+    match self {
+      Self::Setup(_) => false,
+      Self::Spirc(error) => !login_was_rejected(error),
+      Self::Timeout { .. } => true,
+    }
+  }
+}
+
+/// Whether Spotify rejected the stored login. login5 answers a bad stored
+/// credential with `FailedPrecondition` (`INVALID_CREDENTIALS` or
+/// `UNKNOWN_IDENTIFIER` in the private `Login5Error`'s `Display`); its plain
+/// form is a retryable local-state error. Six access points answering
+/// `TryAnotherAP` surface as `PermissionDenied`, which stays retryable.
+fn login_was_rejected(error: &librespot_core::error::Error) -> bool {
+  match error.kind {
+    ErrorKind::Unauthenticated => true,
+    ErrorKind::PermissionDenied => !error.error.to_string().contains("Try another access point"),
+    ErrorKind::FailedPrecondition => {
+      let detail = error.error.to_string();
+      detail.contains("INVALID_CREDENTIALS") || detail.contains("UNKNOWN_IDENTIFIER")
+    }
+    _ => false,
+  }
+}
+
+impl From<anyhow::Error> for StreamingBuildError {
+  fn from(error: anyhow::Error) -> Self {
+    Self::Setup(error)
+  }
+}
+
+impl From<librespot_core::error::Error> for StreamingBuildError {
+  fn from(error: librespot_core::error::Error) -> Self {
+    Self::Setup(anyhow::Error::new(error))
+  }
+}
+
+impl std::fmt::Display for StreamingBuildError {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self {
+      Self::Setup(error) => write!(f, "{error:#}"),
+      Self::Spirc(error) => write!(f, "Failed to create Spirc: {error}"),
+      Self::Timeout { secs } => write!(
+        f,
+        "Timed out after {secs}s waiting for Spotify. \
+         Set SPOTATUI_STREAMING_INIT_TIMEOUT_SECS to adjust."
+      ),
+    }
+  }
+}
+
+impl std::error::Error for StreamingBuildError {}
+
 type SpircTaskHandle = tokio::task::JoinHandle<Option<SavedPlaybackState>>;
 
 /// One-shot play for the paused load a resume-after-handoff transfer ends in (#693).
@@ -686,7 +753,9 @@ impl StreamingPlayer {
   }
 
   /// A streaming player from the cached Spotify login; never opens a browser.
-  pub async fn new_cache_only(config: StreamingConfig) -> Result<Self> {
+  pub async fn new_cache_only(
+    config: StreamingConfig,
+  ) -> std::result::Result<Self, StreamingBuildError> {
     // Set up cache paths
     let cache_path = config.cache_path.clone().or_else(get_default_cache_path);
     let audio_cache_path = if config.audio_cache {
@@ -821,28 +890,24 @@ impl StreamingPlayer {
     let (spirc, spirc_task) = match timeout(init_timeout, spirc_new).await {
       Ok(Ok(result)) => result,
       Ok(Err(e)) => {
-        // Only discard cached credentials when Spotify actually rejected them.
+        // Only discard cached credentials when Spotify actually rejected them
+        // (including login5's `FailedPrecondition` for a bad stored credential).
         // A transient failure (network down, service unavailable) must NOT wipe
         // valid credentials and force a browser re-auth next launch — same
         // reasoning as the timeout arm below.
-        if matches!(
-          e.kind,
-          ErrorKind::Unauthenticated | ErrorKind::PermissionDenied
-        ) {
+        if login_was_rejected(&e) {
           clear_cached_streaming_credentials(&cache_path);
         }
         warn!("Spirc creation error: {:?}", e);
-        return Err(anyhow!("Failed to create Spirc: {:?}", e));
+        return Err(StreamingBuildError::Spirc(e));
       }
       Err(_) => {
         // Timeout means the network was slow, not that credentials are bad.
         // Do NOT clear credentials, they may be valid for the next startup.
         // Streaming is skipped for this session; main.rs falls back to Web API.
-        return Err(anyhow!(
-          "Spirc initialization timed out after {}s. Streaming skipped for this session. \
-             Set SPOTATUI_STREAMING_INIT_TIMEOUT_SECS to adjust.",
-          init_timeout.as_secs()
-        ));
+        return Err(StreamingBuildError::Timeout {
+          secs: init_timeout.as_secs(),
+        });
       }
     };
 
@@ -1330,7 +1395,8 @@ fn new_device_id_string() -> String {
 mod tests {
   use super::{
     backend_error_status, get_or_create_device_id, new_device_id_string, PlayAfterTransfer,
-    RecoveringSink, SkipResume, StreamingConnectionState, PLAY_AFTER_TRANSFER_WINDOW,
+    RecoveringSink, SkipResume, StreamingBuildError, StreamingConnectionState,
+    PLAY_AFTER_TRANSFER_WINDOW,
   };
   use crate::core::i18n::EN;
   use crate::infra::spotify::credentials::{
@@ -1363,6 +1429,15 @@ mod tests {
       ),
       "Audio backend failed: Audio Sink Error Not Connected: Audio sink unavailable"
     );
+  }
+
+  /// The startup path logs the Display verbatim; keep the env-var hint in it.
+  #[test]
+  fn a_build_timeout_names_the_env_var_that_tunes_it() {
+    let error = StreamingBuildError::Timeout { secs: 45 };
+    assert!(error
+      .to_string()
+      .contains("SPOTATUI_STREAMING_INIT_TIMEOUT_SECS"));
   }
 
   struct StubSink {

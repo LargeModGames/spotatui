@@ -24,3 +24,9 @@ default while the old device remains available is outside its scope.
 - librespot reports full `spotify:track:<id>` URIs while app state uses bare
   base62 ids: normalize with `base62_id_of` at the event boundary
   (`spotify:local:` URIs stay whole).
+- The recovery handler is generic over `RecoveryBackend` only so a test can
+  run the whole chain: drive `handle_streaming_recovery` with a scripted
+  backend under `#[tokio::test(start_paused = true)]` and assert on what it
+  published and dispatched. A test that calls `rebuild_with_retries` or
+  `replay_recovery_intent` itself still passes with the handler's install or
+  replay deleted.
