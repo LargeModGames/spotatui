@@ -134,11 +134,18 @@ fn recovery_snapshot_summary(app: &App) -> String {
 
 /// Intent ORs across coalesced transport-drop requests, but a handoff
 /// (`restore_playback == false`) stickily vetoes restore/reselect: restoring
-/// over the user's handoff would steal playback back (#437).
+/// over the user's handoff would steal playback back (#437). `reacquire` is
+/// owned by the newest generation: a retry still waiting when a new request
+/// takes over must not replay a queue slot from the superseded start intent.
 fn merge_recovery_requests(request: &mut StreamingRecoveryRequest, next: StreamingRecoveryRequest) {
   // The newest generation owns the identity; intent still merges.
+  let newer = next.generation > request.generation;
   request.generation = request.generation.max(next.generation);
-  request.reacquire |= next.reacquire;
+  if newer {
+    request.reacquire = next.reacquire;
+  } else {
+    request.reacquire |= next.reacquire;
+  }
   if !request.restore_playback || !next.restore_playback {
     request.reselect_device = false;
     request.restore_playback = false;
@@ -3379,6 +3386,40 @@ mod tests {
     assert!(request.reacquire);
     assert!(request.restore_playback);
     assert!(!request.reselect_device);
+  }
+
+  /// A request that takes over the generation owns `reacquire` too: the retry
+  /// chain's old start intent must not replay a queue slot under the new identity.
+  #[test]
+  fn a_newer_request_does_not_inherit_a_stale_reacquire() {
+    let mut request = StreamingRecoveryRequest {
+      generation: 1,
+      restore_playback: true,
+      reacquire: true,
+      ..StreamingRecoveryRequest::default()
+    };
+    // Engine switch back: a new identity with no play intent of its own.
+    merge_recovery_requests(
+      &mut request,
+      StreamingRecoveryRequest {
+        generation: 2,
+        ..StreamingRecoveryRequest::default()
+      },
+    );
+    assert_eq!(request.generation, 2);
+    assert!(!request.reacquire);
+
+    // A newer request that does ask for reacquire still carries it.
+    merge_recovery_requests(
+      &mut request,
+      StreamingRecoveryRequest {
+        generation: 3,
+        reacquire: true,
+        ..StreamingRecoveryRequest::default()
+      },
+    );
+    assert_eq!(request.generation, 3);
+    assert!(request.reacquire);
   }
 
   #[test]
