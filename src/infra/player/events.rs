@@ -2358,6 +2358,57 @@ mod tests {
     }
   }
 
+  /// Exercise cancellation through the handler so deleting its cancellation
+  /// call fails a test, as required by src/infra/player/AGENTS.md.
+  #[tokio::test(start_paused = true)]
+  async fn a_music_cancelled_recovery_parks_and_reacquires_through_the_handler() {
+    use crate::core::user_config::UserConfig;
+    use std::sync::mpsc::{channel, TryRecvError};
+    use std::time::SystemTime;
+
+    let (tx, io_rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    let generation = app.begin_native_recovery();
+    app.native_backend_pending = true;
+    // App's sender is separate from the handler's context: reacquire reports here.
+    let (recovery_tx, mut reacquire_rx) = tokio::sync::mpsc::unbounded_channel();
+    app.streaming_recovery_tx = Some(recovery_tx);
+    let app = Arc::new(tokio::sync::Mutex::new(app));
+    let (ctx, request_tx) = recovery_context(Arc::clone(&app));
+
+    let app_for_script = Arc::clone(&app);
+    let script = move |_attempt: u32, _published: ScriptedSlot| -> BuildAttempt<ScriptedPlayer> {
+      let app = Arc::clone(&app_for_script);
+      Box::pin(async move {
+        app.lock().await.claim_apple_music();
+        Err(transient_build_failure())
+      })
+    };
+    let backend = ScriptedBackend::new(script);
+    let record = backend.clone();
+    request_tx
+      .send(restore_request(generation))
+      .expect("the recovery channel is open");
+
+    run_recovery_handler_until_parked(handle_streaming_recovery(ctx, backend)).await;
+
+    assert_eq!(record.events(), [], "a cancelled build publishes nothing");
+    {
+      let mut app = app.lock().await;
+      assert!(app.apple_music_owns_playback());
+      assert!(!app.native_backend_pending);
+      assert!(app.native_backend_parked());
+      let handoff = app.begin_apple_music_handoff();
+      assert!(app.finish_apple_music_handoff(handoff));
+      assert!(app.reacquire_parked_backend());
+    }
+    assert!(
+      reacquire_rx.try_recv().unwrap().reacquire,
+      "the parked backend rebuilds once Music releases"
+    );
+    assert!(matches!(io_rx.try_recv(), Err(TryRecvError::Empty)));
+  }
+
   #[test]
   fn frontend_shutdown_is_not_a_decoded_owner_cancellation() {
     use crate::core::{app::App, source::Source, user_config::UserConfig};
