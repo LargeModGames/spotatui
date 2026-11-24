@@ -575,14 +575,13 @@ async fn handle_streaming_recovery<B: RecoveryBackend>(
       |app| backend.available_published_player(app),
     )
     .await;
-    // The retry chain can outlast a single player build. Not user's wait, so credit it
-    // back to any start parked for this backend before replaying it on the built route.
-    // A chain superseded mid-wait still credits its own elapsed time: the newer
-    // chain only knows about its own wait. The clamp in
-    // `exclude_recovery_time_from_parked_start` keeps repeated credits bounded.
+    // Recovery waiting is not user wait. Credit it for every outcome except
+    // `Reused`, whose in-loop replay already credited the same interval.
     {
       let mut app = ctx.app.lock().await;
-      app.exclude_recovery_time_from_parked_start(recovery_started.elapsed());
+      if !matches!(outcome, RebuildOutcome::Reused) {
+        app.exclude_recovery_time_from_parked_start(recovery_started.elapsed());
+      }
     }
     match outcome {
       RebuildOutcome::Built(built) => {
@@ -2700,6 +2699,72 @@ mod tests {
     assert_ne!(
       app.status_message(),
       Some(crate::core::i18n::EN.status.app.native_request_expired)
+    );
+  }
+
+  /// The in-loop `Reused` replay already credits the wait; the handler must not
+  /// credit the same interval again and consume the wait before parking.
+  #[tokio::test(start_paused = true)]
+  async fn reusing_a_live_player_credits_the_parked_start_only_once() {
+    use crate::core::user_config::UserConfig;
+    use crate::infra::network::IoEvent;
+    use std::sync::mpsc::{channel, TryRecvError};
+    use std::time::SystemTime;
+
+    let (tx, io_rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    assert_eq!(app.begin_native_recovery(), 1);
+    app.park_start_playback(Some("spotify:playlist:parked".to_string()), None, None);
+    // A short wait before recovery: crediting the chain twice would eat into
+    // this too. std Instant is frozen under paused Tokio time, so the chain's
+    // own wait comes from a short real sleep below.
+    let pre_park = Duration::from_millis(200);
+    if let Some(pending) = app.pending_start_playback.as_mut() {
+      pending.parked_at = Instant::now() - pre_park;
+    }
+    app.native_backend_pending = true;
+    let app = Arc::new(tokio::sync::Mutex::new(app));
+    let (ctx, recovery_tx) = recovery_context(Arc::clone(&app));
+
+    let wait = Duration::from_millis(300);
+    let script = move |_attempt: u32, published: ScriptedSlot| -> BuildAttempt<ScriptedPlayer> {
+      Box::pin(async move {
+        tokio::task::spawn_blocking(move || std::thread::sleep(wait))
+          .await
+          .expect("the blocking wait finished");
+        published.publish(ScriptedPlayer::from_startup());
+        Err(transient_build_failure())
+      })
+    };
+    let backend = ScriptedBackend::new(script);
+    recovery_tx
+      .send(restore_request(1))
+      .expect("the recovery channel is open");
+
+    run_recovery_handler_until_parked(handle_streaming_recovery(ctx, backend)).await;
+
+    assert!(matches!(
+      io_rx.try_recv(),
+      Ok(IoEvent::AutoSelectStreamingDevice(_, false, true))
+    ));
+    assert!(matches!(
+      io_rx.try_recv(),
+      Ok(IoEvent::StartPlayback(Some(ref context), None, None))
+        if context == "spotify:playlist:parked"
+    ));
+    assert!(matches!(io_rx.try_recv(), Err(TryRecvError::Empty)));
+
+    // The replay leaves the start in place, so its age shows whether the
+    // handler credited the same interval a second time.
+    let app = app.lock().await;
+    let pending = app
+      .pending_start_playback
+      .as_ref()
+      .expect("the parked start remains");
+    let age = Instant::now().saturating_duration_since(pending.parked_at);
+    assert!(
+      age >= Duration::from_millis(100),
+      "the pre-recovery wait must survive the replay: {age:?}"
     );
   }
 
