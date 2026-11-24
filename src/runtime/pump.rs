@@ -190,7 +190,7 @@ pub(super) async fn start_tokio(io_rx: std::sync::mpsc::Receiver<IoEvent>, netwo
       // router loads the slot before the external-playback check runs.
       #[cfg(feature = "streaming")]
       let io_event = if matches!(&io_event, IoEvent::ReplayPublishedSpotifyQueueSlot) {
-        match network.hold_back_if_rate_limited(io_event).await {
+        match network.hold_back_behind_deferred(io_event).await {
           Some(io_event) => io_event,
           None => continue,
         }
@@ -536,7 +536,8 @@ mod tests {
     });
     app.current_playback_context = Some(external_playing_context());
     let app = Arc::new(Mutex::new(app));
-    let mut network = Network::rate_limited_pump_network_for_test(&app).await;
+    let mut network =
+      Network::rate_limited_pump_network_for_test(&app, std::time::Duration::from_secs(30)).await;
 
     let (pump_tx, pump_rx) = std::sync::mpsc::channel();
     // Recovery dispatches the reselect before the retained-slot replay.

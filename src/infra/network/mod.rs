@@ -1261,6 +1261,20 @@ impl Network {
     None
   }
 
+  /// Hold a replay behind events already waiting, even after the window closes,
+  /// so a flush keeps them in order. Falls back to the window check.
+  pub(crate) async fn hold_back_behind_deferred(&mut self, io_event: IoEvent) -> Option<IoEvent> {
+    if self.deferred.is_empty() {
+      return self.hold_back_if_rate_limited(io_event).await;
+    }
+    let owner = self.app.lock().await.playback_owner();
+    self.deferred.push(Deferred {
+      event: io_event,
+      owner,
+    });
+    None
+  }
+
   /// A `Network` for the Spotify lane: the pump's login, limits, fallback cache
   /// and rate gate, taken per event so a login reaches it. It defers like the
   /// pump; the lane hands what it defers back to the pump.
@@ -1989,15 +2003,15 @@ fn report_request_error(app: &mut App, error: anyhow::Error) {
 #[cfg(test)]
 impl Network {
   /// A pump-mode network with a live login and an open rate-limit window.
-  pub(crate) async fn rate_limited_pump_network_for_test(app: &Arc<Mutex<App>>) -> Network {
+  pub(crate) async fn rate_limited_pump_network_for_test(
+    app: &Arc<Mutex<App>>,
+    window: std::time::Duration,
+  ) -> Network {
     let mut network = Network::new(None, app);
     network.spotify = Some(SpotifyLogin::new());
     network.defers_rate_limited = true;
     network.rate_gate = requests::RateLimitGate::default();
-    network
-      .rate_gate
-      .rate_limit_for(std::time::Duration::from_secs(30))
-      .await;
+    network.rate_gate.rate_limit_for(window).await;
     network
   }
 }
@@ -2397,7 +2411,7 @@ mod tests {
 
   /// A pump-mode network with a session and a private, open rate-limit window.
   async fn rate_limited_pump_network(app: &Arc<Mutex<App>>) -> Network {
-    Network::rate_limited_pump_network_for_test(app).await
+    Network::rate_limited_pump_network_for_test(app, Duration::from_secs(30)).await
   }
 
   /// An app with a session whose pump channel the test can read.
@@ -2526,6 +2540,43 @@ mod tests {
     assert!(matches!(io_rx.try_recv(), Ok(IoEvent::ToggleSaveTrack(_))));
     assert!(io_rx.try_recv().is_err());
     assert!(!app.lock().await.is_loading);
+  }
+
+  /// A window can close between the reselect's hold and the replay's read; the
+  /// replay must still wait behind the queued reselect.
+  #[cfg(feature = "streaming")]
+  #[tokio::test]
+  async fn a_replay_waits_behind_deferred_events_after_the_window_closes() {
+    let (app, io_rx) = app_with_a_session_and_channel();
+    let mut network =
+      Network::rate_limited_pump_network_for_test(&app, Duration::from_millis(10)).await;
+
+    network
+      .handle_network_event(IoEvent::AutoSelectStreamingDevice(
+        "spotatui".to_string(),
+        false,
+        true,
+      ))
+      .await;
+    assert_eq!(network.deferred.len(), 1);
+
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    assert!(network.rate_gate.rate_limit_remaining().await.is_none());
+    assert!(network
+      .hold_back_behind_deferred(IoEvent::ReplayPublishedSpotifyQueueSlot)
+      .await
+      .is_none());
+
+    network.flush_deferred().await;
+    assert!(matches!(
+      io_rx.try_recv(),
+      Ok(IoEvent::AutoSelectStreamingDevice(_, false, true))
+    ));
+    assert!(matches!(
+      io_rx.try_recv(),
+      Ok(IoEvent::ReplayPublishedSpotifyQueueSlot)
+    ));
+    assert!(io_rx.try_recv().is_err());
   }
 
   #[cfg(feature = "streaming")]
