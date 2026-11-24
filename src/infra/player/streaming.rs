@@ -14,6 +14,7 @@ use librespot_core::{
   cache::Cache,
   config::{DeviceType, SessionConfig},
   error::ErrorKind,
+  http_client::HttpClientError,
   session::Session,
   spclient::TransferRequest,
   SpotifyUri,
@@ -67,6 +68,14 @@ impl StreamingBuildError {
 /// form is a retryable local-state error. Six access points answering
 /// `TryAnotherAP` surface as `PermissionDenied`, which stays retryable.
 fn login_was_rejected(error: &librespot_core::error::Error) -> bool {
+  // librespot maps client-token HTTP failures (403 -> PermissionDenied,
+  // 401/407/511 -> Unauthenticated) into these kinds. Keep them retryable.
+  if matches!(
+    error.error.downcast_ref::<HttpClientError>(),
+    Some(HttpClientError::StatusCode(_))
+  ) {
+    return false;
+  }
   match error.kind {
     ErrorKind::Unauthenticated => true,
     ErrorKind::PermissionDenied => !error.error.to_string().contains("Try another access point"),
@@ -1417,6 +1426,26 @@ mod tests {
   use std::time::Duration;
 
   const ALSA_NO_DEFAULT: &str = "Audio Sink Error Connection Refused: <AlsaSink> Device default May be Invalid, Busy, or Already in Use, ALSA function 'snd_pcm_open' failed with error 'No such file or directory (2)'";
+
+  #[test]
+  fn client_token_http_errors_are_retryable_and_keep_the_cached_login() {
+    use librespot_core::error::Error as LibrespotError;
+
+    // librespot maps a captive-portal 511 to Unauthenticated on the
+    // client-token request that precedes login.
+    let captive_portal = LibrespotError::unauthenticated(
+      librespot_core::http_client::HttpClientError::StatusCode("511".parse().unwrap()),
+    );
+    assert!(!super::login_was_rejected(&captive_portal));
+    assert!(StreamingBuildError::Spirc(captive_portal).is_retryable());
+
+    // A 403 from the same endpoint surfaces as PermissionDenied.
+    let forbidden = LibrespotError::permission_denied(
+      librespot_core::http_client::HttpClientError::StatusCode("403".parse().unwrap()),
+    );
+    assert!(!super::login_was_rejected(&forbidden));
+    assert!(StreamingBuildError::Spirc(forbidden).is_retryable());
+  }
 
   #[test]
   fn an_unsupported_login5_challenge_is_terminal_but_not_a_credential_rejection() {
