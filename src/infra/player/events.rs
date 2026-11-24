@@ -207,6 +207,17 @@ fn rebuild_cancellation(app: &App) -> Option<RebuildCancellation> {
   }
 }
 
+/// Park for a Music interruption only while the frontend and native engine
+/// still own the backend; exit and engine switches stay non-parking.
+fn park_for_apple_music_recovery(app: &mut App) {
+  if app.io_tx_clone().is_some()
+    && app.native_engine_still_selected()
+    && app.apple_music_owns_playback()
+  {
+    app.park_cancelled_native_recovery();
+  }
+}
+
 /// Finish a cancelled librespot recovery without clearing Soloist's startup flag.
 fn finish_cancelled_recovery(app: &mut App, interrupted_by_decoded: bool) {
   if !app.native_engine_still_selected() {
@@ -255,9 +266,7 @@ where
     if let Some(cancellation) = rebuild_cancellation(&app) {
       // Music can release its claim before the handler's cleanup re-reads
       // ownership; park now so the backend stays reacquirable either way.
-      if app.apple_music_owns_playback() {
-        app.park_cancelled_native_recovery();
-      }
+      park_for_apple_music_recovery(&mut app);
       return cancellation.outcome();
     }
     // Startup can publish a player while the chain sleeps; replay over it,
@@ -304,9 +313,7 @@ where
             return RebuildOutcome::Superseded;
           }
           if let Some(cancellation) = rebuild_cancellation(&app) {
-            if app.apple_music_owns_playback() {
-              app.park_cancelled_native_recovery();
-            }
+            park_for_apple_music_recovery(&mut app);
             return cancellation.outcome();
           }
 
@@ -2316,6 +2323,39 @@ mod tests {
     assert!(app.finish_apple_music_handoff(handoff));
     super::finish_cancelled_recovery(&mut app, false);
     assert!(app.native_backend_parked());
+  }
+
+  /// A Music park must not be re-asserted once the frontend exited or Soloist
+  /// cleared the native park — cleanup treats both as non-parking cancellations.
+  #[test]
+  fn a_music_park_is_skipped_after_frontend_exit_or_engine_switch() {
+    use crate::core::user_config::UserConfig;
+    use std::sync::mpsc::channel;
+    use std::time::SystemTime;
+
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.claim_apple_music();
+    app.close_io_channel();
+    super::park_for_apple_music_recovery(&mut app);
+    assert!(!app.native_backend_parked());
+
+    #[cfg(all(
+      feature = "soloist",
+      not(all(target_os = "macos", target_arch = "x86_64"))
+    ))]
+    {
+      use crate::core::user_config::PlaybackEngine;
+      let (tx, _rx) = channel();
+      let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+      app.user_config.behavior.enable_streaming = true;
+      app.user_config.behavior.playback_engine = PlaybackEngine::Soloist;
+      assert!(app.apply_playback_engine().is_some());
+      assert!(!app.native_engine_still_selected());
+      app.claim_apple_music();
+      super::park_for_apple_music_recovery(&mut app);
+      assert!(!app.native_backend_parked());
+    }
   }
 
   #[test]
