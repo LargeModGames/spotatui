@@ -227,9 +227,7 @@ fn finish_cancelled_recovery(app: &mut App, interrupted_by_decoded: bool) {
   if app.io_tx_clone().is_none() {
     return;
   }
-  if app.apple_music_owns_playback() {
-    app.park_cancelled_native_recovery();
-  } else if interrupted_by_decoded {
+  if app.apple_music_owns_playback() || interrupted_by_decoded {
     app.park_cancelled_native_recovery();
   }
   // Music or a decoded source may have let go between detection and cleanup.
