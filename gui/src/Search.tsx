@@ -185,7 +185,7 @@ export const Search = memo(function Search({
           </div>
         )
       ) : nothing ? (
-        <p className="search-note">
+        <p className="search-note" role="status">
           {fmt(s.no_search_results, { query: search.query ?? asked })}
         </p>
       ) : (

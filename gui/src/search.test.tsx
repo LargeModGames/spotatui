@@ -138,4 +138,13 @@ describe("Search", () => {
       render({ ...results, tracks: [], artists: [], albums: [] }),
     ).toContain("No results found for “kygo”.");
   });
+
+  it("announces to screen readers when a search found nothing", () => {
+    const empty = render({ ...results, tracks: [], artists: [], albums: [] });
+    expect(empty).toContain(
+      '<p class="search-note" role="status">No results found for “kygo”.</p>',
+    );
+    expect(render(results)).not.toContain('role="status"');
+    expect(render(null)).not.toContain('role="status"');
+  });
 });

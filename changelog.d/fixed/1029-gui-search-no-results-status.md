@@ -1,0 +1,1 @@
+- **GUI Search reads out "No results found"**: screen readers now announce when a search finds nothing, the same way they announce "Searching…" ([#1029](https://github.com/LargeModGames/spotatui/issues/1029)).
