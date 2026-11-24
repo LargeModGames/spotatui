@@ -87,7 +87,6 @@ stream-download = { version = "0.24", optional = true, default-features = false,
 icy-metadata = { version = "0.6", optional = true, default-features = false }
 
 # Local-files media source dependencies
-symphonia = { version = "0.6", features = ["mp3", "flac", "ogg", "wav", "aiff", "isomp4", "mkv", "pcm", "vorbis"], optional = true, default-features = false }
 lofty = { version = "0.25", optional = true }
 # Local-files audio output. Defaults pull in cpal `playback` plus the common
 # codecs (flac/mp3/mp4-aac/vorbis/wav) via symphonia. Drives the default device
@@ -237,11 +236,11 @@ queue-download = ["audio-decode-queue", "dep:tempfile"]
 # Convenience alias to pull in every alternative (non-Spotify) source at once,
 # e.g. `cargo run --features all-sources`. Deliberately NOT part of `default`:
 # the release binaries enable these explicitly (see .github/workflows/cd.yml) and
-# adding them to `default` would pull lofty/symphonia/md-5/stream-download into
+# adding them to `default` would pull lofty/md-5/stream-download into
 # every plain `cargo build`. It also carries `soloist`, so the release binaries
 # ship the Soloist engine.
 all-sources = ["local-files", "subsonic", "internet-radio", "youtube", "qobuz", "soloist"]
-local-files = ["audio-decode-queue", "queue", "dep:lofty", "dep:symphonia"]
+local-files = ["audio-decode-queue", "queue", "dep:lofty"]
 subsonic = ["dep:md-5", "audio-decode-queue", "queue", "queue-download", "dep:tempfile", "reqwest/stream"]
 internet-radio = ["audio-decode", "dep:stream-download", "dep:icy-metadata"]
 # YouTube via an external `yt-dlp` binary (no new crates): search with
