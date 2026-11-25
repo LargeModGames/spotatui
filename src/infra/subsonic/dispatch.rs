@@ -234,7 +234,7 @@ async fn load_subsonic_tracks(app: &Arc<Mutex<App>>, playlist_uri: &str, epoch: 
       let mut app = app.lock().await;
       if app.is_current_source_track_table_load(epoch) {
         let message = app.strings().status.infra.subsonic_no_server;
-        app.set_status_message(message, 6);
+        app.set_error_status_message(message, 6);
       }
       return;
     }
@@ -254,7 +254,7 @@ async fn load_subsonic_tracks(app: &Arc<Mutex<App>>, playlist_uri: &str, epoch: 
         .status
         .infra
         .subsonic_playlist_failed(&e.to_string());
-      app.set_status_message(message, 6);
+      app.set_error_status_message(message, 6);
     }
   }
 }
@@ -943,6 +943,20 @@ mod tests {
     assert!(load.await.unwrap());
     server.await.unwrap();
     assert_eq!(app.lock().await.status_message(), Some("Current status"));
+  }
+
+  #[tokio::test]
+  async fn a_current_subsonic_playlist_error_is_reported_as_an_error() {
+    let (app, rx, _requested, release, server) = pending_playlist(ERROR_RESPONSE).await;
+    let event = rx.try_recv().unwrap();
+    release.send(()).unwrap();
+
+    assert!(route_subsonic_event(&app, &event).await);
+    server.await.unwrap();
+
+    let app = app.lock().await;
+    assert!(app.status_message().is_some());
+    assert!(app.status_message_is_error());
   }
 
   #[tokio::test]
