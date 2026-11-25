@@ -145,6 +145,11 @@ impl App {
     let wait = self.request_native_streaming_recovery_if_disconnected(true)
       || (explicit && !self.spotify_playing_elsewhere() && self.reacquire_parked_backend());
     if wait {
+      // A bare resume carries no target: the restored snapshot must play.
+      // The snapshot now exists, so arming has an effect; earlier it would no-op.
+      if context_uri.is_none() && uris.is_none() && offset.is_none() {
+        self.arm_native_play_intent();
+      }
       self.park_start_playback(context_uri, uris, offset);
     }
     wait
@@ -923,6 +928,38 @@ mod tests {
     assert!(app.native_backend_pending);
     assert!(rx.try_recv().is_err());
     assert_eq!(app.status_message(), Some("Reconnecting native streaming…"));
+  }
+
+  #[test]
+  fn a_bare_resume_arms_a_paused_snapshot_before_parking() {
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    let (recovery_tx, _recovery_rx) = tokio::sync::mpsc::unbounded_channel();
+    app.streaming_recovery_tx = Some(recovery_tx);
+    app.last_track_id = Some("spotify:track:old".to_string());
+    assert!(app
+      .prepare_native_playback_recovery(42_000, false)
+      .is_some());
+    assert!(
+      !app
+        .native_playback_recovery
+        .as_ref()
+        .unwrap()
+        .desired_playing
+    );
+    app.park_cancelled_native_recovery();
+
+    assert!(app.park_start_if_recovery_needed(true, None, None, None));
+
+    assert!(
+      app
+        .native_playback_recovery
+        .as_ref()
+        .unwrap()
+        .desired_playing,
+      "the play press must restore the paused snapshot as playing"
+    );
+    assert!(app.pending_start_playback.is_some());
   }
 
   #[test]
