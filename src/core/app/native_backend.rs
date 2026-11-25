@@ -351,12 +351,9 @@ impl App {
   /// parked: the explicit target is the user's more specific intent.
   #[cfg(feature = "streaming")]
   pub fn park_bare_start_playback(&mut self) {
-    let absent_or_bare = self
-      .pending_start_playback
-      .as_ref()
-      .map_or(true, |pending| {
-        pending.context_uri.is_none() && pending.uris.is_none() && pending.offset.is_none()
-      });
+    let absent_or_bare = self.pending_start_playback.as_ref().is_none_or(|pending| {
+      pending.context_uri.is_none() && pending.uris.is_none() && pending.offset.is_none()
+    });
     if absent_or_bare {
       self.park_start_playback(None, None, None);
     }
