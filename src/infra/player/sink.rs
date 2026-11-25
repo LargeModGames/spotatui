@@ -17,7 +17,7 @@ use librespot_playback::{
 };
 use log::{debug, info, warn};
 use rodio::cpal::traits::HostTrait;
-use rodio::cpal::{Device, SampleFormat, StreamError, SupportedStreamConfig};
+use rodio::cpal::{Device, DeviceDescription, SampleFormat, StreamError, SupportedStreamConfig};
 use rodio::{ChannelCount, DeviceSinkBuilder, DeviceTrait, Player};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
@@ -35,16 +35,11 @@ const DEFAULT_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 
 use super::sink_wait::{default_moved, wait_decision, WaitDecision};
 
-/// The name, not `id()`: cpal's WASAPI `id()` leaks a COM string on each call.
-fn device_name(device: &Device) -> Option<String> {
-  device.description().ok().map(|d| d.name().to_string())
-}
-
-fn default_output_name() -> Option<String> {
-  rodio::cpal::default_host()
-    .default_output_device()
-    .as_ref()
-    .and_then(device_name)
+/// The whole description, because its name is a generic label such as
+/// "Headphones". Not `id()`: cpal's WASAPI `id()` leaks a COM string per call.
+fn default_output_description() -> Option<DeviceDescription> {
+  let device = rodio::cpal::default_host().default_output_device()?;
+  device.description().ok()
 }
 
 /// Wait until at most `threshold` buffers are queued. Never blocks for longer
@@ -125,7 +120,7 @@ fn sample_format(format: AudioFormat) -> SampleFormat {
 /// thread so the lookups are bounded by `OPEN_TIMEOUT` too.
 fn select_device_and_config(
   requested: Option<&str>,
-) -> Result<(Device, SupportedStreamConfig), String> {
+) -> Result<(Device, SupportedStreamConfig, Option<DeviceDescription>), String> {
   let host = rodio::cpal::default_host();
   let device = match requested {
     Some(name) => host
@@ -137,12 +132,10 @@ fn select_device_and_config(
       .default_output_device()
       .ok_or_else(|| "no audio output device available".to_string())?,
   };
+  let description = device.description().ok();
   info!(
     "Using audio device: {}",
-    device
-      .description()
-      .map(|d| d.name().to_string())
-      .unwrap_or_else(|_| "[unknown name]".into())
+    description.as_ref().map_or("[unknown name]", |d| d.name())
   );
 
   // Native stereo 44.1 kHz first, then the device's default rate (rodio
@@ -159,7 +152,7 @@ fn select_device_and_config(
         .or_else(|| c.try_with_sample_rate(default_config.sample_rate()))
     })
     .unwrap_or(default_config);
-  Ok((device, config))
+  Ok((device, config, description))
 }
 
 impl SpotatuiSink {
@@ -189,14 +182,13 @@ impl SpotatuiSink {
     std::thread::Builder::new()
       .name("spotatui-stream-audio".to_string())
       .spawn(move || {
-        let (device, config) = match select_device_and_config(requested.as_deref()) {
+        let (device, config, mut seen) = match select_device_and_config(requested.as_deref()) {
           Ok(selected) => selected,
           Err(e) => {
             let _ = init_tx.send(Err(e));
             return;
           }
         };
-        let mut seen = device_name(&device);
         let opened = DeviceSinkBuilder::from_device(device)
           .map(|b| {
             b.with_config(&config.config())
@@ -219,8 +211,8 @@ impl SpotatuiSink {
               && keepalive_rx.recv_timeout(DEFAULT_CHECK_INTERVAL)
                 == Err(mpsc::RecvTimeoutError::Timeout)
             {
-              let now = default_output_name();
-              if default_moved(seen.as_deref(), now.as_deref()) {
+              let now = default_output_description();
+              if default_moved(seen.as_ref(), now.as_ref()) {
                 moved_flag.store(true, Ordering::Relaxed);
               }
               seen = now.or(seen);

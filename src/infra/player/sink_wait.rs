@@ -30,9 +30,12 @@ pub(super) fn wait_decision(
   }
 }
 
-/// Whether the system default output moved off the opened device. A name that
-/// cannot be read is no evidence of a move.
-pub(super) fn default_moved(opened: Option<&str>, current: Option<&str>) -> bool {
+/// Whether the system default output moved off the opened device. A device
+/// that cannot be read is no evidence of a move.
+pub(super) fn default_moved<T: PartialEq + ?Sized>(
+  opened: Option<&T>,
+  current: Option<&T>,
+) -> bool {
   matches!((opened, current), (Some(a), Some(b)) if a != b)
 }
 
