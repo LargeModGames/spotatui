@@ -43,6 +43,8 @@ Without `--format`, each subcommand uses a default that depends on its other fla
 | `search` | with `--albums` | `%b - %a (%u)` |
 | `search` | with `--shows` | `%h - %a (%u)` |
 
+When `playback` gets more than one of `--seek`, `--volume` and `--transfer`, the first of them in that order picks the default, so `spotatui pb --seek 10 --volume 60` prints `%f %s %t - %a %r`. `list` and `search` take one flag at a time.
+
 The `%` after `%v` is printed as is, so `%v% %d` prints `60% Kitchen speaker`.
 
 ## `playback` (alias `pb`)
