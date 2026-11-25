@@ -299,6 +299,7 @@ Everyone who helped, with code or without. To get on this list, see [Recognition
       <td align="center" valign="top" width="14.28%"><a href="https://rutgerpronk.com"><img src="https://avatars.githubusercontent.com/u/119070855?v=4&size=100" width="100px" height="100px" alt="Rutger"/><br /><sub><b>Rutger</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=Rutger505" title="Code">💻</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://www.linkedin.com/in/andredevay"><img src="https://avatars.githubusercontent.com/u/43342188?v=4&size=100" width="100px" height="100px" alt="Andre Devay"/><br /><sub><b>Andre Devay</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=andretorresdg" title="Code">💻</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/Dathinel/rodaje/releases"><img src="https://avatars.githubusercontent.com/u/221246794?v=4&size=100" width="100px" height="100px" alt="Daniel"/><br /><sub><b>Daniel</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=Dathinel" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://felikious.github.io/"><img src="https://avatars.githubusercontent.com/u/137797868?v=4&size=100" width="100px" height="100px" alt="Felix"/><br /><sub><b>Felix</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=EfLampri" title="Code">💻</a></td>
     </tr>
   </tbody>
 </table>
