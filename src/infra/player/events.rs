@@ -2350,7 +2350,7 @@ mod tests {
       track: queued_track("spotify:track:queued", "Queued"),
     });
     app.pending_start_playback = None;
-    assert!(app.reacquire_parked_backend());
+    assert!(app.reacquire_parked_backend_for_queue_slot());
     assert!(recovery_rx.try_recv().is_err(), "no request while pending");
 
     super::finish_cancelled_recovery(&mut app, false);
@@ -2387,7 +2387,7 @@ mod tests {
       ..StreamingRecoveryRequest::default()
     };
 
-    super::replay_recovery_intent(&mut app, &request, Some("spotatui"), false);
+    replay_recovery_intent(&mut app, &request, Some("spotatui"), false);
 
     assert!(app.pending_start_playback.is_none());
     assert!(matches!(
@@ -2397,30 +2397,66 @@ mod tests {
     assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
   }
 
-  /// A queue-slot rebuild whose slot ended before the rebuild must not restore
-  /// the old snapshot: the slot carried the play intent, not `reacquire`.
-  #[test]
-  fn a_queue_slot_rebuild_without_a_slot_does_not_restore_the_snapshot() {
-    use crate::core::user_config::UserConfig;
-    use std::sync::mpsc::{channel, TryRecvError};
+  #[tokio::test(start_paused = true)]
+  async fn skipping_the_last_queue_slot_during_rebuild_does_not_restore_the_snapshot() {
+    use crate::core::{test_helpers::queued_track, user_config::UserConfig};
+    use crate::infra::{network::IoEvent, queue::dispatch::route_queue_event};
+    use std::sync::mpsc::channel;
     use std::time::SystemTime;
 
-    let (tx, rx) = channel();
-    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
-    app.last_track_id = Some("spotify:track:old".to_string());
-    assert!(app.prepare_native_playback_recovery(0, false).is_some());
-    let request = StreamingRecoveryRequest {
-      restore_playback: true,
-      reacquire: false,
-      ..StreamingRecoveryRequest::default()
-    };
+    for slot_publishes_first in [true, false] {
+      let (tx, rx) = channel();
+      let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+      app.last_track_id = Some("spotify:track:old".to_string());
+      assert!(app.prepare_native_playback_recovery(0, false).is_some());
+      app.claim_apple_music();
+      super::park_for_apple_music_recovery(&mut app);
+      app.native_backend_pending = true;
+      let handoff = app.begin_apple_music_handoff();
+      assert!(app.finish_apple_music_handoff(handoff));
+      app.native_queue = vec![queued_track("spotify:track:queued", "Queued")];
+      let app = Arc::new(tokio::sync::Mutex::new(app));
+      let (ctx, recovery_tx) = recovery_context(Arc::clone(&app));
+      {
+        let mut guard = app.lock().await;
+        guard.streaming_recovery_tx = Some(recovery_tx);
+        if !slot_publishes_first {
+          super::finish_cancelled_recovery(&mut guard, false);
+        }
+      }
+      assert!(route_queue_event(&app, &IoEvent::AdvanceNativeQueue).await);
+      {
+        let mut guard = app.lock().await;
+        assert!(guard.queue_now_is_spotify());
+        if slot_publishes_first {
+          super::finish_cancelled_recovery(&mut guard, false);
+        }
+      }
 
-    super::replay_recovery_intent(&mut app, &request, Some("spotatui"), false);
+      let app_for_build = Arc::clone(&app);
+      let backend = ScriptedBackend::new(move |attempt, _| -> BuildAttempt<ScriptedPlayer> {
+        let app = Arc::clone(&app_for_build);
+        Box::pin(async move {
+          assert!(route_queue_event(&app, &IoEvent::NextTrack).await);
+          let guard = app.lock().await;
+          assert!(!guard.queue_now_is_spotify());
+          assert!(guard.native_playback_restore_generation().is_some());
+          Ok(ScriptedPlayer::new(attempt))
+        })
+      });
+      run_recovery_handler_until_parked(handle_streaming_recovery(ctx, backend.clone())).await;
 
-    assert!(
-      matches!(rx.try_recv(), Err(TryRecvError::Empty)),
-      "no stale snapshot restore once the queue slot is gone"
-    );
+      assert_eq!(
+        backend.events(),
+        [BuildEvent::Published(1), BuildEvent::Watched(1)]
+      );
+      assert!(
+        !rx
+          .try_iter()
+          .any(|event| matches!(event, IoEvent::RestoreNativePlayback(_))),
+        "stale snapshot restore with slot_publishes_first={slot_publishes_first}"
+      );
+    }
   }
 
   /// The claim can be released between detection and the handler's cleanup;

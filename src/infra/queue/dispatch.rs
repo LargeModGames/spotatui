@@ -209,7 +209,7 @@ async fn route_spotify_queue_transport(app: &Arc<Mutex<App>>, event: &IoEvent) -
       guard.queue_slot_desired_playing = true;
       guard.set_native_playback_intent(true);
       // After a failed reacquire the parked slot has no player: Space retries.
-      guard.reacquire_parked_backend();
+      guard.reacquire_parked_backend_for_queue_slot();
       Some(true)
     }
     // A skip while paused plays the next item, decoded or not.
@@ -541,7 +541,7 @@ async fn play_queued_spotify(app: &Arc<Mutex<App>>, track: &TrackInfo, uri: &str
     if player.is_none() {
       // A parked start would replay before the slot, and its start clears it.
       guard.pending_start_playback = None;
-      guard.reacquire_parked_backend();
+      guard.reacquire_parked_backend_for_queue_slot();
     }
     player
   };
@@ -1920,7 +1920,7 @@ mod tests {
     assert!(guard.native_backend_pending);
     assert!(recovery_rx
       .try_recv()
-      .is_ok_and(|request| request.reacquire));
+      .is_ok_and(|request| request.restore_playback && !request.reacquire));
   }
 
   #[cfg(feature = "streaming")]
@@ -1942,7 +1942,9 @@ mod tests {
     assert!(route_queue_event(&app, &IoEvent::StartPlayback(None, None, None)).await);
 
     assert!(app.lock().await.queue_slot_desired_playing);
-    assert!(recovery_rx.try_recv().is_ok());
+    assert!(recovery_rx
+      .try_recv()
+      .is_ok_and(|request| request.restore_playback && !request.reacquire));
   }
 
   #[cfg(feature = "streaming")]
