@@ -9,6 +9,9 @@
 <p align="center">
   <a href="https://spotatui.com/download"><strong>Download</strong></a> · <a href="#installation">Install</a> · <a href="docs/README.md">Docs</a> · <a href="CONTRIBUTING.md">Contributing</a> · <a href="https://spotatui.com/discord">Discord</a>
 </p>
+<p align="center">
+  <sub><b>English</b> | <a href="README.zh-Hans.md">简体中文</a> | <a href="README.zh-Hant.md">繁體中文</a> | <a href="README.fr.md">Français</a> | <a href="README.de.md">Deutsch</a></sub>
+</p>
 
 [![Crates.io](https://img.shields.io/crates/v/spotatui.svg)](https://crates.io/crates/spotatui)
 [![Discord](https://img.shields.io/discord/1534820237122207815?logo=discord&logoColor=white&label=Discord&color=5865F2)](https://spotatui.com/discord)
