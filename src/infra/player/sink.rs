@@ -171,7 +171,6 @@ impl SpotatuiSink {
       }
     };
 
-    let follows_default = requested.is_none();
     let moved = Arc::new(AtomicBool::new(false));
     let moved_flag = Arc::clone(&moved);
     let (init_tx, init_rx) = mpsc::channel::<Result<Player, String>>();
@@ -207,7 +206,7 @@ impl SpotatuiSink {
             }
             // Each change of the default raises the flag once, so a default
             // that cannot be opened is not retried every second.
-            while follows_default
+            while requested.is_none()
               && keepalive_rx.recv_timeout(DEFAULT_CHECK_INTERVAL)
                 == Err(mpsc::RecvTimeoutError::Timeout)
             {
