@@ -9,6 +9,9 @@
 <p align="center">
   <a href="https://spotatui.com/download"><strong>Download</strong></a> · <a href="#installation">Install</a> · <a href="docs/README.md">Docs</a> · <a href="CONTRIBUTING.md">Contributing</a> · <a href="https://spotatui.com/discord">Discord</a>
 </p>
+<p align="center">
+  <sub><b>English</b> | <a href="README.zh-Hans.md">简体中文</a> | <a href="README.zh-Hant.md">繁體中文</a> | <a href="README.fr.md">Français</a> | <a href="README.de.md">Deutsch</a></sub>
+</p>
 
 [![Crates.io](https://img.shields.io/crates/v/spotatui.svg)](https://crates.io/crates/spotatui)
 [![Discord](https://img.shields.io/discord/1534820237122207815?logo=discord&logoColor=white&label=Discord&color=5865F2)](https://spotatui.com/discord)
@@ -299,6 +302,8 @@ Everyone who helped, with code or without. To get on this list, see [Recognition
       <td align="center" valign="top" width="14.28%"><a href="https://rutgerpronk.com"><img src="https://avatars.githubusercontent.com/u/119070855?v=4&size=100" width="100px" height="100px" alt="Rutger"/><br /><sub><b>Rutger</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=Rutger505" title="Code">💻</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://www.linkedin.com/in/andredevay"><img src="https://avatars.githubusercontent.com/u/43342188?v=4&size=100" width="100px" height="100px" alt="Andre Devay"/><br /><sub><b>Andre Devay</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=andretorresdg" title="Code">💻</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/Dathinel/rodaje/releases"><img src="https://avatars.githubusercontent.com/u/221246794?v=4&size=100" width="100px" height="100px" alt="Daniel"/><br /><sub><b>Daniel</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=Dathinel" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://felikious.github.io/"><img src="https://avatars.githubusercontent.com/u/137797868?v=4&size=100" width="100px" height="100px" alt="Felix"/><br /><sub><b>Felix</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=EfLampri" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://onclicklistener2048.github.io/"><img src="https://avatars.githubusercontent.com/u/22124534?v=4&size=100" width="100px" height="100px" alt="watson wang"/><br /><sub><b>watson wang</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=OnClickListener2048" title="Documentation">📖</a> <a href="#translation-OnClickListener2048" title="Translation">🌍</a></td>
     </tr>
   </tbody>
 </table>
