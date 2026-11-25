@@ -1,1 +1,0 @@
-- **Playbar badge is omitted when it does not fit**: in narrow terminal panes where available space before the first control is smaller than the badge width, the badge is now hidden rather than drawn partially ([#1079](https://github.com/LargeModGames/spotatui/issues/1079)).

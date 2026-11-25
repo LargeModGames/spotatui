@@ -1,1 +1,0 @@
-- **The Settings title counts only the rows it shows**: without a Spotify session, the Behavior and Icons titles and the filter's total no longer count the hidden Spotify rows ([#1035](https://github.com/LargeModGames/spotatui/issues/1035)).

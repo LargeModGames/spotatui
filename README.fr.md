@@ -154,7 +154,7 @@ La lecture native et Spotify Connect reposent sur notre fork de librespot, [spot
 
 - **[LargeModGames](https://github.com/LargeModGames)** ([@LargeModGames](https://x.com/LargeModGames) sur X)
 - [shilicioo](https://github.com/shilicioo)
-- [2570165831](https://github.com/2570165831)
+- [kapok-4o](https://github.com/kapok-4o)
 - [Oud](https://github.com/Oud-Idk)
 
 Issu à l'origine d'un fork de [spotify-tui](https://github.com/Rigellute/spotify-tui) par [Alexander Keliris](https://github.com/Rigellute). Les contributeurs de spotify-tui et les bibliothèques utilisées par spotatui sont dans [CREDITS.md](CREDITS.md).
@@ -165,7 +165,7 @@ Signature de code gratuite fournie par [SignPath.io](https://about.signpath.io),
 
 Les fichiers de version Windows sont construits depuis ce dépôt par le [workflow de version](.github/workflows/cd.yml) sur des runners hébergés par GitHub. Chaque demande de signature est approuvée à la main.
 
-- Committeurs et relecteurs : [LargeModGames](https://github.com/LargeModGames), [ThatModGames](https://github.com/ThatModGames), [shilicioo](https://github.com/shilicioo), [2570165831](https://github.com/2570165831), [Oud](https://github.com/Oud-Idk)
+- Committeurs et relecteurs : [LargeModGames](https://github.com/LargeModGames), [ThatModGames](https://github.com/ThatModGames), [shilicioo](https://github.com/shilicioo), [kapok-4o](https://github.com/kapok-4o), [Oud](https://github.com/Oud-Idk)
 - Approbateurs : [LargeModGames](https://github.com/LargeModGames)
 
 Confidentialité : voir la [politique de confidentialité](https://spotatui.com/privacy) pour les données que spotatui envoie et comment désactiver chaque partie.
