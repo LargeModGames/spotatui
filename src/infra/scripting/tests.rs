@@ -1685,6 +1685,311 @@ mod action_tests {
   }
 }
 
+// --- callback snapshots ---
+
+mod cache_refresh_tests {
+  use super::*;
+  use crate::core::app::{ActiveBlock, App, NativeTrackInfo, NativeTrackKind, RouteId};
+  use crate::core::user_config::UserConfig;
+  use crate::infra::network::IoEvent;
+  use std::sync::mpsc::{channel, Receiver};
+  use std::time::SystemTime;
+
+  fn make_app() -> (App, Receiver<IoEvent>) {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.state_path = None;
+    (app, rx)
+  }
+
+  fn playing(app: &mut App, name: &str) {
+    app.is_streaming_active = true;
+    app.native_track_info = Some(NativeTrackInfo {
+      name: name.to_string(),
+      artists: vec!["Artist".to_string()],
+      album: "Album".to_string(),
+      duration_ms: 200_000,
+      kind: NativeTrackKind::Track,
+      image_url: None,
+    });
+    #[allow(deprecated)]
+    app.set_devices(rspotify::model::device::DevicePayload {
+      devices: vec![rspotify::model::Device {
+        id: Some(name.to_string()),
+        name: name.to_string(),
+        is_active: true,
+        is_private_session: false,
+        is_restricted: false,
+        _type: rspotify::model::DeviceType::Computer,
+        volume_percent: Some(50),
+      }],
+    });
+  }
+
+  #[test]
+  fn a_timer_callback_reads_current_state_with_or_without_event_handlers() {
+    for with_handler in [false, true] {
+      let mut engine = ScriptEngine::new().unwrap();
+      let (mut app, _rx) = make_app();
+      if with_handler {
+        engine
+          .load_source("reader", r#"spotatui.on("seek", function() end)"#)
+          .unwrap();
+      }
+      engine.on_start(&mut app);
+      engine
+        .load_source(
+          "reader",
+          r#"
+            spotatui.set_timeout(0, function()
+              local track = spotatui.current_track()
+              spotatui.notify((track and track.name or "nil") .. ":" .. #spotatui.devices(), 1)
+            end)
+          "#,
+        )
+        .unwrap();
+      playing(&mut app, "Track B");
+      engine.on_tick(&mut app);
+      assert_eq!(app.status_message(), Some("Track B:1"));
+    }
+  }
+
+  #[test]
+  fn a_screen_key_callback_reads_current_state_without_a_pending_command() {
+    let mut engine = ScriptEngine::new().unwrap();
+    let (mut app, _rx) = make_app();
+    engine
+      .load_source(
+        "reader",
+        r#"
+          spotatui.register_screen("reader", {
+            on_key = function(key)
+              local track = spotatui.current_track()
+              spotatui.notify((track and track.name or "nil") .. ":" .. #spotatui.devices(), 1)
+            end,
+          })
+        "#,
+      )
+      .unwrap();
+    engine.on_start(&mut app);
+    playing(&mut app, "Track B");
+    app
+      .pending_plugin_screen_keys
+      .push(("reader".to_string(), "x".to_string()));
+    engine.run_pending_commands(&mut app);
+    assert_eq!(app.status_message(), Some("Track B:1"));
+  }
+
+  #[test]
+  fn a_plugin_command_does_not_swallow_pending_playback_or_device_events() {
+    let mut engine = ScriptEngine::new().unwrap();
+    let (mut app, _rx) = make_app();
+    engine
+      .load_source(
+        "reader",
+        r#"
+          tracks, devices = 0, 0
+          spotatui.on("track_change", function() tracks = tracks + 1 end)
+          spotatui.on("device_change", function() devices = devices + 1 end)
+          spotatui.register_command("read", function()
+            spotatui.notify(spotatui.current_track().name .. ":" .. spotatui.devices()[1].name, 1)
+          end)
+        "#,
+      )
+      .unwrap();
+    playing(&mut app, "Track A");
+    engine.on_start(&mut app);
+    playing(&mut app, "Track B");
+    app.pending_plugin_commands.push("read".to_string());
+    engine.run_pending_commands(&mut app);
+    assert_eq!(app.status_message(), Some("Track B:Track B"));
+    engine.on_tick(&mut app);
+    engine.on_tick(&mut app);
+    assert_eq!(engine.lua.globals().get::<i64>("tracks").unwrap(), 1);
+    assert_eq!(engine.lua.globals().get::<i64>("devices").unwrap(), 1);
+  }
+
+  #[test]
+  fn handlers_registered_by_a_command_only_receive_changes_after_unhandled_ticks() {
+    let event_names = [
+      "track_change",
+      "playback_state_change",
+      "queue_change",
+      "device_change",
+      "search_results",
+      "route_change",
+    ];
+    let mut engine = ScriptEngine::new().unwrap();
+    let (mut app, _rx) = make_app();
+    engine
+      .load_source(
+        "listener",
+        r#"
+          events = {}
+          spotatui.register_command("listen", function()
+            for _, name in ipairs({"track_change", "playback_state_change", "queue_change",
+                                   "device_change", "search_results", "route_change"}) do
+              events[name] = 0
+              spotatui.on(name, function() events[name] = events[name] + 1 end)
+            end
+            spotatui.on("search_results", function()
+              local first = spotatui.search_results().tracks[1]
+              seen_search = first and first.name or "none"
+            end)
+          end)
+          spotatui.register_command("read_search", function()
+            local first = spotatui.search_results().tracks[1]
+            spotatui.notify(first and first.name or "none", 1)
+          end)
+        "#,
+      )
+      .unwrap();
+    engine.on_start(&mut app);
+    app.push_navigation_stack(RouteId::Queue, ActiveBlock::Queue);
+    for name in ["Track A", "Track B"] {
+      playing(&mut app, name);
+      app.native_is_playing = Some(true);
+      app.queue = Some(crate::core::app::QueueState {
+        currently_playing: None,
+        queue: vec![crate::core::plugin_api::PlayableInfo::Track(track(
+          name, name,
+        ))],
+      });
+      app
+        .plugin_data_generations
+        .bump(crate::core::app::PluginDataKind::Search);
+      engine.on_tick(&mut app);
+    }
+
+    app.pending_plugin_commands.push("listen".to_string());
+    engine.run_pending_commands(&mut app);
+    engine.on_tick(&mut app);
+    engine.on_tick(&mut app);
+    let events: mlua::Table = engine.lua.globals().get("events").unwrap();
+    for name in event_names {
+      let count = events.get::<u64>(name).unwrap();
+      assert_eq!(count, 0, "replayed {name} from before registration");
+    }
+
+    playing(&mut app, "Track C");
+    app.native_is_playing = Some(false);
+    app.queue = None;
+    app.set_search_results(crate::core::app::SearchResult {
+      tracks: Some(crate::core::pagination::Paged {
+        items: vec![track("spotify:track:needle", "Needle")],
+        ..Default::default()
+      }),
+      ..Default::default()
+    });
+    app
+      .plugin_data_generations
+      .bump(crate::core::app::PluginDataKind::Search);
+    app.push_navigation_stack(RouteId::Settings, ActiveBlock::Settings);
+    app.pending_plugin_commands.push("read_search".to_string());
+    engine.run_pending_commands(&mut app);
+    assert_eq!(app.status_message(), Some("Needle"));
+    engine.on_tick(&mut app);
+    engine.on_tick(&mut app);
+    for name in event_names {
+      let count = events.get::<u64>(name).unwrap();
+      assert_eq!(count, 1, "expected one new {name}");
+    }
+    assert_eq!(
+      engine.lua.globals().get::<String>("seen_search").unwrap(),
+      "Needle"
+    );
+  }
+
+  #[test]
+  fn a_screen_opened_by_a_key_and_closed_by_a_timer_gets_on_open_and_on_close() {
+    for with_handler in [false, true] {
+      let mut engine = ScriptEngine::new().unwrap();
+      let (mut app, _rx) = make_app();
+      if with_handler {
+        engine
+          .load_source("pages", r#"spotatui.on("seek", function() end)"#)
+          .unwrap();
+      }
+      engine
+        .load_source(
+          "pages",
+          r#"
+            opened, closed = 0, 0
+            spotatui.register_screen("a", {
+              title = "A",
+              on_key = function(key)
+                spotatui.show_screen("b")
+                spotatui.set_timeout(0, function()
+                  if spotatui.current_route() == "plugin:b" then spotatui.close_screen("b") end
+                end)
+              end,
+            })
+            spotatui.register_screen("b", {
+              title = "B",
+              on_key = function() end,
+              on_open = function() opened = opened + 1 end,
+              on_close = function() closed = closed + 1 end,
+            })
+          "#,
+        )
+        .unwrap();
+      engine
+        .load_source("pages", r#"spotatui.show_screen("a")"#)
+        .unwrap();
+      engine.drain_effects(&mut app);
+      engine.on_start(&mut app);
+
+      app
+        .pending_plugin_screen_keys
+        .push(("a".to_string(), "x".to_string()));
+      engine.run_pending_commands(&mut app);
+      engine.on_tick(&mut app);
+
+      assert_eq!(
+        app.get_current_route().id,
+        RouteId::PluginScreen("a".to_string()),
+        "with_handler={with_handler}"
+      );
+      let globals = engine.lua.globals();
+      assert_eq!(
+        globals.get::<i64>("opened").unwrap(),
+        1,
+        "with_handler={with_handler}"
+      );
+      assert_eq!(
+        globals.get::<i64>("closed").unwrap(),
+        1,
+        "with_handler={with_handler}"
+      );
+    }
+  }
+
+  #[test]
+  fn a_key_event_that_runs_no_lua_leaves_the_snapshots_alone() {
+    let mut engine = ScriptEngine::new().unwrap();
+    let (mut app, _rx) = make_app();
+    engine
+      .load_source(
+        "reader",
+        r#"
+          spotatui.register_command("read", function()
+            spotatui.notify(spotatui.current_track().name, 1)
+          end)
+        "#,
+      )
+      .unwrap();
+    engine.on_start(&mut app);
+    playing(&mut app, "Track B");
+    engine.run_pending_commands(&mut app);
+    assert!(engine.shared.playback.borrow().is_none());
+    assert!(engine.shared.devices.borrow().is_empty());
+
+    app.pending_plugin_commands.push("read".to_string());
+    engine.run_pending_commands(&mut app);
+    assert_eq!(app.status_message(), Some("Track B"));
+  }
+}
+
 // --- async data reads (spotatui.get_*) ---
 
 #[cfg(test)]
