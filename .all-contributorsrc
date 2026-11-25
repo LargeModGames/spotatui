@@ -913,6 +913,16 @@
       "contributions": [
         "code"
       ]
+    },
+    {
+      "login": "OnClickListener2048",
+      "name": "watson wang",
+      "avatar_url": "https://avatars.githubusercontent.com/u/22124534?v=4",
+      "profile": "https://onclicklistener2048.github.io/",
+      "contributions": [
+        "doc",
+        "translation"
+      ]
     }
   ],
   "contributorsPerLine": 7,
