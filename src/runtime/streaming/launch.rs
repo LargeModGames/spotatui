@@ -159,8 +159,9 @@ async fn deferred_streaming_startup_inner(ctx: DeferredStreamingContext) {
   // Store streaming player reference in App for direct control (bypasses event channel)
   {
     let mut app_mut = ctx.app.lock().await;
-    // The frontend is exiting: nothing would shut this player down.
-    if app_mut.io_tx_clone().is_none() {
+    // The frontend is exiting, or recovery already published a player:
+    // overwriting it would leave a ghost Connect device.
+    if app_mut.io_tx_clone().is_none() || app_mut.streaming_player.is_some() {
       drop(app_mut);
       streaming_player.shutdown();
       return;
