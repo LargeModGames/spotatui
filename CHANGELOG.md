@@ -69,6 +69,7 @@
 - **Cover art fills its area on a Retina display in iTerm2**: the cover showed at half the width and half the height in the playbar, the full-screen view and the Now Playing panel, because iTerm2 reports the cell size in points but draws images in device pixels. spotatui now asks iTerm2 for the scale at startup. Inside tmux nothing changes ([#999](https://github.com/LargeModGames/spotatui/pull/999)).
 - **The visualizer labels in the GUI are translated to Chinese**: three visualizer strings still showed in English in Simplified and Traditional Chinese ([#1009](https://github.com/LargeModGames/spotatui/pull/1009)).
 - **Settings shows the value that was saved**: a number that was clamped, or an icon that was refused, stayed on screen as typed. For example, Volume Increment showed `500` when the saved value was `100` ([#1063](https://github.com/LargeModGames/spotatui/issues/1063)).
+- **Playlist folder names display correctly**: folder names now show properly when they contain spaces, colons or other special characters. Names like `Road+Trip` appear as "Road Trip", instead of showing the raw encoding ([#1094](https://github.com/LargeModGames/spotatui/pull/1094)).
 
 ### Documentation
 
