@@ -157,36 +157,49 @@ async fn deferred_streaming_startup_inner(ctx: DeferredStreamingContext) {
   info!("native playback enabled - spotatui is available as a spotify connect device");
 
   // Store streaming player reference in App for direct control (bypasses event channel)
-  {
+  let published = {
     let mut app_mut = ctx.app.lock().await;
-    // The frontend is exiting, or recovery already published a player:
-    // overwriting it would leave a ghost Connect device.
-    if app_mut.io_tx_clone().is_none() || app_mut.streaming_player.is_some() {
+    if app_mut.io_tx_clone().is_none() {
       drop(app_mut);
       streaming_player.shutdown();
       return;
     }
-    app_mut.streaming_player = Some(Arc::clone(&streaming_player));
-    // Startup playlist loading may have fallen back to a flat list while the
-    // deferred player was unavailable. Refresh once so rootlist folders are
-    // reconciled now that librespot is ready.
-    app_mut.dispatch(IoEvent::GetPlaylists);
-  }
+    let published = app_mut.streaming_player.clone();
+    if published.is_none() {
+      app_mut.streaming_player = Some(Arc::clone(&streaming_player));
+      // Startup playlist loading may have fallen back to a flat list while the
+      // deferred player was unavailable. Refresh once so rootlist folders are
+      // reconciled now that librespot is ready.
+      app_mut.dispatch(IoEvent::GetPlaylists);
+    }
+    published
+  };
 
-  // Spawn player event listener (updates app state from native player events)
-  player::spawn_player_event_handler(player::PlayerEventContext {
-    player: Arc::clone(&streaming_player),
-    app: Arc::clone(&ctx.app),
-    shared_position: ctx.shared_position,
-    shared_is_playing: ctx.shared_is_playing,
-    recovery_tx: ctx.recovery_tx,
-    #[cfg(all(feature = "mpris", target_os = "linux"))]
-    mpris_manager: ctx.mpris_manager,
-    #[cfg(all(feature = "macos-media", target_os = "macos"))]
-    macos_media_manager: ctx.macos_media_manager,
-    #[cfg(all(feature = "windows-media", target_os = "windows"))]
-    windows_media_manager: ctx.windows_media_manager,
-  });
+  let streaming_player = match published {
+    // Recovery already published a player and its event handler: overwriting
+    // it would leave a ghost Connect device. The device decision still runs.
+    Some(published) => {
+      streaming_player.shutdown();
+      published
+    }
+    None => {
+      // Spawn player event listener (updates app state from native player events)
+      player::spawn_player_event_handler(player::PlayerEventContext {
+        player: Arc::clone(&streaming_player),
+        app: Arc::clone(&ctx.app),
+        shared_position: ctx.shared_position,
+        shared_is_playing: ctx.shared_is_playing,
+        recovery_tx: ctx.recovery_tx,
+        #[cfg(all(feature = "mpris", target_os = "linux"))]
+        mpris_manager: ctx.mpris_manager,
+        #[cfg(all(feature = "macos-media", target_os = "macos"))]
+        macos_media_manager: ctx.macos_media_manager,
+        #[cfg(all(feature = "windows-media", target_os = "windows"))]
+        windows_media_manager: ctx.windows_media_manager,
+      });
+      streaming_player
+    }
+  };
 
   // Auto-select the saved playback device when available (fallback to native
   // streaming). This used to run inline in the network task before the pump
