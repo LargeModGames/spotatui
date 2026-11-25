@@ -2554,10 +2554,7 @@ mod in_tui {
     #[tokio::test]
     async fn failed_queue_tools_supply_the_reason_when_auto_queue_stops() {
       for (tracks, reason) in [
-        (
-          r#"[{"title":"Nightcall","artist":"Kavinsky"}]"#,
-          "no Spotify session",
-        ),
+        (r#"[{"uri":"spotify:track:abc"}]"#, "no Spotify session"),
         ("[]", "Invalid arguments"),
       ] {
         failed_refill_waits_before_retrying(
