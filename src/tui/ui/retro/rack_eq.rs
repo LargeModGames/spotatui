@@ -60,11 +60,11 @@ pub fn band_label(i: usize) -> &'static str {
 
 /// Columns from one band to the next: each channel's ten 3-column ladders must
 /// end before the other channel's label in the middle of the window, so the
-/// spacing narrows from 5 to 3 on smaller terminals.
+/// spacing narrows from 5 to 2 on smaller terminals.
 fn band_step(window_width: i32) -> i32 {
   // Left ladders start 3 in, and the last one is 3 wide; the right label sits
   // at the window's middle.
-  ((window_width / 2 - 7) / (BANDS as i32 - 1)).clamp(3, 5)
+  ((window_width / 2 - 7) / (BANDS as i32 - 1)).clamp(2, 5)
 }
 
 pub fn draw(cells: &mut Cells, frame: &Frame, state: &mut State, dt: f32) {
@@ -83,7 +83,10 @@ pub fn draw(cells: &mut Cells, frame: &Frame, state: &mut State, dt: f32) {
     None,
     true,
   );
-  cells.put(w - 26, 2, "MODEL SA-1200", (60, 60, 64), None, false);
+  // The header text ends at column 44.
+  if w >= 72 {
+    cells.put(w - 26, 2, "MODEL SA-1200", (60, 60, 64), None, false);
+  }
 
   let (wx, wy, ww, wh) = (4, 4, w - 8, h - 10);
   cells.fill(wx, wy, ww, wh, WINDOW);
@@ -99,12 +102,15 @@ pub fn draw(cells: &mut Cells, frame: &Frame, state: &mut State, dt: f32) {
 
   let segments = (wh - 6).max(3);
   let step = band_step(ww);
-  // Ladders are 3 wide, 2 on the tightest spacing, so a gap always shows.
+  // Ladders are 3 wide, 1 on the tightest spacing, so a gap always shows.
   let bar = (step - 1).min(3);
   let (lit_glyph, peak_glyph) = ("▆".repeat(bar as usize), "▂".repeat(bar as usize));
-  for (ch, (x0, label, values)) in [(wx + 3, "L", &left), (wx + ww / 2 + 2, "R", &right)]
-    .into_iter()
-    .enumerate()
+  for (ch, (x0, end, label, values)) in [
+    (wx + 3, wx + ww / 2, "L", &left),
+    (wx + ww / 2 + 2, wx + ww, "R", &right),
+  ]
+  .into_iter()
+  .enumerate()
   {
     cells.put(x0 - 2, wy + 1, label, LABEL, Some(WINDOW), true);
     // The frequency labels are up to 4 wide: on a tight spacing, skip any
@@ -112,6 +118,9 @@ pub fn draw(cells: &mut Cells, frame: &Frame, state: &mut State, dt: f32) {
     let mut label_end = i32::MIN;
     for (b, &v) in values.iter().enumerate() {
       let x = x0 + b as i32 * step;
+      if x + bar > end {
+        break;
+      }
       let lit = (v.clamp(0.0, 1.0) * segments as f32).round() as i32;
       for s in 0..segments {
         let y = wy + wh - 3 - s;
@@ -145,7 +154,7 @@ pub fn draw(cells: &mut Cells, frame: &Frame, state: &mut State, dt: f32) {
       }
       let text = band_label(b);
       let text_x = x + (bar - text.len() as i32) / 2;
-      if text_x > label_end {
+      if text_x > label_end && text_x + text.len() as i32 <= end {
         cells.put(text_x, wy + wh - 2, text, LABEL, Some(WINDOW), false);
         label_end = text_x + text.len() as i32;
       }
@@ -174,11 +183,11 @@ mod tests {
   use crate::tui::ui::head_unit::HeadUnitView;
 
   #[test]
-  fn the_left_ladders_end_before_the_right_channel_from_80_columns_up() {
-    for w in [80, 90, 100, 108, 116, 160] {
+  fn the_left_ladders_end_before_the_right_channel_from_52_columns_up() {
+    for w in [52, 58, 64, 70, 80, 90, 100, 108, 116, 160] {
       let ww = w - 8;
       let step = band_step(ww);
-      let left_end = 3 + (BANDS as i32 - 1) * step + 3;
+      let left_end = 3 + (BANDS as i32 - 1) * step + (step - 1).min(3);
       assert!(
         left_end <= ww / 2,
         "{w} columns: ladders run to {left_end}, the R label is at {}",
@@ -215,7 +224,7 @@ mod tests {
   #[test]
   fn band_labels_stay_apart_and_match_in_both_channels() {
     let all: Vec<&str> = (0..BANDS).map(band_label).collect();
-    for w in [80u16, 96, 116] {
+    for w in [58u16, 64, 80, 96, 116] {
       let row = label_row(w);
       let shown: Vec<&str> = row.split_whitespace().collect();
       let (left, right) = shown.split_at(shown.len() / 2);
