@@ -1,1 +1,0 @@
-- **A failed `plugin add --force` keeps the installed plugin**: the reinstall deleted the plugin folder before cloning, so a mistyped URL or a network error lost a plugin that worked. The new copy is now cloned next to the old one and swapped in only when the clone works ([#1049](https://github.com/LargeModGames/spotatui/issues/1049)).

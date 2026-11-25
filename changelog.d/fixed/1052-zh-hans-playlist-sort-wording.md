@@ -1,1 +1,0 @@
-- **Simplified Chinese playlist sort titles match the sidebar**: the playlist sort popup in the TUI and GUI said 歌单排序 and the help menu called the playlists sidebar Spotify 歌单侧栏, while the sidebar itself says 播放列表. All three now use 播放列表 ([#1052](https://github.com/LargeModGames/spotatui/issues/1052)).
