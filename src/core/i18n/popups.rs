@@ -374,7 +374,7 @@ pub const ZH_HANS: PopupStrings = PopupStrings {
   exit_yes_no: "按 Y 确认，按 N 取消",
   exit_controls: "[ENTER = 确认，ESC = 取消]",
   exit_title: " 确认退出 ",
-  sort_playlists: "歌单排序",
+  sort_playlists: "播放列表排序",
   sort_spotify: "Spotify",
   sort_recently_played: "最近播放",
   sort_tracks: "曲目排序",
