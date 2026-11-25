@@ -269,12 +269,18 @@ async fn run_subsonic_search(app: &Arc<Mutex<App>>, query: &str) {
   let Some(source) = build_source(app).await else {
     return;
   };
+  let source_rev = app.lock().await.source_revision();
   match source.search(query).await {
-    Ok(results) => app
-      .lock()
-      .await
-      .show_source_search_tracks(query, results.tracks),
+    Ok(results) => {
+      app
+        .lock()
+        .await
+        .show_source_search_tracks_if_current(source_rev, query, results.tracks);
+    }
     Err(e) => {
+      if app.lock().await.source_revision() != source_rev {
+        return;
+      }
       set_error(
         app,
         crate::infra::app_strings(app)

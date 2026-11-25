@@ -220,6 +220,27 @@ impl App {
     self.view.search_selected_block = SearchResultBlock::Empty;
   }
 
+  /// Populate source search hits only if the active browse source has not
+  /// changed since the search started (`source_rev`).
+  #[cfg(any(
+    feature = "subsonic",
+    feature = "qobuz",
+    feature = "internet-radio",
+    feature = "youtube"
+  ))]
+  pub(crate) fn show_source_search_tracks_if_current(
+    &mut self,
+    source_rev: u64,
+    query: &str,
+    tracks: Vec<TrackInfo>,
+  ) -> bool {
+    if self.source_revision() != source_rev {
+      return false;
+    }
+    self.show_source_search_tracks(query, tracks);
+    true
+  }
+
   pub fn reset_playlist_tracks_view(
     &mut self,
     playlist_id: PlaylistId<'static>,
@@ -1229,5 +1250,33 @@ mod tests {
       app.display_revisions().get(DisplayDomain::Search),
       before + 1
     );
+  }
+
+  #[cfg(any(
+    feature = "subsonic",
+    feature = "qobuz",
+    feature = "internet-radio",
+    feature = "youtube"
+  ))]
+  #[test]
+  fn stale_source_search_is_dropped_after_source_revision_changes() {
+    let mut app = App::default();
+    let dir = tempfile::tempdir().unwrap();
+    app.state_path = Some(dir.path().join("state.yml"));
+    app.set_active_source(crate::core::source::Source::YouTube);
+    let yt_rev = app.display_revisions().get(DisplayDomain::Source);
+
+    // Source changes before the async search finishes.
+    app.set_active_source(crate::core::source::Source::Spotify);
+    assert!(!app.show_source_search_tracks_if_current(
+      yt_rev,
+      "late query",
+      vec![TrackInfo::from(&full_track(
+        "0000000000000000000002",
+        "Late Hit",
+      ))],
+    ));
+    assert!(app.search_results().tracks.is_none());
+    assert!(app.search_results().query.is_none());
   }
 }

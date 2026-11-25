@@ -78,6 +78,8 @@ impl SearchNetwork for Network {
       ("offset", "0".to_string()),
     ];
 
+    let source_rev = self.app.lock().await.source_revision();
+
     let (track_search, album_search, show_search, playlist_search, artist_search) = tokio::join!(
       self.spotify_get_typed::<TrackSearchResponse>("search", &track_query),
       self.spotify_get_typed::<AlbumSearchResponse>("search", &album_query),
@@ -115,6 +117,9 @@ impl SearchNetwork for Network {
     let playlist_result = playlist_search.ok().map(|res| res.playlists);
 
     let mut app = self.app.lock().await;
+    if app.source_revision() != source_rev {
+      return;
+    }
 
     // Extract ids for follow/saved checks from raw rspotify pages before conversion.
     if let Some(ref track_results) = track_result {

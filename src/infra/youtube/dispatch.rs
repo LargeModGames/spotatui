@@ -166,12 +166,25 @@ pub(crate) async fn build_source(app: &Arc<Mutex<App>>) -> YouTubeSource {
 /// dispatches the `youtube:` URIs back through this module.
 async fn run_youtube_search(app: &Arc<Mutex<App>>, query: &str) {
   let source = build_source(app).await;
-  match source.search(query).await {
-    Ok(results) => app
-      .lock()
-      .await
-      .show_source_search_tracks(query, results.tracks),
+  run_youtube_search_with(app, query, source.search(query)).await;
+}
+
+async fn run_youtube_search_with<F>(app: &Arc<Mutex<App>>, query: &str, search: F)
+where
+  F: std::future::Future<Output = Result<super::SearchResults>>,
+{
+  let source_rev = app.lock().await.source_revision();
+  match search.await {
+    Ok(results) => {
+      app
+        .lock()
+        .await
+        .show_source_search_tracks_if_current(source_rev, query, results.tracks);
+    }
     Err(e) => {
+      if app.lock().await.source_revision() != source_rev {
+        return;
+      }
       set_error(
         app,
         crate::infra::app_strings(app)
@@ -1323,5 +1336,44 @@ mod tests {
       app.lock().await.youtube_playback.is_none(),
       "a foreign start must tear down the YouTube session (device handoff)"
     );
+  }
+
+  #[tokio::test]
+  async fn stale_youtube_search_is_dropped_after_source_switch() {
+    let app = Arc::new(Mutex::new(test_app()));
+    let dir = tempfile::tempdir().unwrap();
+    {
+      let mut guard = app.lock().await;
+      guard.state_path = Some(dir.path().join("state.yml"));
+      guard.set_active_source(crate::core::source::Source::YouTube);
+    }
+
+    let (ready_tx, ready_rx) = tokio::sync::oneshot::channel::<()>();
+    let (finish_tx, finish_rx) = tokio::sync::oneshot::channel::<()>();
+    let task_app = Arc::clone(&app);
+    let task = tokio::spawn(async move {
+      run_youtube_search_with(&task_app, "Kygo Firestone", async move {
+        let _ = ready_tx.send(());
+        let _ = finish_rx.await;
+        Ok(super::super::SearchResults {
+          tracks: vec![video("youtube:vid1", "Firestone")],
+          ..Default::default()
+        })
+      })
+      .await;
+    });
+
+    ready_rx.await.unwrap();
+    app
+      .lock()
+      .await
+      .set_active_source(crate::core::source::Source::Spotify);
+    let _ = finish_tx.send(());
+    task.await.unwrap();
+
+    let guard = app.lock().await;
+    assert_eq!(guard.active_source, crate::core::source::Source::Spotify);
+    assert!(guard.search_results().tracks.is_none());
+    assert!(guard.search_results().query.is_none());
   }
 }
