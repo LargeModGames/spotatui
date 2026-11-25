@@ -1,0 +1,1 @@
+- **Search results clear when switching sources in the sidebar**: Selecting a different source in Your Library or via `SelectSource` now clears stale search results from the previous source instead of displaying them under the new source label ([#1077](https://github.com/LargeModGames/spotatui/issues/1077)).

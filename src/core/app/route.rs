@@ -263,9 +263,8 @@ impl App {
   }
 
   /// Switch the active browse source and mirror + persist the choice so the
-  /// selection survives restarts. Browse scope only: never interrupts
-  /// playback (routing goes by URI scheme). Sidebar data loading and any
-  /// view resets stay with the caller.
+  /// selection survives restarts. Clears stale search results from the previous
+  /// source and never interrupts playback (routing goes by URI scheme).
   pub fn set_active_source(&mut self, source: Source) {
     if self.active_source != source {
       self.cancel_apple_music_browse();
@@ -763,6 +762,39 @@ mod tests {
       ..Default::default()
     });
     app.set_active_source(Source::Local);
+    assert!(app.search_results().query.is_none());
+  }
+
+  #[test]
+  fn switching_the_browse_source_clears_stale_search_results() {
+    use crate::core::pagination::Paged;
+    use crate::core::test_helpers::playlist_info;
+
+    let mut app = make_app_simple();
+    let dir = tempfile::tempdir().unwrap();
+    app.state_path = Some(dir.path().join("state.yml"));
+    app.set_active_source(Source::YouTube);
+    app.set_search_results(SearchResult {
+      query: Some("Kygo Firestone".to_string()),
+      playlists: Some(Paged {
+        items: vec![playlist_info("p1", "Firestone", "owner", false)],
+        total: 1,
+        ..Default::default()
+      }),
+      ..Default::default()
+    });
+    assert!(app.search_results().playlists.is_some());
+
+    // Picking the same source leaves existing results intact.
+    app.set_active_source(Source::YouTube);
+    assert_eq!(
+      app.search_results().query.as_deref(),
+      Some("Kygo Firestone")
+    );
+
+    // Switching to another source clears stale results from the old source.
+    app.set_active_source(Source::Spotify);
+    assert!(app.search_results().playlists.is_none());
     assert!(app.search_results().query.is_none());
   }
 }
