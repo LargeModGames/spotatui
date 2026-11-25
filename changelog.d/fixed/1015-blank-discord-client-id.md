@@ -1,0 +1,1 @@
+- **A blank `discord_rpc_client_id` falls back to the built-in Discord app**: `discord_rpc_client_id: ""` (or only spaces) in `config.yml` was kept as an empty id, so Rich Presence connected with no app id and showed nothing, with no error. A blank value now counts as unset, and spaces around an id are trimmed ([#1015](https://github.com/LargeModGames/spotatui/issues/1015)).

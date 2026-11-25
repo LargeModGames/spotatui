@@ -1917,7 +1917,13 @@ impl UserConfig {
     }
 
     if let Some(discord_rpc_client_id) = behavior_config.discord_rpc_client_id {
-      self.behavior.discord_rpc_client_id = Some(discord_rpc_client_id);
+      // A blank id is unset, so presence falls back to the built-in app id.
+      let trimmed = discord_rpc_client_id.trim();
+      self.behavior.discord_rpc_client_id = if trimmed.is_empty() {
+        None
+      } else {
+        Some(trimmed.to_string())
+      };
     }
 
     if let Some(visualizer_style) = behavior_config.visualizer_style {
@@ -4058,6 +4064,25 @@ dj_api_key: null
     let behavior: BehaviorConfigString = serde_yaml::from_str("sync_token: '   '\n").unwrap();
     config.load_behaviorconfig(behavior).unwrap();
     assert_eq!(config.behavior.sync_token, None);
+  }
+
+  #[test]
+  fn discord_rpc_client_id_trims_and_treats_blank_as_unset() {
+    use super::{BehaviorConfigString, UserConfig};
+
+    let behavior: BehaviorConfigString =
+      serde_yaml::from_str("discord_rpc_client_id: ' 123 '\n").unwrap();
+    let mut config = UserConfig::new();
+    config.load_behaviorconfig(behavior).unwrap();
+    assert_eq!(
+      config.behavior.discord_rpc_client_id,
+      Some("123".to_string())
+    );
+
+    let behavior: BehaviorConfigString =
+      serde_yaml::from_str("discord_rpc_client_id: ' '\n").unwrap();
+    config.load_behaviorconfig(behavior).unwrap();
+    assert_eq!(config.behavior.discord_rpc_client_id, None);
   }
 
   #[test]
