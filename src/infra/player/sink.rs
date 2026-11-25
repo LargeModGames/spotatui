@@ -32,6 +32,7 @@ const POLL: Duration = Duration::from_millis(10);
 const OPEN_TIMEOUT: Duration = Duration::from_secs(5);
 /// How often the device thread checks if the system default output moved.
 const DEFAULT_CHECK_INTERVAL: Duration = Duration::from_secs(1);
+const REOPEN_RETRY_MAX: Duration = Duration::from_secs(30);
 
 use super::sink_wait::{default_moved, wait_decision, WaitDecision};
 
@@ -80,6 +81,8 @@ pub struct SpotatuiSink {
   /// Set by the device thread when the system default output moved.
   default_moved: Arc<AtomicBool>,
   format: AudioFormat,
+  retry_at: Instant,
+  retry_delay: Duration,
 }
 
 /// Stands in when the device cannot be opened, so the failure reaches
@@ -204,8 +207,7 @@ impl SpotatuiSink {
             if init_tx.send(Ok(player)).is_err() {
               return;
             }
-            // Each change of the default raises the flag once, so a default
-            // that cannot be opened is not retried every second.
+            // Each change of the default raises the flag once.
             while requested.is_none()
               && keepalive_rx.recv_timeout(DEFAULT_CHECK_INTERVAL)
                 == Err(mpsc::RecvTimeoutError::Timeout)
@@ -235,13 +237,17 @@ impl SpotatuiSink {
       _keepalive: keepalive_tx,
       default_moved: moved,
       format,
+      retry_at: Instant::now(),
+      retry_delay: DEFAULT_CHECK_INTERVAL,
     })
   }
 
   /// Reopen on the system default output when it moved to another device that
   /// is still available, so no stream error ever reports the move.
+  /// A failed open stays pending and is retried with a doubling delay, because
+  /// a Bluetooth output can become the default before it can open.
   fn follow_default_output(&mut self) {
-    if !self.default_moved.swap(false, Ordering::Relaxed) {
+    if Instant::now() < self.retry_at || !self.default_moved.swap(false, Ordering::Relaxed) {
       return;
     }
     info!("Default audio output changed; reopening the streaming output");
@@ -250,7 +256,12 @@ impl SpotatuiSink {
         reopened.player.play();
         *self = reopened;
       }
-      Err(e) => warn!("Could not open the new default audio output: {e}"),
+      Err(e) => {
+        warn!("Could not open the new default audio output: {e}");
+        self.default_moved.store(true, Ordering::Relaxed);
+        self.retry_at = Instant::now() + self.retry_delay;
+        self.retry_delay = (self.retry_delay * 2).min(REOPEN_RETRY_MAX);
+      }
     }
   }
 
