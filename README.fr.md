@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <sub><a href="README.md">English</a> | <a href="README.zh-Hans.md">简体中文</a> | <a href="README.zh-Hant.md">繁體中文</a> | **Français** | <a href="README.de.md">Deutsch</a></sub>
+  <sub><a href="README.md">English</a> | <a href="README.zh-Hans.md">简体中文</a> | <a href="README.zh-Hant.md">繁體中文</a> | <b>Français</b> | <a href="README.de.md">Deutsch</a></sub>
 </p>
 
 [![Crates.io](https://img.shields.io/crates/v/spotatui.svg)](https://crates.io/crates/spotatui)
