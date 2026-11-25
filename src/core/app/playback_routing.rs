@@ -272,12 +272,8 @@ impl App {
     if self.native_parked_here() {
       let bare_resume = matches!(event, IoEvent::StartPlayback(None, None, None));
       if !bare_resume || self.native_backend_pending {
-        // A play press during the rebuild still asks the restore to play.
         if bare_resume {
-          self.arm_native_play_intent();
-          // Cleanup only requeues for a parked start; keep the press visible
-          // without displacing an explicit start already waiting.
-          self.park_bare_start_playback();
+          self.park_start_playback(None, None, None);
         }
         self.refuse_parked_gesture();
       } else if self.native_playback_recovery.is_none() {

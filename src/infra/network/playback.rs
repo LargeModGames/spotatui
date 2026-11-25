@@ -2190,6 +2190,7 @@ impl PlaybackNetwork for Network {
       let mut app = self.app.lock().await;
       app.pending_start_playback = None;
       app.native_load_watchdog = None;
+      app.set_native_playback_intent(false);
     }
     // A pause on the Connect route must not leave a deferred play armed (#693).
     #[cfg(feature = "streaming")]
@@ -3217,6 +3218,124 @@ mod tests {
     })
     .await
     .expect("pause test timed out");
+  }
+
+  #[cfg(feature = "streaming")]
+  async fn no_active_device_server<const N: usize>(
+    commands: [&'static str; N],
+  ) -> (String, tokio::task::JoinHandle<()>) {
+    use crate::infra::network::metadata::tests::read_http_request;
+    use tokio::io::AsyncWriteExt;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}/v1/", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+      let body = r#"{"error":{"status":404,"reason":"NO_ACTIVE_DEVICE"}}"#;
+      let response = format!(
+        "HTTP/1.1 404 Not Found\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+        body.len()
+      );
+      for command in commands {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let request = read_http_request(&mut stream).await;
+        assert!(
+          request.starts_with(&format!("PUT /v1/me/player/{command} ")),
+          "{request}"
+        );
+        stream.write_all(response.as_bytes()).await.unwrap();
+      }
+    });
+    (base_url, server)
+  }
+
+  #[cfg(feature = "streaming")]
+  #[tokio::test]
+  async fn a_bare_resume_keeps_the_playlist_parked_by_no_active_device() {
+    use crate::core::user_config::UserConfig;
+    use crate::infra::network::metadata::tests::fake_spotify_login;
+    use tokio::sync::Mutex;
+
+    const PLAYLIST: &str = "spotify:playlist:37i9dQZF1DXcBWIGoYBM5M";
+    tokio::time::timeout(Duration::from_secs(30), async {
+      let (base_url, server) = no_active_device_server(["play", "play"]).await;
+
+      let (tx, rx) = std::sync::mpsc::channel();
+      let mut app = App::new(tx, UserConfig::new(), Some(std::time::SystemTime::now()));
+      app.native_backend_pending = true;
+      app.last_track_id = Some("spotify:track:0000000000000000000001".to_string());
+      assert!(app
+        .prepare_native_playback_recovery(42_000, false)
+        .is_some());
+      let app = Arc::new(Mutex::new(app));
+      let (spotify, _fake) = fake_spotify_login(base_url);
+      let mut network = Network::new(Some(spotify), &app);
+      network
+        .start_playback(
+          crate::infra::network::ids::play_context_id(PLAYLIST),
+          None,
+          Some(3),
+        )
+        .await;
+      network.start_playback(None, None, None).await;
+      server.await.unwrap();
+
+      let mut app = app.lock().await;
+      assert!(app.api_error().is_empty());
+      assert!(app
+        .native_playback_recovery
+        .as_ref()
+        .is_some_and(|s| !s.desired_playing));
+      app.replay_pending_start_playback();
+      assert!(matches!(
+        rx.try_recv(),
+        Ok(IoEvent::StartPlayback(Some(context), None, Some(3))) if context == PLAYLIST
+      ));
+    })
+    .await
+    .expect("playback test timed out");
+  }
+
+  #[cfg(feature = "streaming")]
+  #[tokio::test]
+  async fn a_pause_during_rebuild_disarms_a_parked_resume() {
+    use crate::infra::network::metadata::tests::fake_spotify_login;
+    use tokio::sync::Mutex;
+
+    tokio::time::timeout(Duration::from_secs(30), async {
+      let (base_url, server) = no_active_device_server(["play", "pause"]).await;
+      let mut app = App::default();
+      app.native_backend_pending = true;
+      app.last_track_id = Some("spotify:track:0000000000000000000001".to_string());
+      app.prepare_native_playback_recovery(42_000, false).unwrap();
+      let app = Arc::new(Mutex::new(app));
+      let (spotify, _fake) = fake_spotify_login(base_url);
+      let mut network = Network::new(Some(spotify), &app);
+
+      network.start_playback(None, None, None).await;
+      assert!(
+        app
+          .lock()
+          .await
+          .native_playback_recovery
+          .as_ref()
+          .unwrap()
+          .desired_playing
+      );
+      network.pause_playback().await;
+      server.await.unwrap();
+
+      let app = app.lock().await;
+      assert!(app.pending_start_playback.is_none());
+      assert!(
+        !app
+          .native_playback_recovery
+          .as_ref()
+          .unwrap()
+          .desired_playing
+      );
+    })
+    .await
+    .expect("playback test timed out");
   }
 
   #[tokio::test]

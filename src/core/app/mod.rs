@@ -681,6 +681,8 @@ pub struct App {
   /// `native_recovery_generation()` and `begin_native_recovery()`.
   #[cfg(feature = "streaming")]
   native_recovery_generation: u64,
+  #[cfg(feature = "streaming")]
+  native_rebuild_started_at: Option<Instant>,
   /// Identity of the restore snapshot a native start/restore was issued for.
   #[cfg(feature = "streaming")]
   native_playback_generation: u64,

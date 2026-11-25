@@ -272,11 +272,11 @@ where
   let mut delay = base_delay;
 
   loop {
-    // Cancel if not native
     let mut app = ctx.app.lock().await;
     if app.native_recovery_generation() != request.generation {
       return RebuildOutcome::Superseded;
     }
+    app.note_native_rebuild_started(chain_started);
     if let Some(cancellation) = rebuild_cancellation(&app) {
       // Music can release its claim before the handler's cleanup re-reads
       // ownership; park now so the backend stays reacquirable either way.

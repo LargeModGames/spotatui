@@ -145,11 +145,6 @@ impl App {
     let wait = self.request_native_streaming_recovery_if_disconnected(true)
       || (explicit && !self.spotify_playing_elsewhere() && self.reacquire_parked_backend());
     if wait {
-      // A bare resume carries no target: the restored snapshot must play.
-      // The snapshot now exists, so arming has an effect; earlier it would no-op.
-      if context_uri.is_none() && uris.is_none() && offset.is_none() {
-        self.arm_native_play_intent();
-      }
       self.park_start_playback(context_uri, uris, offset);
     }
     wait
@@ -328,9 +323,7 @@ impl App {
     true
   }
 
-  /// Park a StartPlayback request (string form, as `IoEvent::StartPlayback`
-  /// carries it) for replay once a usable backend exists. A newer request
-  /// replaces an older one — the user's latest intent wins.
+  /// Park a start for replay; a bare resume never replaces a live explicit target.
   #[cfg(feature = "streaming")]
   pub fn park_start_playback(
     &mut self,
@@ -338,9 +331,20 @@ impl App {
     uris: Option<Vec<String>>,
     offset: Option<usize>,
   ) {
-    let same_request = self.pending_start_playback.as_ref().is_some_and(|pending| {
+    let age_at = self.native_rebuild_started_at.unwrap_or_else(Instant::now);
+    let waiting = self
+      .pending_start_playback
+      .as_ref()
+      .filter(|pending| age_at.saturating_duration_since(pending.parked_at) <= max_parked_age());
+    let same_request = waiting.is_some_and(|pending| {
       pending.context_uri == context_uri && pending.uris == uris && pending.offset == offset
     });
+    if context_uri.is_none() && uris.is_none() && offset.is_none() {
+      if waiting.is_some() && !same_request {
+        return;
+      }
+      self.arm_native_play_intent();
+    }
     if !same_request {
       self.pending_start_playback = Some(PendingStartPlayback {
         context_uri,
@@ -349,18 +353,6 @@ impl App {
         parked_at: Instant::now(),
         recovery_attempts: 0,
       });
-    }
-  }
-
-  /// Park a bare resume without displacing an explicit start that is already
-  /// parked: the explicit target is the user's more specific intent.
-  #[cfg(feature = "streaming")]
-  pub fn park_bare_start_playback(&mut self) {
-    let absent_or_bare = self.pending_start_playback.as_ref().is_none_or(|pending| {
-      pending.context_uri.is_none() && pending.uris.is_none() && pending.offset.is_none()
-    });
-    if absent_or_bare {
-      self.park_start_playback(None, None, None);
     }
   }
 
@@ -389,10 +381,16 @@ impl App {
     }
   }
 
+  #[cfg(feature = "streaming")]
+  pub(crate) fn note_native_rebuild_started(&mut self, started_at: Instant) {
+    self.native_rebuild_started_at = Some(started_at);
+  }
+
   /// Credit the time a rebuild spent retrying back to a parked start, clamped
   /// so a start parked mid-chain never lands in the future.
   #[cfg(feature = "streaming")]
   pub(crate) fn exclude_recovery_time_from_parked_start(&mut self, duration: Duration) {
+    self.native_rebuild_started_at = None;
     let Some(pending) = self.pending_start_playback.as_mut() else {
       return;
     };
@@ -858,6 +856,42 @@ mod tests {
 
     assert!(rx.try_recv().is_err());
     assert!(app.pending_start_playback.is_none());
+  }
+
+  #[test]
+  fn an_expired_playlist_does_not_swallow_a_fresh_resume() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.park_start_playback(Some("spotify:playlist:old".to_string()), None, None);
+    app.pending_start_playback.as_mut().unwrap().parked_at =
+      Instant::now() - max_parked_age() - Duration::from_secs(1);
+
+    app.park_start_playback(None, None, None);
+    app.replay_pending_start_playback();
+
+    assert!(matches!(
+      rx.try_recv(),
+      Ok(IoEvent::StartPlayback(None, None, None))
+    ));
+  }
+
+  #[test]
+  fn a_long_running_rebuild_keeps_a_parked_playlist_ahead_of_bare_resume() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    let wait = max_parked_age() + Duration::from_secs(1);
+    app.park_start_playback(Some("spotify:playlist:waiting".to_string()), None, None);
+    app.pending_start_playback.as_mut().unwrap().parked_at = Instant::now() - wait;
+    app.note_native_rebuild_started(Instant::now() - wait);
+
+    app.park_start_playback(None, None, None);
+    app.exclude_recovery_time_from_parked_start(wait);
+    app.replay_pending_start_playback();
+
+    assert!(matches!(
+      rx.try_recv(),
+      Ok(IoEvent::StartPlayback(Some(context), None, None)) if context == "spotify:playlist:waiting"
+    ));
   }
 
   #[test]
