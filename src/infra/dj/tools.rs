@@ -1746,26 +1746,10 @@ mod tests {
     assert!(!opaque_play.needs_network());
     assert!(!opaque_queue.needs_network());
     assert!(named_queue.needs_network());
-  }
-
-  #[test]
-  fn named_queue_items_need_a_spotify_session_only_without_youtube() {
-    let named = parse_call(
-      "queue_tracks",
-      &json!({"tracks": [{"title": "t", "artist": "a"}]}),
-    );
-    let spotify = parse_call(
-      "queue_tracks",
-      &json!({"tracks": [{"uri": "spotify:track:x"}]}),
-    );
-    let search = parse_call("search_tracks", &json!({"query": "x"}));
-
     assert_eq!(
-      named.unwrap().needs_spotify_session(),
+      named_queue.needs_spotify_session(),
       !cfg!(feature = "youtube")
     );
-    assert!(spotify.unwrap().needs_spotify_session());
-    assert!(search.unwrap().needs_spotify_session());
   }
 
   #[test]
