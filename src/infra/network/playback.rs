@@ -855,19 +855,6 @@ async fn should_activate_native_streaming_for_playback(network: &Network) -> boo
   })
 }
 
-/// Whether the start must wait for a rebuilt backend. A parked backend is
-/// rebuilt for an explicit start only: the App side decides a bare resume.
-#[cfg(feature = "streaming")]
-async fn request_native_streaming_recovery_if_disconnected(
-  network: &Network,
-  explicit: bool,
-) -> bool {
-  let mut app = network.app.lock().await;
-  // A start while another device plays keeps its Connect route.
-  app.request_native_streaming_recovery_if_disconnected(true)
-    || (explicit && !app.spotify_playing_elsewhere() && app.reacquire_parked_backend())
-}
-
 #[cfg(feature = "streaming")]
 async fn requested_native_playback_origin(
   network: &Network,
@@ -1611,26 +1598,22 @@ impl PlaybackNetwork for Network {
       self.app.lock().await.clear_native_shuffle_session();
     }
 
-    // Check if we should use native streaming for playback
+    // Wait for a rebuilt backend when needed, parking the press under the same
+    // lock as the check: cancellation cleanup must not land between them.
     #[cfg(feature = "streaming")]
-    if request_native_streaming_recovery_if_disconnected(
-      self,
-      context_id.is_some() || uris.is_some(),
-    )
-    .await
     {
-      // Park the request instead of dropping it: the recovery handler replays
-      // it once the new session and device selection are in place, so the
-      // press that detected the disconnect still plays.
       let mut app = self.app.lock().await;
-      app.park_start_playback(
+      let need_parking = app.park_start_if_recovery_needed(
+        context_id.is_some() || uris.is_some(),
         context_id.as_ref().map(|c| c.uri()),
         uris
           .as_ref()
           .map(|list| list.iter().map(|u| u.uri()).collect()),
         offset,
       );
-      return;
+      if need_parking {
+        return;
+      }
     }
 
     #[cfg(feature = "streaming")]
@@ -3956,6 +3939,37 @@ mod tests {
       Some("phone-device"),
       "native-device"
     ));
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn a_waiting_start_parks_and_queues_a_rebuild_when_pending_was_cleared() {
+    use crate::core::user_config::UserConfig;
+    use std::sync::mpsc::channel;
+    use std::time::SystemTime;
+
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    let (recovery_tx, mut recovery_rx) = tokio::sync::mpsc::unbounded_channel();
+    app.streaming_recovery_tx = Some(recovery_tx);
+    app.park_cancelled_native_recovery();
+    assert!(app.native_backend_parked());
+    // Cleanup ran before the check, so no rebuild is in flight.
+    app.native_backend_pending = false;
+
+    assert!(app.park_start_if_recovery_needed(
+      true,
+      Some("spotify:playlist:parked".to_string()),
+      None,
+      None,
+    ));
+    assert!(app.pending_start_playback.is_some());
+    assert!(
+      recovery_rx
+        .try_recv()
+        .expect("a rebuild is queued")
+        .reacquire
+    );
   }
 
   #[cfg(feature = "streaming")]

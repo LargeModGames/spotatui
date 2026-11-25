@@ -133,6 +133,23 @@ impl App {
     true
   }
 
+  /// Whether this start must wait for a rebuild.
+  #[cfg(feature = "streaming")]
+  pub(crate) fn park_start_if_recovery_needed(
+    &mut self,
+    explicit: bool,
+    context_uri: Option<String>,
+    uris: Option<Vec<String>>,
+    offset: Option<usize>,
+  ) -> bool {
+    let wait = self.request_native_streaming_recovery_if_disconnected(true)
+      || (explicit && !self.spotify_playing_elsewhere() && self.reacquire_parked_backend());
+    if wait {
+      self.park_start_playback(context_uri, uris, offset);
+    }
+    wait
+  }
+
   /// Tear down the current native session — even one that still passes
   /// `is_connected` — and request recovery. Called by the disconnect check
   /// above and by the load watchdog, which catches zombie sessions (half-open
