@@ -3,7 +3,6 @@
 //!
 //! Gated behind the `local-files` Cargo feature.
 
-// Not yet wired into dispatch / UI.
 #![allow(dead_code)]
 
 pub mod dispatch;
@@ -684,7 +683,7 @@ mod tests {
   /// Write a minimal valid WAV file (44-byte header + silence).
   ///
   /// Symphonia can probe and decode this without external data.
-  fn write_wav(path: &Path, sample_rate: u32, num_samples: u32) {
+  pub(super) fn write_wav(path: &Path, sample_rate: u32, num_samples: u32) {
     let data_size = num_samples * 2; // 16-bit mono
     let file_size = 36 + data_size;
 
