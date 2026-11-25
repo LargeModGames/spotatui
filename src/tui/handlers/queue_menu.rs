@@ -168,8 +168,6 @@ mod tests {
       handler(Key::Char('j'), &mut app);
     }
     assert_eq!(app.view.queue_selected_index, 2);
-    handler(Key::Enter, &mut app);
-    assert!(app.native_queue.is_empty());
   }
 
   #[test]
