@@ -1,0 +1,1 @@
+- **Cassette visualizer overlapping meters and header in small panes**: omit the cassette shell in panes too short to fit above the meters, draw the reels and window when the shell height is at least 8, and abbreviate header labels in narrow panes to avoid overlapping the tape counter ([#1081](https://github.com/LargeModGames/spotatui/issues/1081)).
