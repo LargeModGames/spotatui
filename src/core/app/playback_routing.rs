@@ -275,8 +275,9 @@ impl App {
         // A play press during the rebuild still asks the restore to play.
         if bare_resume {
           self.arm_native_play_intent();
-          // Cleanup only requeues for a parked start; keep the press visible.
-          self.park_start_playback(None, None, None);
+          // Cleanup only requeues for a parked start; keep the press visible
+          // without displacing an explicit start already waiting.
+          self.park_bare_start_playback();
         }
         self.refuse_parked_gesture();
       } else if self.native_playback_recovery.is_none() {
@@ -1227,6 +1228,26 @@ mod tests {
       Ok(IoEvent::StartPlayback(None, None, None))
     ));
     assert!(recovery_rx.try_recv().is_err());
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn a_bare_resume_during_the_rebuild_keeps_an_explicit_parked_start() {
+    let (mut app, rx, mut recovery_rx) = parked_native_app();
+    app.native_backend_pending = true;
+    app.park_start_playback(Some("spotify:playlist:explicit".to_string()), None, None);
+
+    app.toggle_playback();
+
+    assert_eq!(
+      app
+        .pending_start_playback
+        .as_ref()
+        .and_then(|pending| pending.context_uri.as_deref()),
+      Some("spotify:playlist:explicit")
+    );
+    assert!(recovery_rx.try_recv().is_err());
+    assert!(rx.try_recv().is_err());
   }
 
   #[cfg(feature = "streaming")]

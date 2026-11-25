@@ -399,8 +399,23 @@ fn replay_recovery_intent(
   }
   // A new explicit request wins; both paths queue after device selection.
   if app.pending_start_playback.is_some() {
-    info!("recovery route: replay parked StartPlayback");
-    app.replay_pending_start_playback();
+    let bare = app.pending_start_playback.as_ref().is_some_and(|pending| {
+      pending.context_uri.is_none() && pending.uris.is_none() && pending.offset.is_none()
+    });
+    let restore = if bare {
+      app.native_playback_restore_generation()
+    } else {
+      None
+    };
+    if let Some(generation) = restore {
+      // A bare resume carries no target or position; the snapshot does.
+      app.pending_start_playback = None;
+      info!("recovery route: RestoreNativePlayback({generation}) (bare parked resume)");
+      app.dispatch(IoEvent::RestoreNativePlayback(generation));
+    } else {
+      info!("recovery route: replay parked StartPlayback");
+      app.replay_pending_start_playback();
+    }
   } else if replay_queue_slot {
     // The queue slot outranks the snapshot: its direct load was discarded with
     // the replaced player, and a queue over an idle app has no TrackChanged snapshot.
@@ -2348,6 +2363,38 @@ mod tests {
       !request.reacquire,
       "the slot carries the play intent; a stale snapshot must not be restored"
     );
+  }
+
+  /// A bare resume has no target or position; replay must restore the snapshot
+  /// instead of dispatching an empty StartPlayback.
+  #[test]
+  fn a_bare_parked_resume_restores_the_snapshot() {
+    use crate::core::user_config::UserConfig;
+    use crate::infra::network::IoEvent;
+    use std::sync::mpsc::{channel, TryRecvError};
+    use std::time::SystemTime;
+
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.last_track_id = Some("spotify:track:old".to_string());
+    let generation = app
+      .prepare_native_playback_recovery(42_000, true)
+      .expect("a retained snapshot");
+    app.park_start_playback(None, None, None);
+    let request = StreamingRecoveryRequest {
+      reacquire: true,
+      restore_playback: true,
+      ..StreamingRecoveryRequest::default()
+    };
+
+    super::replay_recovery_intent(&mut app, &request, Some("spotatui"), false);
+
+    assert!(app.pending_start_playback.is_none());
+    assert!(matches!(
+      rx.try_recv(),
+      Ok(IoEvent::RestoreNativePlayback(g)) if g == generation
+    ));
+    assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
   }
 
   /// A queue-slot rebuild whose slot ended before the rebuild must not restore

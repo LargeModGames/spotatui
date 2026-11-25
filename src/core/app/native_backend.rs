@@ -347,6 +347,21 @@ impl App {
     }
   }
 
+  /// Park a bare resume without displacing an explicit start that is already
+  /// parked: the explicit target is the user's more specific intent.
+  #[cfg(feature = "streaming")]
+  pub fn park_bare_start_playback(&mut self) {
+    let absent_or_bare = self
+      .pending_start_playback
+      .as_ref()
+      .map_or(true, |pending| {
+        pending.context_uri.is_none() && pending.uris.is_none() && pending.offset.is_none()
+      });
+    if absent_or_bare {
+      self.park_start_playback(None, None, None);
+    }
+  }
+
   /// The configured Spotify startup Play/Pause, sent once deferred native
   /// init is over (before that, the device transfer had not completed and
   /// these 404'd onto the Error screen). A start the user parked during init
