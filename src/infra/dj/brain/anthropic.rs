@@ -15,14 +15,16 @@
 //! Non-streaming on purpose: a DJ turn is one sentence plus a track list, well
 //! inside the client timeout, and streaming would buy nothing but machinery.
 
-use super::{parse_step, step_schema, system_prompt, user_prompt, DjRequest, DjStep};
+use super::{
+  parse_step_or_token_limit, step_schema, system_prompt, user_prompt, DjRequest, DjStep,
+  DEFAULT_MAX_TOKENS,
+};
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 
 pub const DEFAULT_MODEL: &str = "claude-haiku-4-5";
 const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
 const API_VERSION: &str = "2023-06-01";
-const MAX_TOKENS: u32 = 2048;
 
 pub struct AnthropicBrain {
   api_key: String,
@@ -31,6 +33,7 @@ pub struct AnthropicBrain {
   /// listener. `friends.rs` hardcodes its URLs and consequently has no tests;
   /// `requests.rs` threads a base URL and does.
   base_url: String,
+  max_tokens: u32,
   http: reqwest::Client,
 }
 
@@ -46,15 +49,22 @@ impl AnthropicBrain {
       api_key,
       model: model.unwrap_or_else(|| DEFAULT_MODEL.to_string()),
       base_url: base_url.unwrap_or_else(|| DEFAULT_BASE_URL.to_string()),
+      max_tokens: DEFAULT_MAX_TOKENS,
       // Shared, and always with an explicit timeout — see `super::shared_client`.
       http: super::shared_client(),
     })
   }
 
+  /// Override the per-step `max_tokens` sent to `/v1/messages`.
+  pub fn with_max_tokens(mut self, max_tokens: u32) -> Self {
+    self.max_tokens = max_tokens.max(1);
+    self
+  }
+
   pub async fn step(&self, request: &DjRequest) -> Result<DjStep> {
     let body = json!({
       "model": self.model,
-      "max_tokens": MAX_TOKENS,
+      "max_tokens": self.max_tokens,
       "system": system_prompt(),
       "messages": [{ "role": "user", "content": user_prompt(request) }],
       // Constrain the shape at the API level instead of asking nicely for JSON.
@@ -88,9 +98,11 @@ impl AnthropicBrain {
       return Err(anyhow!("Anthropic API error {status}: {message}"));
     }
 
+    let stop_reason = payload.get("stop_reason").and_then(Value::as_str);
+
     // Checked before touching `content`: a refusal comes back as HTTP 200 with an
     // empty content array, so indexing first would panic.
-    if payload.get("stop_reason").and_then(Value::as_str) == Some("refusal") {
+    if stop_reason == Some("refusal") {
       let category = payload
         .get("stop_details")
         .and_then(|details| details.get("category"))
@@ -101,9 +113,13 @@ impl AnthropicBrain {
       ));
     }
 
-    let text = first_text_block(&payload)
-      .ok_or_else(|| anyhow!("Anthropic API returned no text content"))?;
-    parse_step(&text)
+    let text = first_text_block(&payload);
+    parse_step_or_token_limit(
+      text.as_deref(),
+      stop_reason == Some("max_tokens"),
+      self.max_tokens,
+      "Anthropic API returned no text content",
+    )
   }
 }
 
@@ -116,6 +132,7 @@ impl std::fmt::Debug for AnthropicBrain {
     f.debug_struct("AnthropicBrain")
       .field("model", &self.model)
       .field("base_url", &self.base_url)
+      .field("max_tokens", &self.max_tokens)
       .field("api_key", &"<redacted>")
       .finish()
   }
@@ -314,5 +331,28 @@ mod tests {
       .to_string();
     assert!(err.contains("no text content"), "{err}");
     server.await.unwrap();
+  }
+
+  #[tokio::test]
+  async fn reports_max_tokens_truncation_with_configured_limit() {
+    let (base_url, server) = serve_once(
+      "200 OK",
+      json!({
+        "stop_reason": "max_tokens",
+        "content": [{"type": "thinking", "thinking": "..."}]
+      }),
+    )
+    .await;
+    let err = brain(base_url)
+      .with_max_tokens(12_288)
+      .step(&request())
+      .await
+      .unwrap_err()
+      .to_string();
+    assert!(err.contains("12288 token limit"), "{err}");
+    assert!(err.contains("dj_max_tokens"), "{err}");
+    let sent = server.await.unwrap();
+    let body: Value = serde_json::from_str(&sent).unwrap();
+    assert_eq!(body["max_tokens"], json!(12_288));
   }
 }

@@ -8,14 +8,16 @@
 //! plenty of local servers ignore or reject it, and the reply parser is tolerant
 //! enough to read a fenced JSON block out of prose anyway.
 
-use super::{parse_step, step_schema, system_prompt, user_prompt, DjRequest, DjStep};
+use super::{
+  parse_step_or_token_limit, step_schema, system_prompt, user_prompt, DjRequest, DjStep,
+  DEFAULT_MAX_TOKENS,
+};
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 
 pub const DEFAULT_MODEL: &str = "gpt-4o-mini";
 /// Ollama's OpenAI-compatible endpoint — the most common local-model setup.
 pub const DEFAULT_BASE_URL: &str = "http://localhost:11434/v1";
-const MAX_TOKENS: u32 = 2048;
 
 /// Which token-limit field this server takes.
 ///
@@ -78,6 +80,7 @@ pub struct OpenAiCompatBrain {
   api_key: Option<String>,
   model: String,
   base_url: String,
+  max_tokens: u32,
   http: reqwest::Client,
 }
 
@@ -87,8 +90,15 @@ impl OpenAiCompatBrain {
       api_key: api_key.filter(|key| !key.trim().is_empty()),
       model: model.unwrap_or_else(|| DEFAULT_MODEL.to_string()),
       base_url: base_url.unwrap_or_else(|| DEFAULT_BASE_URL.to_string()),
+      max_tokens: DEFAULT_MAX_TOKENS,
       http: super::shared_client(),
     }
+  }
+
+  /// Override the per-step completion token budget sent to `/chat/completions`.
+  pub fn with_max_tokens(mut self, max_tokens: u32) -> Self {
+    self.max_tokens = max_tokens.max(1);
+    self
   }
 
   /// One turn, downgrading the request only for fields the server actually
@@ -144,7 +154,7 @@ impl OpenAiCompatBrain {
         { "role": "user", "content": user_prompt(request) },
       ],
     });
-    body[tokens.field()] = json!(MAX_TOKENS);
+    body[tokens.field()] = json!(self.max_tokens);
     if structured {
       body["response_format"] = json!({
         "type": "json_schema",
@@ -188,16 +198,23 @@ impl OpenAiCompatBrain {
       );
     }
 
-    let text = payload
+    let choice = payload
       .get("choices")
       .and_then(Value::as_array)
       .and_then(|choices| choices.first())
-      .and_then(|choice| choice.get("message"))
-      .and_then(|message| message.get("content"))
-      .and_then(Value::as_str)
       .ok_or_else(|| anyhow!("{url} returned no message content"))?;
+    let hit_limit = choice.get("finish_reason").and_then(Value::as_str) == Some("length");
+    let text = choice
+      .get("message")
+      .and_then(|message| message.get("content"))
+      .and_then(Value::as_str);
 
-    parse_step(text)
+    parse_step_or_token_limit(
+      text,
+      hit_limit,
+      self.max_tokens,
+      &format!("{url} returned no message content"),
+    )
   }
 }
 
@@ -208,6 +225,7 @@ impl std::fmt::Debug for OpenAiCompatBrain {
     f.debug_struct("OpenAiCompatBrain")
       .field("model", &self.model)
       .field("base_url", &self.base_url)
+      .field("max_tokens", &self.max_tokens)
       .field("api_key", &self.api_key.as_ref().map(|_| "<redacted>"))
       .finish()
   }
@@ -400,5 +418,55 @@ mod tests {
     let brain = OpenAiCompatBrain::new(None, None, None);
     assert_eq!(brain.base_url, DEFAULT_BASE_URL);
     assert!(brain.base_url.contains("11434"));
+    assert_eq!(brain.max_tokens, DEFAULT_MAX_TOKENS);
+  }
+
+  #[tokio::test]
+  async fn sends_configured_max_tokens_and_reports_length_truncation() {
+    // Reproduces #1164: a reasoning model spends the entire token budget on
+    // `reasoning_content`, leaving `content: ""` and `finish_reason: "length"`.
+    let (base_url, server) = serve(vec![(
+      "200 OK",
+      json!({
+        "choices": [{
+          "finish_reason": "length",
+          "message": {
+            "role": "assistant",
+            "content": "",
+            "reasoning_content": "thinking..."
+          }
+        }]
+      }),
+    )])
+    .await;
+    let brain = OpenAiCompatBrain::new(None, None, Some(base_url)).with_max_tokens(16_384);
+    let err = brain.step(&request()).await.unwrap_err().to_string();
+    assert!(err.contains("16384 token limit"), "{err}");
+    assert!(err.contains("dj_max_tokens"), "{err}");
+
+    let bodies = server.await.unwrap();
+    let sent: Value = serde_json::from_str(&bodies[0]).unwrap();
+    assert_eq!(sent["max_tokens"], json!(16_384));
+  }
+
+  #[tokio::test]
+  async fn reports_truncated_partial_json_when_finish_reason_is_length() {
+    let (base_url, server) = serve(vec![(
+      "200 OK",
+      json!({
+        "choices": [{
+          "finish_reason": "length",
+          "message": { "role": "assistant", "content": r#"{"say":"cut off"# }
+        }]
+      }),
+    )])
+    .await;
+    let brain = OpenAiCompatBrain::new(None, None, Some(base_url));
+    let err = brain.step(&request()).await.unwrap_err().to_string();
+    assert!(
+      err.contains(&format!("{} token limit", DEFAULT_MAX_TOKENS)),
+      "{err}"
+    );
+    server.await.unwrap();
   }
 }

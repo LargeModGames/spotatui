@@ -805,6 +805,8 @@ pub struct BehaviorConfigString {
   #[cfg(feature = "ai-dj")]
   pub dj_api_key: Option<String>,
   #[cfg(feature = "ai-dj")]
+  pub dj_max_tokens: Option<u32>,
+  #[cfg(feature = "ai-dj")]
   pub dj_batch_size: Option<usize>,
   #[cfg(feature = "ai-dj")]
   pub dj_history_period: Option<String>,
@@ -975,6 +977,12 @@ pub struct BehaviorConfig {
   /// plaintext secret.
   #[cfg(feature = "ai-dj")]
   pub dj_api_key: Option<String>,
+  /// Per-step completion token budget for the HTTP backends (`anthropic`,
+  /// `openai_compat`). Reasoning models spend tokens on chain-of-thought before
+  /// producing the reply JSON, so raising this prevents empty `length`-truncated
+  /// responses.
+  #[cfg(feature = "ai-dj")]
+  pub dj_max_tokens: u32,
   /// How many tracks the DJ queues per round. Clamped to the resolver's cap.
   #[cfg(feature = "ai-dj")]
   pub dj_batch_size: usize,
@@ -1110,8 +1118,8 @@ impl BehaviorConfig {
   /// the DJ in their YAML before the picker existed: those values can only have
   /// been typed, because `save_config` writes the defaults back verbatim.
   ///
-  /// Deliberately absent: `dj_batch_size`, `dj_history_period`, `dj_avoid_library`
-  /// and the timeout are tuning, not a choice of AI. So is `dj_agent_prompt_via`,
+  /// Deliberately absent: `dj_batch_size`, `dj_history_period`, `dj_avoid_library`,
+  /// `dj_max_tokens` and the timeout are tuning, not a choice of AI. So is `dj_agent_prompt_via`,
   /// and that one is the trap — `save_config` already wrote `stdin` into every
   /// existing install, so counting it would mean nobody is ever asked, including
   /// the Claude Pro users this picker exists for.
@@ -1497,6 +1505,8 @@ impl UserConfig {
         dj_base_url: None,
         #[cfg(feature = "ai-dj")]
         dj_api_key: None,
+        #[cfg(feature = "ai-dj")]
+        dj_max_tokens: crate::infra::dj::brain::DEFAULT_MAX_TOKENS,
         #[cfg(feature = "ai-dj")]
         dj_batch_size: crate::infra::dj::DEFAULT_BATCH,
         #[cfg(feature = "ai-dj")]
@@ -2078,6 +2088,12 @@ impl UserConfig {
       }
       if let Some(dj_api_key) = behavior_config.dj_api_key {
         self.behavior.dj_api_key = Some(dj_api_key).filter(|key| !key.trim().is_empty());
+      }
+      if let Some(dj_max_tokens) = behavior_config.dj_max_tokens {
+        self.behavior.dj_max_tokens = dj_max_tokens.clamp(
+          crate::infra::dj::brain::MAX_TOKENS_MIN,
+          crate::infra::dj::brain::MAX_TOKENS_MAX,
+        );
       }
       if let Some(dj_batch_size) = behavior_config.dj_batch_size {
         self.behavior.dj_batch_size = dj_batch_size.clamp(1, crate::infra::dj::MAX_BATCH);
@@ -2671,6 +2687,8 @@ impl UserConfig {
       dj_base_url: self.behavior.dj_base_url.clone(),
       #[cfg(feature = "ai-dj")]
       dj_api_key: self.behavior.dj_api_key.clone(),
+      #[cfg(feature = "ai-dj")]
+      dj_max_tokens: Some(self.behavior.dj_max_tokens),
       #[cfg(feature = "ai-dj")]
       dj_batch_size: Some(self.behavior.dj_batch_size),
       #[cfg(feature = "ai-dj")]
@@ -3605,6 +3623,7 @@ dj_agent_model: haiku
 dj_model: some-model
 dj_base_url: http://localhost:11434/v1
 dj_api_key: secret
+dj_max_tokens: 16384
 dj_batch_size: 7
 dj_history_period: 7d
 dj_configured: true
@@ -3641,6 +3660,7 @@ volume_increment: 5
     config.behavior.dj_model = Some("some-model".to_string());
     config.behavior.dj_base_url = Some("http://localhost:1234/v1".to_string());
     config.behavior.dj_api_key = Some("sk-not-a-real-key".to_string());
+    config.behavior.dj_max_tokens = 16_384;
     config.behavior.dj_avoid_library = true;
     config.behavior.dj_configured = Some(true);
 
@@ -3657,6 +3677,7 @@ volume_increment: 5
       dj_model: config.behavior.dj_model.clone(),
       dj_base_url: config.behavior.dj_base_url.clone(),
       dj_api_key: config.behavior.dj_api_key.clone(),
+      dj_max_tokens: Some(config.behavior.dj_max_tokens),
       dj_avoid_library: Some(config.behavior.dj_avoid_library),
       dj_configured: config.behavior.dj_configured,
       ..Default::default()
@@ -3686,6 +3707,7 @@ volume_increment: 5
       reloaded.behavior.dj_api_key.as_deref(),
       Some("sk-not-a-real-key")
     );
+    assert_eq!(reloaded.behavior.dj_max_tokens, 16_384);
     assert!(reloaded.behavior.dj_avoid_library);
     assert_eq!(reloaded.behavior.dj_configured, Some(true));
   }
@@ -3750,6 +3772,7 @@ dj_agent_command:
   - -p
 dj_agent_prompt_via: stdin
 dj_agent_timeout_secs: 90
+dj_max_tokens: 8192
 dj_batch_size: 6
 dj_history_period: 30d
 dj_avoid_library: false
@@ -3822,7 +3845,9 @@ dj_api_key: null
   fn tuning_the_dj_is_not_choosing_an_ai() {
     // Batch size and the history window are knobs, not a backend choice, so a user
     // who touched them is still owed the question.
-    let config = loaded("dj_batch_size: 3\ndj_history_period: 7d\ndj_avoid_library: true");
+    let config = loaded(
+      "dj_batch_size: 3\ndj_history_period: 7d\ndj_avoid_library: true\ndj_max_tokens: 16384",
+    );
     assert!(!config.behavior.dj_is_configured());
   }
 

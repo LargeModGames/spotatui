@@ -211,7 +211,7 @@ does not interrogate a user who has already decided. Any one of these is enough:
 * a `dj_agent_command` other than the shipped `["claude", "-p"]`
 * any of `dj_agent_model`, `dj_model`, `dj_api_key` or `dj_base_url` set
 
-Tuning `dj_batch_size`, `dj_history_period`, `dj_avoid_library` or the timeout does
+Tuning `dj_batch_size`, `dj_history_period`, `dj_avoid_library`, `dj_max_tokens` or the timeout does
 not count, because none of them is a choice of AI. Either way,
 <kbd>Ctrl</kbd>+<kbd>G</kbd> opens the picker on demand.
 
@@ -441,6 +441,7 @@ batch rather than per track is what keeps latency and quota sane.
 | It never asked which AI to use | Something in your config already counts as a deliberate choice. See [It never asked me](#it-never-asked-me), or just press <kbd>Ctrl</kbd>+<kbd>G</kbd>. |
 | "no API key for the Anthropic DJ backend" | `export SPOTATUI_DJ_API_KEY=…`. |
 | "the model declined this request" | A safety refusal. Rephrase, or switch backend. |
+| "model hit the … token limit before producing a reply" | Reasoning models can exhaust the default 8192-token budget before emitting JSON. Raise `behavior.dj_max_tokens` (up to 131072) in `config.yml`. |
 | Everything is "not found" | Usually no Spotify session — log in from the UI. The catalogue lookup needs it. |
 | "Very little listening history so far" | The brief needs a handful of qualifying plays. Play some music, or just tell the DJ what you want. |
 
@@ -461,6 +462,7 @@ by design, so they never influence the DJ.
 | `dj_model` | unset | Model id for the API backends; the agent CLIs use `dj_agent_model` instead |
 | `dj_base_url` | Ollama's local endpoint | For `openai_compat` |
 | `dj_api_key` | unset | Prefer `SPOTATUI_DJ_API_KEY` |
+| `dj_max_tokens` | `8192` | Completion token budget for `anthropic` and `openai_compat` (clamped to 256–131072) |
 | `dj_batch_size` | `6` | Tracks per round, max 8 |
 | `dj_history_period` | `30d` | `7d`, `30d`, `month`, `year`, `all` |
 | `dj_avoid_library` | `false` | Start in "only tracks I don't already have" mode |
