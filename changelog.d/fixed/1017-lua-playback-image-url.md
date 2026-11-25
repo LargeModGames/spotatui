@@ -1,0 +1,1 @@
+- **Lua plugins get the cover of the playing song**: `spotatui.playback().track.image_url` was always `nil`; it now carries the cover URL when the source provides one ([#1017](https://github.com/LargeModGames/spotatui/issues/1017)).
