@@ -241,12 +241,13 @@ fn finish_cancelled_recovery(app: &mut App, interrupted_by_decoded: bool) {
   // Requeue only for a start that needs it: a parked StartPlayback, or a
   // published queue slot whose dispatch cleared the start while pending was
   // still set. Otherwise leave the backend parked for an explicit start.
-  if app.native_backend_parked()
-    && (app.pending_start_playback.is_some() || app.queue_now_is_spotify())
-    && !app.apple_music_owns_playback()
-    && !app.active_decoded_source()
+  if app.native_backend_parked() && !app.apple_music_owns_playback() && !app.active_decoded_source()
   {
-    app.reacquire_parked_backend();
+    if app.pending_start_playback.is_some() {
+      app.reacquire_parked_backend();
+    } else if app.queue_now_is_spotify() {
+      app.reacquire_parked_backend_for_queue_slot();
+    }
   }
 }
 
@@ -1972,12 +1973,13 @@ mod tests {
   use super::{
     handle_streaming_recovery, merge_recovery_requests, next_recovery_retry_delay,
     owns_published_player, recovery_needs_native_selection, recovery_watchdog_should_escalate,
-    request_may_replay_over, session_disconnect_recovery, should_replay_published_queue_slot,
-    stop_disarms_watchdog, unavailable_is_for_the_loading_track, unavailable_is_transport_related,
-    BuildAttempt, RebuildOutcome, RecoveryBackend, SessionDisconnectReason,
-    SessionDisconnectRecovery, StreamingBuildError, StreamingConfig, StreamingConnectionState,
-    StreamingRecoveryContext, StreamingRecoveryRequest, RECOVERY_RETRY_BASE_DELAY,
-    RECOVERY_RETRY_MAX_DELAY, STALLED_PLAYBACK_RECOVERY_TIMEOUT,
+    replay_recovery_intent, request_may_replay_over, session_disconnect_recovery,
+    should_replay_published_queue_slot, stop_disarms_watchdog,
+    unavailable_is_for_the_loading_track, unavailable_is_transport_related, BuildAttempt,
+    RebuildOutcome, RecoveryBackend, SessionDisconnectReason, SessionDisconnectRecovery,
+    StreamingBuildError, StreamingConfig, StreamingConnectionState, StreamingRecoveryContext,
+    StreamingRecoveryRequest, RECOVERY_RETRY_BASE_DELAY, RECOVERY_RETRY_MAX_DELAY,
+    STALLED_PLAYBACK_RECOVERY_TIMEOUT,
   };
   use crate::core::app::App;
   use librespot_core::error::Error as LibrespotError;
@@ -2341,7 +2343,37 @@ mod tests {
     let request = recovery_rx
       .try_recv()
       .expect("the queue slot gets a rebuild");
-    assert!(request.reacquire);
+    assert!(request.restore_playback);
+    assert!(
+      !request.reacquire,
+      "the slot carries the play intent; a stale snapshot must not be restored"
+    );
+  }
+
+  /// A queue-slot rebuild whose slot ended before the rebuild must not restore
+  /// the old snapshot: the slot carried the play intent, not `reacquire`.
+  #[test]
+  fn a_queue_slot_rebuild_without_a_slot_does_not_restore_the_snapshot() {
+    use crate::core::user_config::UserConfig;
+    use std::sync::mpsc::{channel, TryRecvError};
+    use std::time::SystemTime;
+
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.last_track_id = Some("spotify:track:old".to_string());
+    assert!(app.prepare_native_playback_recovery(0, false).is_some());
+    let request = StreamingRecoveryRequest {
+      restore_playback: true,
+      reacquire: false,
+      ..StreamingRecoveryRequest::default()
+    };
+
+    super::replay_recovery_intent(&mut app, &request, Some("spotatui"), false);
+
+    assert!(
+      matches!(rx.try_recv(), Err(TryRecvError::Empty)),
+      "no stale snapshot restore once the queue slot is gone"
+    );
   }
 
   /// The claim can be released between detection and the handler's cleanup;

@@ -245,6 +245,18 @@ impl App {
   /// the caller holds its start back instead of routing it to another device.
   #[cfg(feature = "streaming")]
   pub(crate) fn reacquire_parked_backend(&mut self) -> bool {
+    self.reacquire_parked_backend_with(true)
+  }
+
+  /// Rebuild for a published queue slot. The slot carries the play intent, so
+  /// the rebuild must not restore a stale snapshot if the slot ends first.
+  #[cfg(feature = "streaming")]
+  pub(crate) fn reacquire_parked_backend_for_queue_slot(&mut self) -> bool {
+    self.reacquire_parked_backend_with(false)
+  }
+
+  #[cfg(feature = "streaming")]
+  fn reacquire_parked_backend_with(&mut self, reacquire: bool) -> bool {
     if !self.native_backend_parked() {
       return false;
     }
@@ -256,7 +268,7 @@ impl App {
           reselect_device: false,
           restore_playback: true,
           continue_after_track: None,
-          reacquire: true,
+          reacquire,
         })
         .is_ok()
       });
