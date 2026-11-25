@@ -469,4 +469,25 @@ mod tests {
     );
     server.await.unwrap();
   }
+
+  #[tokio::test]
+  async fn accepts_valid_json_reply_even_when_finish_reason_is_length() {
+    let (base_url, server) = serve(vec![(
+      "200 OK",
+      json!({
+        "choices": [{
+          "finish_reason": "length",
+          "message": {
+            "role": "assistant",
+            "content": r#"{"say":"complete anyway","tracks":[{"title":"Nude","artist":"Radiohead"}]}"#
+          }
+        }]
+      }),
+    )])
+    .await;
+    let brain = OpenAiCompatBrain::new(None, None, Some(base_url));
+    let reply = brain.step(&request()).await.unwrap();
+    assert_eq!(reply.say.as_deref(), Some("complete anyway"));
+    server.await.unwrap();
+  }
 }

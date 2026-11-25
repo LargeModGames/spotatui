@@ -524,7 +524,7 @@ them.
 | `dj_model` | `ai-dj` | unset | Model id for the API backends; the agent CLIs use `dj_agent_model` instead |
 | `dj_base_url` | `ai-dj` | Ollama's local endpoint | Base URL for `openai_compat` |
 | `dj_api_key` | `ai-dj` | unset | Plaintext; prefer `SPOTATUI_DJ_API_KEY` |
-| `dj_max_tokens` | `ai-dj` | `8192` | Completion token budget for `anthropic` and `openai_compat` (clamped to 256–131072) |
+| `dj_max_tokens` | `ai-dj` | `8192` | Completion token budget for `anthropic` and `openai_compat` (clamped to 256–131072, or the model's limit if lower; lower on small-context servers) |
 | `dj_batch_size` | `ai-dj` | `6` | Tracks queued per round, max 8 |
 | `dj_history_period` | `ai-dj` | `30d` | History window summarised for the model |
 | `dj_avoid_library` | `ai-dj` | `false` | Start in "only tracks I don't already have" mode |

@@ -355,4 +355,26 @@ mod tests {
     let body: Value = serde_json::from_str(&sent).unwrap();
     assert_eq!(body["max_tokens"], json!(12_288));
   }
+
+  #[tokio::test]
+  async fn reports_max_tokens_truncation_on_partial_text_block() {
+    let (base_url, server) = serve_once(
+      "200 OK",
+      json!({
+        "stop_reason": "max_tokens",
+        "content": [{"type": "text", "text": r#"{"say":"cut off"#}]
+      }),
+    )
+    .await;
+    let err = brain(base_url)
+      .with_max_tokens(12_288)
+      .step(&request())
+      .await
+      .unwrap_err()
+      .to_string();
+    assert!(err.contains("12288 token limit"), "{err}");
+    assert!(err.contains("cut off"), "{err}");
+    assert!(err.contains("dj_max_tokens"), "{err}");
+    server.await.unwrap();
+  }
 }
