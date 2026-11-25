@@ -1,0 +1,1 @@
+- **Local Files**: removed the unused `Streamer` scaffold and its direct `symphonia` dependency. Playback is unchanged ([#1027](https://github.com/LargeModGames/spotatui/issues/1027)).

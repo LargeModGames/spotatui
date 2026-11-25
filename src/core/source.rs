@@ -205,19 +205,6 @@ pub trait PlaylistWriter {
   async fn remove_tracks(&self, playlist_uri: &str, track_uris: &[String]) -> Result<()>;
 }
 
-/// Optional capability: produce a playable audio stream for a URI and route it
-/// into the shared rodio sink (so the visualizer and volume control work
-/// uniformly across sources).
-///
-/// The concrete stream/handle return type is defined in the local-files slice
-/// (Phase 3), when the symphonia → rodio pipeline is wired. Until then this is
-/// the marker seam that lets the dispatch layer ask "can this source stream?".
-pub trait Streamer {
-  /// Begin streaming the given URI. Returns once playback has started (or
-  /// errors if the URI is not streamable by this source).
-  async fn stream(&self, uri: &str) -> Result<()>;
-}
-
 #[cfg(test)]
 mod tests {
   use super::*;
