@@ -197,6 +197,15 @@ pub(super) fn install_panic_hook() {
   }));
 }
 
+/// Whether an uncommented `enable_global_song_count:` line appears in a config
+/// that a YAML `Value` could not parse, so the typed loader's value for it came
+/// from the file rather than the default.
+fn config_text_sets_global_song_count(config_string: &str) -> bool {
+  config_string
+    .lines()
+    .any(|line| line.trim_start().starts_with("enable_global_song_count:"))
+}
+
 /// Prompt once for the anonymous global song counter opt-in and persist the
 /// choice into `config.yml`. Asked before the first-run source picker so the
 /// answer applies to whichever source(s) the user sets up. Non-interactive runs
@@ -223,12 +232,19 @@ fn prompt_global_song_count_opt_in(
     // The typed config loader can accept keys that a YAML Value rejects, such
     // as a duplicate `plugin_commands` key. Saving the answer would fail on the
     // same parse, so asking again would repeat on every launch: treat such a
-    // file as answered and keep the value the typed loader read.
+    // file as answered. Keep the value the typed loader read only when the file
+    // spells the key out; otherwise the `true` default was never an answer, so
+    // the counter stays off.
     match serde_yaml::from_str::<serde_yaml::Value>(&config_string) {
       Ok(config) => config["behavior"]["enable_global_song_count"]
         .as_bool()
         .is_some(),
-      Err(_) => true,
+      Err(_) => {
+        if !config_text_sets_global_song_count(&config_string) {
+          user_config.behavior.enable_global_song_count = false;
+        }
+        true
+      }
     }
   };
 
@@ -1160,6 +1176,35 @@ mod tests {
     assert!(!onboarding.saw("Would you like to participate?"));
     assert!(!onboarding.saw("Opted out. You can change this anytime in Settings -> Behavior.\n"));
     assert!(!onboarding.saw("Thank you for participating!\n"));
+  }
+
+  #[test]
+  fn duplicate_plugin_commands_without_a_song_counter_key_keep_the_counter_off() {
+    let contents =
+      "behavior:\n  show_loading_indicator: true\nplugin_commands:\n  example: x\n  example: y\n";
+    for (interactive, label) in [(true, "interactive launch"), (false, "CLI run")] {
+      let dir = tempfile::tempdir().unwrap();
+      let config_path = dir.path().join("config.yml");
+      std::fs::write(&config_path, contents).unwrap();
+      let mut config = user_config_at(config_path.clone());
+      config.load_config().unwrap();
+      assert!(config.behavior.enable_global_song_count, "{label}");
+      let onboarding = if interactive {
+        ScriptedOnboarding::with_answers(&["y"])
+      } else {
+        ScriptedOnboarding::non_interactive(&[])
+      };
+
+      prompt_global_song_count_opt_in(&mut config, false, &onboarding).unwrap();
+
+      assert!(!onboarding.saw("Would you like to participate?"), "{label}");
+      assert!(!config.behavior.enable_global_song_count, "{label}");
+      assert_eq!(
+        std::fs::read_to_string(config_path).unwrap(),
+        contents,
+        "{label}"
+      );
+    }
   }
 
   #[test]

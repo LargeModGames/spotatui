@@ -1,1 +1,1 @@
-- **The global song counter saves answers in empty or null `behavior:` sections**. A commented-out answer still prompts. If the saved-answer check cannot parse a config the app can load, it treats the prompt as unanswered and startup continues.
+- **The global song counter saves answers in empty or null `behavior:` sections**. A commented-out answer still prompts. If the saved-answer check cannot parse a config the app can load, it does not ask again: it keeps the saved answer, or leaves the counter off when the file has none.
