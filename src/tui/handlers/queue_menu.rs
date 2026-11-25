@@ -5,7 +5,8 @@ use crate::tui::event::Key;
 
 /// The Queue screen is a header row ("Now playing", index 0, non-actionable)
 /// followed by one selectable row per native-queue item. Selection index `k`
-/// (k >= 1) maps to `native_queue[k - 1]`.
+/// (k >= 1) maps to `native_queue[k - 1]`. For an external device with an empty
+/// native queue, the rows are the Spotify queue instead, and only the cursor moves.
 pub fn handler(key: Key, app: &mut App) {
   match key {
     k if common_key_events::down_event(k, &app.user_config.keys) => move_selection(1, app),
@@ -47,9 +48,14 @@ fn play_selected(app: &mut App) {
   app.view.queue_selected_index = 1;
 }
 
-/// Total selectable rows: the now-playing header plus every queue item.
+/// Total selectable rows: the now-playing header plus every queue item, or the
+/// Spotify queue rows the screen shows for an external device.
 fn row_count(app: &App) -> usize {
-  1 + app.native_queue.len()
+  1 + if app.native_queue.is_empty() && app.spotify_external_device_active() {
+    app.queue.as_ref().map_or(0, |q| q.queue.len())
+  } else {
+    app.native_queue.len()
+  }
 }
 
 fn move_selection(delta: i32, app: &mut App) {
@@ -114,7 +120,7 @@ fn reorder(delta: i32, app: &mut App) {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::core::plugin_api::TrackInfo;
+  use crate::core::plugin_api::{PlayableInfo, TrackInfo};
   use crate::core::user_config::UserConfig;
   use std::sync::mpsc::channel;
   use std::time::SystemTime;
@@ -146,6 +152,24 @@ mod tests {
       app.add_track_to_native_queue(track("spotify:track:x", name));
     }
     app
+  }
+
+  #[test]
+  fn j_moves_onto_the_spotify_queue_rows_of_an_external_device() {
+    let mut app = app_with_queue(&[]);
+    crate::core::test_helpers::play_elsewhere_with_queue(
+      &mut app,
+      vec![
+        PlayableInfo::Track(track("spotify:track:a", "A")),
+        PlayableInfo::Track(track("spotify:track:b", "B")),
+      ],
+    );
+    for _ in 0..3 {
+      handler(Key::Char('j'), &mut app);
+    }
+    assert_eq!(app.view.queue_selected_index, 2);
+    handler(Key::Enter, &mut app);
+    assert!(app.native_queue.is_empty());
   }
 
   #[test]
