@@ -1,0 +1,1 @@
+- **Large Subsonic lists keep their covers in the GUI** when the queue or search results change.
