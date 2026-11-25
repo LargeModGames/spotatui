@@ -154,7 +154,7 @@ spotatui 由一个小的团队和不断壮大的贡献者群体共同构建，�
 
 - **[LargeModGames](https://github.com/LargeModGames)**（X 上的 [@LargeModGames](https://x.com/LargeModGames)）
 - [shilicioo](https://github.com/shilicioo)
-- [2570165831](https://github.com/2570165831)
+- [kapok-4o](https://github.com/kapok-4o)
 - [Oud](https://github.com/Oud-Idk)
 
 最初由 [Alexander Keliris](https://github.com/Rigellute) 从 [spotify-tui](https://github.com/Rigellute/spotify-tui) fork 而来。spotify-tui 的贡献者以及 spotatui 使用的库见 [CREDITS.md](CREDITS.md)。
@@ -165,7 +165,7 @@ spotatui 由一个小的团队和不断壮大的贡献者群体共同构建，�
 
 Windows 发布文件由 GitHub 托管 runner 上的[发布工作流](.github/workflows/cd.yml)从本仓库构建。每次签名请求都由人工批准。
 
-- 提交者和审查者：[LargeModGames](https://github.com/LargeModGames)、[ThatModGames](https://github.com/ThatModGames)、[shilicioo](https://github.com/shilicioo)、[2570165831](https://github.com/2570165831)、[Oud](https://github.com/Oud-Idk)
+- 提交者和审查者：[LargeModGames](https://github.com/LargeModGames)、[ThatModGames](https://github.com/ThatModGames)、[shilicioo](https://github.com/shilicioo)、[kapok-4o](https://github.com/kapok-4o)、[Oud](https://github.com/Oud-Idk)
 - 批准者：[LargeModGames](https://github.com/LargeModGames)
 
 隐私：spotatui 发送的数据以及如何关闭每一部分，请参见[隐私政策](https://spotatui.com/privacy)。
