@@ -275,6 +275,8 @@ impl App {
         // A play press during the rebuild still asks the restore to play.
         if bare_resume {
           self.arm_native_play_intent();
+          // Cleanup only requeues for a parked start; keep the press visible.
+          self.park_start_playback(None, None, None);
         }
         self.refuse_parked_gesture();
       } else if self.native_playback_recovery.is_none() {
@@ -1239,6 +1241,8 @@ mod tests {
       .native_playback_recovery
       .as_ref()
       .is_some_and(|snapshot| snapshot.desired_playing));
+    // Cleanup requeues only for a parked start, so the resume must be parked.
+    assert!(app.pending_start_playback.is_some());
     assert!(recovery_rx.try_recv().is_err());
     assert!(rx.try_recv().is_err());
     assert_eq!(app.status_message(), Some("Reconnecting native streaming…"));
