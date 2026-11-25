@@ -60,7 +60,7 @@ fn row_count(app: &App) -> usize {
 
 fn move_selection(delta: i32, app: &mut App) {
   let max_index = row_count(app).saturating_sub(1);
-  let current = app.view.queue_selected_index;
+  let current = app.view.queue_selected_index.min(max_index);
   app.view.queue_selected_index = match delta {
     -1 => current.saturating_sub(1),
     _ => (current + 1).min(max_index),
@@ -168,6 +168,14 @@ mod tests {
       handler(Key::Char('j'), &mut app);
     }
     assert_eq!(app.view.queue_selected_index, 2);
+  }
+
+  #[test]
+  fn k_from_a_cursor_past_a_shrunk_queue_moves_up_from_the_last_row() {
+    let mut app = app_with_queue(&["A", "B"]);
+    app.view.queue_selected_index = 20;
+    handler(Key::Char('k'), &mut app);
+    assert_eq!(app.view.queue_selected_index, 1);
   }
 
   #[test]
