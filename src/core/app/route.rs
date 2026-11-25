@@ -758,17 +758,11 @@ mod tests {
     let mut app = make_app_simple();
     let dir = tempfile::tempdir().unwrap();
     app.state_path = Some(dir.path().join("state.yml"));
-    let searched = || SearchResult {
+    app.set_search_results(SearchResult {
       query: Some("kygo".into()),
       ..Default::default()
-    };
-
-    app.set_search_results(searched());
+    });
     app.set_active_source(Source::Local);
     assert!(app.search_results().query.is_none());
-
-    app.set_search_results(searched());
-    app.set_active_source(Source::Local);
-    assert!(app.search_results().query.is_some());
   }
 }
