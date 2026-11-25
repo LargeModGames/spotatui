@@ -873,6 +873,15 @@ impl DjToolCall {
     }
   }
 
+  /// Whether this call is refused without a Spotify session: named queue items
+  /// can still resolve through YouTube.
+  pub fn needs_spotify_session(&self) -> bool {
+    let youtube_names = cfg!(feature = "youtube")
+      && matches!(self, Self::QueueTracks { items, .. }
+        if items.iter().any(|item| matches!(item, QueueItem::Named(_))));
+    self.needs_network() && !youtube_names
+  }
+
   pub fn tool_name(&self) -> &'static str {
     match self {
       Self::GetListeningHistory { .. } => "get_listening_history",
@@ -1737,6 +1746,26 @@ mod tests {
     assert!(!opaque_play.needs_network());
     assert!(!opaque_queue.needs_network());
     assert!(named_queue.needs_network());
+  }
+
+  #[test]
+  fn named_queue_items_need_a_spotify_session_only_without_youtube() {
+    let named = parse_call(
+      "queue_tracks",
+      &json!({"tracks": [{"title": "t", "artist": "a"}]}),
+    );
+    let spotify = parse_call(
+      "queue_tracks",
+      &json!({"tracks": [{"uri": "spotify:track:x"}]}),
+    );
+    let search = parse_call("search_tracks", &json!({"query": "x"}));
+
+    assert_eq!(
+      named.unwrap().needs_spotify_session(),
+      !cfg!(feature = "youtube")
+    );
+    assert!(spotify.unwrap().needs_spotify_session());
+    assert!(search.unwrap().needs_spotify_session());
   }
 
   #[test]
