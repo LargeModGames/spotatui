@@ -1,0 +1,1 @@
+- **GUI search no longer shows the results of the previous source**: a change of the browse source now clears the search results ([#1077](https://github.com/LargeModGames/spotatui/issues/1077)).

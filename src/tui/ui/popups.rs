@@ -564,9 +564,9 @@ pub fn draw_queue_in(f: &mut Frame<'_>, app: &App, area: Rect) {
   }
 
   // Dimmed, non-selectable preview of what resumes once the queue drains. It is
-  // appended after the selectable native-queue rows; selection stays confined to
-  // those rows (queue_menu.rs counts only `1 + native_queue.len()` rows), so
-  // these extra rows never receive the highlight.
+  // appended after the selectable queue rows; selection stays confined to
+  // those rows (see `row_count` in queue_menu.rs), so these extra rows never
+  // receive the highlight.
   let preview = context_preview_lines(app, 5);
   if !preview.is_empty() {
     let header_style = Style::default().fg(app.user_config.theme.hint.into());

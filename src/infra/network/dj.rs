@@ -15,7 +15,7 @@ use crate::core::action::{Action, ActionOutcome};
 use crate::core::plugin_api::TrackInfo;
 use crate::infra::dj::resolve::{self, ResolveReport};
 #[cfg(any(feature = "mcp-server", feature = "ai-dj"))]
-use crate::infra::dj::tools::{queue_needs_spotify, DjToolCall, QueueItem, ToolOutcome};
+use crate::infra::dj::tools::{DjToolCall, QueueItem, ToolOutcome};
 use crate::infra::dj::{library, DjLibrary, DjLine, DjSuggestion};
 #[cfg(any(feature = "mcp-server", feature = "ai-dj"))]
 use crate::infra::dj::{DjTurn, RefillProgress, TurnKind, MAX_BATCH};
@@ -235,7 +235,7 @@ impl Network {
   async fn dj_tool_outcome(&mut self, call: DjToolCall, turn: Option<DjTurn>) -> ToolOutcome {
     // This variant bypasses the generic auth gate so we can say something
     // useful here instead of the caller seeing a dropped channel.
-    if call.needs_network() && self.spotify.is_none() {
+    if call.needs_spotify_session() && self.spotify.is_none() {
       return ToolOutcome::error_localized(|strings| strings.status.tools.catalogue_unavailable);
     }
 
@@ -548,8 +548,13 @@ impl Network {
     turn: Option<DjTurn>,
   ) -> ToolOutcome {
     // Ownership is a Spotify notion: a batch with no Spotify item has nothing the
-    // filter could skip, so it pays for no crawl.
-    let filter_applies = exclude_owned && queue_needs_spotify(&items);
+    // filter could skip, so it pays for no crawl. Without a session, names
+    // resolve through YouTube, which the filter cannot judge either.
+    let filter_applies = exclude_owned
+      && items.iter().any(|item| match item {
+        QueueItem::Uri(uri) => uri.starts_with("spotify:track:"),
+        QueueItem::Named(_) => self.spotify.is_some(),
+      });
     // Split the two input shapes: exact URIs are looked up as a batch, names go
     // through the fuzzy resolver that drops anything it cannot confidently match.
     let mut uris = Vec::new();
@@ -2549,10 +2554,7 @@ mod in_tui {
     #[tokio::test]
     async fn failed_queue_tools_supply_the_reason_when_auto_queue_stops() {
       for (tracks, reason) in [
-        (
-          r#"[{"title":"Nightcall","artist":"Kavinsky"}]"#,
-          "no Spotify session",
-        ),
+        (r#"[{"uri":"spotify:track:abc"}]"#, "no Spotify session"),
         ("[]", "Invalid arguments"),
       ] {
         failed_refill_waits_before_retrying(

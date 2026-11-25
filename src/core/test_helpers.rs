@@ -188,6 +188,16 @@ pub fn app_with_playbar(position: &str) -> App {
   app
 }
 
+/// Play on another device, with `queue` as the Spotify queue mirror.
+#[cfg(feature = "tui")]
+pub fn play_elsewhere_with_queue(app: &mut App, queue: Vec<crate::core::plugin_api::PlayableInfo>) {
+  app.current_playback_context = Some(playing_with_art("a", "u"));
+  app.queue = Some(crate::core::app::QueueState {
+    currently_playing: None,
+    queue,
+  });
+}
+
 /// A Spotify track playing on another device, its album art at `image_url`.
 pub fn playing_with_art(id: &str, image_url: &str) -> rspotify::model::CurrentPlaybackContext {
   use rspotify::model::{
