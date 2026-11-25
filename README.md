@@ -151,7 +151,7 @@ Native playback and Spotify Connect run on our librespot fork, [spotatui-libresp
 
 - **[LargeModGames](https://github.com/LargeModGames)** ([@LargeModGames](https://x.com/LargeModGames) on X)
 - [shilicioo](https://github.com/shilicioo)
-- [2570165831](https://github.com/2570165831)
+- [kapok-4o](https://github.com/kapok-4o)
 - [Oud](https://github.com/Oud-Idk)
 
 Originally forked from [spotify-tui](https://github.com/Rigellute/spotify-tui) by [Alexander Keliris](https://github.com/Rigellute). The spotify-tui contributors and the libraries spotatui uses are in [CREDITS.md](CREDITS.md).
@@ -162,7 +162,7 @@ Free code signing provided by [SignPath.io](https://about.signpath.io), certific
 
 The Windows release files are built from this repository by the [release workflow](.github/workflows/cd.yml) on GitHub-hosted runners. Each signing request is approved by hand.
 
-- Committers and reviewers: [LargeModGames](https://github.com/LargeModGames), [ThatModGames](https://github.com/ThatModGames), [shilicioo](https://github.com/shilicioo), [2570165831](https://github.com/2570165831), [Oud](https://github.com/Oud-Idk)
+- Committers and reviewers: [LargeModGames](https://github.com/LargeModGames), [ThatModGames](https://github.com/ThatModGames), [shilicioo](https://github.com/shilicioo), [kapok-4o](https://github.com/kapok-4o), [Oud](https://github.com/Oud-Idk)
 - Approvers: [LargeModGames](https://github.com/LargeModGames)
 
 Privacy: see the [privacy policy](https://spotatui.com/privacy) for the data spotatui sends and how to turn each part off.
@@ -179,7 +179,7 @@ Everyone who helped, with code or without. To get on this list, see [Recognition
     <tr>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/LargeModGames"><img src="https://avatars.githubusercontent.com/u/84450916?v=4&size=100" width="100px" height="100px" alt="LargeModGames"/><br /><sub><b>LargeModGames</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=LargeModGames" title="Code">💻</a> <a href="https://github.com/LargeModGames/spotatui/commits?author=LargeModGames" title="Documentation">📖</a> <a href="#maintenance-LargeModGames" title="Maintenance">🚧</a> <a href="#ideas-LargeModGames" title="Ideas, Planning, & Feedback">🤔</a> <a href="#infra-LargeModGames" title="Infrastructure (Hosting, Build-Tools, etc)">🚇</a> <a href="https://github.com/LargeModGames/spotatui/commits?author=LargeModGames" title="Tests">⚠️</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/shilicioo"><img src="https://avatars.githubusercontent.com/u/56956072?v=4&size=100" width="100px" height="100px" alt="shilicioo"/><br /><sub><b>shilicioo</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=shilicioo" title="Code">💻</a> <a href="#maintenance-shilicioo" title="Maintenance">🚧</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/2570165831"><img src="https://avatars.githubusercontent.com/u/200382837?v=4&size=100" width="100px" height="100px" alt="2570165831"/><br /><sub><b>2570165831</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=2570165831" title="Code">💻</a> <a href="#maintenance-2570165831" title="Maintenance">🚧</a> <a href="#translation-2570165831" title="Translation">🌍</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/kapok-4o"><img src="https://avatars.githubusercontent.com/u/200382837?v=4&size=100" width="100px" height="100px" alt="kapok-4o"/><br /><sub><b>kapok-4o</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=kapok-4o" title="Code">💻</a> <a href="#maintenance-kapok-4o" title="Maintenance">🚧</a> <a href="#translation-kapok-4o" title="Translation">🌍</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/Oud-Idk"><img src="https://avatars.githubusercontent.com/u/80905197?v=4&size=100" width="100px" height="100px" alt="Oud"/><br /><sub><b>Oud</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=Oud-Idk" title="Code">💻</a> <a href="#maintenance-Oud-Idk" title="Maintenance">🚧</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/MysteriousWolf"><img src="https://avatars.githubusercontent.com/u/5306409?v=4&size=100" width="100px" height="100px" alt="MysteriousWolf"/><br /><sub><b>MysteriousWolf</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=MysteriousWolf" title="Code">💻</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/rawcode1337"><img src="https://avatars.githubusercontent.com/u/80097670?v=4&size=100" width="100px" height="100px" alt="rawcode1337"/><br /><sub><b>rawcode1337</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=rawcode1337" title="Code">💻</a> <a href="https://github.com/LargeModGames/spotatui/issues?q=author%3Arawcode1337" title="Bug reports">🐛</a></td>
