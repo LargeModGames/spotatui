@@ -297,6 +297,7 @@ Everyone who helped, with code or without. To get on this list, see [Recognition
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/Xnadir"><img src="https://avatars.githubusercontent.com/u/36660597?v=4&size=100" width="100px" height="100px" alt="Nadir Ali"/><br /><sub><b>Nadir Ali</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=Xnadir" title="Code">💻</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://reportbin.dev"><img src="https://avatars.githubusercontent.com/u/37384673?v=4&size=100" width="100px" height="100px" alt="stellar-pxl"/><br /><sub><b>stellar-pxl</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=stellar-pxl" title="Code">💻</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://rutgerpronk.com"><img src="https://avatars.githubusercontent.com/u/119070855?v=4&size=100" width="100px" height="100px" alt="Rutger"/><br /><sub><b>Rutger</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=Rutger505" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://www.linkedin.com/in/andredevay"><img src="https://avatars.githubusercontent.com/u/43342188?v=4&size=100" width="100px" height="100px" alt="Andre Devay"/><br /><sub><b>Andre Devay</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=andretorresdg" title="Code">💻</a></td>
     </tr>
   </tbody>
 </table>
