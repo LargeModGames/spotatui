@@ -30,8 +30,22 @@ const WRITE_STALL_LIMIT: Duration = Duration::from_secs(2);
 const STOP_STALL_LIMIT: Duration = Duration::from_millis(500);
 const POLL: Duration = Duration::from_millis(10);
 const OPEN_TIMEOUT: Duration = Duration::from_secs(5);
+/// How often the device thread checks if the system default output moved.
+const DEFAULT_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 
-use super::sink_wait::{wait_decision, WaitDecision};
+use super::sink_wait::{default_moved, wait_decision, WaitDecision};
+
+/// The name, not `id()`: cpal's WASAPI `id()` leaks a COM string on each call.
+fn device_name(device: &Device) -> Option<String> {
+  device.description().ok().map(|d| d.name().to_string())
+}
+
+fn default_output_name() -> Option<String> {
+  rodio::cpal::default_host()
+    .default_output_device()
+    .as_ref()
+    .and_then(device_name)
+}
 
 /// Wait until at most `threshold` buffers are queued. Never blocks for longer
 /// than `stall_limit` without the queue shrinking.
@@ -68,6 +82,9 @@ pub struct SpotatuiSink {
   lost: Arc<AtomicBool>,
   /// Dropping this lets the device thread release the stream.
   _keepalive: mpsc::Sender<()>,
+  /// Set by the device thread when the system default output moved.
+  default_moved: Arc<AtomicBool>,
+  format: AudioFormat,
 }
 
 /// Stands in when the device cannot be opened, so the failure reaches
@@ -161,6 +178,9 @@ impl SpotatuiSink {
       }
     };
 
+    let follows_default = requested.is_none();
+    let moved = Arc::new(AtomicBool::new(false));
+    let moved_flag = Arc::clone(&moved);
     let (init_tx, init_rx) = mpsc::channel::<Result<Player, String>>();
     let (keepalive_tx, keepalive_rx) = mpsc::channel::<()>();
     // The device lookup and config queries also run on this thread, so
@@ -176,6 +196,7 @@ impl SpotatuiSink {
             return;
           }
         };
+        let mut seen = device_name(&device);
         let opened = DeviceSinkBuilder::from_device(device)
           .map(|b| {
             b.with_config(&config.config())
@@ -191,6 +212,18 @@ impl SpotatuiSink {
             let player = Player::connect_new(stream.mixer());
             if init_tx.send(Ok(player)).is_err() {
               return;
+            }
+            // Each change of the default raises the flag once, so a default
+            // that cannot be opened is not retried every second.
+            while follows_default
+              && keepalive_rx.recv_timeout(DEFAULT_CHECK_INTERVAL)
+                == Err(mpsc::RecvTimeoutError::Timeout)
+            {
+              let now = default_output_name();
+              if default_moved(seen.as_deref(), now.as_deref()) {
+                moved_flag.store(true, Ordering::Relaxed);
+              }
+              seen = now.or(seen);
             }
             let _ = keepalive_rx.recv();
           }
@@ -209,7 +242,25 @@ impl SpotatuiSink {
       player,
       lost,
       _keepalive: keepalive_tx,
+      default_moved: moved,
+      format,
     })
+  }
+
+  /// Reopen on the system default output when it moved to another device that
+  /// is still available, so no stream error ever reports the move.
+  fn follow_default_output(&mut self) {
+    if !self.default_moved.swap(false, Ordering::Relaxed) {
+      return;
+    }
+    info!("Default audio output changed; reopening the streaming output");
+    match Self::open(None, self.format) {
+      Ok(reopened) => {
+        reopened.player.play();
+        *self = reopened;
+      }
+      Err(e) => warn!("Could not open the new default audio output: {e}"),
+    }
   }
 
   fn removed() -> SinkError {
@@ -247,6 +298,7 @@ impl Sink for SpotatuiSink {
     ) else {
       return Err(SinkError::InvalidParams("bad audio format".to_string()));
     };
+    self.follow_default_output();
     self.player.append(rodio::buffer::SamplesBuffer::new(
       channels,
       rate,
