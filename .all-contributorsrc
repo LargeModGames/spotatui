@@ -923,6 +923,15 @@
         "doc",
         "translation"
       ]
+    },
+    {
+      "login": "alboumKW",
+      "name": "alboumKW",
+      "avatar_url": "https://avatars.githubusercontent.com/u/131019295?v=4",
+      "profile": "https://github.com/alboumKW",
+      "contributions": [
+        "code"
+      ]
     }
   ],
   "contributorsPerLine": 7,
