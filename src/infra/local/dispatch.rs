@@ -745,10 +745,17 @@ mod tests {
     let album = dir.path().join("Album");
     std::fs::create_dir(&album).unwrap();
     super::super::tests::write_wav(&album.join("song.wav"), 44100, 200);
-    let app = app_with_music_root(dir.path());
+    let (tx, rx) = channel();
+    let mut config = UserConfig::new();
+    config.behavior.local_music_path = Some(dir.path().to_string_lossy().into_owned());
+    let app = Arc::new(Mutex::new(App::new(tx, config, Some(SystemTime::now()))));
     let uri = super::super::path_to_file_uri(&album);
+    app.lock().await.open_source_playlist_tracks(uri);
+    let event = rx
+      .try_recv()
+      .expect("opening the folder dispatches its load");
 
-    assert!(route_local_event(&app, &IoEvent::GetLocalTracks(uri)).await);
+    assert!(route_local_event(&app, &event).await);
 
     let app = app.lock().await;
     assert_eq!(app.track_table.tracks.len(), 1);
