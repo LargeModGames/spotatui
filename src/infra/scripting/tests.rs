@@ -3000,6 +3000,51 @@ mod storage_tests {
   }
 
   #[test]
+  fn legacy_save_migrates_for_renamed_plugin() {
+    use super::super::shared::storage_namespace_id;
+
+    let cfg = temp_config_dir();
+    write_file(
+      &cfg.join("plugin-data").join("my_plugin.json"),
+      r#"{"theme":"nord","count":3}"#,
+    );
+
+    let ns = storage_namespace_id("my plugin.lua");
+    assert!(ns.starts_with("my_plugin."));
+
+    {
+      let mut engine = engine_with_dir(&cfg);
+      engine
+        .load_source(
+          "my plugin.lua",
+          r#"
+            migrated_theme = spotatui.storage_get("theme")
+            migrated_count = spotatui.storage_get("count")
+            spotatui.storage_set("count", 4)
+          "#,
+        )
+        .unwrap();
+      let globals = engine.lua.globals();
+      assert_eq!(globals.get::<String>("migrated_theme").unwrap(), "nord");
+      assert_eq!(globals.get::<i64>("migrated_count").unwrap(), 3);
+      engine.flush_storage(true);
+    }
+
+    assert!(cfg.join("plugin-data").join(format!("{ns}.json")).is_file());
+    // Subsequent runs read the new hashed file instead of the untouched legacy file.
+    let mut reload = engine_with_dir(&cfg);
+    reload
+      .load_source(
+        "my plugin.lua",
+        r#"reloaded_count = spotatui.storage_get("count")"#,
+      )
+      .unwrap();
+    let globals = reload.lua.globals();
+    assert_eq!(globals.get::<i64>("reloaded_count").unwrap(), 4);
+    std::fs::remove_dir_all(&cfg).unwrap();
+  }
+
+  #[test]
   fn corrupt_storage_file_starts_empty() {
     let cfg = temp_config_dir();
     write_file(&cfg.join("plugin-data").join("a.json"), "{not json");

@@ -789,33 +789,57 @@ fn storage_namespace(shared: &Rc<ScriptShared>) -> mlua::Result<String> {
   Ok(namespace)
 }
 
-/// Load a namespace from disk on first touch. Missing or corrupt files map to
-/// an empty namespace (corruption is logged, never fatal).
+/// Read one storage JSON file: `None` if missing, `Some(Some(map))` if valid,
+/// or `Some(None)` if unreadable/corrupt (logged, never fatal).
+fn read_storage_map(
+  path: &std::path::Path,
+) -> Option<Option<serde_json::Map<String, serde_json::Value>>> {
+  let text = match std::fs::read_to_string(path) {
+    Ok(text) => text,
+    Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+    Err(e) => {
+      log::warn!(
+        "[lua] failed to read plugin storage {} ({e}); starting empty",
+        path.display()
+      );
+      return Some(None);
+    }
+  };
+  match serde_json::from_str::<serde_json::Value>(&text) {
+    Ok(serde_json::Value::Object(map)) => Some(Some(map)),
+    Ok(_) => {
+      log::warn!(
+        "[lua] plugin storage {} is not a JSON object; starting empty",
+        path.display()
+      );
+      Some(None)
+    }
+    Err(e) => {
+      log::warn!(
+        "[lua] plugin storage {} is corrupt ({e}); starting empty",
+        path.display()
+      );
+      Some(None)
+    }
+  }
+}
+
+/// Load a namespace from disk on first touch. When a hashed namespace file
+/// (`<id>.<hash>.json`) does not exist yet, fall back to the legacy `<id>.json`
+/// file as the starting value. Missing or corrupt files map to an empty namespace.
 fn ensure_storage_loaded(shared: &Rc<ScriptShared>, namespace: &str) {
   if shared.storage.borrow().contains_key(namespace) {
     return;
   }
   let loaded = shared
     .storage_path(namespace)
-    .and_then(|path| match std::fs::read_to_string(&path) {
-      Ok(text) => match serde_json::from_str::<serde_json::Value>(&text) {
-        Ok(serde_json::Value::Object(map)) => Some(map),
-        Ok(_) => {
-          log::warn!(
-            "[lua] plugin storage {} is not a JSON object; starting empty",
-            path.display()
-          );
-          None
-        }
-        Err(e) => {
-          log::warn!(
-            "[lua] plugin storage {} is corrupt ({e}); starting empty",
-            path.display()
-          );
-          None
-        }
-      },
-      Err(_) => None, // missing file: first run
+    .and_then(|path| match read_storage_map(&path) {
+      Some(result) => result,
+      None => namespace
+        .split_once('.')
+        .and_then(|(legacy_id, _)| shared.storage_path(legacy_id))
+        .and_then(|legacy_path| read_storage_map(&legacy_path))
+        .flatten(),
     })
     .unwrap_or_default();
   shared
