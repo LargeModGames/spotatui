@@ -950,6 +950,15 @@
       "contributions": [
         "doc"
       ]
+    },
+    {
+      "login": "abp002",
+      "name": "Alejandro Borrego",
+      "avatar_url": "https://avatars.githubusercontent.com/u/210245044?v=4",
+      "profile": "https://alejandroborrego.dev",
+      "contributions": [
+        "code"
+      ]
     }
   ],
   "contributorsPerLine": 7,
