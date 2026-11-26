@@ -274,6 +274,14 @@ Press `v` for the visualizer and `V` to switch between Cava, Bar Graph, Head Uni
 
 While a Spotify track plays, `v` opens **Spotify Pitch**, the visualizer of the original spotify-tui: the strength of the twelve pitch classes (C to B) as bars, with the tempo, key and time signature of the current section, from Spotify's own audio analysis. It needs no audio capture, so it also works when Spotify plays on another device.
 
+### MilkDrop
+
+> **Photosensitivity warning.** MilkDrop presets can contain flashing lights and fast patterns.
+
+Builds with the `milkdrop` cargo feature (`cargo run --features milkdrop`) play MilkDrop presets on the visualizer screen, through the [tidewarp](https://github.com/LargeModGames/tidewarp) engine. Press `m` to show MilkDrop and `v` to go back to the other styles. `[` and `]` step to the previous and the next preset, and every preset blends into the next after 30 seconds.
+
+spotatui ships six presets of its own. It also plays every `.milk` file in the `milkdrop` folder of the config directory (`~/.config/spotatui/milkdrop`, created at start), subfolders included. Presets with pixel shaders (most MilkDrop 2 presets) render on the GPU; without a usable GPU, only the presets without shaders play.
+
 ## Listening history
 
 spotatui keeps a local play history at `$XDG_STATE_HOME/spotatui/history/listens.jsonl` when `XDG_STATE_HOME` is an absolute path, otherwise `~/.local/state/spotatui/history/listens.jsonl`. It powers the Stats screen and `spotatui history recap`. Short or skipped plays are stored but left out of recap totals.

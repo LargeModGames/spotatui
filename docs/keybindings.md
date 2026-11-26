@@ -55,6 +55,7 @@ key and its default from `UserConfig::new`. The five AI DJ keys live in the
 | Copy song URL | `c` | `copy_song_url` |
 | Copy album URL | `C` | `copy_album_url` |
 | Audio visualization | `v` | `audio_analysis` |
+| MilkDrop visuals (builds with the `milkdrop` feature) | `m` | `milkdrop` |
 | Lyrics view (the old name `basic_view` still works) | `B` | `lyrics_view` |
 | Toggle miniplayer view | `T` | `miniplayer_view` |
 | Cover art view (cover-art builds — every released binary; a plain `cargo run` without the feature ignores it) | `G` | `cover_art_view` |

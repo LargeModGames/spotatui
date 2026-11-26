@@ -1,0 +1,1 @@
+- **MilkDrop presets on the visualizer screen**: builds with the `milkdrop` cargo feature press `m` to play MilkDrop presets through the tidewarp engine, with shader presets on the GPU. `[` and `]` change the preset, and every `.milk` file in `~/.config/spotatui/milkdrop` plays next to the six built-in presets.
