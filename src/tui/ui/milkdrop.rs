@@ -4,11 +4,13 @@
 //! draw functions only see `&App`. The runner feeds it the capture's new samples.
 
 use std::cell::RefCell;
+use std::path::PathBuf;
 use std::time::Instant;
 
 use ratatui::{buffer::Buffer, layout::Rect, style::Color};
-use tidewarp::{presets, ComfortMode, Config, Engine, PresetId, Transition};
+use tidewarp::{presets, presets::BuiltinPreset, Config, Engine, PresetId, Transition};
 
+use crate::core::paths;
 use crate::core::user_config::VisualizerStyle;
 use crate::infra::audio::RecentAudio;
 use crate::tui::event::Key;
@@ -17,11 +19,34 @@ use crate::tui::event::Key;
 const SECONDS_PER_PRESET: f64 = 30.0;
 const BLEND_SECONDS: f64 = 5.0;
 
+/// Where a preset's text comes from.
+enum Source {
+  Builtin(&'static BuiltinPreset),
+  File(PathBuf),
+}
+
+struct Entry {
+  name: String,
+  source: Source,
+}
+
+impl Entry {
+  fn text(&self) -> Option<String> {
+    match &self.source {
+      Source::Builtin(preset) => Some(preset.text.to_string()),
+      Source::File(path) => std::fs::read(path)
+        .ok()
+        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned()),
+    }
+  }
+}
+
 struct State {
   engine: Engine,
-  /// The loaded presets with their display names.
-  presets: Vec<(PresetId, &'static str)>,
+  entries: Vec<Entry>,
   current: usize,
+  /// The preset that is playing; it is unloaded when the next one starts.
+  loaded: Option<PresetId>,
   started: Instant,
   switched_at: f64,
   written: u64,
@@ -29,57 +54,125 @@ struct State {
   size: (u16, u16),
 }
 
+/// The `.milk` files under the user's preset folder, sorted by path. The folder is
+/// created when it is missing, so the user can find it.
+fn user_presets() -> Vec<Entry> {
+  let Some(dir) = paths::milkdrop_presets_dir() else {
+    return Vec::new();
+  };
+  let _ = std::fs::create_dir_all(&dir);
+  let mut files = Vec::new();
+  let mut pending = vec![dir];
+  while let Some(dir) = pending.pop() {
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+      continue;
+    };
+    for entry in entries.flatten() {
+      let path = entry.path();
+      if path.is_dir() {
+        pending.push(path);
+      } else if path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("milk"))
+      {
+        files.push(path);
+      }
+    }
+  }
+  files.sort();
+  files
+    .into_iter()
+    .map(|path| Entry {
+      name: path
+        .file_stem()
+        .map_or_else(String::new, |s| s.to_string_lossy().into_owned()),
+      source: Source::File(path),
+    })
+    .collect()
+}
+
 impl State {
   fn new() -> State {
-    let mut engine = Engine::new(Config {
+    let config = Config {
       width: 1,
       height: 1,
-      comfort: ComfortMode::Calm,
       ..Config::default()
-    });
-    let presets: Vec<(PresetId, &'static str)> = presets::ALL
+    };
+    // Shader presets need the GPU; without one the CPU engine plays the others.
+    let engine = Engine::with_gpu(config.clone()).unwrap_or_else(|_| Engine::new(config));
+    let mut entries: Vec<Entry> = presets::ALL
       .iter()
-      .filter_map(|p| engine.load_preset(p.text).ok().map(|id| (id, p.name)))
+      .map(|p| Entry {
+        name: p.name.to_string(),
+        source: Source::Builtin(p),
+      })
       .collect();
-    if let Some((first, _)) = presets.first() {
-      let _ = engine.switch_to(*first, Transition::Cut);
+    // Tests never read the user's real preset folder.
+    if !cfg!(test) {
+      entries.extend(user_presets());
     }
-    State {
+    let mut state = State {
       engine,
-      presets,
+      entries,
       current: 0,
+      loaded: None,
       started: Instant::now(),
       switched_at: 0.0,
       written: 0,
       rgba: Vec::new(),
       size: (0, 0),
+    };
+    state.show(0, 1, Transition::Cut);
+    state
+  }
+
+  /// Starts entry `start`, or the first entry after it in steps of `delta` that loads.
+  fn show(&mut self, start: usize, delta: isize, transition: Transition) {
+    let count = self.entries.len();
+    for tries in 0..count {
+      // Both values are small, so the casts cannot overflow.
+      let index = (start as isize + delta * tries as isize).rem_euclid(count as isize) as usize;
+      let Some(text) = self.entries[index].text() else {
+        continue;
+      };
+      let Ok(id) = self.engine.load_preset(&text) else {
+        continue;
+      };
+      if self.engine.switch_to(id, transition).is_err() {
+        let _ = self.engine.unload_preset(id);
+        continue;
+      }
+      if let Some(old) = self.loaded.replace(id) {
+        let _ = self.engine.unload_preset(old);
+      }
+      self.current = index;
+      return;
     }
+  }
+
+  /// Blends `delta` presets forward (or back, when negative) and restarts the timer.
+  fn step(&mut self, delta: isize) {
+    let count = self.entries.len();
+    if count == 0 {
+      return;
+    }
+    let start = (self.current as isize + delta).rem_euclid(count as isize) as usize;
+    self.show(start, delta.signum(), Transition::Blend(BLEND_SECONDS));
+    self.switched_at = self.started.elapsed().as_secs_f64();
   }
 }
 
 thread_local! {
-  static STATE: RefCell<Option<State>> = const { RefCell::new(None) };
+  // Leaked on purpose: dropping the GPU device during thread teardown would read
+  // thread-locals that are already gone. The OS frees it when the process ends.
+  static STATE: RefCell<Option<&'static mut State>> = const { RefCell::new(None) };
 }
 
 fn with_state<R>(f: impl FnOnce(&mut State) -> R) -> R {
-  STATE.with(|cell| f(cell.borrow_mut().get_or_insert_with(State::new)))
-}
-
-impl State {
-  /// Blends `delta` presets forward (or back, when negative) and restarts the timer.
-  fn step(&mut self, delta: isize) {
-    let count = self.presets.len();
-    if count == 0 {
-      return;
-    }
-    // Both values are small, so the casts cannot overflow.
-    self.current = (self.current as isize + delta).rem_euclid(count as isize) as usize;
-    let _ = self.engine.switch_to(
-      self.presets[self.current].0,
-      Transition::Blend(BLEND_SECONDS),
-    );
-    self.switched_at = self.started.elapsed().as_secs_f64();
-  }
+  STATE.with(|cell| {
+    let mut slot = cell.borrow_mut();
+    f(slot.get_or_insert_with(|| Box::leak(Box::new(State::new()))))
+  })
 }
 
 /// Blends to the next (`1`) or previous (`-1`) preset.
@@ -100,12 +193,12 @@ pub fn handle_key(key: Key, style: VisualizerStyle) {
 }
 
 /// The name of the preset that is playing or blending in.
-pub fn current_name() -> &'static str {
+pub fn current_name() -> String {
   with_state(|state| {
     state
-      .presets
+      .entries
       .get(state.current)
-      .map_or("", |(_, name)| *name)
+      .map_or_else(String::new, |e| e.name.clone())
   })
 }
 
@@ -183,6 +276,9 @@ mod tests {
     step_preset(-1);
     assert_eq!(current_name(), first);
     step_preset(-1);
-    assert_eq!(current_name(), presets::ALL.last().unwrap().name);
+    assert_eq!(
+      current_name(),
+      presets::ALL.last().unwrap().name.to_string()
+    );
   }
 }

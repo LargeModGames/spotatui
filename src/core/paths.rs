@@ -193,6 +193,12 @@ pub(crate) fn soloist_cache_dir() -> Option<PathBuf> {
   app_cache_dir().map(|dir| dir.join("soloist"))
 }
 
+/// The user's own MilkDrop presets, scanned at start: `<config dir>/milkdrop`.
+#[cfg(feature = "milkdrop")]
+pub(crate) fn milkdrop_presets_dir() -> Option<PathBuf> {
+  app_config_dir().map(|dir| dir.join("milkdrop"))
+}
+
 /// The player-bar visualizer's look: `<config dir>/visualizer.yml`, never written by the app.
 #[cfg(feature = "gui")]
 pub(crate) fn visualizer_config_path() -> Option<PathBuf> {
