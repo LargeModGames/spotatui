@@ -1,0 +1,1 @@
+- **AI DJ token limit and truncation diagnostics**: Raised the default HTTP backend `max_tokens` from 2048 to 8192, added `behavior.dj_max_tokens` (256–131072), and surfaced token-limit truncation errors when reasoning models exhaust the budget before producing a JSON reply ([#1164](https://github.com/LargeModGames/spotatui/issues/1164)).

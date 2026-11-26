@@ -35,10 +35,10 @@
       ]
     },
     {
-      "login": "2570165831",
-      "name": "2570165831",
+      "login": "kapok-4o",
+      "name": "kapok-4o",
       "avatar_url": "https://avatars.githubusercontent.com/u/200382837?v=4",
-      "profile": "https://github.com/2570165831",
+      "profile": "https://github.com/kapok-4o",
       "contributions": [
         "code",
         "maintenance",
@@ -883,6 +883,79 @@
       "name": "Rutger",
       "avatar_url": "https://avatars.githubusercontent.com/u/119070855?v=4",
       "profile": "https://rutgerpronk.com",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "andretorresdg",
+      "name": "Andre Devay",
+      "avatar_url": "https://avatars.githubusercontent.com/u/43342188?v=4",
+      "profile": "https://www.linkedin.com/in/andredevay",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "Dathinel",
+      "name": "Daniel",
+      "avatar_url": "https://avatars.githubusercontent.com/u/221246794?v=4",
+      "profile": "https://github.com/Dathinel/rodaje/releases",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "EfLampri",
+      "name": "Felix",
+      "avatar_url": "https://avatars.githubusercontent.com/u/137797868?v=4",
+      "profile": "https://felikious.github.io/",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "OnClickListener2048",
+      "name": "watson wang",
+      "avatar_url": "https://avatars.githubusercontent.com/u/22124534?v=4",
+      "profile": "https://onclicklistener2048.github.io/",
+      "contributions": [
+        "doc",
+        "translation"
+      ]
+    },
+    {
+      "login": "alboumKW",
+      "name": "alboumKW",
+      "avatar_url": "https://avatars.githubusercontent.com/u/131019295?v=4",
+      "profile": "https://github.com/alboumKW",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "aloneangel45",
+      "name": "Aloneangel20",
+      "avatar_url": "https://avatars.githubusercontent.com/u/63845775?v=4",
+      "profile": "https://github.com/aloneangel45",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "momolly1024",
+      "name": "Molly",
+      "avatar_url": "https://avatars.githubusercontent.com/u/61406208?v=4",
+      "profile": "https://github.com/momolly1024",
+      "contributions": [
+        "doc"
+      ]
+    },
+    {
+      "login": "abp002",
+      "name": "Alejandro Borrego",
+      "avatar_url": "https://avatars.githubusercontent.com/u/210245044?v=4",
+      "profile": "https://alejandroborrego.dev",
       "contributions": [
         "code"
       ]

@@ -283,13 +283,12 @@ pub(super) async fn start_tokio(
       {
         network.handle_network_event(io_event).await;
       } else {
-        // A source router consumed the event and returned without touching
-        // `is_loading`, which `App::dispatch` set to true. Only
-        // `handle_network_event` resets it, and we skipped that path, so clear
-        // it here — otherwise selecting/loading Local, Subsonic, Qobuz, Radio,
-        // or YouTube content leaves the UI stuck on the loading indicator.
+        // A routed event skips the network handler's spinner cleanup.
         let mut app = network.app.lock().await;
-        app.is_loading = false;
+        match Network::source_track_table_load_epoch(&io_event) {
+          Some(epoch) => app.finish_source_track_table_load(epoch),
+          None => app.is_loading = false,
+        }
         app.note_display_changes();
       }
     }
@@ -420,6 +419,54 @@ mod tests {
     drop(pump_tx);
     pump.await.unwrap();
     assert!(!app.lock().await.decoded_sink_claimed());
+  }
+
+  #[tokio::test]
+  async fn a_stale_source_playlist_load_leaves_the_search_spinner_in_place() {
+    use crate::core::app::{App, TrackTableContext};
+    use crate::core::user_config::UserConfig;
+    use std::sync::{mpsc::channel, Arc};
+    use tokio::sync::Mutex;
+
+    let (app_tx, app_rx) = channel();
+    let mut app = App::new(app_tx, UserConfig::new(), None);
+    app.open_source_playlist_tracks("subsonic:playlist:1".into());
+    assert!(!app.is_loading);
+    app.set_track_table(Vec::new(), TrackTableContext::SavedTracks);
+    app.dispatch(IoEvent::GetSubsonicSearchResults("new search".into()));
+
+    let app = Arc::new(Mutex::new(app));
+    let mut network = Network::new(None, &app);
+    let (pump_tx, pump_rx) = channel();
+    pump_tx.send(app_rx.try_recv().unwrap()).unwrap();
+    drop(pump_tx);
+
+    start_tokio(pump_rx, &mut network, RadioRestore::new()).await;
+
+    assert!(app.lock().await.is_loading);
+  }
+
+  #[tokio::test]
+  async fn the_pump_ends_a_source_playlist_loading_flag_when_the_load_finishes() {
+    use crate::core::app::App;
+    use crate::core::user_config::UserConfig;
+    use std::sync::{mpsc::channel, Arc};
+    use tokio::sync::Mutex;
+
+    let (app_tx, app_rx) = channel();
+    let mut app = App::new(app_tx, UserConfig::new(), None);
+    app.open_source_playlist_tracks("subsonic:playlist:1".into());
+    assert!(app.is_source_track_table_loading());
+
+    let app = Arc::new(Mutex::new(app));
+    let mut network = Network::new(None, &app);
+    let (pump_tx, pump_rx) = channel();
+    pump_tx.send(app_rx.try_recv().unwrap()).unwrap();
+    drop(pump_tx);
+
+    start_tokio(pump_rx, &mut network, RadioRestore::new()).await;
+
+    assert!(!app.lock().await.is_source_track_table_loading());
   }
 
   #[cfg(feature = "gui")]

@@ -650,7 +650,7 @@ pub fn playback_state(app: &App) -> Option<PlaybackState> {
     is_local: false,
     track_number: 0,
     explicit: false,
-    image_url: None,
+    image_url: s.metadata.image_url.clone(),
     release_date: None,
   });
 
@@ -1067,6 +1067,20 @@ mod tests {
     assert_eq!(dev.id.as_deref(), Some("dev-abc"));
     assert_eq!(dev.name, "Living Room TV");
     assert_eq!(dev.kind, "tv");
+  }
+
+  #[test]
+  fn playback_state_track_carries_the_cover_url() {
+    let mut app = make_app();
+    app.current_playback_context = Some(crate::core::test_helpers::playing_with_art(
+      "id",
+      "https://i.scdn.co/image/x",
+    ));
+    let track = playback_state(&app).and_then(|s| s.track).expect("a track");
+    assert_eq!(
+      track.image_url.as_deref(),
+      Some("https://i.scdn.co/image/x")
+    );
   }
 
   // --- config_snapshot ---

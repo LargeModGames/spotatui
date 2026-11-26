@@ -51,6 +51,7 @@ use crate::core::app::{
 };
 use crate::core::requirement::{Availability, Capability, Requirement};
 use crate::core::source::Source;
+use crate::infra::network::sync::PartyStatus;
 use crate::tui::event::Key;
 
 pub use announcement_prompt::dismiss as dismiss_announcement;
@@ -348,7 +349,14 @@ pub fn handle_app(key: Key, app: &mut App) {
       app.push_navigation_stack(RouteId::CoverArtView, ActiveBlock::CoverArtView);
     }
     _ if key == app.user_config.keys.listening_party => {
-      app.apply(Action::Navigate(NavTarget::Party));
+      // A running party stays reachable without a session, so it can be left.
+      if app.availability(Requirement::SpotifySession) != Availability::Available
+        && *app.party_status() == PartyStatus::Disconnected
+      {
+        app.set_status_message(app.strings().status.app.party_needs_spotify, 6);
+      } else {
+        app.apply(Action::Navigate(NavTarget::Party));
+      }
     }
     _ if key == app.user_config.keys.like_track => {
       if is_input_mode(app) {
@@ -1459,6 +1467,49 @@ mod tests {
 
     assert_ne!(app.get_current_route().active_block, ActiveBlock::Input);
     assert_eq!(app.status_message(), Some("Search needs a Spotify session"));
+  }
+
+  #[test]
+  fn party_key_without_a_spotify_session_shows_a_hint_instead_of_the_popup() {
+    let mut app = App::default();
+    app.set_current_route_state(Some(ActiveBlock::Empty), Some(ActiveBlock::Library));
+
+    handle_app(app.user_config.keys.listening_party, &mut app);
+
+    assert_ne!(app.get_current_route().id, RouteId::Party);
+    assert_eq!(
+      app.status_message(),
+      Some(app.strings().status.app.party_needs_spotify)
+    );
+  }
+
+  #[test]
+  fn party_key_with_a_spotify_session_opens_the_popup() {
+    let mut app = App::default_connected();
+    app.set_current_route_state(Some(ActiveBlock::Empty), Some(ActiveBlock::Library));
+
+    handle_app(app.user_config.keys.listening_party, &mut app);
+
+    assert_eq!(app.get_current_route().id, RouteId::Party);
+    assert!(app.status_message().is_none());
+  }
+
+  #[test]
+  fn party_key_opens_a_running_party_without_a_session() {
+    for status in [
+      PartyStatus::Connecting,
+      PartyStatus::Hosting,
+      PartyStatus::Joined,
+    ] {
+      let mut app = App::default();
+      app.set_current_route_state(Some(ActiveBlock::Empty), Some(ActiveBlock::Library));
+      app.set_party_status(status);
+
+      handle_app(app.user_config.keys.listening_party, &mut app);
+
+      assert_eq!(app.get_current_route().id, RouteId::Party);
+      assert!(app.status_message().is_none());
+    }
   }
 
   /// The DJ's own tests all call `ai_dj::handler` directly, which is the branch

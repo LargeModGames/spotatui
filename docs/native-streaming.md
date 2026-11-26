@@ -70,6 +70,33 @@ On PipeWire this usually means the ALSA bridge isn't installed. Install `pipewir
 
 To use a different ALSA device, set `SPOTATUI_STREAMING_AUDIO_DEVICE` to a name from `aplay -L`, for example `SPOTATUI_STREAMING_AUDIO_DEVICE=pipewire spotatui` or `plughw:0,0`. This only applies to Spotify playback; the other sources use the system default output.
 
+## Proxy and slow networks
+
+spotatui can send most of the Spotify connection through an HTTP proxy (see the dealer websocket limit below). It checks `SPOTATUI_STREAMING_PROXY`, `https_proxy`, `HTTPS_PROXY`, `http_proxy` and `HTTP_PROXY`, in that order, and takes the first one that is set and not empty. Set `SPOTATUI_STREAMING_PROXY` to give the Spotify sessions a different proxy than the rest of your system. `no_proxy` is not read.
+
+- Only `http://` proxy URLs work, even in `https_proxy`. An `https://` value is ignored, with a warning in the [log](configuration.md#logging) that says to write `http://` instead. `socks5://`, other schemes and values without a scheme are ignored too.
+- If the first value found is invalid, spotatui does **not** try the next variable. It ignores the proxy and connects directly.
+- A user name and password in the URL are dropped with a warning. A proxy that requires a login answers 407, so the Spotify sessions cannot connect and native streaming does not start.
+- The proxy applies to both Spotify sessions: the one for your library, search and remote control, and the native player. These rules do not cover the other sources (Local Files, Subsonic, Internet Radio, YouTube, Qobuz).
+- The pairing-code login does not read `SPOTATUI_STREAMING_PROXY`. On a proxy-only network, set `https_proxy` too before you log in.
+- The access-point connection and the sessions' HTTP requests use the proxy. The dealer websocket does not, so on a network that blocks all direct outbound connections the Connect device still won't register.
+
+`SPOTATUI_STREAMING_INIT_TIMEOUT_SECS` sets how long, in whole seconds, spotatui waits for the Spotify Connect handshake when native streaming starts. The default is 30; `0` or anything other than a positive whole number keeps 30. The whole player start, setup included, is limited to this value plus 15 seconds, so setup that takes longer than 15 seconds cuts into the handshake wait. After a timeout, native streaming is skipped for that run and the saved login is kept. Raise the value if the log says `Spirc initialization timed out`. It does not change the 35-second limit on the Spotify session that connects first.
+
+PowerShell:
+
+```pwsh
+$env:SPOTATUI_STREAMING_PROXY = "http://proxy.example:3128"
+$env:SPOTATUI_STREAMING_INIT_TIMEOUT_SECS = "60"
+spotatui
+```
+
+Bash:
+
+```bash
+SPOTATUI_STREAMING_PROXY=http://proxy.example:3128 SPOTATUI_STREAMING_INIT_TIMEOUT_SECS=60 spotatui
+```
+
 ---
 
 ## Audio Backends

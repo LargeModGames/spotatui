@@ -21,15 +21,22 @@ pub fn draw(cells: &mut Cells, frame: &Frame, state: &mut State, dt: f32) {
   let (w, h) = (cells.width(), cells.height());
   let view = frame.view;
   cells.fill(0, 0, w, h, BODY);
-  cells.put(
-    3,
-    1,
-    "AUTO REVERSE  ·  DOLBY B NR  ·  CrO₂",
-    TEXT,
-    None,
-    false,
-  );
-  cells.put(w - 18, 1, "TAPE COUNTER", MUTED, None, false);
+  let counter_x = w - 18;
+  let header = if counter_x >= 41 {
+    "AUTO REVERSE  ·  DOLBY B NR  ·  CrO₂"
+  } else if counter_x >= 24 {
+    "DOLBY B NR  ·  CrO₂"
+  } else if counter_x >= 9 {
+    "CrO₂"
+  } else {
+    ""
+  };
+  if !header.is_empty() {
+    cells.put(3, 1, header, TEXT, None, false);
+  }
+  if counter_x >= 3 {
+    cells.put(counter_x, 1, "TAPE COUNTER", MUTED, None, false);
+  }
   let count = view.progress_ms.map_or(0, |ms| (ms / 1000) % 10_000);
   let digits: String = format!("{count:04}")
     .chars()
@@ -45,62 +52,66 @@ pub fn draw(cells: &mut Cells, frame: &Frame, state: &mut State, dt: f32) {
   );
 
   // The cassette, kept above the meter rows (they start at `h - 8`).
-  let ww = (w * 69 / 100).max(20);
   let wh = shell_height(h);
-  let (wx, wy) = ((w - ww) / 2, 4);
-  cells.fill(wx, wy, ww, wh, SHELL);
-  cells.fill(wx + 2, wy + 1, ww - 4, 3, LABEL_STRIP);
-  let title = view.title.as_deref().unwrap_or("").to_uppercase();
-  cells.put(
-    wx + 4,
-    wy + 2,
-    &format!("C-90   {title}   ·   SIDE A"),
-    (60, 50, 40),
-    Some(LABEL_STRIP),
-    true,
-  );
-  let (rx0, ry0, rw, rh) = (wx + 10, wy + 5, ww - 20, (wh - 7).max(3));
-  cells.fill(rx0, ry0, rw, rh, WINDOW);
+  if wh >= 6 {
+    let ww = (w * 69 / 100).max(20);
+    let (wx, wy) = ((w - ww) / 2, 4);
+    cells.fill(wx, wy, ww, wh, SHELL);
+    cells.fill(wx + 2, wy + 1, ww - 4, 3, LABEL_STRIP);
+    let title = view.title.as_deref().unwrap_or("").to_uppercase();
+    cells.put(
+      wx + 4,
+      wy + 2,
+      &format!("C-90   {title}   ·   SIDE A"),
+      (60, 50, 40),
+      Some(LABEL_STRIP),
+      true,
+    );
+    if wh >= 8 && ww > 20 {
+      let (rx0, ry0, rw, rh) = (wx + 10, wy + 5, ww - 20, (wh - 7).max(3));
+      cells.fill(rx0, ry0, rw, rh, WINDOW);
 
-  let progress = match (view.progress_ms, view.duration_ms) {
-    (Some(p), Some(d)) if d > 0 => (p as f32 / d as f32).clamp(0.0, 1.0),
-    _ => 0.3,
-  };
-  let mut dots = Dots::new(rw, rh);
-  let (cw, ch) = (dots.width as f32, dots.height as f32);
-  let max_r = (ch / 2.0 - 1.0).max(4.0);
-  let hub_r = (max_r * 0.46).max(3.0);
-  // Tape moves from the left (supply) reel to the right (take-up) reel.
-  let packs = [
-    hub_r + 1.0 + (max_r - hub_r - 1.0) * (1.0 - progress),
-    hub_r + 1.0 + (max_r - hub_r - 1.0) * progress,
-  ];
-  if view.is_playing {
-    advance_reels(&mut state.reel_angles, packs, max_r, dt);
-  }
-  for (k, (cx, pack)) in [(cw * 0.22, packs[0]), (cw * 0.78, packs[1])]
-    .into_iter()
-    .enumerate()
-  {
-    let cy = ch / 2.0;
-    disc(&mut dots, cx, cy, pack, TAPE);
-    disc_clear(&mut dots, cx, cy, hub_r + 0.5);
-    ring(&mut dots, cx, cy, hub_r, HUB);
-    // Six teeth inside the hub, turning with the reel.
-    let spin = state.reel_angles[k] + k as f32 * 30.0;
-    for t in 0..6 {
-      let a = (t as f32 * 60.0 + spin) * PI / 180.0;
-      dots.line(
-        cx + hub_r * 0.55 * a.cos(),
-        cy + hub_r * 0.55 * a.sin(),
-        cx + hub_r * a.cos(),
-        cy + hub_r * a.sin(),
-        HUB,
-      );
+      let progress = match (view.progress_ms, view.duration_ms) {
+        (Some(p), Some(d)) if d > 0 => (p as f32 / d as f32).clamp(0.0, 1.0),
+        _ => 0.3,
+      };
+      let mut dots = Dots::new(rw, rh);
+      let (cw, ch) = (dots.width as f32, dots.height as f32);
+      let max_r = (ch / 2.0 - 1.0).max(4.0);
+      let hub_r = (max_r * 0.46).max(3.0);
+      // Tape moves from the left (supply) reel to the right (take-up) reel.
+      let packs = [
+        hub_r + 1.0 + (max_r - hub_r - 1.0) * (1.0 - progress),
+        hub_r + 1.0 + (max_r - hub_r - 1.0) * progress,
+      ];
+      if view.is_playing {
+        advance_reels(&mut state.reel_angles, packs, max_r, dt);
+      }
+      for (k, (cx, pack)) in [(cw * 0.22, packs[0]), (cw * 0.78, packs[1])]
+        .into_iter()
+        .enumerate()
+      {
+        let cy = ch / 2.0;
+        disc(&mut dots, cx, cy, pack, TAPE);
+        disc_clear(&mut dots, cx, cy, hub_r + 0.5);
+        ring(&mut dots, cx, cy, hub_r, HUB);
+        // Six teeth inside the hub, turning with the reel.
+        let spin = state.reel_angles[k] + k as f32 * 30.0;
+        for t in 0..6 {
+          let a = (t as f32 * 60.0 + spin) * PI / 180.0;
+          dots.line(
+            cx + hub_r * 0.55 * a.cos(),
+            cy + hub_r * 0.55 * a.sin(),
+            cx + hub_r * a.cos(),
+            cy + hub_r * a.sin(),
+            HUB,
+          );
+        }
+      }
+      dots.line(cw * 0.22, ch - 1.0, cw * 0.78, ch - 1.0, TAPE);
+      cells.dots(&dots, rx0, ry0);
     }
   }
-  dots.line(cw * 0.22, ch - 1.0, cw * 0.78, ch - 1.0, TAPE);
-  cells.dots(&dots, rx0, ry0);
 
   // LED level bars.
   let (l, r) = frame.audio.levels();
@@ -147,9 +158,15 @@ pub fn draw(cells: &mut Cells, frame: &Frame, state: &mut State, dt: f32) {
 }
 
 /// Rows the cassette shell takes: half the area, but ending above the meter
-/// rows (from `h - 8`) and never under 6.
+/// rows (from `h - 8`) and never under 6. Returns 0 when the area is too short
+/// for the cassette to fit above the meters.
 fn shell_height(h: i32) -> i32 {
-  (h / 2).min(h - 13).max(6)
+  let height = (h / 2).min(h - 13);
+  if height >= 6 {
+    height
+  } else {
+    0
+  }
 }
 
 /// Turns each reel by its own speed (the smaller pack turns faster, as on a
@@ -210,7 +227,7 @@ mod tests {
       is_playing: true,
       ..HeadUnitView::default()
     };
-    for h in [19u16, 20, 22, 24, 30] {
+    for h in [12u16, 14, 15, 16, 17, 18, 19, 20, 21, 22, 24, 30] {
       let area = Rect::new(0, 0, 80, h);
       let mut buf = Buffer::empty(area);
       let frame = Frame {
@@ -227,6 +244,7 @@ mod tests {
       };
       draw(&mut cells, &frame, &mut State::default(), 0.0);
       let shell = Color::Rgb(SHELL.0, SHELL.1, SHELL.2);
+      let window = Color::Rgb(WINDOW.0, WINDOW.1, WINDOW.2);
       for y in (h - 8)..h {
         for x in 0..80 {
           assert_ne!(
@@ -234,7 +252,75 @@ mod tests {
             shell,
             "the shell reaches meter row {y} at height {h}"
           );
+          assert_ne!(
+            buf[(x, y)].bg,
+            window,
+            "the cassette window reaches meter row {y} at height {h}"
+          );
         }
+      }
+    }
+  }
+
+  #[test]
+  fn the_window_is_drawn_at_heights_21_and_22() {
+    let bands = sample_bands(24);
+    let wave = sample_wave();
+    let view = HeadUnitView {
+      title: Some("Side A".into()),
+      is_playing: true,
+      ..HeadUnitView::default()
+    };
+    for h in [21u16, 22] {
+      let area = Rect::new(0, 0, 80, h);
+      let mut buf = Buffer::empty(area);
+      let frame = Frame {
+        audio: Audio {
+          bands: &bands,
+          wave: &wave,
+        },
+        view: &view,
+        now: Instant::now(),
+      };
+      let mut cells = Cells {
+        buf: &mut buf,
+        area,
+      };
+      draw(&mut cells, &frame, &mut State::default(), 0.0);
+      let window = Color::Rgb(WINDOW.0, WINDOW.1, WINDOW.2);
+      let window_drawn = (0..h).any(|y| (0..80).any(|x| buf[(x, y)].bg == window));
+      assert!(window_drawn, "window should be drawn at height {h}");
+    }
+  }
+
+  #[test]
+  fn header_labels_do_not_touch_in_narrow_panes() {
+    let bands = sample_bands(24);
+    let wave = sample_wave();
+    let view = HeadUnitView::default();
+    for w in [40u16, 50, 58, 60, 80] {
+      let area = Rect::new(0, 0, w, 20);
+      let mut buf = Buffer::empty(area);
+      let frame = Frame {
+        audio: Audio {
+          bands: &bands,
+          wave: &wave,
+        },
+        view: &view,
+        now: Instant::now(),
+      };
+      let mut cells = Cells {
+        buf: &mut buf,
+        area,
+      };
+      draw(&mut cells, &frame, &mut State::default(), 0.0);
+      let counter_start = (w - 18) as usize;
+      if counter_start > 0 && counter_start < w as usize {
+        let before_counter = buf[((counter_start - 1) as u16, 1)].symbol();
+        assert_eq!(
+          before_counter, " ",
+          "header touches or overlaps TAPE COUNTER at width {w}"
+        );
       }
     }
   }

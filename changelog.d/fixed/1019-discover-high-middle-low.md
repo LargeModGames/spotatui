@@ -1,0 +1,1 @@
+- **`H`, `M` and `L` move the cursor on Discover**: the help menu lists them as the keys that jump to the first, middle and last row of a list, but the Discover (Made For You) page ignored them. They now select the first, middle and last playlist across all shelves, and do nothing on an empty page ([#1019](https://github.com/LargeModGames/spotatui/issues/1019)).

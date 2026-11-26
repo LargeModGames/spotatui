@@ -820,7 +820,7 @@ mod tests {
     handler(Key::Enter, &mut app);
 
     match rx.recv().unwrap() {
-      IoEvent::GetLocalTracks(uri) => assert_eq!(uri, "file:///music/Jazz"),
+      IoEvent::GetLocalTracks(uri, _) => assert_eq!(uri, "file:///music/Jazz"),
       _ => panic!("expected local tracks fetch"),
     }
   }

@@ -1,0 +1,1 @@
+- **The Rack EQ visualizer fits a narrow pane**: the bands stop at the edge of their channel, and the model plate hides below 72 columns ([#1080](https://github.com/LargeModGames/spotatui/issues/1080)).

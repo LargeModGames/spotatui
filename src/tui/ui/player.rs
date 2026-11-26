@@ -796,7 +796,8 @@ fn draw_playbar_badge(f: &mut Frame<'_>, app: &App, controls_area: Rect, badge: 
   let width = first_control
     .saturating_sub(controls_area.x)
     .saturating_sub(1);
-  if width == 0 || controls_area.height == 0 {
+  let badge_width = UnicodeWidthStr::width(badge.as_str()) as u16;
+  if width < badge_width || controls_area.height == 0 {
     return;
   }
   let style = Style::default()
@@ -2524,6 +2525,47 @@ mod tests {
       row.trim_end().len() > "FLAC 44.1".len(),
       "controls kept: {row}"
     );
+  }
+
+  #[test]
+  fn playbar_badge_hidden_when_it_does_not_fit_before_controls() {
+    let app = App::default();
+    let badge = "FLAC 44.1".to_string();
+    let badge_width = UnicodeWidthStr::width(badge.as_str()) as u16;
+
+    let full_area = Rect::new(0, 0, 200, 1);
+    let hitboxes = playbar_control_hitboxes_in_area_localized(
+      full_area,
+      &app.user_config.behavior,
+      &playbar_supported_controls(&app),
+      &app.strings().screens,
+    );
+    let min_x = hitboxes.iter().map(|h| h.rect.x).min().unwrap();
+    let max_x = hitboxes.iter().map(|h| h.rect.right()).max().unwrap();
+    let controls_width = max_x - min_x;
+
+    let partial_free_space: u16 = 4;
+    assert!(partial_free_space < badge_width);
+    let area_width = controls_width + 2 * partial_free_space;
+    let area = Rect::new(0, 0, area_width, 1);
+
+    let mut terminal =
+      ratatui::Terminal::new(ratatui::backend::TestBackend::new(area_width, 1)).unwrap();
+    terminal
+      .draw(|f| {
+        draw_playbar_controls(f, &app, area);
+        draw_playbar_badge(f, &app, area, badge);
+      })
+      .unwrap();
+
+    let buffer = terminal.backend().buffer();
+    for x in 0..partial_free_space {
+      assert_eq!(
+        buffer[(x, 0)].symbol(),
+        " ",
+        "cell at x={x} should be blank, badge should not partially render"
+      );
+    }
   }
 
   /// A live (radio) view must render the station, the ICY subtitle and a LIVE

@@ -9,6 +9,9 @@
 <p align="center">
   <a href="https://spotatui.com/download"><strong>Download</strong></a> · <a href="#installation">Install</a> · <a href="docs/README.md">Docs</a> · <a href="CONTRIBUTING.md">Contributing</a> · <a href="https://spotatui.com/discord">Discord</a>
 </p>
+<p align="center">
+  <sub><b>English</b> | <a href="README.zh-Hans.md">简体中文</a> | <a href="README.zh-Hant.md">繁體中文</a> | <a href="README.fr.md">Français</a> | <a href="README.de.md">Deutsch</a></sub>
+</p>
 
 [![Crates.io](https://img.shields.io/crates/v/spotatui.svg)](https://crates.io/crates/spotatui)
 [![Discord](https://img.shields.io/discord/1534820237122207815?logo=discord&logoColor=white&label=Discord&color=5865F2)](https://spotatui.com/discord)
@@ -151,7 +154,7 @@ Native playback and Spotify Connect run on our librespot fork, [spotatui-libresp
 
 - **[LargeModGames](https://github.com/LargeModGames)** ([@LargeModGames](https://x.com/LargeModGames) on X)
 - [shilicioo](https://github.com/shilicioo)
-- [2570165831](https://github.com/2570165831)
+- [kapok-4o](https://github.com/kapok-4o)
 - [Oud](https://github.com/Oud-Idk)
 
 Originally forked from [spotify-tui](https://github.com/Rigellute/spotify-tui) by [Alexander Keliris](https://github.com/Rigellute). The spotify-tui contributors and the libraries spotatui uses are in [CREDITS.md](CREDITS.md).
@@ -162,7 +165,7 @@ Free code signing provided by [SignPath.io](https://about.signpath.io), certific
 
 The Windows release files are built from this repository by the [release workflow](.github/workflows/cd.yml) on GitHub-hosted runners. Each signing request is approved by hand.
 
-- Committers and reviewers: [LargeModGames](https://github.com/LargeModGames), [ThatModGames](https://github.com/ThatModGames), [shilicioo](https://github.com/shilicioo), [2570165831](https://github.com/2570165831), [Oud](https://github.com/Oud-Idk)
+- Committers and reviewers: [LargeModGames](https://github.com/LargeModGames), [ThatModGames](https://github.com/ThatModGames), [shilicioo](https://github.com/shilicioo), [kapok-4o](https://github.com/kapok-4o), [Oud](https://github.com/Oud-Idk)
 - Approvers: [LargeModGames](https://github.com/LargeModGames)
 
 Privacy: see the [privacy policy](https://spotatui.com/privacy) for the data spotatui sends and how to turn each part off.
@@ -179,7 +182,7 @@ Everyone who helped, with code or without. To get on this list, see [Recognition
     <tr>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/LargeModGames"><img src="https://avatars.githubusercontent.com/u/84450916?v=4&size=100" width="100px" height="100px" alt="LargeModGames"/><br /><sub><b>LargeModGames</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=LargeModGames" title="Code">💻</a> <a href="https://github.com/LargeModGames/spotatui/commits?author=LargeModGames" title="Documentation">📖</a> <a href="#maintenance-LargeModGames" title="Maintenance">🚧</a> <a href="#ideas-LargeModGames" title="Ideas, Planning, & Feedback">🤔</a> <a href="#infra-LargeModGames" title="Infrastructure (Hosting, Build-Tools, etc)">🚇</a> <a href="https://github.com/LargeModGames/spotatui/commits?author=LargeModGames" title="Tests">⚠️</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/shilicioo"><img src="https://avatars.githubusercontent.com/u/56956072?v=4&size=100" width="100px" height="100px" alt="shilicioo"/><br /><sub><b>shilicioo</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=shilicioo" title="Code">💻</a> <a href="#maintenance-shilicioo" title="Maintenance">🚧</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/2570165831"><img src="https://avatars.githubusercontent.com/u/200382837?v=4&size=100" width="100px" height="100px" alt="2570165831"/><br /><sub><b>2570165831</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=2570165831" title="Code">💻</a> <a href="#maintenance-2570165831" title="Maintenance">🚧</a> <a href="#translation-2570165831" title="Translation">🌍</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/kapok-4o"><img src="https://avatars.githubusercontent.com/u/200382837?v=4&size=100" width="100px" height="100px" alt="kapok-4o"/><br /><sub><b>kapok-4o</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=kapok-4o" title="Code">💻</a> <a href="#maintenance-kapok-4o" title="Maintenance">🚧</a> <a href="#translation-kapok-4o" title="Translation">🌍</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/Oud-Idk"><img src="https://avatars.githubusercontent.com/u/80905197?v=4&size=100" width="100px" height="100px" alt="Oud"/><br /><sub><b>Oud</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=Oud-Idk" title="Code">💻</a> <a href="#maintenance-Oud-Idk" title="Maintenance">🚧</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/MysteriousWolf"><img src="https://avatars.githubusercontent.com/u/5306409?v=4&size=100" width="100px" height="100px" alt="MysteriousWolf"/><br /><sub><b>MysteriousWolf</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=MysteriousWolf" title="Code">💻</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/rawcode1337"><img src="https://avatars.githubusercontent.com/u/80097670?v=4&size=100" width="100px" height="100px" alt="rawcode1337"/><br /><sub><b>rawcode1337</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=rawcode1337" title="Code">💻</a> <a href="https://github.com/LargeModGames/spotatui/issues?q=author%3Arawcode1337" title="Bug reports">🐛</a></td>
@@ -297,6 +300,16 @@ Everyone who helped, with code or without. To get on this list, see [Recognition
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/Xnadir"><img src="https://avatars.githubusercontent.com/u/36660597?v=4&size=100" width="100px" height="100px" alt="Nadir Ali"/><br /><sub><b>Nadir Ali</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=Xnadir" title="Code">💻</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://reportbin.dev"><img src="https://avatars.githubusercontent.com/u/37384673?v=4&size=100" width="100px" height="100px" alt="stellar-pxl"/><br /><sub><b>stellar-pxl</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=stellar-pxl" title="Code">💻</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://rutgerpronk.com"><img src="https://avatars.githubusercontent.com/u/119070855?v=4&size=100" width="100px" height="100px" alt="Rutger"/><br /><sub><b>Rutger</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=Rutger505" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://www.linkedin.com/in/andredevay"><img src="https://avatars.githubusercontent.com/u/43342188?v=4&size=100" width="100px" height="100px" alt="Andre Devay"/><br /><sub><b>Andre Devay</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=andretorresdg" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/Dathinel/rodaje/releases"><img src="https://avatars.githubusercontent.com/u/221246794?v=4&size=100" width="100px" height="100px" alt="Daniel"/><br /><sub><b>Daniel</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=Dathinel" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://felikious.github.io/"><img src="https://avatars.githubusercontent.com/u/137797868?v=4&size=100" width="100px" height="100px" alt="Felix"/><br /><sub><b>Felix</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=EfLampri" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://onclicklistener2048.github.io/"><img src="https://avatars.githubusercontent.com/u/22124534?v=4&size=100" width="100px" height="100px" alt="watson wang"/><br /><sub><b>watson wang</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=OnClickListener2048" title="Documentation">📖</a> <a href="#translation-OnClickListener2048" title="Translation">🌍</a></td>
+    </tr>
+    <tr>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/alboumKW"><img src="https://avatars.githubusercontent.com/u/131019295?v=4&size=100" width="100px" height="100px" alt="alboumKW"/><br /><sub><b>alboumKW</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=alboumKW" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/aloneangel45"><img src="https://avatars.githubusercontent.com/u/63845775?v=4&size=100" width="100px" height="100px" alt="Aloneangel20"/><br /><sub><b>Aloneangel20</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=aloneangel45" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/momolly1024"><img src="https://avatars.githubusercontent.com/u/61406208?v=4&size=100" width="100px" height="100px" alt="Molly"/><br /><sub><b>Molly</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=momolly1024" title="Documentation">📖</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://alejandroborrego.dev"><img src="https://avatars.githubusercontent.com/u/210245044?v=4&size=100" width="100px" height="100px" alt="Alejandro Borrego"/><br /><sub><b>Alejandro Borrego</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=abp002" title="Code">💻</a></td>
     </tr>
   </tbody>
 </table>

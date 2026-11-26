@@ -69,8 +69,8 @@ pub async fn route_subsonic_event(app: &Arc<Mutex<App>>, event: &IoEvent) -> boo
       load_subsonic_playlists(app).await;
       true
     }
-    IoEvent::GetSubsonicTracks(uri) => {
-      load_subsonic_tracks(app, uri).await;
+    IoEvent::GetSubsonicTracks(uri, epoch) => {
+      load_subsonic_tracks(app, uri, *epoch).await;
       true
     }
     IoEvent::GetSubsonicSearchResults(query) => {
@@ -224,25 +224,37 @@ async fn load_subsonic_playlists(app: &Arc<Mutex<App>>) {
 
 /// Fetch a playlist's tracks into the shared track table, tagged
 /// [`TrackTableContext::SubsonicPlaylist`] so selecting a row plays it.
-async fn load_subsonic_tracks(app: &Arc<Mutex<App>>, playlist_uri: &str) {
-  let Some(source) = build_source(app).await else {
+async fn load_subsonic_tracks(app: &Arc<Mutex<App>>, playlist_uri: &str, epoch: u64) {
+  if !app.lock().await.is_current_source_track_table_load(epoch) {
     return;
-  };
-  match source.tracks(playlist_uri).await {
-    Ok(tracks) => {
+  }
+  let source = match build_sync_source(app).await {
+    Ok(source) => source,
+    Err(_) => {
       let mut app = app.lock().await;
+      if app.is_current_source_track_table_load(epoch) {
+        let message = app.strings().status.infra.subsonic_no_server;
+        app.set_error_status_message(message, 6);
+      }
+      return;
+    }
+  };
+  let result = source.tracks(playlist_uri).await;
+  let mut app = app.lock().await;
+  if !app.is_current_source_track_table_load(epoch) {
+    return;
+  }
+  match result {
+    Ok(tracks) => {
       app.set_source_track_table(playlist_uri, tracks, TrackTableContext::SubsonicPlaylist);
     }
     Err(e) => {
-      set_error(
-        app,
-        crate::infra::app_strings(app)
-          .await
-          .status
-          .infra
-          .subsonic_playlist_failed(&e.to_string()),
-      )
-      .await
+      let message = app
+        .strings()
+        .status
+        .infra
+        .subsonic_playlist_failed(&e.to_string());
+      app.set_error_status_message(message, 6);
     }
   }
 }
@@ -753,6 +765,220 @@ async fn set_error(app: &Arc<Mutex<App>>, message: String) {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::core::plugin_api::TrackInfo;
+  use crate::core::user_config::UserConfig;
+  use std::sync::mpsc::{channel, Receiver};
+  use std::time::SystemTime;
+  use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+  use tokio::net::TcpListener;
+  use tokio::sync::oneshot;
+
+  const PLAYLIST_URI: &str = "subsonic:playlist:1";
+  const PLAYLIST_RESPONSE: &str = r#"{"subsonic-response":{"status":"ok","version":"1.16.1","playlist":{"id":"1","name":"Slow playlist","entry":[{"id":"7","title":"Subsonic song"}]}}}"#;
+  const ERROR_RESPONSE: &str = r#"{"subsonic-response":{"status":"failed","version":"1.16.1","error":{"code":70,"message":"Playlist not found"}}}"#;
+
+  async fn pending_playlist(
+    payload: &'static str,
+  ) -> (
+    Arc<Mutex<App>>,
+    Receiver<IoEvent>,
+    oneshot::Receiver<()>,
+    oneshot::Sender<()>,
+    tokio::task::JoinHandle<()>,
+  ) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let (requested_tx, requested) = oneshot::channel();
+    let (release, released) = oneshot::channel();
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.user_config.behavior.subsonic_url =
+      Some(format!("http://{}", listener.local_addr().unwrap()));
+    app.user_config.behavior.subsonic_username = Some("test".into());
+    app.user_config.behavior.subsonic_password = Some("test".into());
+    app.open_source_playlist_tracks(PLAYLIST_URI.into());
+    let server = tokio::spawn(async move {
+      let (mut stream, _) = listener.accept().await.unwrap();
+      let mut reader = BufReader::new(&mut stream);
+      let mut line = String::new();
+      reader.read_line(&mut line).await.unwrap();
+      assert!(line.starts_with("GET /rest/getPlaylist.view?"));
+      loop {
+        line.clear();
+        reader.read_line(&mut line).await.unwrap();
+        if line == "\r\n" || line.is_empty() {
+          break;
+        }
+      }
+      let _ = requested_tx.send(());
+      released.await.unwrap();
+      stream
+        .write_all(
+          format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{payload}",
+            payload.len()
+          )
+          .as_bytes(),
+        )
+        .await
+        .unwrap();
+    });
+    (Arc::new(Mutex::new(app)), rx, requested, release, server)
+  }
+
+  fn liked_rows() -> Vec<TrackInfo> {
+    vec![TrackInfo::from(&crate::core::test_helpers::full_track(
+      "0000000000000000000001",
+      "Liked song",
+    ))]
+  }
+
+  async fn begin_playlist_load(
+    app: &Arc<Mutex<App>>,
+    event: IoEvent,
+    requested: oneshot::Receiver<()>,
+  ) -> tokio::task::JoinHandle<bool> {
+    let app = Arc::clone(app);
+    let load = tokio::spawn(async move { route_subsonic_event(&app, &event).await });
+    tokio::time::timeout(Duration::from_secs(5), requested)
+      .await
+      .expect("waiting for the playlist request")
+      .unwrap();
+    load
+  }
+
+  #[tokio::test]
+  async fn a_queued_subsonic_playlist_cannot_fill_a_reopened_track_table() {
+    let (app, rx, mut requested, release, server) = pending_playlist(PLAYLIST_RESPONSE).await;
+    let older_open = rx.try_recv().unwrap();
+    app
+      .lock()
+      .await
+      .open_source_playlist_tracks(PLAYLIST_URI.into());
+    release.send(()).unwrap();
+
+    assert!(route_subsonic_event(&app, &older_open).await);
+    assert!(app.lock().await.track_table.tracks.is_empty());
+    assert!(matches!(
+      requested.try_recv(),
+      Err(oneshot::error::TryRecvError::Empty)
+    ));
+
+    assert!(route_subsonic_event(&app, &rx.try_recv().unwrap()).await);
+    server.await.unwrap();
+    assert_eq!(app.lock().await.track_table.tracks.len(), 1);
+  }
+
+  #[tokio::test]
+  async fn a_late_subsonic_playlist_cannot_replace_another_track_table() {
+    let (app, rx, requested, release, server) = pending_playlist(PLAYLIST_RESPONSE).await;
+    let load = begin_playlist_load(&app, rx.try_recv().unwrap(), requested).await;
+    app
+      .lock()
+      .await
+      .set_track_table(liked_rows(), TrackTableContext::SavedTracks);
+    release.send(()).unwrap();
+
+    assert!(load.await.unwrap());
+    server.await.unwrap();
+
+    let app = app.lock().await;
+    assert_eq!(
+      app.track_table.context,
+      Some(TrackTableContext::SavedTracks)
+    );
+    assert_eq!(app.track_table.tracks, liked_rows());
+  }
+
+  #[tokio::test]
+  async fn a_late_subsonic_playlist_leaves_an_album_open_in_place() {
+    use crate::core::action::{Action, OpenTarget};
+
+    let (app, rx, requested, release, server) = pending_playlist(PLAYLIST_RESPONSE).await;
+    let load = begin_playlist_load(&app, rx.try_recv().unwrap(), requested).await;
+    app.lock().await.apply(Action::Open(OpenTarget::Album {
+      id: "4aawyAB9vmqN3uQ7FjRGTy".into(),
+      from_search: true,
+    }));
+    release.send(()).unwrap();
+
+    assert!(load.await.unwrap());
+    server.await.unwrap();
+
+    let app = app.lock().await;
+    assert_eq!(
+      app.track_table.context,
+      Some(TrackTableContext::AlbumSearch)
+    );
+    assert!(app.track_table.tracks.is_empty());
+  }
+
+  #[tokio::test]
+  async fn a_late_subsonic_playlist_cannot_fill_a_reopened_track_table() {
+    let (app, rx, requested, release, server) = pending_playlist(PLAYLIST_RESPONSE).await;
+    let load = begin_playlist_load(&app, rx.try_recv().unwrap(), requested).await;
+    {
+      let mut app = app.lock().await;
+      app.open_source_playlist_tracks("subsonic:playlist:2".into());
+      app.open_source_playlist_tracks(PLAYLIST_URI.into());
+    }
+    release.send(()).unwrap();
+
+    assert!(load.await.unwrap());
+    server.await.unwrap();
+
+    assert!(app.lock().await.track_table.tracks.is_empty());
+  }
+
+  #[tokio::test]
+  async fn a_late_subsonic_playlist_error_leaves_the_current_status_in_place() {
+    let (app, rx, requested, release, server) = pending_playlist(ERROR_RESPONSE).await;
+    let load = begin_playlist_load(&app, rx.try_recv().unwrap(), requested).await;
+    {
+      let mut app = app.lock().await;
+      app.open_source_playlist_tracks("subsonic:playlist:2".into());
+      app.set_status_message("Current status", 6);
+    }
+    release.send(()).unwrap();
+
+    assert!(load.await.unwrap());
+    server.await.unwrap();
+    assert_eq!(app.lock().await.status_message(), Some("Current status"));
+  }
+
+  #[tokio::test]
+  async fn a_current_subsonic_playlist_error_is_reported_as_an_error() {
+    let (app, rx, _requested, release, server) = pending_playlist(ERROR_RESPONSE).await;
+    let event = rx.try_recv().unwrap();
+    release.send(()).unwrap();
+
+    assert!(route_subsonic_event(&app, &event).await);
+    server.await.unwrap();
+
+    let app = app.lock().await;
+    assert!(app.status_message().is_some());
+    assert!(app.status_message_is_error());
+  }
+
+  #[tokio::test]
+  async fn a_current_subsonic_playlist_populates_its_track_table() {
+    let (app, rx, _requested, release, server) = pending_playlist(PLAYLIST_RESPONSE).await;
+    let event = rx.try_recv().unwrap();
+    release.send(()).unwrap();
+
+    assert!(route_subsonic_event(&app, &event).await);
+    server.await.unwrap();
+
+    let app = app.lock().await;
+    assert_eq!(
+      app.track_table.context,
+      Some(TrackTableContext::SubsonicPlaylist)
+    );
+    assert_eq!(app.track_table.tracks.len(), 1);
+    assert_eq!(
+      app.track_table.tracks[0].uri.as_deref(),
+      Some("subsonic:track:7")
+    );
+  }
 
   /// End-to-end dispatch test: drive `route_subsonic_event` exactly as the
   /// runtime pump does — browse, play, advance the queue, and tear down on a
@@ -762,11 +988,7 @@ mod tests {
   #[tokio::test]
   #[ignore = "hits the live demo server AND requires an audio output device"]
   async fn live_dispatch_browse_play_and_advance() {
-    use crate::core::user_config::UserConfig;
-    use std::sync::mpsc::channel;
-    use std::time::SystemTime;
-
-    let (tx, _rx) = channel();
+    let (tx, rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
     app.user_config.behavior.subsonic_url = Some("https://demo.navidrome.org".to_string());
     app.user_config.behavior.subsonic_username = Some("demo".to_string());
@@ -783,7 +1005,8 @@ mod tests {
       .expect("demo has playlists")
       .uri
       .clone();
-    assert!(route_subsonic_event(&app, &IoEvent::GetSubsonicTracks(playlist_uri)).await);
+    app.lock().await.open_source_playlist_tracks(playlist_uri);
+    assert!(route_subsonic_event(&app, &rx.try_recv().unwrap()).await);
     let uris: Vec<String> = app
       .lock()
       .await

@@ -2040,13 +2040,13 @@ mod tests {
   async fn live_queue_suspends_and_preserves_subsonic_context() {
     use crate::infra::subsonic::dispatch::route_subsonic_event;
 
-    let app = {
-      let (tx, _rx) = channel();
+    let (app, rx) = {
+      let (tx, rx) = channel();
       let mut a = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
       a.user_config.behavior.subsonic_url = Some("https://demo.navidrome.org".to_string());
       a.user_config.behavior.subsonic_username = Some("demo".to_string());
       a.user_config.behavior.subsonic_password = Some("demo".to_string());
-      Arc::new(Mutex::new(a))
+      (Arc::new(Mutex::new(a)), rx)
     };
 
     assert!(route_subsonic_event(&app, &IoEvent::GetSubsonicPlaylists).await);
@@ -2058,7 +2058,8 @@ mod tests {
       .unwrap()
       .uri
       .clone();
-    assert!(route_subsonic_event(&app, &IoEvent::GetSubsonicTracks(playlist_uri)).await);
+    app.lock().await.open_source_playlist_tracks(playlist_uri);
+    assert!(route_subsonic_event(&app, &rx.try_recv().unwrap()).await);
     let tracks: Vec<TrackInfo> = app.lock().await.track_table.tracks.clone();
     assert!(tracks.len() >= 3, "need a multi-track playlist");
     let uris: Vec<String> = tracks.iter().filter_map(|t| t.uri.clone()).collect();

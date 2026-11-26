@@ -172,17 +172,19 @@ fn build_brain_with(env_key: Option<&str>, behavior: &BehaviorConfig) -> Result<
     }
     "anthropic" => {
       let key = resolve_api_key_with(env_key, behavior).unwrap_or_default();
-      Ok(DjBrain::Anthropic(AnthropicBrain::new(
-        key,
+      Ok(DjBrain::Anthropic(
+        AnthropicBrain::new(key, behavior.dj_model.clone(), behavior.dj_base_url.clone())?
+          .with_max_tokens(behavior.dj_max_tokens),
+      ))
+    }
+    "openai_compat" => Ok(DjBrain::OpenAiCompat(
+      OpenAiCompatBrain::new(
+        resolve_api_key_with(env_key, behavior),
         behavior.dj_model.clone(),
         behavior.dj_base_url.clone(),
-      )?))
-    }
-    "openai_compat" => Ok(DjBrain::OpenAiCompat(OpenAiCompatBrain::new(
-      resolve_api_key_with(env_key, behavior),
-      behavior.dj_model.clone(),
-      behavior.dj_base_url.clone(),
-    ))),
+      )
+      .with_max_tokens(behavior.dj_max_tokens),
+    )),
     other => Err(anyhow!(
       "unknown behavior.dj_backend '{other}'; expected agent_cli, anthropic, or openai_compat"
     )),
@@ -733,5 +735,18 @@ mod tests {
     std::fs::set_permissions(&preferred, std::fs::Permissions::from_mode(0o700)).unwrap();
     assert_ne!(chosen, preferred);
     assert!(chosen.is_dir(), "{}", chosen.display());
+  }
+
+  #[test]
+  fn build_brain_threads_dj_max_tokens_from_config() {
+    let mut behavior = crate::core::user_config::UserConfig::new().behavior;
+    behavior.dj_backend = "openai_compat".to_string();
+    behavior.dj_max_tokens = 24_576;
+    let openai = build_brain_with(None, &behavior).unwrap();
+    assert!(format!("{openai:?}").contains("24576"), "{openai:?}");
+
+    behavior.dj_backend = "anthropic".to_string();
+    let anthropic = build_brain_with(Some("sk-ant-test"), &behavior).unwrap();
+    assert!(format!("{anthropic:?}").contains("24576"), "{anthropic:?}");
   }
 }

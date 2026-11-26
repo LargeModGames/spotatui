@@ -271,6 +271,7 @@ impl App {
       self.cancel_apple_music_browse();
       self.display_revisions.bump(DisplayDomain::Source);
       self.view.playlist_scroll_offset.set(0);
+      self.set_search_results(SearchResult::default());
     }
     self.active_source = source;
     self.runtime_state.active_source = source;
@@ -750,5 +751,18 @@ mod tests {
     assert_eq!(app.display_revisions().get(DisplayDomain::Source), rev + 1);
     app.set_active_source(Source::Local);
     assert_eq!(app.display_revisions().get(DisplayDomain::Source), rev + 1);
+  }
+
+  #[test]
+  fn switching_the_browse_source_clears_the_previous_sources_search_results() {
+    let mut app = make_app_simple();
+    let dir = tempfile::tempdir().unwrap();
+    app.state_path = Some(dir.path().join("state.yml"));
+    app.set_search_results(SearchResult {
+      query: Some("kygo".into()),
+      ..Default::default()
+    });
+    app.set_active_source(Source::Local);
+    assert!(app.search_results().query.is_none());
   }
 }

@@ -67,8 +67,8 @@ pub async fn route_qobuz_event(app: &Arc<Mutex<App>>, event: &IoEvent) -> bool {
       load_qobuz_playlists(app).await;
       true
     }
-    IoEvent::GetQobuzTracks(uri) => {
-      load_qobuz_tracks(app, uri).await;
+    IoEvent::GetQobuzTracks(uri, epoch) => {
+      load_qobuz_tracks(app, uri, *epoch).await;
       true
     }
     IoEvent::GetQobuzSearchResults(query) => {
@@ -175,8 +175,19 @@ async fn constants(app: &Arc<Mutex<App>>) -> Result<QobuzBundleCache> {
 enum WhenLoggedOut {
   /// Browse paths start the browser login.
   Login,
+  /// A track listing can prompt for login while it still owns the table.
+  LoginForTracks(u64),
   /// Playback paths only show the login message.
   Message,
+}
+
+impl WhenLoggedOut {
+  fn is_current(self, app: &App) -> bool {
+    match self {
+      Self::LoginForTracks(epoch) => app.is_current_source_track_table_load(epoch),
+      Self::Login | Self::Message => true,
+    }
+  }
 }
 
 /// Build a [`QobuzSource`] from the in-memory token, or `None` after handling
@@ -187,7 +198,12 @@ async fn build_source(
 ) -> Option<QobuzSource> {
   let Some(token) = auth::current_token() else {
     match when_logged_out {
-      WhenLoggedOut::Login => app.lock().await.dispatch(IoEvent::QobuzLogin),
+      WhenLoggedOut::Login | WhenLoggedOut::LoginForTracks(_) => {
+        let mut app = app.lock().await;
+        if when_logged_out.is_current(&app) {
+          app.dispatch(IoEvent::QobuzLogin);
+        }
+      }
       WhenLoggedOut::Message => {
         set_error(
           app,
@@ -206,7 +222,10 @@ async fn build_source(
   match constants(app).await {
     Ok(c) => Some(QobuzSource::new(c.app_id, c.app_secret, token)),
     Err(e) => {
-      report(app, QobuzStep::Constants, e).await;
+      let mut app = app.lock().await;
+      if when_logged_out.is_current(&app) {
+        report_locked(&mut app, QobuzStep::Constants, e);
+      }
       None
     }
   }
@@ -394,16 +413,50 @@ async fn load_qobuz_playlists(app: &Arc<Mutex<App>>) {
 
 /// Fetch a listing's tracks into the shared track table, tagged
 /// [`TrackTableContext::QobuzPlaylist`] so selecting a row plays it.
-async fn load_qobuz_tracks(app: &Arc<Mutex<App>>, playlist_uri: &str) {
-  let Some(source) = build_source(app, WhenLoggedOut::Login).await else {
+async fn load_qobuz_tracks(app: &Arc<Mutex<App>>, playlist_uri: &str, epoch: u64) {
+  if !app.lock().await.is_current_source_track_table_load(epoch) {
+    return;
+  }
+  let Some(source) = build_source(app, WhenLoggedOut::LoginForTracks(epoch)).await else {
     return;
   };
-  match source.tracks(playlist_uri).await {
+  if !app.lock().await.is_current_source_track_table_load(epoch) {
+    return;
+  }
+  let result = source.tracks(playlist_uri).await;
+  let mut app = app.lock().await;
+  finish_qobuz_tracks(&mut app, playlist_uri, epoch, source.token(), result);
+}
+
+/// Apply a finished listing under the App lock. A stale 401 still forgets the
+/// token it was sent with, so the list opened since then logs in again instead
+/// of failing on the same token.
+fn finish_qobuz_tracks(
+  app: &mut App,
+  playlist_uri: &str,
+  epoch: u64,
+  sent_token: &str,
+  result: Result<Vec<crate::core::plugin_api::TrackInfo>>,
+) {
+  let unauthorized = result.as_ref().is_err_and(|err| err.is::<Unauthorized>());
+  let still_logged_in = unauthorized && auth::forget_token(sent_token);
+  if !app.is_current_source_track_table_load(epoch) {
+    return;
+  }
+  match result {
     Ok(tracks) => {
-      let mut app = app.lock().await;
       app.set_source_track_table(playlist_uri, tracks, TrackTableContext::QobuzPlaylist);
     }
-    Err(e) => report(app, QobuzStep::Tracks, e).await,
+    Err(_) if unauthorized => {
+      let strings = &app.strings().status.infra;
+      let message = if still_logged_in {
+        strings.qobuz_operation_failed(strings.qobuz_step_tracks, "HTTP 401")
+      } else {
+        strings.qobuz_login_expired.to_string()
+      };
+      app.set_error_status_message(message, 8);
+    }
+    Err(e) => report_locked(app, QobuzStep::Tracks, e),
   }
 }
 
@@ -1008,6 +1061,48 @@ mod tests {
       Some(crate::core::i18n::EN.status.infra.qobuz_no_full_stream)
     );
     assert!(app.status_message_is_error());
+  }
+
+  #[test]
+  fn a_qobuz_listing_401_only_forgets_the_token_it_sent() {
+    use crate::core::user_config::UserConfig;
+    const SENT: &str = "listing-401-token";
+    const NEW: &str = "new-login-token";
+    for (stale, replaced) in [(true, false), (true, true), (false, false), (false, true)] {
+      let (tx, rx) = std::sync::mpsc::channel();
+      let mut app = App::new(tx, UserConfig::new(), None);
+      app.open_source_playlist_tracks("qobuz:playlist:1".into());
+      let Ok(IoEvent::GetQobuzTracks(_, epoch)) = rx.try_recv() else {
+        panic!("expected GetQobuzTracks");
+      };
+      if stale {
+        app.open_source_playlist_tracks("qobuz:playlist:2".into());
+      }
+      app.set_status_message("Current status", 6);
+
+      let saved = auth::current_token();
+      auth::set_token(Some(if replaced { NEW } else { SENT }.into()));
+      finish_qobuz_tracks(
+        &mut app,
+        "qobuz:playlist:1",
+        epoch,
+        SENT,
+        Err(Unauthorized.into()),
+      );
+      let left = auth::current_token();
+      auth::set_token(saved);
+
+      assert_eq!(left.as_deref(), replaced.then_some(NEW), "stale={stale}");
+      let strings = &crate::core::i18n::EN.status.infra;
+      let expected_status = match (stale, replaced) {
+        (true, _) => "Current status".to_string(),
+        (false, true) => strings.qobuz_operation_failed(strings.qobuz_step_tracks, "HTTP 401"),
+        (false, false) => strings.qobuz_login_expired.to_string(),
+      };
+      assert_eq!(app.status_message(), Some(expected_status.as_str()));
+      assert_eq!(app.status_message_is_error(), !stale);
+      assert!(app.track_table.tracks.is_empty());
+    }
   }
 
   #[test]

@@ -2640,7 +2640,7 @@ fn open_source_playlist_local_clears_the_table_and_fetches() {
     "a decoded source opens without the Spotify page reset"
   );
   match rx.try_recv() {
-    Ok(IoEvent::GetLocalTracks(uri)) => assert_eq!(uri, "file:///music/Jazz"),
+    Ok(IoEvent::GetLocalTracks(uri, _)) => assert_eq!(uri, "file:///music/Jazz"),
     _other => panic!("expected GetLocalTracks (IoEvent is not Debug)"),
   }
 }
@@ -2659,7 +2659,7 @@ fn open_source_playlist_qobuz_uses_the_qobuz_context() {
   );
   assert_eq!(app.get_current_route().id, RouteId::TrackTable);
   match rx.try_recv() {
-    Ok(IoEvent::GetQobuzTracks(uri)) => assert_eq!(uri, "qobuz:album:0060254730301"),
+    Ok(IoEvent::GetQobuzTracks(uri, _)) => assert_eq!(uri, "qobuz:album:0060254730301"),
     _other => panic!("expected GetQobuzTracks (IoEvent is not Debug)"),
   }
 }
@@ -2678,7 +2678,7 @@ fn open_source_playlist_subsonic_uses_the_subsonic_context() {
   );
   assert_eq!(app.get_current_route().id, RouteId::TrackTable);
   match rx.try_recv() {
-    Ok(IoEvent::GetSubsonicTracks(uri)) => assert_eq!(uri, "subsonic:playlist:42"),
+    Ok(IoEvent::GetSubsonicTracks(uri, _)) => assert_eq!(uri, "subsonic:playlist:42"),
     _other => panic!("expected GetSubsonicTracks (IoEvent is not Debug)"),
   }
 }
@@ -2697,7 +2697,7 @@ fn open_source_playlist_youtube_uses_the_youtube_context() {
   );
   assert_eq!(app.get_current_route().id, RouteId::TrackTable);
   match rx.try_recv() {
-    Ok(IoEvent::GetYouTubeTracks(uri)) => assert_eq!(uri, "youtube:playlist:y1"),
+    Ok(IoEvent::GetYouTubeTracks(uri, _)) => assert_eq!(uri, "youtube:playlist:y1"),
     _other => panic!("expected GetYouTubeTracks (IoEvent is not Debug)"),
   }
 }
