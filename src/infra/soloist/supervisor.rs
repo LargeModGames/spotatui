@@ -462,7 +462,7 @@ impl Seen {
         self.pairing_shown = true;
         return Some(Notice::NotPaired);
       }
-      LogEvent::LoginFailed if !self.bad_key => {
+      LogEvent::LoginFailed if !self.bad_key && !self.ever_logged_in => {
         self.bad_key = true;
         return Some(Notice::BadKey);
       }
@@ -784,6 +784,42 @@ async fn run_once(
     link.send(Command::Activate);
   }
 
+  let outcome = watch_connected(
+    app,
+    config,
+    shared,
+    &link,
+    &mut child,
+    &mut seen,
+    &mut log_rx,
+    &mut stream,
+    &users_before,
+    first_login,
+  )
+  .await;
+  writer.abort();
+  if let Ok(mut slot) = shared.link.lock() {
+    *slot = None;
+  }
+  app.lock().await.uninstall_soloist_link(&link);
+  let _ = std::fs::remove_file(config.data_dir.join(CHILD_PID));
+  remove_stale(&config.data_dir);
+  outcome
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn watch_connected(
+  app: &Mutex<App>,
+  config: &Config,
+  shared: &Shared,
+  link: &Arc<SoloistLink>,
+  child: &mut Child,
+  seen: &mut Seen,
+  log_rx: &mut UnboundedReceiver<LogEvent>,
+  stream: &mut (dyn Stream<Item = WsResult<Message>> + Send + Unpin),
+  users_before: &BTreeSet<String>,
+  first_login: &mut bool,
+) -> Outcome {
   let mut quality = PendingQuality::default();
   let mut log_open = true;
   let mut seed_restart = false;
@@ -791,7 +827,7 @@ async fn run_once(
   let mut seed_watch = false;
   let offline_at = tokio::time::Instant::now() + OFFLINE_AFTER;
   let mut offline_pending = !users_before.is_empty();
-  let outcome = loop {
+  loop {
     tokio::select! {
       event = log_rx.recv(), if log_open => {
         let Some(event) = event else {
@@ -799,7 +835,7 @@ async fn run_once(
           continue;
         };
         if let Some(notice) = seen.note(&event) {
-          notify_link(app, config, shared, &link, notice).await;
+          notify_link(app, config, shared, link, notice).await;
         }
         match event {
           LogEvent::AverageBitrate(bitrate) => quality.bitrate = Some(bitrate),
@@ -815,7 +851,7 @@ async fn run_once(
               let previous = link.quality();
               link.set_quality(measured.clone());
               if let Some(mut app) = current_app(app, config, shared).await {
-                app.note_soloist_quality(&link, previous, &measured);
+                app.note_soloist_quality(link, previous, &measured);
               }
             }
           }
@@ -833,20 +869,20 @@ async fn run_once(
           let logged_in = confirms_login(&event);
           if logged_in || matches!(event, Event::Auth { logged_in: false, .. }) {
             if let Some(notice) = seen.auth(logged_in) {
-              notify_link(app, config, shared, &link, notice).await;
+              notify_link(app, config, shared, link, notice).await;
             }
           }
           {
             let current = current_app(app, config, shared)
               .await
-              .filter(|app| app.is_current_soloist(&link));
+              .filter(|app| app.is_current_soloist(link));
             let Some(mut app) = current else {
               // A superseded or stopping child writes nothing to the App, but a device
               // change must still cancel its queued pause or deactivation.
               link.apply(&event);
               continue;
             };
-            app.apply_soloist_event(&link, &event);
+            app.apply_soloist_event(link, &event);
             if logged_in && !seen.login_handled {
               seen.login_handled = true;
               offline_pending = false;
@@ -857,15 +893,15 @@ async fn run_once(
             }
           }
           if seed_watch {
-            if let Some(restart) = seed_new_accounts(&config.data_dir, config.quality, &users_before) {
+            if let Some(restart) = seed_new_accounts(&config.data_dir, config.quality, users_before) {
               seed_watch = false;
               seed_restart = restart;
             }
           }
           let snapshot = link.snapshot();
           if seed_restart && !snapshot.status.is_playing() {
-            notify_link(app, config, shared, &link, Notice::RestartingForQuality).await;
-            terminate(&mut child).await;
+            notify_link(app, config, shared, link, Notice::RestartingForQuality).await;
+            terminate(child).await;
             break Outcome::Restart { reactivate: snapshot.is_active };
           }
         }
@@ -876,13 +912,13 @@ async fn run_once(
           let status = tokio::select! {
             biased;
             _ = shared.stop.notified() => {
-              terminate(&mut child).await;
+              terminate(child).await;
               break Outcome::Exited(Exit::Stopped);
             }
             status = tokio::time::timeout(EXIT_GRACE, child.wait()) => match status {
               Ok(status) => status,
               Err(_) => {
-                terminate(&mut child).await;
+                terminate(child).await;
                 child.wait().await
               }
             },
@@ -892,9 +928,9 @@ async fn run_once(
             app,
             config,
             shared,
-            Some(&link),
-            &mut seen,
-            &mut log_rx,
+            Some(link),
+            seen,
+            log_rx,
             None,
             Some(status),
             until,
@@ -909,10 +945,10 @@ async fn run_once(
           app,
           config,
           shared,
-          Some(&link),
-          &mut seen,
-          &mut log_rx,
-          Some(&mut stream),
+          Some(link),
+          seen,
+          log_rx,
+          Some(stream),
           Some(status),
           until,
           None,
@@ -921,22 +957,14 @@ async fn run_once(
       }
       _ = tokio::time::sleep_until(offline_at), if offline_pending => {
         offline_pending = false;
-        notify_link(app, config, shared, &link, Notice::Offline).await;
+        notify_link(app, config, shared, link, Notice::Offline).await;
       }
       _ = shared.stop.notified() => {
-        terminate(&mut child).await;
+        terminate(child).await;
         break Outcome::Exited(Exit::Stopped);
       }
     }
-  };
-  writer.abort();
-  if let Ok(mut slot) = shared.link.lock() {
-    *slot = None;
   }
-  app.lock().await.uninstall_soloist_link(&link);
-  let _ = std::fs::remove_file(config.data_dir.join(CHILD_PID));
-  remove_stale(&config.data_dir);
-  outcome
 }
 
 #[cfg(windows)]
@@ -1562,12 +1590,15 @@ mod tests {
   #[cfg(unix)]
   #[tokio::test]
   async fn a_login_queued_on_the_websocket_keeps_an_exit_restartable() {
-    use std::os::unix::process::ExitStatusExt;
     use tokio_tungstenite::{tungstenite::protocol::Role, WebSocketStream};
 
+    let mut child = ProcessCommand::new("/bin/sh")
+      .args(["-c", "exit 1"])
+      .spawn()
+      .unwrap();
+    assert_eq!(child.wait().await.unwrap().code(), Some(1));
     let (client, server) = tokio::io::duplex(1024);
     let client = WebSocketStream::from_raw_socket(client, Role::Client, None).await;
-    let (_sink, mut stream) = client.split();
     let mut server = WebSocketStream::from_raw_socket(server, Role::Server, None).await;
     for logged_in in [false, true] {
       server
@@ -1579,32 +1610,56 @@ mod tests {
     }
     drop(server);
 
-    let (log_tx, mut log_rx) = mpsc::unbounded_channel();
-    log_tx.send(LogEvent::LoginFailed).unwrap();
-    drop(log_tx);
+    // Leave the log receiver pending and delay the socket's first read result.
+    // The already-ready child exit must win the connected loop's select.
+    let (_log_tx, mut log_rx) = mpsc::unbounded_channel();
+    let mut stream = Box::pin(client.then(|message| async {
+      tokio::task::yield_now().await;
+      message
+    }));
+    let mut seen = Seen::default();
+    seen.note(&LogEvent::LoginFailed);
     let (link, _commands) = SoloistLink::test_pair("test-device");
     let mut app = App::default();
     app.install_soloist_link(link.clone());
     let app = Mutex::new(app);
-    let outcome = classify_tail(
+    let mut first_login = true;
+    let outcome = watch_connected(
       &app,
       &fake_config(),
       &Shared::default(),
-      Some(&link),
-      &mut Seen::default(),
+      &link,
+      &mut child,
+      &mut seen,
       &mut log_rx,
-      Some(&mut stream),
-      Some(Ok(std::process::ExitStatus::from_raw(1 << 8))),
-      tokio::time::Instant::now() + EXIT_GRACE,
-      None,
+      &mut stream,
+      &BTreeSet::new(),
+      &mut first_login,
     )
     .await;
     assert!(matches!(outcome, Outcome::Exited(Exit::Crashed(Some(1)))));
+    assert!(seen.ever_logged_in);
+    assert!(
+      !seen.login_handled,
+      "the exit path must read the login frame"
+    );
     let app = app.lock().await;
     assert_ne!(
       app.status_message(),
       Some(app.strings().status.infra.soloist_bad_key)
     );
+  }
+
+  #[test]
+  fn a_login_failure_log_after_confirmed_login_does_not_report_a_bad_key() {
+    for logged_out in [false, true] {
+      let mut seen = Seen::default();
+      seen.auth(true);
+      if logged_out {
+        seen.auth(false);
+      }
+      assert_eq!(seen.note(&LogEvent::LoginFailed), None);
+    }
   }
 
   #[test]
