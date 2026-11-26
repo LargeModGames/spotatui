@@ -97,6 +97,11 @@ export const Search = memo(function Search({
       playlists.length +
       shows.length ===
     0;
+  const status = waiting
+    ? s.searching
+    : search?.ran && nothing
+      ? fmt(s.no_search_results, { query: search.query ?? asked })
+      : null;
   const top: Top | null = artists[0]
     ? { kind: "artist", artist: artists[0] }
     : albums[0]
@@ -170,11 +175,10 @@ export const Search = memo(function Search({
           </select>
         )}
       </div>
-      {waiting && (
-        <p className="search-note" role="status">
-          {s.searching}
-        </p>
-      )}
+      {/* Live region stays mounted; replacing it with populated text can be missed. */}
+      <p className={status ? "search-note" : "sr-only"} role="status">
+        {status}
+      </p>
       {!search?.ran ? (
         !waiting && (
           <div className="search-empty">
@@ -184,11 +188,7 @@ export const Search = memo(function Search({
             {active && compiled.length <= 1 && <p>{scopeLabel(active, s)}</p>}
           </div>
         )
-      ) : nothing ? (
-        <p className="search-note" role="status">
-          {fmt(s.no_search_results, { query: search.query ?? asked })}
-        </p>
-      ) : (
+      ) : nothing ? null : (
         <>
           {tab === "All" && (top || tracks.length > 0) && (
             <div className={top ? "search-lead wide" : "search-lead"}>
