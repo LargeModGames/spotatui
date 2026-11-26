@@ -395,6 +395,17 @@ impl App {
     pending.parked_at += shift;
   }
 
+  /// Whether a parked start has aged past its replay window. The bare-resume
+  /// restore route and the normal replay share this so neither can expire a
+  /// request the other would still accept.
+  #[cfg(feature = "streaming")]
+  pub(crate) fn pending_start_is_expired(&self) -> bool {
+    self
+      .pending_start_playback
+      .as_ref()
+      .is_some_and(|pending| pending.parked_at.elapsed() > max_parked_age())
+  }
+
   /// Replay a parked StartPlayback through the normal dispatch path. No-op
   /// when nothing is parked.
   #[cfg(feature = "streaming")]
@@ -402,7 +413,7 @@ impl App {
     let Some(pending) = self.pending_start_playback.clone() else {
       return;
     };
-    if pending.parked_at.elapsed() > max_parked_age() {
+    if self.pending_start_is_expired() {
       self.pending_start_playback = None;
       self.set_status_message(self.strings().status.app.native_request_expired, 6);
       return;

@@ -377,7 +377,9 @@ fn replay_recovery_intent(
     let bare = app.pending_start_playback.as_ref().is_some_and(|pending| {
       pending.context_uri.is_none() && pending.uris.is_none() && pending.offset.is_none()
     });
-    let restore = if bare {
+    // An expired bare resume must take the normal replay path, which retires
+    // it instead of restoring a stale snapshot.
+    let restore = if bare && !app.pending_start_is_expired() {
       app.native_playback_restore_generation()
     } else {
       None
@@ -2343,6 +2345,60 @@ mod tests {
       Ok(IoEvent::RestoreNativePlayback(g)) if g == generation
     ));
     assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
+  }
+
+  /// The bare branch must not outlive the replay window: an aged resume retires
+  /// with the expiry message rather than restoring a stale snapshot.
+  #[tokio::test(start_paused = true)]
+  async fn an_expired_bare_parked_resume_does_not_restore_the_snapshot() {
+    use crate::core::app::max_parked_age;
+    use crate::core::user_config::UserConfig;
+    use crate::infra::network::IoEvent;
+    use std::sync::mpsc::channel;
+    use std::time::SystemTime;
+
+    let (tx, io_rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.last_track_id = Some("spotify:track:old".to_string());
+    assert!(app.prepare_native_playback_recovery(42_000, true).is_some());
+    app.park_start_playback(None, None, None);
+    let generation = app.begin_native_recovery();
+    app.native_backend_pending = true;
+    let app = Arc::new(tokio::sync::Mutex::new(app));
+    let (ctx, request_tx) = recovery_context(Arc::clone(&app));
+
+    let app_for_script = Arc::clone(&app);
+    let script = move |attempt: u32, _published: ScriptedSlot| -> BuildAttempt<ScriptedPlayer> {
+      let app = Arc::clone(&app_for_script);
+      Box::pin(async move {
+        let mut app = app.lock().await;
+        if let Some(pending) = app.pending_start_playback.as_mut() {
+          pending.parked_at = Instant::now() - max_parked_age() - Duration::from_secs(60);
+        }
+        Ok(ScriptedPlayer::new(attempt))
+      })
+    };
+    let backend = ScriptedBackend::new(script);
+    request_tx
+      .send(restore_request(generation))
+      .expect("the recovery channel is open");
+
+    run_recovery_handler_until_parked(handle_streaming_recovery(ctx, backend)).await;
+
+    {
+      let app = app.lock().await;
+      assert!(app.pending_start_playback.is_none());
+      assert_eq!(
+        app.status_message(),
+        Some(crate::core::i18n::EN.status.app.native_request_expired)
+      );
+    }
+    while let Ok(event) = io_rx.try_recv() {
+      assert!(
+        !matches!(event, IoEvent::RestoreNativePlayback(_)),
+        "an expired resume must not restore the snapshot"
+      );
+    }
   }
 
   #[tokio::test(start_paused = true)]
