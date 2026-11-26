@@ -1,0 +1,1 @@
+- **Older MCP clients can ping after connecting**: a `2025-06-18` or earlier handshake now gets an empty result for `ping` instead of "Method not found" ([#1186](https://github.com/LargeModGames/spotatui/issues/1186)).
