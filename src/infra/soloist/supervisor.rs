@@ -8,13 +8,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
-use futures::{Sink, SinkExt, StreamExt};
+use futures::{Sink, SinkExt, Stream, StreamExt};
 use log::{debug, info, warn};
 use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::process::{Child, Command as ProcessCommand};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::sync::{oneshot, Mutex, MutexGuard, Notify};
-use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::{Message, Result as WsResult};
 
 use super::auth::ApiKey;
 use super::link::{QueuedCommand, SoloistLink, StreamQuality, VolumeGate};
@@ -565,9 +565,18 @@ fn seed_new_accounts(data_dir: &Path, quality: u8, before: &BTreeSet<String>) ->
   Some(fresh.iter().any(|user| !before.contains(user)))
 }
 
-/// After the child exited (or was stopped): read the log lines its pipes still hold, until
-/// they close or `until`, then classify the exit and only then publish the notices, so a
-/// busy App lock cannot cut the tail short.
+fn confirms_login(event: &Event) -> bool {
+  matches!(
+    event,
+    Event::Auth {
+      logged_in: true,
+      ..
+    } | Event::State(_)
+  )
+}
+
+/// Read the final log lines and any queued login confirmation within the same deadline.
+/// Classify the exit before publishing notices, so a busy App lock cannot cut the tail short.
 #[allow(clippy::too_many_arguments)]
 async fn classify_tail(
   app: &Mutex<App>,
@@ -576,25 +585,46 @@ async fn classify_tail(
   link: Option<&Arc<SoloistLink>>,
   seen: &mut Seen,
   log_rx: &mut UnboundedReceiver<LogEvent>,
+  stream: Option<&mut (dyn Stream<Item = WsResult<Message>> + Send + Unpin)>,
   status: Option<std::io::Result<std::process::ExitStatus>>,
   until: tokio::time::Instant,
   pending: Option<Notice>,
 ) -> Outcome {
   let mut notices: Vec<Notice> = pending.into_iter().collect();
+  let stream = stream.filter(|_| !seen.ever_logged_in);
+  let mut tail_login = false;
   let drained = tokio::select! {
     biased;
     _ = shared.stop.notified() => false,
     _ = tokio::time::timeout_at(until, async {
-      while let Some(event) = log_rx.recv().await {
-        notices.extend(seen.note(&event));
-      }
+      let logs = async {
+        while let Some(event) = log_rx.recv().await {
+          notices.extend(seen.note(&event));
+        }
+      };
+      let login = async {
+        let Some(stream) = stream else { return };
+        // The peer can exit with complete frames still in the TCP or WebSocket buffers.
+        while let Some(Ok(message)) = stream.next().await {
+          let Message::Text(text) = message else { continue };
+          if protocol::parse_event(&text).as_ref().is_some_and(confirms_login) {
+            tail_login = true;
+            break;
+          }
+        }
+      };
+      tokio::join!(logs, login);
     }) => true,
   };
   if !drained {
     return Outcome::Exited(Exit::Stopped);
   }
+  seen.ever_logged_in |= tail_login;
   let outcome = seen.startup_failure(status, shared);
   for notice in notices {
+    if seen.ever_logged_in && matches!(notice, Notice::BadKey) {
+      continue;
+    }
     match link {
       Some(link) => notify_link(app, config, shared, link, notice).await,
       None => notify(app, config, shared, notice).await,
@@ -727,6 +757,7 @@ async fn run_once(
         None,
         &mut seen,
         &mut log_rx,
+        None,
         status,
         drain_until,
         pending_notice,
@@ -799,7 +830,7 @@ async fn run_once(
           if let Event::Error(message) = &event {
             debug!("soloist: command refused: {message}");
           }
-          let logged_in = matches!(event, Event::Auth { logged_in: true, .. } | Event::State(_));
+          let logged_in = confirms_login(&event);
           if logged_in || matches!(event, Event::Auth { logged_in: false, .. }) {
             if let Some(notice) = seen.auth(logged_in) {
               notify_link(app, config, shared, &link, notice).await;
@@ -864,6 +895,7 @@ async fn run_once(
             Some(&link),
             &mut seen,
             &mut log_rx,
+            None,
             Some(status),
             until,
             None,
@@ -880,6 +912,7 @@ async fn run_once(
           Some(&link),
           &mut seen,
           &mut log_rx,
+          Some(&mut stream),
           Some(status),
           until,
           None,
@@ -1517,12 +1550,61 @@ mod tests {
         &mut seen,
         &mut log_rx,
         None,
+        None,
         until,
         None
       ),
       release,
     );
     assert!(matches!(outcome, Outcome::Fatal(Notice::BadKey)));
+  }
+
+  #[cfg(unix)]
+  #[tokio::test]
+  async fn a_login_queued_on_the_websocket_keeps_an_exit_restartable() {
+    use std::os::unix::process::ExitStatusExt;
+    use tokio_tungstenite::{tungstenite::protocol::Role, WebSocketStream};
+
+    let (client, server) = tokio::io::duplex(1024);
+    let client = WebSocketStream::from_raw_socket(client, Role::Client, None).await;
+    let (_sink, mut stream) = client.split();
+    let mut server = WebSocketStream::from_raw_socket(server, Role::Server, None).await;
+    for logged_in in [false, true] {
+      server
+        .send(Message::Text(
+          format!(r#"{{"type":"auth_state","logged_in":{logged_in}}}"#).into(),
+        ))
+        .await
+        .unwrap();
+    }
+    drop(server);
+
+    let (log_tx, mut log_rx) = mpsc::unbounded_channel();
+    log_tx.send(LogEvent::LoginFailed).unwrap();
+    drop(log_tx);
+    let (link, _commands) = SoloistLink::test_pair("test-device");
+    let mut app = App::default();
+    app.install_soloist_link(link.clone());
+    let app = Mutex::new(app);
+    let outcome = classify_tail(
+      &app,
+      &fake_config(),
+      &Shared::default(),
+      Some(&link),
+      &mut Seen::default(),
+      &mut log_rx,
+      Some(&mut stream),
+      Some(Ok(std::process::ExitStatus::from_raw(1 << 8))),
+      tokio::time::Instant::now() + EXIT_GRACE,
+      None,
+    )
+    .await;
+    assert!(matches!(outcome, Outcome::Exited(Exit::Crashed(Some(1)))));
+    let app = app.lock().await;
+    assert_ne!(
+      app.status_message(),
+      Some(app.strings().status.infra.soloist_bad_key)
+    );
   }
 
   #[test]
