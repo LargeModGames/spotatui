@@ -71,6 +71,35 @@ pub(crate) fn plugin_id(name: &str) -> String {
     .collect()
 }
 
+/// Stable FNV-1a 64-bit hash so lossy sanitization never collapses distinct
+/// plugin names onto the same storage file.
+fn fnv1a_64(bytes: &[u8]) -> u64 {
+  const OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+  const PRIME: u64 = 0x00000100000001b3;
+  let mut hash = OFFSET_BASIS;
+  for &b in bytes {
+    hash ^= u64::from(b);
+    hash = hash.wrapping_mul(PRIME);
+  }
+  hash
+}
+
+/// Storage namespace for a plugin, keeping lossy-sanitized names distinct
+/// while leaving `[A-Za-z0-9_-]` names at `<plugin_id>.json` for backwards
+/// compatibility with existing saves.
+pub(crate) fn storage_namespace_id(name: &str) -> String {
+  let base = name.strip_suffix(".lua").unwrap_or(name);
+  if base.is_empty() {
+    return String::new();
+  }
+  let id = plugin_id(name);
+  if base == id {
+    id
+  } else {
+    format!("{id}_{:016x}", fnv1a_64(base.as_bytes()))
+  }
+}
+
 /// How long one entry into plugin code can run before the hook stops it.
 pub(super) const PLUGIN_TIME_LIMIT: std::time::Duration = std::time::Duration::from_secs(1);
 

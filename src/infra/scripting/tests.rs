@@ -2908,6 +2908,57 @@ mod storage_tests {
   }
 
   #[test]
+  fn similarly_named_plugins_keep_separate_storage() {
+    let cfg = tempfile::tempdir().unwrap();
+    write_file(
+      &cfg.path().join("plugins/mix.notes.lua"),
+      r#"
+        pre_dotted = spotatui.storage_get("name") or "missing"
+        if spotatui.storage_get("name") == nil then
+          spotatui.storage_set("name", "dotted")
+        end
+        spotatui.on("start", function() dotted = spotatui.storage_get("name") end)
+      "#,
+    );
+    write_file(
+      &cfg.path().join("plugins/mix_notes.lua"),
+      r#"
+        pre_underscored = spotatui.storage_get("name") or "missing"
+        if spotatui.storage_get("name") == nil then
+          spotatui.storage_set("name", "underscored")
+        end
+        spotatui.on("start", function() underscored = spotatui.storage_get("name") end)
+      "#,
+    );
+
+    {
+      let mut engine = ScriptEngine::new().unwrap();
+      assert_eq!(engine.load_user_scripts(cfg.path()), 2);
+      engine.emit(ScriptEvent::Start);
+      let globals = engine.lua.globals();
+      assert_eq!(globals.get::<String>("pre_dotted").unwrap(), "missing");
+      assert_eq!(globals.get::<String>("pre_underscored").unwrap(), "missing");
+      assert_eq!(globals.get::<String>("underscored").unwrap(), "underscored");
+      assert_eq!(globals.get::<String>("dotted").unwrap(), "dotted");
+      engine.flush_storage(true);
+    }
+
+    assert!(cfg
+      .path()
+      .join("plugin-data")
+      .join("mix_notes.json")
+      .is_file());
+    let mut engine = ScriptEngine::new().unwrap();
+    assert_eq!(engine.load_user_scripts(cfg.path()), 2);
+    let globals = engine.lua.globals();
+    assert_eq!(globals.get::<String>("pre_dotted").unwrap(), "dotted");
+    assert_eq!(
+      globals.get::<String>("pre_underscored").unwrap(),
+      "underscored"
+    );
+  }
+
+  #[test]
   fn corrupt_storage_file_starts_empty() {
     let cfg = temp_config_dir();
     write_file(&cfg.join("plugin-data").join("a.json"), "{not json");

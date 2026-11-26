@@ -700,7 +700,7 @@ pub(super) fn install_api(
   }
 
   // Plugin-scoped persistent storage: a flat JSON object per plugin under
-  // <config_dir>/plugin-data/<plugin_id>.json. Lazily loaded on first touch,
+  // <config_dir>/plugin-data/<namespace>.json. Lazily loaded on first touch,
   // flushed by the engine (throttled on tick, forced on quit).
   {
     let shared_get = shared.clone();
@@ -779,7 +779,7 @@ pub(super) fn install_api(
 
 /// The storage namespace for the plugin currently on the call stack.
 fn storage_namespace(shared: &Rc<ScriptShared>) -> mlua::Result<String> {
-  let namespace = super::shared::plugin_id(&shared.current_plugin.borrow());
+  let namespace = super::shared::storage_namespace_id(&shared.current_plugin.borrow());
   if namespace.is_empty() {
     return Err(mlua::Error::RuntimeError(
       "spotatui.storage_*: no plugin context (storage is only available from plugin code)"
