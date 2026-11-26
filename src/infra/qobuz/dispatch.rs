@@ -438,17 +438,23 @@ fn finish_qobuz_tracks(
   sent_token: &str,
   result: Result<Vec<crate::core::plugin_api::TrackInfo>>,
 ) {
+  let unauthorized = result.as_ref().is_err_and(|err| err.is::<Unauthorized>());
+  let still_logged_in = unauthorized && auth::forget_token(sent_token);
   if !app.is_current_source_track_table_load(epoch) {
-    if let Err(e) = &result {
-      if e.downcast_ref::<Unauthorized>().is_some() {
-        auth::forget_token(sent_token);
-      }
-    }
     return;
   }
   match result {
     Ok(tracks) => {
       app.set_source_track_table(playlist_uri, tracks, TrackTableContext::QobuzPlaylist);
+    }
+    Err(_) if unauthorized => {
+      let strings = &app.strings().status.infra;
+      let message = if still_logged_in {
+        strings.qobuz_operation_failed(strings.qobuz_step_tracks, "HTTP 401")
+      } else {
+        strings.qobuz_login_expired.to_string()
+      };
+      app.set_error_status_message(message, 8);
     }
     Err(e) => report_locked(app, QobuzStep::Tracks, e),
   }
@@ -1058,33 +1064,45 @@ mod tests {
   }
 
   #[test]
-  fn a_stale_qobuz_listing_401_still_forgets_the_token_it_sent() {
+  fn a_qobuz_listing_401_only_forgets_the_token_it_sent() {
     use crate::core::user_config::UserConfig;
-    const SENT: &str = "stale-listing-401-token";
-    let (tx, rx) = std::sync::mpsc::channel();
-    let mut app = App::new(tx, UserConfig::new(), None);
-    app.open_source_playlist_tracks("qobuz:playlist:1".into());
-    let Ok(IoEvent::GetQobuzTracks(_, epoch)) = rx.try_recv() else {
-      panic!("expected GetQobuzTracks");
-    };
-    app.open_source_playlist_tracks("qobuz:playlist:2".into());
-    app.set_status_message("Current status", 6);
+    const SENT: &str = "listing-401-token";
+    const NEW: &str = "new-login-token";
+    for (stale, replaced) in [(true, false), (true, true), (false, false), (false, true)] {
+      let (tx, rx) = std::sync::mpsc::channel();
+      let mut app = App::new(tx, UserConfig::new(), None);
+      app.open_source_playlist_tracks("qobuz:playlist:1".into());
+      let Ok(IoEvent::GetQobuzTracks(_, epoch)) = rx.try_recv() else {
+        panic!("expected GetQobuzTracks");
+      };
+      if stale {
+        app.open_source_playlist_tracks("qobuz:playlist:2".into());
+      }
+      app.set_status_message("Current status", 6);
 
-    let saved = auth::current_token();
-    auth::set_token(Some(SENT.into()));
-    finish_qobuz_tracks(
-      &mut app,
-      "qobuz:playlist:1",
-      epoch,
-      SENT,
-      Err(Unauthorized.into()),
-    );
-    let left = auth::current_token();
-    auth::set_token(saved);
+      let saved = auth::current_token();
+      auth::set_token(Some(if replaced { NEW } else { SENT }.into()));
+      finish_qobuz_tracks(
+        &mut app,
+        "qobuz:playlist:1",
+        epoch,
+        SENT,
+        Err(Unauthorized.into()),
+      );
+      let left = auth::current_token();
+      auth::set_token(saved);
 
-    assert_eq!(left, None, "the next load must log in again");
-    assert_eq!(app.status_message(), Some("Current status"));
-    assert!(app.track_table.tracks.is_empty());
+      assert_eq!(left.as_deref(), replaced.then_some(NEW), "stale={stale}");
+      let strings = &crate::core::i18n::EN.status.infra;
+      let expected_status = match (stale, replaced) {
+        (true, _) => "Current status".to_string(),
+        (false, true) => strings.qobuz_operation_failed(strings.qobuz_step_tracks, "HTTP 401"),
+        (false, false) => strings.qobuz_login_expired.to_string(),
+      };
+      assert_eq!(app.status_message(), Some(expected_status.as_str()));
+      assert_eq!(app.status_message_is_error(), !stale);
+      assert!(app.track_table.tracks.is_empty());
+    }
   }
 
   #[test]

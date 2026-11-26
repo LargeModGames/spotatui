@@ -278,10 +278,13 @@ pub fn set_token(token: Option<String>) {
 }
 
 /// Forget `sent` after a 401, unless a login replaced it since that request went out.
-pub fn forget_token(sent: &str) {
-  if let Ok(mut slot) = token_slot().lock() {
-    forget_from(&mut slot, sent);
-  }
+/// Returns whether there is still a login to use.
+pub fn forget_token(sent: &str) -> bool {
+  let Ok(mut slot) = token_slot().lock() else {
+    return false;
+  };
+  forget_from(&mut slot, sent);
+  slot.is_some()
 }
 
 fn forget_from(slot: &mut Option<String>, sent: &str) {
