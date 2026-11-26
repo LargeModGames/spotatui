@@ -1,0 +1,1 @@
+- **Spotify gateway timeouts now report HTTP 504 instead of 503**: upstream `DeadlineExceeded` errors preserve `504 Gateway Timeout` on `SpotifyApiError` ([#1185](https://github.com/LargeModGames/spotatui/issues/1185)).
