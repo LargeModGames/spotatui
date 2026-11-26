@@ -305,6 +305,9 @@ Everyone who helped, with code or without. To get on this list, see [Recognition
       <td align="center" valign="top" width="14.28%"><a href="https://felikious.github.io/"><img src="https://avatars.githubusercontent.com/u/137797868?v=4&size=100" width="100px" height="100px" alt="Felix"/><br /><sub><b>Felix</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=EfLampri" title="Code">💻</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://onclicklistener2048.github.io/"><img src="https://avatars.githubusercontent.com/u/22124534?v=4&size=100" width="100px" height="100px" alt="watson wang"/><br /><sub><b>watson wang</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=OnClickListener2048" title="Documentation">📖</a> <a href="#translation-OnClickListener2048" title="Translation">🌍</a></td>
     </tr>
+    <tr>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/aloneangel45"><img src="https://avatars.githubusercontent.com/u/63845775?v=4&size=100" width="100px" height="100px" alt="Aloneangel20"/><br /><sub><b>Aloneangel20</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=aloneangel45" title="Code">💻</a></td>
+    </tr>
   </tbody>
 </table>
 
