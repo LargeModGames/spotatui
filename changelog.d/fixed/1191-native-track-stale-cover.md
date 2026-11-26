@@ -1,0 +1,1 @@
+- **Native playback snapshots no longer borrow stale context covers**: when native track art is missing, context art is used only if the context item matches the current track or episode ([#1191](https://github.com/LargeModGames/spotatui/issues/1191)).
