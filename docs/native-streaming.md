@@ -81,7 +81,7 @@ spotatui can send most of the Spotify connection through an HTTP proxy (see the 
 - The pairing-code login does not read `SPOTATUI_STREAMING_PROXY`. On a proxy-only network, set `https_proxy` too before you log in.
 - The access-point connection and the sessions' HTTP requests use the proxy. The dealer websocket does not, so on a network that blocks all direct outbound connections the Connect device still won't register.
 
-`SPOTATUI_STREAMING_INIT_TIMEOUT_SECS` sets how long, in whole seconds, spotatui waits for the Spotify Connect handshake when native streaming starts. The default is 30; `0` or anything other than a positive whole number keeps 30. The whole player start gets 15 seconds more. After a timeout, native streaming is skipped for that run and the saved login is kept. Raise the value if the log says `Spirc initialization timed out`. It does not change the 35-second limit on the Spotify session that connects first.
+`SPOTATUI_STREAMING_INIT_TIMEOUT_SECS` sets how long, in whole seconds, spotatui waits for the Spotify Connect handshake when native streaming starts. The default is 30; `0` or anything other than a positive whole number keeps 30. The whole player start, setup included, is limited to this value plus 15 seconds, so setup that takes longer than 15 seconds cuts into the handshake wait. After a timeout, native streaming is skipped for that run and the saved login is kept. Raise the value if the log says `Spirc initialization timed out`. It does not change the 35-second limit on the Spotify session that connects first.
 
 PowerShell:
 
