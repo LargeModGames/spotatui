@@ -1,0 +1,1 @@
+- **Playlist sync keeps manual mirror tracks safe after failed adds**, ignores repeat registrations of the same mirror, and gives exact link IDs priority over playlist names. Name filters handle accented capitals, and track matching recognizes equivalent Unicode text and keeps explicit live and acoustic versions distinct.

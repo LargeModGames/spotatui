@@ -7,6 +7,7 @@
 pub mod store;
 
 use crate::core::source::Source;
+use icu_normalizer::ComposingNormalizerBorrowed;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -48,9 +49,12 @@ pub struct Endpoint {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Mirror {
   pub endpoint: Endpoint,
-  /// Master track key to mirror track key, ordered so the saved file is stable.
+  /// Master track key to mirror track key for pairs adopted or added by sync.
   #[serde(default)]
   pub matches: BTreeMap<String, String>,
+  /// Search results that can be retried but cannot authorize a removal.
+  #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+  pub pending_matches: BTreeMap<String, String>,
   #[serde(default)]
   pub unmatched: Vec<Unmatched>,
   /// RFC 3339 stamp of the last finished run.
@@ -107,7 +111,7 @@ impl Link {
   /// Whether `filter` names this link: its id exactly, or its master name, ignoring case.
   pub fn matches_filter(&self, filter: &str) -> bool {
     let filter = filter.trim();
-    self.id == filter || self.master.name.trim().eq_ignore_ascii_case(filter)
+    self.id == filter || self.master.name.trim().to_lowercase() == filter.to_lowercase()
   }
 }
 
@@ -117,6 +121,7 @@ impl Mirror {
     Mirror {
       endpoint,
       matches: BTreeMap::new(),
+      pending_matches: BTreeMap::new(),
       unmatched: Vec::new(),
       last_run: None,
     }
@@ -228,24 +233,60 @@ pub fn pick_candidate(target: &SyncTrack, candidates: &[SyncTrack]) -> Option<us
   })
 }
 
-/// The title without its trailing `(feat. X)`, `[Remastered]` or ` - Radio Edit`
-/// suffixes, which another catalog often drops; the duration check keeps a
-/// different edition apart.
+/// The title without catalog annotations such as `(feat. X)`, `[Remastered]`
+/// or ` - Radio Edit`. Keep suffixes that may identify a different recording.
 pub fn strip_title_suffix(title: &str) -> String {
   let mut out = title.trim();
   loop {
     if out.ends_with([')', ']']) {
       if let Some(open) = out.rfind(['(', '[']).filter(|open| *open > 0) {
+        if !is_ignorable_title_suffix(&out[open + 1..out.len() - 1]) {
+          break;
+        }
         out = out[..open].trim_end();
         continue;
       }
     }
     if let Some(dash) = out.rfind(" - ").filter(|dash| *dash > 0) {
+      if !is_ignorable_title_suffix(&out[dash + 3..]) {
+        break;
+      }
       out = out[..dash].trim_end();
       continue;
     }
-    return out.to_string();
+    break;
   }
+  out.to_string()
+}
+
+fn is_ignorable_title_suffix(suffix: &str) -> bool {
+  let normalized = normalize_text(suffix);
+  let mut words = normalized.split_whitespace();
+  if words
+    .clone()
+    .any(|word| matches!(word, "live" | "acoustic"))
+  {
+    return false;
+  }
+  match words.next() {
+    Some("feat" | "ft" | "featuring") => return words.next().is_some(),
+    Some("from") => return suffix.contains(['"', '“']) && words.next().is_some(),
+    _ => {}
+  }
+  if normalized == "radio edit" {
+    return true;
+  }
+  let mut words = normalized
+    .split_whitespace()
+    .filter(|word| !(word.len() == 4 && word.bytes().all(|byte| byte.is_ascii_digit())));
+  matches!(
+    (words.next(), words.next(), words.next()),
+    (
+      Some("remaster" | "remastered"),
+      None | Some("version"),
+      None
+    )
+  )
 }
 
 /// Uppercase an ISRC and drop its separators, so `gb-aaa-00-00001` is canonical.
@@ -257,11 +298,12 @@ pub fn normalize_isrc(value: &str) -> String {
     .collect()
 }
 
-/// Lowercase, every non-alphanumeric run collapsed to one space, already trimmed.
+/// Compose equivalent Unicode spellings, then lowercase and collapse punctuation.
 pub fn normalize_text(value: &str) -> String {
-  let mut out = String::with_capacity(value.len());
+  let composed = ComposingNormalizerBorrowed::new_nfc().normalize(value);
+  let mut out = String::with_capacity(composed.len());
   let mut pending_space = false;
-  for ch in value.chars() {
+  for ch in composed.chars() {
     if ch.is_alphanumeric() {
       if pending_space && !out.is_empty() {
         out.push(' ');
@@ -649,16 +691,11 @@ mod tests {
   }
 
   fn mirror_of(source: Source, uri: &str) -> Mirror {
-    Mirror {
-      endpoint: Endpoint {
-        source,
-        playlist_uri: uri.to_string(),
-        name: "Mirror".to_string(),
-      },
-      matches: BTreeMap::new(),
-      unmatched: Vec::new(),
-      last_run: None,
-    }
+    Mirror::new(Endpoint {
+      source,
+      playlist_uri: uri.to_string(),
+      name: "Mirror".to_string(),
+    })
   }
 
   #[test]
@@ -874,6 +911,37 @@ mod tests {
   }
 
   #[test]
+  fn live_and_acoustic_titles_do_not_match_the_studio_recording() {
+    let studio = track("studio", "Creep", "Radiohead", 238_000);
+    for title in [
+      "Creep - Live",
+      "Creep (LIVE at Wembley)",
+      "Creep (2024 Live Version)",
+      "Creep [Acoustic] - Radio Edit",
+      "Creep - Wembley Acoustic Version",
+      "Creep (Piano Version)",
+    ] {
+      let version = track("master", title, "Radiohead", 238_000);
+      assert_eq!(
+        pick_candidate(&version, std::slice::from_ref(&studio)),
+        None,
+        "{title}"
+      );
+    }
+    let live = track("master", "Creep - Live", "Radiohead", 238_000);
+    let same = track("mirror", "Creep (Live)", "Radiohead", 238_000);
+    assert_eq!(pick_candidate(&live, &[studio, same]), Some(1));
+  }
+
+  #[test]
+  fn canonically_equivalent_titles_and_artists_match_across_catalogues() {
+    let target = track("master", "Cafe\u{301}", "Beyonce\u{301}", 180_000);
+    let same = track("mirror", "Café", "Beyoncé", 180_000);
+
+    assert_eq!(pick_candidate(&target, &[same]), Some(0));
+  }
+
+  #[test]
   fn a_missing_duration_on_either_side_does_not_block_a_match() {
     let target = track("m1", "Creep", "Radiohead", 238_000);
     let candidate = without_duration(track("x1", "Creep", "Radiohead", 0));
@@ -907,6 +975,10 @@ mod tests {
     assert_eq!(strip_title_suffix("No Sleep (feat. Bonn)"), "No Sleep");
     assert_eq!(strip_title_suffix("Tsunami - Radio Edit"), "Tsunami");
     assert_eq!(
+      strip_title_suffix("Creep - 2011 Remastered Version"),
+      "Creep"
+    );
+    assert_eq!(
       strip_title_suffix("Sooraj Dooba Hain (From \"Roy\") [Remastered]"),
       "Sooraj Dooba Hain"
     );
@@ -927,6 +999,22 @@ mod tests {
       "weird fishes arpeggi"
     );
     assert_eq!(normalize_text("!!!"), "");
+  }
+
+  #[test]
+  fn link_name_filters_ignore_non_ascii_case() {
+    let link = Link {
+      id: "abcdef123456".to_string(),
+      master: Endpoint {
+        source: Source::Spotify,
+        playlist_uri: "spotify:playlist:1".to_string(),
+        name: "Été".to_string(),
+      },
+      mirrors: Vec::new(),
+    };
+
+    assert!(link.matches_filter(" été "));
+    assert!(!link.matches_filter("ete"));
   }
 
   #[test]

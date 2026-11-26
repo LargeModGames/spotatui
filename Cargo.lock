@@ -5871,6 +5871,7 @@ dependencies = [
  "hkdf",
  "hmac 0.13.0",
  "httparse",
+ "icu_normalizer",
  "icy-metadata",
  "image",
  "keepawake",

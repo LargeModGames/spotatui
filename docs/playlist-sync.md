@@ -51,10 +51,10 @@ candidate that is the same recording:
    one call.
 2. **Title, first artist and duration.** Title and first artist have to be equal
    once lowercased with punctuation collapsed, and the two durations have to be
-   within two seconds. A trailing `(feat. X)`, `[Remastered]` or ` - Radio Edit`
-   on the master title is forgiven, both in the search and in the comparison;
-   the duration keeps a different edition apart. A candidate that reports no
-   duration matches on title and artist alone.
+   within two seconds. The search and comparison forgive trailing `(feat. X)`,
+   `[Remastered]` or ` - Radio Edit` on the master title. Recording labels such
+   as `(2024 Live Version)` and ` - Wembley Acoustic Version` stay part of the
+   title. A candidate that reports no duration matches on title and artist alone.
 3. **Nothing else.** A live version or a cover carrying the same title is left
    unmatched rather than silently substituted.
 
@@ -66,10 +66,14 @@ seconds. Failing that, a video on any other channel is taken only when both
 durations are known and within two seconds, which is what a re-upload of the
 same audio looks like.
 
-Every resolved pair is remembered per mirror, so a re-run costs no searches for
-tracks it has already placed. Only what changed on the master costs calls. The
-first YouTube run on a long playlist is the slow one: it shells out to `yt-dlp`
-once per track, and the status line counts the progress.
+Every resolved pair is remembered per mirror. If an add fails, its search result
+is kept for retry. The pair follows the master once sync sees the track on the
+mirror or successfully adds it. On the first YouTube run, sync shells out to
+`yt-dlp` once per track it needs to place. The status line counts the progress.
+
+An upgrade from version 1 of `playlist_sync.yml` treats saved matches as
+candidates. A cached pair can follow a later master removal after a sync sees
+its track on the mirror while the master still has it, or adds it successfully.
 
 ## Unmatched tracks
 
@@ -137,8 +141,8 @@ spotatui sync --link "Road Trip"   # one link
 spotatui sync --dry-run            # report the changes, write nothing
 ```
 
-`--link` takes the master playlist name, trimmed and ignoring case, or the link
-id exactly.
+`--link` trims whitespace and looks for an exact link ID first. If no ID matches,
+it looks up the master playlist name ignoring case.
 
 `--dry-run` does every read and every search and prints what it would do. It
 writes nothing at all, not even the match cache, so the next real run repeats
@@ -163,11 +167,11 @@ is unset or not absolute. `SPOTATUI_PLAYLIST_SYNC_PATH` overrides the whole path
 A missing file means no links. A malformed file is reported and never
 overwritten, so a hand edit that went wrong stays yours to fix.
 
-You can write a link by hand. Everything a run fills in (`matches`, `unmatched`,
-`last_run`) is optional:
+You can write a link by hand. The fields a run fills in are optional (`matches`,
+`pending_matches`, `unmatched`, and `last_run`).
 
 ```yaml
-version: 1
+version: 2
 links:
   - id: road-trip
     master:
