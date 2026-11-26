@@ -228,11 +228,12 @@ async fn release_other_backends(app: &Arc<Mutex<App>>) {
 async fn acquire_player(
   app: &Arc<Mutex<App>>,
   previous: Option<Arc<LocalPlayer>>,
+  open_player: impl FnOnce() -> anyhow::Result<LocalPlayer> + Send + 'static,
 ) -> Option<Arc<LocalPlayer>> {
   if let Some(player) = previous {
     return Some(player);
   }
-  match tokio::task::spawn_blocking(LocalPlayer::new).await {
+  match tokio::task::spawn_blocking(open_player).await {
     Ok(Ok(p)) => Some(Arc::new(p)),
     Ok(Err(e)) => {
       set_error(
@@ -292,7 +293,7 @@ pub(crate) struct RadioTuneIn {
   station: TrackInfo,
   paused: bool,
   /// For a startup restore, [`App::playback_requests`] when it began. Any
-  /// playback request dispatched since then wins over the restore.
+  /// newer playback intent recorded since then wins over the restore.
   requests: Option<u64>,
   result: Result<PreparedStation, TuneInError>,
 }
@@ -331,6 +332,14 @@ pub(crate) async fn prepare_radio(
 
 /// Only the serial pump may take the sink and publish a prepared station.
 pub(crate) async fn finish_radio(app: &Arc<Mutex<App>>, tune_in: RadioTuneIn) {
+  finish_radio_with_player(app, tune_in, LocalPlayer::new).await;
+}
+
+async fn finish_radio_with_player(
+  app: &Arc<Mutex<App>>,
+  tune_in: RadioTuneIn,
+  open_player: impl FnOnce() -> anyhow::Result<LocalPlayer> + Send + 'static,
+) {
   let RadioTuneIn {
     station,
     paused,
@@ -339,8 +348,8 @@ pub(crate) async fn finish_radio(app: &Arc<Mutex<App>>, tune_in: RadioTuneIn) {
   } = tune_in;
   let (PreparedStation { audio, now_playing }, previous) = {
     let mut guard = app.lock().await;
-    // Checked under the lock `App::dispatch` holds, so a request dispatched
-    // before this point always wins, even when the pump took this first.
+    // Check under the App lock so a newer request or play/pause action wins
+    // even when the pump took the restore result first.
     if requests.is_some_and(|requests| requests != guard.playback_requests()) {
       return;
     }
@@ -364,7 +373,7 @@ pub(crate) async fn finish_radio(app: &Arc<Mutex<App>>, tune_in: RadioTuneIn) {
   };
   release_other_backends(app).await;
   // A failed start keeps the claim, so a bare resume cannot wake librespot.
-  let Some(player) = acquire_player(app, previous).await else {
+  let Some(player) = acquire_player(app, previous, open_player).await else {
     return;
   };
 
@@ -477,6 +486,61 @@ mod tests {
     radio_stage_failed(&mut app, "no audio".to_owned());
     assert!(app.decoded_sink_claimed());
     assert!(app.status_message().is_some());
+  }
+
+  #[tokio::test]
+  async fn a_failed_player_open_keeps_the_radio_claim() {
+    let app = Arc::new(Mutex::new(test_app()));
+
+    finish_radio_with_player(&app, prepared_tune_in(None), unavailable_player).await;
+
+    let app = app.lock().await;
+    assert!(app.decoded_sink_claimed());
+    assert!(app.radio_playback.is_none());
+    let message = app
+      .strings()
+      .status
+      .infra
+      .radio_audio_unavailable("output unavailable");
+    assert_eq!(app.status_message(), Some(message.as_str()));
+  }
+
+  #[tokio::test]
+  async fn playback_actions_without_spotify_discard_a_ready_radio_restore() {
+    use crate::core::action::Action;
+
+    for action in [Action::TogglePlayback, Action::Play, Action::Pause] {
+      let (tx, rx) = channel();
+      let mut app = App::new(tx, UserConfig::new(), None);
+      let restore = prepared_tune_in(Some(app.playback_requests()));
+      let label = format!("{action:?}");
+      app.apply(action);
+      let status = app.status_message().map(str::to_owned);
+      assert!(rx.try_recv().is_err());
+      let app = Arc::new(Mutex::new(app));
+
+      finish_radio_with_player(&app, restore, unavailable_player).await;
+
+      let app = app.lock().await;
+      assert!(!app.decoded_sink_claimed(), "{label}");
+      assert_eq!(app.status_message(), status.as_deref(), "{label}");
+    }
+  }
+
+  fn prepared_tune_in(requests: Option<u64>) -> RadioTuneIn {
+    RadioTuneIn {
+      station: station_row("radio:https://example.com/live", "Saved FM"),
+      paused: false,
+      requests,
+      result: Ok(PreparedStation {
+        audio: silent_wav(),
+        now_playing: Arc::default(),
+      }),
+    }
+  }
+
+  fn unavailable_player() -> anyhow::Result<LocalPlayer> {
+    Err(anyhow::anyhow!("output unavailable"))
   }
 
   fn failed_restore(requests: u64) -> RadioTuneIn {

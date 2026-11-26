@@ -232,6 +232,14 @@ impl App {
     self.playback_requests
   }
 
+  /// Make a pending startup radio restore yield to a newer playback intent.
+  pub(crate) fn invalidate_radio_restore(&mut self) {
+    #[cfg(feature = "internet-radio")]
+    {
+      self.playback_requests = self.playback_requests.wrapping_add(1);
+    }
+  }
+
   /// Mark the radio session as being replaced on its own player, or done.
   #[cfg(feature = "internet-radio")]
   pub(crate) fn set_radio_retuning(&mut self, retuning: bool) {

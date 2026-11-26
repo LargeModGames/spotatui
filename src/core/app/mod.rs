@@ -637,8 +637,8 @@ pub struct App {
   /// ended nor drop out of `last_session.yml` before the new station is live.
   #[cfg(feature = "internet-radio")]
   radio_retuning: bool,
-  /// Counts the playback requests dispatched through [`App::dispatch`]. A
-  /// startup radio restore notes it when it starts and gives up if it moved.
+  /// A startup radio restore snapshots this and gives up if a newer playback
+  /// request or play/pause action moved it.
   #[cfg(feature = "internet-radio")]
   playback_requests: u64,
   /// The active YouTube playback session (multi-source, yt-dlp backed), or
@@ -763,7 +763,7 @@ impl App {
     self.is_loading = true;
     #[cfg(feature = "internet-radio")]
     if action.supersedes_radio_restore() {
-      self.playback_requests += 1;
+      self.invalidate_radio_restore();
     }
     let Some(io_tx) = &self.io_tx else {
       return false;

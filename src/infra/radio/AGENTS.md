@@ -17,9 +17,9 @@
   the connection closes even when nothing reads any more.
 - User tune-in runs on the serial pump. Saved radio can prepare in the
   background. Only the pump stages or publishes the prepared session. A
-  playback request dispatched after the restore began discards it: the pump
-  drops the pending work, and `finish_radio` compares
-  `App::playback_requests` under the lock before it takes the sink.
+  newer playback request or play/pause action discards it. The pump drops the
+  pending work when it receives a superseding event, and `finish_radio`
+  compares `App::playback_requests` under the lock before it takes the sink.
 - Radio claims the sink (`App::claim_decoded_sink`) only once the station is
   prepared, right before it releases librespot, so a station that fails to
   connect leaves Spotify as it was. From that claim on, the usual rule holds:
