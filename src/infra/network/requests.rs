@@ -708,6 +708,9 @@ fn classifiable_text(e: &anyhow::Error) -> String {
 }
 
 pub fn is_rate_limited_error(e: &anyhow::Error) -> bool {
+  if let Some(error) = e.downcast_ref::<SpotifyApiError>() {
+    return error.status == reqwest::StatusCode::TOO_MANY_REQUESTS;
+  }
   let text = classifiable_text(e);
   text.contains("429") || text.contains("Too Many Requests") || text.contains("Too many requests")
 }
