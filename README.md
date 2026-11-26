@@ -307,6 +307,7 @@ Everyone who helped, with code or without. To get on this list, see [Recognition
     </tr>
     <tr>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/alboumKW"><img src="https://avatars.githubusercontent.com/u/131019295?v=4&size=100" width="100px" height="100px" alt="alboumKW"/><br /><sub><b>alboumKW</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=alboumKW" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/aloneangel45"><img src="https://avatars.githubusercontent.com/u/63845775?v=4&size=100" width="100px" height="100px" alt="Aloneangel20"/><br /><sub><b>Aloneangel20</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=aloneangel45" title="Code">💻</a></td>
     </tr>
   </tbody>
 </table>
