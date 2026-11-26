@@ -8,7 +8,7 @@
   allow(dead_code)
 )]
 
-use crate::core::app::{App, NativePlaybackOrigin, NativeTrackKind};
+use crate::core::app::{App, NativePlaybackOrigin, NativeTrackInfo, NativeTrackKind};
 use rspotify::model::{PlayableItem, RepeatState};
 use rspotify::prelude::Id;
 
@@ -133,11 +133,16 @@ fn playback_snapshot_with(
         // item for seconds, and for a natively queued track it never reports the
         // right one at all, so reading art from it pinned the *previous* album's
         // cover (#402). Fall back to the context item only when librespot gave
-        // us no covers, which keeps the old behavior for that corner.
-        image_url: native_info
-          .image_url
-          .clone()
-          .or_else(|| image_url_from_context_item(context.and_then(|ctx| ctx.item.as_ref()))),
+        // us no covers AND the context item actually matches the playing track,
+        // so a stale item after a skip never lends its cover to the next track.
+        image_url: native_info.image_url.clone().or_else(|| {
+          matching_context_image_url(
+            native_info,
+            item_kind,
+            item_id.as_deref(),
+            context.and_then(|ctx| ctx.item.as_ref()),
+          )
+        }),
         duration_ms: native_info.duration_ms,
       },
       item_kind,
@@ -505,12 +510,25 @@ fn playback_uri_for_item_kind(item_kind: PlaybackItemKind, id: &str) -> String {
   }
 }
 
-fn image_url_from_context_item(item: Option<&PlayableItem>) -> Option<String> {
-  match item? {
-    PlayableItem::Track(track) => track.album.images.first().map(|image| image.url.clone()),
-    PlayableItem::Episode(episode) => episode.images.first().map(|image| image.url.clone()),
-    PlayableItem::Unknown(_) => None,
+fn matching_context_image_url(
+  native_info: &NativeTrackInfo,
+  item_kind: PlaybackItemKind,
+  item_id: Option<&str>,
+  item: Option<&PlayableItem>,
+) -> Option<String> {
+  let (ctx_meta, ctx_kind, ctx_id, _) = metadata_and_identity_from_context_item(item)?;
+  if ctx_kind != item_kind {
+    return None;
   }
+  let same_item = match (item_id, ctx_id.as_deref()) {
+    (Some(native_id), Some(context_id)) => native_id == context_id,
+    _ => {
+      ctx_meta.title == native_info.name
+        && ctx_meta.artists == native_info.artists
+        && (ctx_kind != PlaybackItemKind::Track || ctx_meta.album == native_info.album)
+    }
+  };
+  same_item.then_some(ctx_meta.image_url).flatten()
 }
 
 /// Static metadata for an active local-files playback session, decoupled from
@@ -868,6 +886,53 @@ pub(crate) mod tests {
 
     let snapshot = current_playback_snapshot(&app).unwrap();
 
+    assert_eq!(
+      snapshot.metadata.image_url.as_deref(),
+      Some("https://example.com/cover.jpg")
+    );
+  }
+
+  #[test]
+  fn a_native_track_without_art_does_not_borrow_another_tracks_cover() {
+    let mut app = app();
+    app.is_streaming_active = true;
+    app.last_track_id = Some("new2".into());
+    app.native_track_info = Some(NativeTrackInfo {
+      name: "New Track".into(),
+      artists: vec!["New Artist".into()],
+      album: "New Album".into(),
+      duration_ms: 123_000,
+      kind: NativeTrackKind::Track,
+      image_url: None,
+    });
+    let mut previous = track();
+    previous.id = Some(rspotify::model::TrackId::from_id("old1").unwrap());
+    app.current_playback_context = Some(playback_context(PlayableItem::Track(previous), true));
+
+    let snapshot = current_playback_snapshot(&app).unwrap();
+    assert_eq!(snapshot.item_id.as_deref(), Some("new2"));
+    assert_eq!(snapshot.metadata.image_url, None);
+  }
+
+  #[test]
+  fn a_native_track_without_art_uses_cover_when_context_item_id_matches() {
+    let mut app = app();
+    app.is_streaming_active = true;
+    app.last_track_id = Some("same1".into());
+    app.native_track_info = Some(NativeTrackInfo {
+      name: "Current Track".into(),
+      artists: vec!["Current Artist".into()],
+      album: "Current Album".into(),
+      duration_ms: 123_000,
+      kind: NativeTrackKind::Track,
+      image_url: None,
+    });
+    let mut current = track();
+    current.id = Some(rspotify::model::TrackId::from_id("same1").unwrap());
+    app.current_playback_context = Some(playback_context(PlayableItem::Track(current), true));
+
+    let snapshot = current_playback_snapshot(&app).unwrap();
+    assert_eq!(snapshot.item_id.as_deref(), Some("same1"));
     assert_eq!(
       snapshot.metadata.image_url.as_deref(),
       Some("https://example.com/cover.jpg")
