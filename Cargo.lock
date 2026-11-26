@@ -5914,6 +5914,7 @@ dependencies = [
  "spotatui-librespot-protocol",
  "stream-download",
  "tempfile",
+ "tidewarp",
  "tokio",
  "tokio-rustls",
  "tokio-tungstenite 0.30.0",
@@ -6512,6 +6513,13 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.114",
+]
+
+[[package]]
+name = "tidewarp"
+version = "0.1.0"
+dependencies = [
+ "realfft",
 ]
 
 [[package]]

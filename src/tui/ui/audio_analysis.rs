@@ -78,6 +78,8 @@ pub fn draw_in(f: &mut Frame<'_>, app: &App, area: Rect, margin: u16) {
         VisualizerStyle::Outrun => app.strings().screens.outrun,
         VisualizerStyle::RackEq => app.strings().screens.rack_eq,
         VisualizerStyle::Cassette => app.strings().screens.cassette_deck,
+        #[cfg(feature = "milkdrop")]
+        VisualizerStyle::MilkDrop => "MilkDrop",
       },
       app.strings().screens.spectrum,
     )
@@ -161,6 +163,8 @@ pub fn draw_in(f: &mut Frame<'_>, app: &App, area: Rect, margin: u16) {
         inner_area,
         app.user_config.theme.analysis_bar.into(),
       ),
+      #[cfg(feature = "milkdrop")]
+      VisualizerStyle::MilkDrop => super::milkdrop::render(f.buffer_mut(), inner_area),
       VisualizerStyle::HeadUnit => head_unit::render(
         f.buffer_mut(),
         inner_area,
@@ -222,6 +226,8 @@ fn retro_style(style: VisualizerStyle) -> Option<retro::Retro> {
     VisualizerStyle::RackEq => Some(retro::Retro::RackEq),
     VisualizerStyle::Cassette => Some(retro::Retro::Cassette),
     VisualizerStyle::Cava | VisualizerStyle::BarGraph | VisualizerStyle::HeadUnit => None,
+    #[cfg(feature = "milkdrop")]
+    VisualizerStyle::MilkDrop => None,
   }
 }
 

@@ -560,16 +560,18 @@ mod tests {
 
     app.cycle_visualizer_style();
     assert!(app.pitch_view_shows());
-    assert_eq!(
-      app.user_config.behavior.visualizer_style,
-      VisualizerStyle::Cassette
-    );
+    assert_eq!(app.user_config.behavior.visualizer_style, last_style());
+  }
+
+  /// The last style in the cycle, which depends on the features built in.
+  fn last_style() -> VisualizerStyle {
+    *VisualizerStyle::all().last().unwrap()
   }
 
   #[test]
   fn v_skips_the_pitch_view_without_a_spotify_track() {
     let (mut app, _rx) = app_on_the_analysis_screen();
-    app.user_config.behavior.visualizer_style = VisualizerStyle::Cassette;
+    app.user_config.behavior.visualizer_style = last_style();
     app.sync_audio_analysis(None);
 
     app.cycle_visualizer_style();
@@ -584,7 +586,7 @@ mod tests {
   #[test]
   fn the_style_action_still_cycles_away_from_the_analysis_screen() {
     let (mut app, _rx) = app_with_events();
-    app.user_config.behavior.visualizer_style = VisualizerStyle::Cassette;
+    app.user_config.behavior.visualizer_style = last_style();
     app.sync_audio_analysis(Some("track1"));
 
     app.cycle_visualizer_style();

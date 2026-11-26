@@ -240,6 +240,9 @@ pub enum VisualizerStyle {
   RackEq,
   /// Cassette Deck: turning reels, LED level bars and a tape counter
   Cassette,
+  /// MilkDrop: feedback visuals from the tidewarp engine's built-in presets
+  #[cfg(feature = "milkdrop")]
+  MilkDrop,
 }
 
 impl VisualizerStyle {
@@ -254,7 +257,19 @@ impl VisualizerStyle {
       VisualizerStyle::Outrun,
       VisualizerStyle::RackEq,
       VisualizerStyle::Cassette,
+      #[cfg(feature = "milkdrop")]
+      VisualizerStyle::MilkDrop,
     ]
+  }
+
+  /// The style to write to config.yml. MilkDrop is saved as Cava, because a build
+  /// without the `milkdrop` feature cannot read it.
+  pub fn saved(self) -> Self {
+    #[cfg(feature = "milkdrop")]
+    if self == VisualizerStyle::MilkDrop {
+      return VisualizerStyle::Cava;
+    }
+    self
   }
 
   pub fn next(&self) -> Self {
@@ -2613,7 +2628,7 @@ impl UserConfig {
       playing_icon: Some(self.behavior.playing_icon.clone()),
       paused_icon: Some(self.behavior.paused_icon.clone()),
       set_window_title: Some(self.behavior.set_window_title),
-      visualizer_style: Some(self.behavior.visualizer_style),
+      visualizer_style: Some(self.behavior.visualizer_style.saved()),
       relay_server_url: Some(self.behavior.relay_server_url.clone()),
       sync_token: self.behavior.sync_token.clone(),
       local_music_path: self.behavior.local_music_path.clone(),
