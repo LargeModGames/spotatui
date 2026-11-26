@@ -1210,6 +1210,18 @@ mod tests {
   }
 
   #[test]
+  fn a_number_in_a_failed_speakers_name_does_not_make_it_rate_limited() {
+    let error = anyhow::Error::new(SpotifyApiError {
+      status: StatusCode::BAD_GATEWAY,
+      body: "Studio 429: speaker did not respond".into(),
+      localized_body: None,
+      detail: None,
+      endpoint: None,
+    });
+    assert!(!is_rate_limited_error(&error), "misclassified {error}");
+  }
+
+  #[test]
   fn forbidden_error_classification_uses_status_not_body_text() {
     let error = anyhow::Error::new(SpotifyApiError {
       status: reqwest::StatusCode::FORBIDDEN,
