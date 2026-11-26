@@ -97,6 +97,7 @@ impl Default for App {
       radio_seed_id: None,
       track_table_epoch: 0,
       radio_epoch: None,
+      source_track_table_load_epoch: None,
       search_results: SearchResult::default(),
       song_progress_ms: 0,
       last_tick_at: Instant::now(),

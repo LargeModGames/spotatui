@@ -336,6 +336,8 @@ pub struct App {
   track_table_epoch: u64,
   /// The epoch of the last radio request; its rows land only while no other list opened.
   radio_epoch: Option<u64>,
+  /// The epoch of the decoded-source list load in flight, cleared when the pump finishes it.
+  source_track_table_load_epoch: Option<u64>,
   pub recommendations_context: Option<RecommendationsContext>,
   search_results: SearchResult,
   pub selected_album_simplified: Option<SelectedAlbum>,
