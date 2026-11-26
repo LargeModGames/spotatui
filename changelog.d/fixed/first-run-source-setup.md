@@ -1,0 +1,1 @@
+- **First-run source setup survives an interrupted launch**. CLI subcommands leave source setup pending. Existing installations with a state file, a state backup, or `client.yml` keep their completed setup. On first run, `--reconfigure-auth` chooses Spotify before login, even when an older config names a different source.

@@ -71,6 +71,7 @@ pub enum RadioStationAddOutcome {
 /// Live runtime/app-managed state.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RuntimeState {
+  pub first_run_complete: bool,
   pub volume_percent: u8,
   pub shuffle_enabled: bool,
   pub active_source: Source,
@@ -98,6 +99,7 @@ pub struct RuntimeState {
 impl Default for RuntimeState {
   fn default() -> Self {
     Self {
+      first_run_complete: false,
       volume_percent: 100,
       shuffle_enabled: false,
       active_source: Source::default(),
@@ -121,6 +123,11 @@ impl Default for RuntimeState {
 
 impl RuntimeState {
   pub fn apply_persisted(&mut self, state: &PersistedRuntimeState) {
+    if let Some(complete) = state.first_run_complete {
+      self.first_run_complete = complete;
+    } else if state.active_source.is_some() {
+      self.first_run_complete = true;
+    }
     if let Some(volume_percent) = state.volume_percent {
       self.volume_percent = volume_percent.min(100);
     }
@@ -175,8 +182,10 @@ impl RuntimeState {
     }
   }
 
+  #[cfg(test)]
   pub fn to_persisted(&self) -> PersistedRuntimeState {
     PersistedRuntimeState {
+      first_run_complete: Some(self.first_run_complete),
       volume_percent: Some(self.volume_percent.min(100)),
       shuffle_enabled: Some(self.shuffle_enabled),
       active_source: Some(self.active_source),
@@ -271,6 +280,9 @@ impl RuntimeState {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PersistedRuntimeState {
+  /// Missing in older releases; a saved source then counts as completed setup.
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub first_run_complete: Option<bool>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub volume_percent: Option<u8>,
   #[serde(skip_serializing_if = "Option::is_none")]
@@ -450,7 +462,8 @@ impl PersistedRuntimeState {
   }
 
   pub fn is_empty(&self) -> bool {
-    self.volume_percent.is_none()
+    self.first_run_complete.is_none()
+      && self.volume_percent.is_none()
       && self.shuffle_enabled.is_none()
       && self.active_source.is_none()
       && self.playlist_sidebar_order.is_none()
@@ -590,7 +603,12 @@ pub fn save(path: &Path, state: &PersistedRuntimeState) -> Result<()> {
       return Err(PlaylistPinLimitReached.into());
     }
   }
-  write_state(path, &merged)
+  write_state(path, &merged, crate::core::auth::write_private_file_atomic)
+}
+
+/// Create the initial state without replacing state another launch saved first.
+pub(crate) fn save_initial(path: &Path, state: &PersistedRuntimeState) -> Result<()> {
+  write_state(path, state, crate::core::auth::write_private_file_if_absent)
 }
 
 /// Remove one pin from the latest saved list.
@@ -627,7 +645,7 @@ pub fn save_removing_pinned_playlists(
       accounts.remove(uri.trim());
     }
   }
-  write_state(path, &merged)
+  write_state(path, &merged, crate::core::auth::write_private_file_atomic)
 }
 
 /// Remove a radio station without sending a stale full station list.
@@ -640,21 +658,26 @@ pub fn save_removing_radio_station(path: &Path, url: &str) -> Result<()> {
   } else {
     merged.radio_stations = Some(Vec::new());
   }
-  write_state(path, &merged)
+  write_state(path, &merged, crate::core::auth::write_private_file_atomic)
 }
 
-fn write_state(path: &Path, state: &PersistedRuntimeState) -> Result<()> {
+fn write_state(
+  path: &Path,
+  state: &PersistedRuntimeState,
+  write: impl FnOnce(&Path, &[u8]) -> Result<()>,
+) -> Result<()> {
   let state = sanitized_persisted_state(state);
   let yaml = serde_yaml::to_string(&state).context("serializing runtime state")?;
   path
     .parent()
     .map_or(Ok(()), crate::core::paths::ensure_private_dir)
-    .and_then(|()| crate::core::auth::write_private_file_atomic(path, yaml.as_bytes()))
+    .and_then(|()| write(path, yaml.as_bytes()))
     .with_context(|| format!("writing {}", path.display()))
 }
 
 fn sanitized_persisted_state(state: &PersistedRuntimeState) -> PersistedRuntimeState {
   PersistedRuntimeState {
+    first_run_complete: state.first_run_complete,
     volume_percent: state.volume_percent.map(|volume| volume.min(100)),
     shuffle_enabled: state.shuffle_enabled,
     active_source: state.active_source,
@@ -687,6 +710,10 @@ fn sanitized_persisted_state(state: &PersistedRuntimeState) -> PersistedRuntimeS
 }
 
 fn merge_state_patch(merged: &mut PersistedRuntimeState, patch: &PersistedRuntimeState) {
+  if let Some(complete) = patch.first_run_complete {
+    // A stale initial save must not undo a picker another instance completed.
+    merged.first_run_complete = Some(merged.first_run_complete.unwrap_or(false) || complete);
+  }
   if let Some(volume_percent) = patch.volume_percent {
     merged.volume_percent = Some(volume_percent.min(100));
   }
@@ -948,6 +975,52 @@ mod source_config {
 mod tests {
   use super::*;
   use crate::core::pane::{Pane, SplitAxis};
+
+  #[test]
+  fn first_run_completion_survives_sparse_state_saves() {
+    for complete in [false, true] {
+      let dir = tempfile::tempdir().unwrap();
+      let path = dir.path().join("state.yml");
+      let initial = PersistedRuntimeState {
+        first_run_complete: Some(complete),
+        active_source: Some(Source::Spotify),
+        ..Default::default()
+      };
+      assert!(!initial.is_empty());
+      save(&path, &initial).unwrap();
+      save(&path, &PersistedRuntimeState::volume_percent(42)).unwrap();
+      save(&path, &PersistedRuntimeState::active_source(Source::Local)).unwrap();
+      save_removing_radio_station(&path, "https://example.com/radio").unwrap();
+
+      let saved = load(&path).unwrap();
+      assert_eq!(saved.first_run_complete, Some(complete));
+      assert_eq!(saved.volume_percent, Some(42));
+      let mut runtime = RuntimeState::default();
+      runtime.apply_persisted(&saved);
+      runtime.apply_persisted(&PersistedRuntimeState::volume_percent(50));
+      assert_eq!(runtime.first_run_complete, complete);
+      assert_eq!(runtime.to_persisted().first_run_complete, Some(complete));
+    }
+  }
+
+  #[test]
+  fn a_stale_initial_save_cannot_undo_completed_setup() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.yml");
+    let initial = RuntimeState::default().to_persisted();
+    save(
+      &path,
+      &PersistedRuntimeState {
+        first_run_complete: Some(true),
+        ..PersistedRuntimeState::active_source(Source::Local)
+      },
+    )
+    .unwrap();
+    save_initial(&path, &initial).unwrap();
+    let saved = load(&path).unwrap();
+    assert_eq!(saved.first_run_complete, Some(true));
+    assert_eq!(saved.active_source, Some(Source::Local));
+  }
 
   fn lyrics_beside_main() -> PaneNode {
     let mut layout = PaneNode::default();
@@ -1695,6 +1768,7 @@ mod tests {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("spotatui").join("state.yml");
     let state = PersistedRuntimeState {
+      first_run_complete: Some(true),
       volume_percent: Some(42),
       shuffle_enabled: Some(true),
       active_source: Some(Source::Radio),
