@@ -1,0 +1,1 @@
+- **Proxy and startup timeout documented**: `docs/native-streaming.md` now explains `SPOTATUI_STREAMING_PROXY`, the standard proxy variables and `SPOTATUI_STREAMING_INIT_TIMEOUT_SECS` ([#1028](https://github.com/LargeModGames/spotatui/issues/1028)).
