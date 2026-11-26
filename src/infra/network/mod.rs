@@ -1197,11 +1197,14 @@ impl Network {
   }
 
   async fn handle_error(&mut self, e: anyhow::Error) {
-    let rate_limited = requests::is_rate_limited_error(&e);
     let mut app = self.app.lock().await;
+    self.handle_error_with_app(&mut app, e);
+  }
+
+  fn handle_error_with_app(&self, app: &mut App, e: anyhow::Error) {
     // The first hit of a window under the pump: every later event is held
     // back, so a status message is enough. The CLI keeps its exit signal.
-    if self.defers_rate_limited && rate_limited {
+    if self.defers_rate_limited && requests::is_rate_limited_error(&e) {
       let message = app
         .strings()
         .status
@@ -1210,7 +1213,7 @@ impl Network {
       app.set_error_status_message(message, 8);
       return;
     }
-    report_request_error(&mut app, e);
+    report_request_error(app, e);
   }
 
   /// Holds a Spotify-bound event back while a rate-limit window is open: queued

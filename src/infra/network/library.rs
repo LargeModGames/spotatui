@@ -1,4 +1,5 @@
 use super::mapping::{map_page, playlist_items_page};
+use super::metadata::next_page_offset;
 use super::requests::{
   is_forbidden_error, is_not_found_error, is_rate_limited_error, spotify_api_request_json_for,
   spotify_get_typed_for,
@@ -724,11 +725,6 @@ fn librespot_episode_info(
   })
 }
 
-#[cfg(test)]
-fn next_saved_tracks_offset(page: &Page<SavedTrack>) -> Option<u32> {
-  page.next.as_ref().map(|_| page.offset + page.limit)
-}
-
 fn uri_batches(uris: &[String]) -> impl Iterator<Item = &[String]> {
   uris.chunks(LIBRARY_CONTAINS_MAX_URIS)
 }
@@ -787,43 +783,40 @@ pub async fn prefetch_saved_tracks_page_task(
   generation: u64,
 ) {
   loop {
-    let should_fetch = {
+    let liked_state_epoch = {
       let mut app = app.lock().await;
-      app.saved_tracks_prefetch_generation == generation
-        && app
+      if app.saved_tracks_prefetch_generation != generation
+        || app
           .library()
           .saved_tracks
           .page_index_for_offset(offset)
-          .is_none()
-        && app.saved_tracks_prefetch_in_flight.insert(offset)
+          .is_some()
+        || !app.saved_tracks_prefetch_in_flight.insert(offset)
+      {
+        return;
+      }
+      app.liked_state_epoch
     };
-
-    if !should_fetch {
-      return;
-    }
 
     let query = vec![("limit", limit.to_string()), ("offset", offset.to_string())];
-    let Ok(page) =
-      spotify_get_typed_for::<Page<rspotify::model::SavedTrack>>("me/tracks", &query).await
-    else {
-      let mut app_guard = app.lock().await;
-      app_guard.saved_tracks_prefetch_in_flight.remove(&offset);
-      return;
-    };
-
-    if page.items.is_empty() {
-      let mut app_guard = app.lock().await;
-      app_guard.saved_tracks_prefetch_in_flight.remove(&offset);
-      return;
-    }
-
-    let next_offset = page.next.as_ref().map(|_| page.offset + page.limit);
+    let response = spotify_get_typed_for::<Page<SavedTrack>>("me/tracks", &query).await;
     let mut app_guard = app.lock().await;
-    app_guard.saved_tracks_prefetch_in_flight.remove(&offset);
     if app_guard.saved_tracks_prefetch_generation != generation {
       return;
     }
+    app_guard.saved_tracks_prefetch_in_flight.remove(&offset);
+    let Ok(page) = response else {
+      return;
+    };
+    if app_guard.liked_state_epoch != liked_state_epoch {
+      // A like/unlike landed while this read was outstanding. Fetch the same
+      // window again before applying either its rows or its liked IDs.
+      continue;
+    }
 
+    // An empty window still belongs in the cache so the table can join the
+    // pages on either side of it.
+    let next_offset = next_page_offset(&page, offset);
     populate_liked_song_ids_from_saved_tracks(app_guard.liked_song_ids_set_mut(), &page);
     let domain_page =
       crate::infra::network::mapping::map_page(&page, |st| TrackInfo::from(&st.track));
@@ -834,21 +827,7 @@ pub async fn prefetch_saved_tracks_page_task(
     let Some(candidate_next_offset) = next_offset else {
       return;
     };
-    let should_prefetch_next = app_guard
-      .library()
-      .saved_tracks
-      .page_index_for_offset(candidate_next_offset)
-      .is_none()
-      && !app_guard
-        .saved_tracks_prefetch_in_flight
-        .contains(&candidate_next_offset);
-    drop(app_guard);
-
-    if should_prefetch_next {
-      offset = candidate_next_offset;
-    } else {
-      return;
-    }
+    offset = candidate_next_offset;
   }
 }
 
@@ -1783,16 +1762,17 @@ impl LibraryNetwork for Network {
       query.push(("offset", offset.to_string()));
     }
 
-    match spotify_get_typed_for::<Page<rspotify::model::SavedTrack>>("me/tracks", &query).await {
-      Ok(saved_tracks) => {
-        let mut app = self.app.lock().await;
-        app
-          .saved_tracks_prefetch_in_flight
-          .remove(&requested_offset);
-        if app.saved_tracks_prefetch_generation != generation {
-          return;
-        }
+    let response = spotify_get_typed_for::<Page<SavedTrack>>("me/tracks", &query).await;
+    let mut app = self.app.lock().await;
+    if app.saved_tracks_prefetch_generation != generation {
+      return;
+    }
+    app
+      .saved_tracks_prefetch_in_flight
+      .remove(&requested_offset);
 
+    match response {
+      Ok(saved_tracks) => {
         populate_liked_song_ids_from_saved_tracks(app.liked_song_ids_set_mut(), &saved_tracks);
         let domain_page =
           crate::infra::network::mapping::map_page(&saved_tracks, |st| TrackInfo::from(&st.track));
@@ -1810,14 +1790,7 @@ impl LibraryNetwork for Network {
           self.spawn_saved_tracks_prefetch(next_offset, generation);
         }
       }
-      Err(e) => {
-        let mut app = self.app.lock().await;
-        app
-          .saved_tracks_prefetch_in_flight
-          .remove(&requested_offset);
-        drop(app);
-        self.handle_error(anyhow!(e)).await;
-      }
+      Err(e) => self.handle_error_with_app(&mut app, e),
     }
   }
 
@@ -1830,16 +1803,9 @@ impl LibraryNetwork for Network {
     match spotify_get_typed_for::<Page<rspotify::model::SavedAlbum>>("me/albums", &query).await {
       Ok(saved_albums) => {
         let first = offset.unwrap_or(0) == 0;
+        let domain_page = map_page(&saved_albums, super::mapping::saved_album_info);
         let mut app = self.app.lock().await;
-        if first || !saved_albums.items.is_empty() {
-          let domain_page = crate::infra::network::mapping::map_page(
-            &saved_albums,
-            crate::infra::network::mapping::saved_album_info,
-          );
-          app.store_saved_albums_page(domain_page, first);
-        }
-        // Bump even on an empty page: completion is the signal plugin data
-        // requests wait on, and an empty library never writes a page.
+        app.store_saved_albums_page(domain_page, first);
         app
           .plugin_data_generations
           .bump(crate::core::app::PluginDataKind::SavedAlbums);
@@ -1960,13 +1926,9 @@ impl LibraryNetwork for Network {
     match spotify_get_typed_for::<Page<rspotify::model::show::Show>>("me/shows", &query).await {
       Ok(saved_shows) => {
         let first = offset.unwrap_or(0) == 0;
+        let domain_page = map_page(&saved_shows, |s| ShowInfo::from(&s.show));
         let mut app = self.app.lock().await;
-        if first || !saved_shows.items.is_empty() {
-          let domain_page =
-            crate::infra::network::mapping::map_page(&saved_shows, |s| ShowInfo::from(&s.show));
-          app.store_saved_shows_page(domain_page, first);
-        }
-        // Bump even on an empty page (see saved-albums note above).
+        app.store_saved_shows_page(domain_page, first);
         app
           .plugin_data_generations
           .bump(crate::core::app::PluginDataKind::SavedShows);
@@ -2252,6 +2214,68 @@ mod tests {
   use chrono::{Duration as ChronoDuration, Utc};
   use rspotify::model::{artist::SimplifiedArtist, track::FullTrack};
   use std::collections::{HashMap, HashSet};
+
+  #[cfg(feature = "spotify-session")]
+  async fn follow_filtered_library_pages<T>(
+    mut event: IoEvent,
+    target: crate::core::action::ListTarget,
+    current_page: fn(&App) -> Option<&Paged<T>>,
+    final_name: &str,
+    item_name: fn(&T) -> &str,
+  ) {
+    use crate::core::action::Action;
+    use crate::infra::spotify::paging_tests::{app_with_network, with_filtered_pages, PAGE_SIZE};
+
+    let (app, mut network, rx) = app_with_network();
+    with_filtered_pages(async {
+      for offset in [0, PAGE_SIZE, 2 * PAGE_SIZE] {
+        network.handle_network_event(event).await;
+        let mut app = app.lock().await;
+        let page = current_page(&app).unwrap();
+        assert_eq!(page.offset, offset, "the visible page must advance");
+        if offset == 2 * PAGE_SIZE {
+          assert!(!page.has_next());
+          assert_eq!(
+            page.items.iter().map(item_name).collect::<Vec<_>>(),
+            [final_name]
+          );
+          app.apply(Action::LoadMore(target));
+          assert!(rx.try_recv().is_err(), "the last page needs no fetch");
+          return;
+        }
+        assert!(page.items.is_empty() && page.has_next());
+        app.apply(Action::LoadMore(target));
+        event = rx.try_recv().expect("request for the next library window");
+      }
+    })
+    .await;
+  }
+
+  #[cfg(feature = "spotify-session")]
+  #[tokio::test]
+  async fn saved_albums_cross_empty_library_windows_and_stop_at_the_last() {
+    follow_filtered_library_pages(
+      IoEvent::GetCurrentUserSavedAlbums(None),
+      crate::core::action::ListTarget::SavedAlbums,
+      |app| app.library().saved_albums.get_results(None),
+      crate::infra::spotify::paging_tests::ALBUM_NAME,
+      |saved| &saved.album.name,
+    )
+    .await;
+  }
+
+  #[cfg(feature = "spotify-session")]
+  #[tokio::test]
+  async fn saved_shows_cross_empty_library_windows_and_stop_at_the_last() {
+    follow_filtered_library_pages(
+      IoEvent::GetCurrentUserSavedShows(None),
+      crate::core::action::ListTarget::SavedShows,
+      |app| app.library().saved_shows.get_results(None),
+      crate::infra::spotify::paging_tests::SHOW_NAME,
+      |show| &show.name,
+    )
+    .await;
+  }
 
   #[test]
   fn publishing_a_refresh_keeps_followed_pins_missing_from_the_rootlist() {
@@ -2963,16 +2987,203 @@ mod tests {
     assert_eq!(app.get_current_route().id, RouteId::CommunityPinPrompt);
   }
 
+  #[tokio::test]
+  async fn saved_tracks_prefetch_continues_past_an_empty_page_with_a_next_link() {
+    use crate::infra::network::requests::fake::use_in_memory_spotify;
+
+    let first = saved_tracks_page(0, 20, true);
+    let mut empty = saved_tracks_page(20, 20, true);
+    empty.items.clear();
+    let final_page = saved_tracks_page(40, 20, false);
+    let final_track_id = final_page
+      .items
+      .last()
+      .unwrap()
+      .track
+      .id
+      .as_ref()
+      .unwrap()
+      .id();
+    let _spotify = use_in_memory_spotify(vec![
+      (
+        "me/tracks",
+        Some("20"),
+        serde_json::to_value(empty).unwrap(),
+      ),
+      (
+        "me/tracks",
+        Some("40"),
+        serde_json::to_value(&final_page).unwrap(),
+      ),
+    ]);
+    let mut app = App::default();
+    app.reset_saved_tracks_view();
+    app
+      .saved_tracks_mut()
+      .upsert_page_by_offset(map_page(&first, |saved| TrackInfo::from(&saved.track)));
+    let generation = app.saved_tracks_prefetch_generation;
+    let app = Arc::new(Mutex::new(app));
+
+    prefetch_saved_tracks_page_task(Arc::clone(&app), 20, 20, generation).await;
+
+    let app = app.lock().await;
+    let pages = &app.library().saved_tracks;
+    let empty_index = pages.page_index_for_offset(20).unwrap();
+    assert!(pages
+      .get_results(Some(empty_index))
+      .unwrap()
+      .items
+      .is_empty());
+    assert_eq!(
+      app
+        .track_table
+        .tracks
+        .last()
+        .and_then(|track| track.id.as_deref()),
+      Some(final_track_id),
+      "the table should show tracks beyond the empty page"
+    );
+  }
+
+  #[tokio::test]
+  async fn an_old_saved_tracks_prefetch_keeps_the_reloaded_requests_marker() {
+    use crate::infra::network::requests::fake::use_in_memory_spotify;
+
+    let page = serde_json::to_value(saved_tracks_page(20, 20, false)).unwrap();
+    // Null cannot deserialize as a saved-tracks page, exercising the error path too.
+    for response in [page, serde_json::Value::Null] {
+      let _spotify = use_in_memory_spotify(vec![("me/tracks", Some("20"), response)]);
+      let mut app = App::default();
+      app.reset_saved_tracks_view();
+      let generation = app.saved_tracks_prefetch_generation;
+      let app = Arc::new(Mutex::new(app));
+
+      tokio::join!(biased;
+        prefetch_saved_tracks_page_task(Arc::clone(&app), 20, 20, generation),
+        async {
+          let mut app = app.lock().await;
+          assert!(app.saved_tracks_prefetch_in_flight.contains(&20));
+          app.reset_saved_tracks_view();
+          assert!(app.saved_tracks_prefetch_in_flight.insert(20));
+        }
+      );
+
+      let app = app.lock().await;
+      assert!(app
+        .library()
+        .saved_tracks
+        .page_index_for_offset(20)
+        .is_none());
+      assert!(
+        app.saved_tracks_prefetch_in_flight.contains(&20),
+        "the obsolete response removed the newer request's marker"
+      );
+    }
+  }
+
+  #[tokio::test]
+  async fn saved_tracks_prefetch_refetches_a_page_after_a_concurrent_unlike() {
+    use crate::infra::network::requests::fake::use_in_memory_spotify;
+
+    let stale = saved_tracks_page(20, 20, false);
+    let mut fresh = stale.clone();
+    let removed = fresh.items.remove(0).track.id.unwrap().id().to_string();
+    let kept = fresh.items[0].track.id.as_ref().unwrap().id().to_string();
+    let _spotify = use_in_memory_spotify(vec![
+      (
+        "me/tracks",
+        Some("20"),
+        serde_json::to_value(stale).unwrap(),
+      ),
+      (
+        "me/tracks",
+        Some("20"),
+        serde_json::to_value(fresh).unwrap(),
+      ),
+    ]);
+    let mut app = App::default();
+    app.reset_saved_tracks_view();
+    app.liked_song_ids_set_mut().insert(removed.clone());
+    let generation = app.saved_tracks_prefetch_generation;
+    let app = Arc::new(Mutex::new(app));
+
+    tokio::join!(biased;
+      prefetch_saved_tracks_page_task(Arc::clone(&app), 20, 20, generation),
+      async {
+        let mut app = app.lock().await;
+        assert!(app.saved_tracks_prefetch_in_flight.contains(&20));
+        // The state published by a successful unlike while the request was in flight.
+        app.liked_song_ids_set_mut().remove(&removed);
+        app.liked_state_epoch = app.liked_state_epoch.wrapping_add(1);
+      }
+    );
+
+    let app = app.lock().await;
+    assert!(!app.liked_song_ids_set().contains(&removed));
+    assert!(app.liked_song_ids_set().contains(&kept));
+    let page = app.library().saved_tracks.get_results(None).unwrap();
+    assert_eq!(page.items.len(), 1);
+    assert_eq!(page.items[0].id.as_deref(), Some(kept.as_str()));
+    assert!(!app.saved_tracks_prefetch_in_flight.contains(&20));
+  }
+
+  #[tokio::test]
+  async fn saved_tracks_foreground_failure_is_published_before_a_queued_reload() {
+    use crate::infra::network::requests::fake::use_in_memory_spotify;
+
+    let _spotify = use_in_memory_spotify(vec![("me/tracks", None, serde_json::Value::Null)]);
+    let app = Arc::new(Mutex::new(App::default()));
+    let mut network = Network::new(None, &app);
+    let mut fetch = std::pin::pin!(network.get_current_user_saved_tracks(None));
+    // The in-memory response yields once, then the fetch waits for the App lock.
+    assert!(futures::poll!(&mut fetch).is_pending());
+    let blocked = app.lock().await;
+    assert!(futures::poll!(&mut fetch).is_pending());
+    let mut reload = std::pin::pin!(app.lock());
+    assert!(futures::poll!(&mut reload).is_pending());
+    drop(blocked);
+
+    let finished = futures::poll!(&mut fetch).is_ready();
+    let reported_before_reload = {
+      let mut app = reload.await;
+      let reported = !app.api_error().is_empty();
+      app.reset_saved_tracks_view();
+      app.clear_api_error();
+      reported
+    };
+    if !finished {
+      fetch.await;
+    }
+    assert!(
+      app.lock().await.api_error().is_empty(),
+      "an older error reached the new load"
+    );
+    assert!(
+      reported_before_reload,
+      "the active load must report its error under the same lock"
+    );
+  }
+
   #[test]
   fn next_saved_tracks_offset_uses_page_limit() {
     let page = saved_tracks_page(20, 20, true);
-    assert_eq!(next_saved_tracks_offset(&page), Some(40));
+    assert_eq!(next_page_offset(&page, 20), Some(40));
   }
 
   #[test]
   fn next_saved_tracks_offset_returns_none_without_next_link() {
     let page = saved_tracks_page(20, 20, false);
-    assert_eq!(next_saved_tracks_offset(&page), None);
+    assert_eq!(next_page_offset(&page, 20), None);
+  }
+
+  #[test]
+  fn next_saved_tracks_offset_requires_a_matching_page_and_forward_progress() {
+    let mut page = saved_tracks_page(20, 20, true);
+    assert_eq!(next_page_offset(&page, 40), None);
+    page.limit = 0;
+    assert_eq!(next_page_offset(&page, 20), None);
+    page.limit = u32::MAX;
+    assert_eq!(next_page_offset(&page, 20), None);
   }
 
   #[test]

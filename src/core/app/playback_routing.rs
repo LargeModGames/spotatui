@@ -363,12 +363,20 @@ impl App {
       .and_then(|ctx| ctx.device.id.as_deref())
   }
 
-  /// After a handoff, a poll that finds no playback means the other device left (#693).
-  #[cfg(feature = "streaming")]
-  pub(crate) fn forget_handed_off_playback(&mut self) {
-    if self.native_handed_off() {
-      self.current_playback_context = None;
+  /// An idle poll invalidates the remote device and track. Local playback and
+  /// recovery can outlast an idle Spotify Connect response.
+  pub(crate) fn clear_idle_spotify_playback(&mut self) {
+    #[cfg(feature = "streaming")]
+    if !self.native_handed_off() {
+      let cached_device = self.cached_playback_device_id();
+      let cached_local =
+        cached_device.is_some() && cached_device == self.native_device_id.as_deref();
+      if cached_local || self.is_native_streaming_active_for_playback() {
+        return;
+      }
     }
+    self.current_playback_context = None;
+    self.spotify_context_name = None;
   }
 
   /// Whether Spotify transport would land on the parked native backend.
@@ -1172,22 +1180,20 @@ mod tests {
     };
     app.mark_native_handed_off();
 
-    app.forget_handed_off_playback();
+    app.clear_idle_spotify_playback();
 
     assert_eq!(app.cached_playback_device_id(), None);
   }
 
   #[cfg(feature = "streaming")]
   #[test]
-  fn an_empty_poll_without_a_handoff_keeps_the_cached_playback() {
-    let mut app = App {
-      current_playback_context: Some(make_external_context()),
-      ..Default::default()
-    };
+  fn an_empty_poll_keeps_the_parked_native_context() {
+    let (mut app, _rx, _recovery_rx) = parked_native_app();
 
-    app.forget_handed_off_playback();
+    app.clear_idle_spotify_playback();
 
-    assert_eq!(app.cached_playback_device_id(), Some("external"));
+    assert_eq!(app.cached_playback_device_id(), Some("spotatui"));
+    assert!(app.native_parked_owns_context());
   }
 
   #[cfg(feature = "streaming")]

@@ -16,10 +16,11 @@ use rspotify::model::{
   enums::Country,
   idtypes::{AlbumId, ArtistId, ShowId, TrackId},
   page::{CursorBasedPage, Page},
+  show::SimplifiedEpisode,
   track::{FullTrack, SimplifiedTrack},
 };
 use rspotify::prelude::*;
-use serde::Deserialize;
+use serde::{de::DeserializeOwned, Deserialize};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -100,6 +101,38 @@ struct FollowedArtistsResponse {
 fn country_code(country: Country) -> String {
   let code: &'static str = country.into();
   code.to_string()
+}
+
+pub(super) fn next_page_offset<T: DeserializeOwned>(
+  page: &Page<T>,
+  requested_offset: u32,
+) -> Option<u32> {
+  page.next.as_ref()?;
+  let next = page.offset.checked_add(page.limit)?;
+  (page.offset == requested_offset && next > requested_offset).then_some(next)
+}
+
+async fn fetch_show_episode_page(
+  network: &Network,
+  show_id: &ShowId<'_>,
+  mut offset: Option<u32>,
+) -> anyhow::Result<Page<SimplifiedEpisode>> {
+  let path = format!("shows/{}/episodes", show_id.id());
+  loop {
+    let mut query = vec![("limit", network.large_search_limit.to_string())];
+    if let Some(offset) = offset {
+      query.push(("offset", offset.to_string()));
+    }
+    let page: Page<SimplifiedEpisode> = network.spotify_get_typed(&path, &query).await?;
+    if !page.items.is_empty() || page.next.is_none() {
+      return Ok(page);
+    }
+    // The browser waits for more rows before requesting again. Cross empty
+    // windows in this request and keep the returned page's raw offset.
+    let next = next_page_offset(&page, offset.unwrap_or(0))
+      .ok_or_else(|| anyhow!("Spotify returned a non-advancing episode page"))?;
+    offset = Some(next);
+  }
 }
 
 /// Fetch an album's tracklist from `offset` onward, following pagination until
@@ -467,26 +500,18 @@ impl MetadataNetwork for Network {
     let Some(show_id) = show.id.as_deref().and_then(|id| ShowId::from_id(id).ok()) else {
       return;
     };
-    let path = format!("shows/{}/episodes", show_id.id());
-    let query = vec![
-      ("limit", self.large_search_limit.to_string()),
-      ("offset", "0".to_string()),
-    ];
-    match self
-      .spotify_get_typed::<Page<rspotify::model::show::SimplifiedEpisode>>(&path, &query)
-      .await
-    {
+    match fetch_show_episode_page(self, &show_id, Some(0)).await {
       Ok(episodes) => {
         let domain_page = map_page(&episodes, |e| EpisodeInfo::from(e));
         let mut app = self.app.lock().await;
         app.dispatch(IoEvent::CurrentUserSavedShowsContains(vec![show_id
           .id()
           .to_string()]));
-        let empty = domain_page.items.is_empty();
+        let has_episodes = !domain_page.items.is_empty();
         app.store_show_episodes_page(domain_page, true);
         app.selected_show_simplified = Some(SelectedShow { show: *show });
         app.episode_table_context = EpisodeTableContext::Simplified;
-        if !empty {
+        if has_episodes {
           app.push_navigation_stack(RouteId::PodcastEpisodes, ActiveBlock::EpisodeTable);
         }
       }
@@ -526,26 +551,13 @@ impl MetadataNetwork for Network {
   }
 
   async fn get_current_show_episodes(&mut self, show_id: ShowId<'static>, offset: Option<u32>) {
-    let path = format!("shows/{}/episodes", show_id.id());
-    let mut query = vec![("limit", self.large_search_limit.to_string())];
-    if let Some(offset) = offset {
-      query.push(("offset", offset.to_string()));
-    }
-
-    match self
-      .spotify_get_typed::<Page<rspotify::model::show::SimplifiedEpisode>>(&path, &query)
-      .await
-    {
+    match fetch_show_episode_page(self, &show_id, offset).await {
       Ok(episodes) => {
         let first = offset.unwrap_or(0) == 0;
-        // An empty first page still lands, so a show with no episodes stops loading.
-        if first || !episodes.items.is_empty() {
-          let domain_page = map_page(&episodes, |e| EpisodeInfo::from(e));
-          let mut app = self.app.lock().await;
-          // Another show opened while this page was in flight.
-          if app.selected_show_id() != Some(show_id.id()) {
-            return;
-          }
+        let domain_page = map_page(&episodes, |e| EpisodeInfo::from(e));
+        let mut app = self.app.lock().await;
+        // Another show may have opened while this page was in flight.
+        if app.selected_show_id() == Some(show_id.id()) {
           app.store_show_episodes_page(domain_page, first);
         }
       }
@@ -716,6 +728,131 @@ pub(crate) mod tests {
     let mut buf = vec![0; 4096];
     let n = stream.read(&mut buf).await.unwrap();
     String::from_utf8_lossy(&buf[..n]).to_string()
+  }
+
+  #[cfg(feature = "spotify-session")]
+  #[tokio::test]
+  async fn simplified_podcast_opens_on_an_empty_first_window_with_continuation() {
+    use crate::infra::spotify::paging_tests::{
+      app_with_network, with_filtered_pages, EPISODE_NAME, PAGE_SIZE, SHOW_ID,
+    };
+
+    let (app, mut network, _rx) = app_with_network();
+    let show = ShowInfo {
+      id: Some(SHOW_ID.to_string()),
+      ..Default::default()
+    };
+    with_filtered_pages(network.handle_network_event(IoEvent::GetShowEpisodes(Box::new(show))))
+      .await;
+
+    let app = app.lock().await;
+    let page = app.library().show_episodes.get_results(None).unwrap();
+    assert_eq!(app.get_current_route().id, RouteId::PodcastEpisodes);
+    assert_eq!(page.offset, 2 * PAGE_SIZE);
+    assert_eq!(page.items[0].name, EPISODE_NAME);
+    assert!(!page.has_next());
+  }
+
+  #[cfg(feature = "spotify-session")]
+  #[tokio::test]
+  async fn podcast_episodes_cross_an_empty_middle_window_and_stop_at_the_last() {
+    use crate::core::action::{Action, ListTarget};
+    use crate::infra::spotify::paging_tests::{
+      app_with_network, with_filtered_pages, EPISODE_NAME, FIRST_EPISODE_NAME, PAGE_SIZE,
+      SHOW_WITH_FIRST_EPISODE_ID,
+    };
+
+    let (app, mut network, rx) = app_with_network();
+    let show_id = SHOW_WITH_FIRST_EPISODE_ID;
+    {
+      let mut app = app.lock().await;
+      app.selected_show_full = Some(SelectedFullShow {
+        show: ShowInfo {
+          id: Some(show_id.to_string()),
+          ..Default::default()
+        },
+      });
+      app.episode_table_context = EpisodeTableContext::Full;
+    }
+
+    with_filtered_pages(async {
+      network
+        .handle_network_event(IoEvent::GetCurrentShowEpisodes(show_id.to_string(), None))
+        .await;
+      let next = {
+        let mut app = app.lock().await;
+        let page = app.library().show_episodes.get_results(None).unwrap();
+        assert_eq!(page.items[0].name, FIRST_EPISODE_NAME);
+        assert!(page.has_next());
+        app.apply(Action::LoadMore(ListTarget::ShowEpisodes));
+        rx.try_recv().expect("request for the next episode window")
+      };
+      assert!(
+        matches!(&next, IoEvent::GetCurrentShowEpisodes(id, Some(PAGE_SIZE)) if id == show_id)
+      );
+      network.handle_network_event(next).await;
+
+      let mut app = app.lock().await;
+      let page = app.library().show_episodes.get_results(None).unwrap();
+      assert_eq!(
+        page.offset,
+        2 * PAGE_SIZE,
+        "one request must cross the empty window"
+      );
+      assert_eq!(page.items[0].name, EPISODE_NAME);
+      assert!(!page.has_next());
+      app.apply(Action::LoadMore(ListTarget::ShowEpisodes));
+      assert!(rx.try_recv().is_err(), "the last page needs no fetch");
+      app.get_episode_table_previous();
+      assert_eq!(
+        app
+          .library()
+          .show_episodes
+          .get_results(None)
+          .unwrap()
+          .offset,
+        0
+      );
+    })
+    .await;
+  }
+
+  #[cfg(feature = "spotify-session")]
+  #[tokio::test]
+  async fn album_tracks_continue_past_empty_catalogue_windows() {
+    use crate::infra::spotify::paging_tests::{
+      app_with_network, with_filtered_pages, ALBUM_ID, TRACK_NAME,
+    };
+
+    let (_app, network, _rx) = app_with_network();
+    let tracks = with_filtered_pages(fetch_album_tracks_from(&network, ALBUM_ID, 0))
+      .await
+      .unwrap();
+    assert_eq!(
+      tracks
+        .iter()
+        .map(|track| track.name.as_str())
+        .collect::<Vec<_>>(),
+      [TRACK_NAME]
+    );
+  }
+
+  #[cfg(feature = "spotify-session")]
+  #[tokio::test]
+  async fn artist_albums_continue_past_empty_catalogue_windows() {
+    use crate::infra::spotify::paging_tests::{with_filtered_pages, ALBUM_NAME, ARTIST_ID};
+
+    let (artist, _) = with_filtered_pages(fetch_artist_data(ARTIST_ID, None))
+      .await
+      .unwrap();
+    assert_eq!(
+      artist
+        .album_items
+        .iter()
+        .map(|album| album.name.as_str())
+        .collect::<Vec<_>>(),
+      [ALBUM_NAME]
+    );
   }
 
   const ARTIST_JSON: &str = r#"{"external_urls":{},"followers":{"href":null,"total":0},"genres":[],"href":"","id":"artist","images":[{"url":"https://i.scdn.co/image/portrait","width":640,"height":640}],"name":"Test Artist","popularity":0}"#;

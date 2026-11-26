@@ -51,6 +51,15 @@ fn cache() -> &'static Mutex<HashMap<&'static str, CachedSet>> {
 
 /// The set's items, newest first.
 async fn entries(session: &SpotifySession, set: &'static str) -> anyhow::Result<Vec<Entry>> {
+  #[cfg(test)]
+  if let Some(uris) = super::paging_tests::collection(set) {
+    return Ok(
+      uris
+        .into_iter()
+        .map(|uri| Entry { uri, added_at: 0 })
+        .collect(),
+    );
+  }
   let mut cache = cache().lock().await;
   if let Some(cached) = cache.get(set) {
     if cached.fetched.elapsed() < CACHE_TTL {
@@ -133,7 +142,12 @@ pub async fn saved_tracks(session: &SpotifySession, paging: Paging) -> anyhow::R
       Some(json!({ "added_at": added_at(entry.added_at), "track": json::track_full(track.as_deref()?) }))
     })
     .collect();
-  Ok(json::page(items, paging.offset, paging.limit, tracks.len()))
+  Ok(json::page_from_window(
+    items,
+    paging,
+    window.len(),
+    tracks.len(),
+  ))
 }
 
 pub async fn saved_albums(session: &SpotifySession, paging: Paging) -> anyhow::Result<Value> {
@@ -166,7 +180,12 @@ pub async fn saved_albums(session: &SpotifySession, paging: Paging) -> anyhow::R
       Some(json!({ "added_at": added_at(entry.added_at), "album": json::album_full(&album, page) }))
     })
     .collect();
-  Ok(json::page(items, paging.offset, paging.limit, albums.len()))
+  Ok(json::page_from_window(
+    items,
+    paging,
+    window.len(),
+    albums.len(),
+  ))
 }
 
 pub async fn saved_shows(session: &SpotifySession, paging: Paging) -> anyhow::Result<Value> {
@@ -180,7 +199,12 @@ pub async fn saved_shows(session: &SpotifySession, paging: Paging) -> anyhow::Re
       Some(json!({ "added_at": added_at(entry.added_at), "show": json::show_simplified(show.as_deref()?) }))
     })
     .collect();
-  Ok(json::page(items, paging.offset, paging.limit, shows.len()))
+  Ok(json::page_from_window(
+    items,
+    paging,
+    window.len(),
+    shows.len(),
+  ))
 }
 
 /// Cursor paging: `after` names the last artist id of the previous page.
