@@ -433,7 +433,8 @@ mod tests {
     app.open_source_playlist_tracks("subsonic:playlist:1".into());
     assert!(!app.is_loading);
     app.set_track_table(Vec::new(), TrackTableContext::SavedTracks);
-    app.dispatch(IoEvent::GetSubsonicSearchResults("new search".into()));
+    let rev = app.source_revision();
+    app.dispatch(IoEvent::GetSubsonicSearchResults("new search".into(), rev));
 
     let app = Arc::new(Mutex::new(app));
     let mut network = Network::new(None, &app);

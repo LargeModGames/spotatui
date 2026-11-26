@@ -47,8 +47,8 @@ pub async fn route_radio_event(app: &Arc<Mutex<App>>, event: &IoEvent) -> bool {
       load_radio_stations(app).await;
       true
     }
-    IoEvent::GetRadioSearchResults(query) => {
-      run_radio_search(app, query).await;
+    IoEvent::GetRadioSearchResults(query, source_rev) => {
+      run_radio_search(app, query, *source_rev).await;
       true
     }
     // A station play. Radio "queues" collapse to the one station at the offset:
@@ -148,10 +148,10 @@ async fn load_radio_stations(app: &Arc<Mutex<App>>) {
 ///
 /// Like the Subsonic search, only the songs block is populated — each row is a
 /// station; Enter on one dispatches its `radio:` URI back through this module.
-async fn run_radio_search(app: &Arc<Mutex<App>>, query: &str) {
-  let Some(source_rev) = app.lock().await.begin_search(Source::Radio) else {
+async fn run_radio_search(app: &Arc<Mutex<App>>, query: &str, source_rev: u64) {
+  if app.lock().await.source_revision() != source_rev {
     return;
-  };
+  }
   let source = RadioSource::new();
   match source.search(query).await {
     Ok(results) => {

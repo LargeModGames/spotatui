@@ -565,7 +565,7 @@ mod tests {
     handler(Key::Enter, &mut app);
 
     match rx.recv().unwrap() {
-      IoEvent::GetSearchResults(query, _) => assert_eq!(query, "daft punk"),
+      IoEvent::GetSearchResults(query, _, _) => assert_eq!(query, "daft punk"),
       _ => panic!("unexpected event"),
     }
 

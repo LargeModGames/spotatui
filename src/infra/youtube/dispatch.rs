@@ -54,8 +54,8 @@ enum Direction {
 /// the Spotify network), `false` to let the normal dispatch run.
 pub async fn route_youtube_event(app: &Arc<Mutex<App>>, event: &IoEvent) -> bool {
   match event {
-    IoEvent::GetYouTubeSearchResults(query) => {
-      run_youtube_search(app, query).await;
+    IoEvent::GetYouTubeSearchResults(query, source_rev) => {
+      run_youtube_search(app, query, *source_rev).await;
       true
     }
     IoEvent::GetYouTubePlaylists => {
@@ -164,10 +164,10 @@ pub(crate) async fn build_source(app: &Arc<Mutex<App>>) -> YouTubeSource {
 /// Run a YouTube search and populate `app.search_results`. Like the Subsonic
 /// M2 search, only the songs block is populated — each row is a video; Enter
 /// dispatches the `youtube:` URIs back through this module.
-async fn run_youtube_search(app: &Arc<Mutex<App>>, query: &str) {
-  let Some(source_rev) = app.lock().await.begin_search(Source::YouTube) else {
+async fn run_youtube_search(app: &Arc<Mutex<App>>, query: &str, source_rev: u64) {
+  if app.lock().await.source_revision() != source_rev {
     return;
-  };
+  }
   let source = build_source(app).await;
   run_youtube_search_with(app, source_rev, query, source.search(query)).await;
 }
@@ -1275,7 +1275,7 @@ mod tests {
     assert!(
       route_youtube_event(
         &app,
-        &IoEvent::GetYouTubeSearchResults("daft punk get lucky".to_string())
+        &IoEvent::GetYouTubeSearchResults("daft punk get lucky".to_string(), 0)
       )
       .await
     );
@@ -1354,11 +1354,7 @@ mod tests {
     let (finish_tx, finish_rx) = tokio::sync::oneshot::channel::<()>();
     let task_app = Arc::clone(&app);
     let task = tokio::spawn(async move {
-      let source_rev = task_app
-        .lock()
-        .await
-        .begin_search(Source::YouTube)
-        .expect("current search should begin");
+      let source_rev = task_app.lock().await.source_revision();
       run_youtube_search_with(&task_app, source_rev, "Kygo Firestone", async move {
         let _ = ready_tx.send(());
         let _ = finish_rx.await;
@@ -1389,18 +1385,25 @@ mod tests {
     let app = Arc::new(Mutex::new(test_app()));
     let dir = tempfile::tempdir().unwrap();
     let (_tx, _rx) = std::sync::mpsc::channel();
-    {
+    let stale_rev = {
       let mut guard = App::new(_tx, crate::core::user_config::UserConfig::new(), None);
       guard.state_path = Some(dir.path().join("state.yml"));
       guard.user_config.behavior.ytdlp_path =
         Some(dir.path().join("missing-yt-dlp").display().to_string());
       guard.set_active_source(Source::YouTube);
-      guard.dispatch(IoEvent::GetYouTubeSearchResults("Kygo".to_string()));
+      let rev = guard.source_revision();
       guard.set_active_source(Source::Spotify);
       *app.lock().await = guard;
-    }
+      rev
+    };
 
-    assert!(route_youtube_event(&app, &IoEvent::GetYouTubeSearchResults("Kygo".to_string())).await);
+    assert!(
+      route_youtube_event(
+        &app,
+        &IoEvent::GetYouTubeSearchResults("Kygo".to_string(), stale_rev)
+      )
+      .await
+    );
     let guard = app.lock().await;
     assert_eq!(guard.active_source, Source::Spotify);
     assert!(

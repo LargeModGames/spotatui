@@ -45,7 +45,7 @@ use std::sync::mpsc::Sender;
 use std::sync::Arc;
 use std::{
   cmp::{max, min},
-  collections::{HashSet, VecDeque},
+  collections::HashSet,
   time::{Duration, Instant},
 };
 // The test modules under `core/app/` take `SystemTime` through `use super::*`.
@@ -745,37 +745,9 @@ pub struct App {
   /// code can show it without doing the environment lookup every frame.
   pub log_path: String,
   active_saved_track_filter: Option<String>,
-  /// Submission-time `source_revision` values recorded when search `IoEvent`s
-  /// are queued so dispatchers reject searches superseded before starting.
-  pending_search_revisions: VecDeque<(Source, u64)>,
 }
 
 impl App {
-  fn search_event_source(event: &IoEvent) -> Option<Source> {
-    match event {
-      IoEvent::GetSearchResults(_, _) => Some(Source::Spotify),
-      IoEvent::GetSubsonicSearchResults(_) => Some(Source::Subsonic),
-      IoEvent::GetQobuzSearchResults(_) => Some(Source::Qobuz),
-      IoEvent::GetRadioSearchResults(_) => Some(Source::Radio),
-      IoEvent::GetYouTubeSearchResults(_) => Some(Source::YouTube),
-      _ => None,
-    }
-  }
-
-  /// Consume the submission-time `source_revision` for `source` and return it
-  /// only if the app is still on that revision; returns `None` when a queued
-  /// search was already superseded by a source switch before starting.
-  pub fn begin_search(&mut self, source: Source) -> Option<u64> {
-    let rev = self
-      .pending_search_revisions
-      .iter()
-      .position(|(queued, _)| *queued == source)
-      .and_then(|pos| self.pending_search_revisions.remove(pos))
-      .map(|(_, rev)| rev)
-      .unwrap_or_else(|| self.source_revision());
-    (self.source_revision() == rev).then_some(rev)
-  }
-
   // Send a network event to the network thread
   /// Clone the IoEvent sender so a spawned task (e.g. the in-TUI Spotify login
   /// callback server) can dispatch events back into the pump without holding the
@@ -798,19 +770,10 @@ impl App {
     let Some(io_tx) = &self.io_tx else {
       return false;
     };
-    let search_source = Self::search_event_source(&action);
     if let Err(e) = io_tx.send(action) {
       self.is_loading = false;
       log::error!("Error from dispatch {}", e);
       return false;
-    }
-    if let Some(source) = search_source {
-      if self.pending_search_revisions.len() >= 64 {
-        self.pending_search_revisions.pop_front();
-      }
-      self
-        .pending_search_revisions
-        .push_back((source, self.source_revision()));
     }
     true
   }

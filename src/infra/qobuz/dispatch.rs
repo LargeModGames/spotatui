@@ -71,8 +71,8 @@ pub async fn route_qobuz_event(app: &Arc<Mutex<App>>, event: &IoEvent) -> bool {
       load_qobuz_tracks(app, uri, *epoch).await;
       true
     }
-    IoEvent::GetQobuzSearchResults(query) => {
-      run_qobuz_search(app, query).await;
+    IoEvent::GetQobuzSearchResults(query, source_rev) => {
+      run_qobuz_search(app, query, *source_rev).await;
       true
     }
     IoEvent::QobuzLogin => {
@@ -461,10 +461,10 @@ fn finish_qobuz_tracks(
 }
 
 /// Run a catalog search and populate the songs block of `app.search_results`.
-async fn run_qobuz_search(app: &Arc<Mutex<App>>, query: &str) {
-  let Some(source_rev) = app.lock().await.begin_search(Source::Qobuz) else {
+async fn run_qobuz_search(app: &Arc<Mutex<App>>, query: &str, source_rev: u64) {
+  if app.lock().await.source_revision() != source_rev {
     return;
-  };
+  }
   let Some(source) = build_source(app, WhenLoggedOut::Login).await else {
     return;
   };
@@ -1128,11 +1128,17 @@ mod tests {
     let mut inner = App::new(tx, crate::core::user_config::UserConfig::new(), None);
     inner.state_path = Some(dir.path().join("state.yml"));
     inner.set_active_source(Source::Qobuz);
-    inner.dispatch(IoEvent::GetQobuzSearchResults("miles".to_string()));
+    let stale_rev = inner.source_revision();
     inner.set_active_source(Source::Spotify);
     let app = Arc::new(Mutex::new(inner));
 
-    assert!(route_qobuz_event(&app, &IoEvent::GetQobuzSearchResults("miles".to_string())).await);
+    assert!(
+      route_qobuz_event(
+        &app,
+        &IoEvent::GetQobuzSearchResults("miles".to_string(), stale_rev)
+      )
+      .await
+    );
     let guard = app.lock().await;
     assert_eq!(guard.active_source, Source::Spotify);
     assert!(!guard.status_message_is_error());

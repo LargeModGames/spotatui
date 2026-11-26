@@ -2789,7 +2789,7 @@ mod tests {
 
     assert!(matches!(
       rx.try_recv(),
-      Ok(IoEvent::GetSearchResults(query, _)) if query == "kygo"
+      Ok(IoEvent::GetSearchResults(query, _, _)) if query == "kygo"
     ));
   }
 

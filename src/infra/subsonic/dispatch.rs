@@ -73,8 +73,8 @@ pub async fn route_subsonic_event(app: &Arc<Mutex<App>>, event: &IoEvent) -> boo
       load_subsonic_tracks(app, uri, *epoch).await;
       true
     }
-    IoEvent::GetSubsonicSearchResults(query) => {
-      run_subsonic_search(app, query).await;
+    IoEvent::GetSubsonicSearchResults(query, source_rev) => {
+      run_subsonic_search(app, query, *source_rev).await;
       true
     }
     // Start a playlist of subsonic tracks: queue all and start at the offset.
@@ -265,10 +265,10 @@ async fn load_subsonic_tracks(app: &Arc<Mutex<App>>, playlist_uri: &str, epoch: 
 /// dispatches rspotify-bound `GetAlbum`/`GetArtist` events that fail for Subsonic
 /// ids, so those blocks are left `None` to avoid dead rows. Album/artist
 /// drill-down is a tracked follow-up.
-async fn run_subsonic_search(app: &Arc<Mutex<App>>, query: &str) {
-  let Some(source_rev) = app.lock().await.begin_search(Source::Subsonic) else {
+async fn run_subsonic_search(app: &Arc<Mutex<App>>, query: &str, source_rev: u64) {
+  if app.lock().await.source_revision() != source_rev {
     return;
-  };
+  }
   let Some(source) = build_source(app).await else {
     return;
   };
@@ -1084,8 +1084,13 @@ mod tests {
     app.user_config.behavior.subsonic_password = Some("demo".to_string());
     let app = Arc::new(Mutex::new(app));
 
+    let source_rev = app.lock().await.source_revision();
     assert!(
-      route_subsonic_event(&app, &IoEvent::GetSubsonicSearchResults("love".to_string())).await
+      route_subsonic_event(
+        &app,
+        &IoEvent::GetSubsonicSearchResults("love".to_string(), source_rev)
+      )
+      .await
     );
     let uris: Vec<String> = app
       .lock()

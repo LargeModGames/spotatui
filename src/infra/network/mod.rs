@@ -53,7 +53,7 @@ pub enum IoEvent {
   /// Refresh the device list without opening the device picker (plugin data reads).
   #[cfg_attr(not(feature = "scripting"), allow(dead_code))]
   GetDevicesSilent,
-  GetSearchResults(String, Option<Country>),
+  GetSearchResults(String, Option<Country>, u64),
   /// Playlist id/URI, page offset.
   GetPlaylistItems(String, u32),
   /// Playlist id/URI, query.
@@ -236,7 +236,7 @@ pub enum IoEvent {
   /// Run a Subsonic catalog search and populate `app.search_results`. Only read
   /// by `infra::subsonic::dispatch`; an inert no-op without the `subsonic` feature.
   #[cfg_attr(not(feature = "subsonic"), allow(dead_code))]
-  GetSubsonicSearchResults(String),
+  GetSubsonicSearchResults(String, u64),
   /// List the Qobuz sidebar rows: favorites, playlists, albums (handled by
   /// `infra::qobuz::dispatch`; a no-op on the Spotify network).
   GetQobuzPlaylists,
@@ -246,7 +246,7 @@ pub enum IoEvent {
   /// Run a Qobuz catalog search and populate `app.search_results`. Only read
   /// by `infra::qobuz::dispatch`; an inert no-op without the `qobuz` feature.
   #[cfg_attr(not(feature = "qobuz"), allow(dead_code))]
-  GetQobuzSearchResults(String),
+  GetQobuzSearchResults(String, u64),
   /// Start the in-TUI Qobuz browser login (handled by `infra::qobuz::dispatch`).
   #[cfg_attr(not(feature = "qobuz"), allow(dead_code))]
   QobuzLogin,
@@ -291,12 +291,12 @@ pub enum IoEvent {
   /// Only read by `infra::radio::dispatch`; an inert no-op without the
   /// `internet-radio` feature.
   #[cfg_attr(not(feature = "internet-radio"), allow(dead_code))]
-  GetRadioSearchResults(String),
+  GetRadioSearchResults(String, u64),
   /// Run a YouTube search (via yt-dlp) and populate `app.search_results`.
   /// Only read by `infra::youtube::dispatch`; an inert no-op without the
   /// `youtube` feature.
   #[cfg_attr(not(feature = "youtube"), allow(dead_code))]
-  GetYouTubeSearchResults(String),
+  GetYouTubeSearchResults(String, u64),
   /// Load the local YouTube playlists file into the sidebar (handled by
   /// `infra::youtube::dispatch`; a no-op on the Spotify network).
   GetYouTubePlaylists,
@@ -595,17 +595,17 @@ impl Network {
         | IoEvent::GetLocalTracks(..)
         | IoEvent::GetSubsonicPlaylists
         | IoEvent::GetSubsonicTracks(..)
-        | IoEvent::GetSubsonicSearchResults(_)
+        | IoEvent::GetSubsonicSearchResults(..)
         | IoEvent::GetQobuzPlaylists
         | IoEvent::GetQobuzTracks(..)
-        | IoEvent::GetQobuzSearchResults(_)
+        | IoEvent::GetQobuzSearchResults(..)
         | IoEvent::QobuzLogin
         | IoEvent::AppleMusicHandoff { .. }
         | IoEvent::AppleMusicVolume { .. }
         | IoEvent::AppleMusicPage { .. }
         | IoEvent::GetRadioStations
-        | IoEvent::GetRadioSearchResults(_)
-        | IoEvent::GetYouTubeSearchResults(_)
+        | IoEvent::GetRadioSearchResults(..)
+        | IoEvent::GetYouTubeSearchResults(..)
         | IoEvent::GetYouTubePlaylists
         | IoEvent::GetYouTubeTracks(..)
         | IoEvent::CreateYouTubePlaylist(_)
@@ -795,8 +795,10 @@ impl Network {
       IoEvent::GetCurrentPlayback => {
         self.get_current_playback().await;
       }
-      IoEvent::GetSearchResults(search_term, country) => {
-        self.get_search_results(search_term, country).await;
+      IoEvent::GetSearchResults(search_term, country, source_rev) => {
+        self
+          .get_search_results(search_term, country, source_rev)
+          .await;
       }
 
       IoEvent::GetPlaylistItems(playlist_id, playlist_offset) => {
@@ -1165,12 +1167,12 @@ impl Network {
       // before reaching the network; they only arrive here when the feature is off.
       IoEvent::GetSubsonicPlaylists
       | IoEvent::GetSubsonicTracks(..)
-      | IoEvent::GetSubsonicSearchResults(_) => {}
+      | IoEvent::GetSubsonicSearchResults(..) => {}
       // Qobuz browse/search/login events are handled by infra::qobuz::dispatch
       // before reaching the network; they only arrive here when the feature is off.
       IoEvent::GetQobuzPlaylists
       | IoEvent::GetQobuzTracks(..)
-      | IoEvent::GetQobuzSearchResults(_)
+      | IoEvent::GetQobuzSearchResults(..)
       | IoEvent::QobuzLogin => {}
       // Consumed by infra::apple_music::dispatch; only a build without the
       // Apple Music router gets here.
@@ -1184,11 +1186,11 @@ impl Network {
       }
       // Radio browse/search events are handled by infra::radio::dispatch before
       // reaching the network; they only arrive here when the feature is off.
-      IoEvent::GetRadioStations | IoEvent::GetRadioSearchResults(_) => {}
+      IoEvent::GetRadioStations | IoEvent::GetRadioSearchResults(..) => {}
       // YouTube search/playlist events are handled by infra::youtube::dispatch
       // before reaching the network; they only arrive here when the feature is
       // off.
-      IoEvent::GetYouTubeSearchResults(_)
+      IoEvent::GetYouTubeSearchResults(..)
       | IoEvent::GetYouTubePlaylists
       | IoEvent::GetYouTubeTracks(..)
       | IoEvent::CreateYouTubePlaylist(_)

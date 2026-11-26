@@ -1,6 +1,5 @@
 use super::{IoEvent, Network};
 use crate::core::plugin_api::{AlbumInfo, ArtistInfo, PlaylistInfo, ShowInfo, TrackInfo};
-use crate::core::source::Source;
 use crate::infra::network::mapping::map_page;
 use anyhow::anyhow;
 use rspotify::model::{
@@ -48,12 +47,25 @@ fn search_limit(requested: u32) -> String {
 }
 
 pub trait SearchNetwork {
-  async fn get_search_results(&mut self, search_term: String, country: Option<Country>);
+  async fn get_search_results(
+    &mut self,
+    search_term: String,
+    country: Option<Country>,
+    source_rev: u64,
+  );
   async fn search_tracks_for_playlist(&mut self, search_term: String);
 }
 
 impl SearchNetwork for Network {
-  async fn get_search_results(&mut self, search_term: String, country: Option<Country>) {
+  async fn get_search_results(
+    &mut self,
+    search_term: String,
+    country: Option<Country>,
+    source_rev: u64,
+  ) {
+    if self.app.lock().await.source_revision() != source_rev {
+      return;
+    }
     // Don't pass market to search - when market is specified, Spotify doesn't return
     // available_markets field, but rspotify 0.14 models require it for tracks/albums.
     // We'll handle null playlist fields by searching playlists separately without requiring all fields.
@@ -78,10 +90,6 @@ impl SearchNetwork for Network {
       ("limit", search_limit(self.small_search_limit)),
       ("offset", "0".to_string()),
     ];
-
-    let Some(source_rev) = self.app.lock().await.begin_search(Source::Spotify) else {
-      return;
-    };
 
     let (track_search, album_search, show_search, playlist_search, artist_search) = tokio::join!(
       self.spotify_get_typed::<TrackSearchResponse>("search", &track_query),
@@ -284,7 +292,9 @@ mod tests {
       let (spotify, _fake) = fake_spotify_login(base_url);
       let mut network = Network::new(Some(spotify), &app);
 
-      network.get_search_results("queen".to_string(), None).await;
+      network
+        .get_search_results("queen".to_string(), None, 0)
+        .await;
       server.abort();
 
       let seen = seen.lock().unwrap();
@@ -323,13 +333,15 @@ mod tests {
       let mut app = App::new(tx, UserConfig::new(), Some(std::time::SystemTime::now()));
       let state_dir = tempfile::tempdir().unwrap();
       app.state_path = Some(state_dir.path().join("state.yml"));
-      app.dispatch(IoEvent::GetSearchResults("queen".to_string(), None));
-      app.set_active_source(Source::YouTube);
+      let stale_rev = app.source_revision();
+      app.set_active_source(crate::core::source::Source::YouTube);
       let app = Arc::new(Mutex::new(app));
       let (spotify, _fake) = fake_spotify_login(base_url);
       let mut network = Network::new(Some(spotify), &app);
 
-      network.get_search_results("queen".to_string(), None).await;
+      network
+        .get_search_results("queen".to_string(), None, stale_rev)
+        .await;
       server.abort();
 
       assert_eq!(
@@ -349,7 +361,7 @@ mod tests {
     let state_dir = tempfile::tempdir().unwrap();
     app.state_path = Some(state_dir.path().join("state.yml"));
     let initial_rev = app.source_revision();
-    app.set_active_source(Source::YouTube);
+    app.set_active_source(crate::core::source::Source::YouTube);
     let app = Arc::new(Mutex::new(app));
     let mut network = Network::new(None, &app);
 

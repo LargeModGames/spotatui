@@ -616,6 +616,7 @@ impl ScriptEngine {
         PluginDataKind::Search => Some(IoEvent::GetSearchResults(
           req.arg.clone().unwrap_or_default(),
           app.get_user_country(),
+          app.source_revision(),
         )),
         PluginDataKind::SavedTracks => Some(IoEvent::GetCurrentSavedTracks(None)),
         PluginDataKind::SavedAlbums => Some(IoEvent::GetCurrentUserSavedAlbums(None)),

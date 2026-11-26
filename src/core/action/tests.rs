@@ -557,7 +557,7 @@ fn search_resolves_the_user_country_at_apply_time() {
   app.apply(Action::Search("daft punk".to_string()));
 
   match rx.try_recv() {
-    Ok(IoEvent::GetSearchResults(query, country)) => {
+    Ok(IoEvent::GetSearchResults(query, country, _)) => {
       assert_eq!(query, "daft punk");
       assert_eq!(country, None, "no user loaded, so no market");
     }
@@ -1646,35 +1646,35 @@ fn search_active_source_routes_by_the_active_source() {
   app.apply(Action::SearchActiveSource(query.clone()));
   assert!(matches!(
     rx.try_recv(),
-    Ok(IoEvent::GetSubsonicSearchResults(q)) if q == "coltrane"
+    Ok(IoEvent::GetSubsonicSearchResults(q, _)) if q == "coltrane"
   ));
 
   app.active_source = Source::Radio;
   app.apply(Action::SearchActiveSource(query.clone()));
   assert!(matches!(
     rx.try_recv(),
-    Ok(IoEvent::GetRadioSearchResults(q)) if q == "coltrane"
+    Ok(IoEvent::GetRadioSearchResults(q, _)) if q == "coltrane"
   ));
 
   app.active_source = Source::YouTube;
   app.apply(Action::SearchActiveSource(query.clone()));
   assert!(matches!(
     rx.try_recv(),
-    Ok(IoEvent::GetYouTubeSearchResults(q)) if q == "coltrane"
+    Ok(IoEvent::GetYouTubeSearchResults(q, _)) if q == "coltrane"
   ));
 
   app.active_source = Source::Qobuz;
   app.apply(Action::SearchActiveSource(query.clone()));
   assert!(matches!(
     rx.try_recv(),
-    Ok(IoEvent::GetQobuzSearchResults(q)) if q == "coltrane"
+    Ok(IoEvent::GetQobuzSearchResults(q, _)) if q == "coltrane"
   ));
 
   app.active_source = Source::Spotify;
   app.apply(Action::SearchActiveSource(query.clone()));
   assert!(matches!(
     rx.try_recv(),
-    Ok(IoEvent::GetSearchResults(q, _)) if q == "coltrane"
+    Ok(IoEvent::GetSearchResults(q, _, _)) if q == "coltrane"
   ));
 
   // Local falls into the Spotify branch, matching the search input's
@@ -1683,7 +1683,7 @@ fn search_active_source_routes_by_the_active_source() {
   app.apply(Action::SearchActiveSource(query));
   assert!(matches!(
     rx.try_recv(),
-    Ok(IoEvent::GetSearchResults(_, None))
+    Ok(IoEvent::GetSearchResults(_, None, _))
   ));
 }
 
@@ -1700,7 +1700,7 @@ fn search_active_source_resolves_a_loaded_users_country() {
   app.apply(Action::SearchActiveSource("coltrane".to_string()));
 
   assert!(
-    matches!(rx.try_recv(), Ok(IoEvent::GetSearchResults(_, Some(_)))),
+    matches!(rx.try_recv(), Ok(IoEvent::GetSearchResults(_, Some(_), _))),
     "the loaded user's market rides along"
   );
 }
@@ -1716,7 +1716,7 @@ fn search_stays_on_the_spotify_catalog_when_browsing_other_sources() {
   // not reroute it (only SearchActiveSource does).
   assert!(matches!(
     rx.try_recv(),
-    Ok(IoEvent::GetSearchResults(q, None)) if q == "daft punk"
+    Ok(IoEvent::GetSearchResults(q, None, _)) if q == "daft punk"
   ));
 }
 
