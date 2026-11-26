@@ -304,19 +304,20 @@ impl YouTubeSource {
         // leave a fragment there. Start every attempt from an empty file, so
         // only the attempt that succeeds can supply the audio.
         discard_partial_download(dest).await?;
-        self.run(&args, DOWNLOAD_TIMEOUT).await
+        let stdout = self.run(&args, DOWNLOAD_TIMEOUT).await?;
+        // yt-dlp can exit successfully without writing the requested audio.
+        let has_audio = match tokio::fs::metadata(dest).await {
+          Ok(metadata) => metadata.is_file() && metadata.len() > 0,
+          Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+          Err(error) => return Err(error.into()),
+        };
+        if !has_audio {
+          return Err(YtdlpError::NoAudioFile.into());
+        }
+        Ok(stdout)
       }
     })
     .await?;
-    // yt-dlp can exit successfully without writing the requested audio.
-    let has_audio = match tokio::fs::metadata(dest).await {
-      Ok(metadata) => metadata.is_file() && metadata.len() > 0,
-      Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
-      Err(error) => return Err(error.into()),
-    };
-    if !has_audio {
-      return Err(YtdlpError::NoAudioFile.into());
-    }
     Ok(track_from_download_output(&stdout, video_id))
   }
 
@@ -838,25 +839,6 @@ mod tests {
     );
   }
 
-  #[test]
-  fn the_configuration_hint_comes_before_a_long_ytdlp_diagnostic() {
-    // The terminal playbar shows a status on one line and cuts off the rest.
-    let diagnostic = format!("yt-dlp failed (exit status: 1): ERROR: {}", "x".repeat(400));
-    for strings in [
-      &crate::core::i18n::EN,
-      &crate::core::i18n::ZH_HANS,
-      &crate::core::i18n::ZH_HANT,
-    ] {
-      let error =
-        anyhow!(diagnostic.clone()).context(YtdlpError::WithConfigHint(diagnostic.clone()));
-      let message = error_detail(&strings.status.infra, &error);
-      assert!(!message.contains('\n'), "{message}");
-      let hint = message.find("SPOTATUI_YTDLP_ARGS").expect("hint");
-      let detail = message.find(&diagnostic).expect("diagnostic");
-      assert!(hint < detail, "{message}");
-    }
-  }
-
   #[cfg(unix)]
   mod config_isolation {
     use super::*;
@@ -888,6 +870,40 @@ while [ "$#" -gt 0 ]; do
 done
 printf '%s\n' '{"id":"5NV6Rdv1a3I","title":"Song","duration":1}'
 "#;
+
+    #[tokio::test]
+    async fn the_configuration_hint_comes_before_a_long_ytdlp_diagnostic() {
+      // The terminal playbar shows a status on one line and cuts off the rest.
+      let diagnostic = format!("ERROR: {}", "x".repeat(400));
+      let (_dir, source) = fake_ytdlp(&format!("printf '%s\\n' '{diagnostic}' >&2\nexit 1"));
+      let error = source.search_videos("song").await.unwrap_err();
+
+      for strings in [
+        &crate::core::i18n::EN,
+        &crate::core::i18n::ZH_HANS,
+        &crate::core::i18n::ZH_HANT,
+      ] {
+        let message = error_detail(&strings.status.infra, &error);
+        assert!(!message.contains('\n'), "{message}");
+        let hint = message.find("SPOTATUI_YTDLP_ARGS").expect("hint");
+        let detail = message.find(&diagnostic).expect("diagnostic");
+        assert!(hint < detail, "{message}");
+      }
+    }
+
+    #[tokio::test]
+    async fn a_successful_exit_without_audio_retries_with_embedded_clients() {
+      let script = format!(
+        "case \" $* \" in\n  *\" {EMBEDDED_PLAYER_CLIENTS} \"*) ;;\n  *) exit 0 ;;\nesac\n{WRITE_AUDIO}"
+      );
+      let (dir, source) = fake_ytdlp(&script);
+      let dest = dir.path().join("audio.m4a");
+
+      let track = source.download_audio("5NV6Rdv1a3I", &dest).await.unwrap();
+
+      assert_eq!(track.unwrap().name, "Song");
+      assert_eq!(std::fs::read(dest).unwrap(), b"audio");
+    }
 
     #[tokio::test]
     async fn search_and_download_ignore_automatic_configuration() {
@@ -935,6 +951,7 @@ while [ "$#" -gt 0 ]; do
   fi
   shift
 done
+printf '%s\n' 'ERROR: primary download failed' >&2
 exit 1
 "#,
       );
@@ -944,10 +961,10 @@ exit 1
         .download_audio("5NV6Rdv1a3I", &dest)
         .await
         .expect_err("a fragment must not count as audio");
-      assert!(matches!(
-        error.downcast_ref::<YtdlpError>(),
-        Some(YtdlpError::NoAudioFile)
-      ));
+      assert!(error.to_string().contains("ERROR: primary download failed"));
+      let args = std::fs::read_to_string(dir.path().join("yt-dlp.args")).unwrap();
+      assert!(args.lines().any(|arg| arg == EMBEDDED_PLAYER_CLIENTS));
+      assert_eq!(std::fs::metadata(dest).unwrap().len(), 0);
     }
 
     #[tokio::test]
