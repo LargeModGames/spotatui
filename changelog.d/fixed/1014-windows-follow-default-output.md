@@ -1,0 +1,1 @@
+- **Native playback on Windows follows a change of the default output device**: switching to other headphones moves the sound to them ([#1014](https://github.com/LargeModGames/spotatui/issues/1014)).

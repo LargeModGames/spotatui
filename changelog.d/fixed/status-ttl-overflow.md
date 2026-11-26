@@ -1,1 +1,0 @@
-- **Large status message durations use overflow-safe scaling.** Normal and error status messages are capped at the in-app Spotify login timeout (currently five minutes) after applying the configured duration percentage.

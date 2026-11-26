@@ -35,6 +35,8 @@ use librespot_core::SpotifyUri;
 use librespot_metadata::{
   Episode as LibrespotEpisode, Metadata, Playlist as LibrespotPlaylist, Track as LibrespotTrack,
 };
+#[cfg(feature = "streaming")]
+use percent_encoding::percent_decode_str;
 
 // Spotify's `me/library` endpoints (contains, save, remove) accept at most 40
 // uris per request; anything larger fails with a 400 "Too many uris".
@@ -3596,7 +3598,12 @@ fn parse_rootlist_items(
 
     if let Some(rest) = uri.strip_prefix("spotify:start-group:") {
       let (group_id, name) = match rest.find(':') {
-        Some(pos) => (rest[..pos].to_string(), rest[pos + 1..].to_string()),
+        Some(pos) => (
+          rest[..pos].to_string(),
+          percent_decode_str(&rest[pos + 1..].replace('+', " "))
+            .decode_utf8_lossy()
+            .into_owned(),
+        ),
         None => (rest.to_string(), String::new()),
       };
       name_stack.push((group_id, name));
@@ -3790,6 +3797,7 @@ mod folder_label_tests {
 mod rootlist_only_tests {
   use super::*;
   use crate::core::test_helpers::playlist_info;
+  use librespot_protocol::playlist4_external::Item;
 
   fn playlist_node(id: &str) -> PlaylistFolderNode {
     PlaylistFolderNode {
@@ -3807,6 +3815,22 @@ mod rootlist_only_tests {
       uri: format!("spotify:folder:{id}"),
       children,
     }
+  }
+
+  fn rootlist_item(uri: &str) -> Item {
+    let mut item = Item::new();
+    item.set_uri(uri.to_string());
+    item
+  }
+
+  /// Parses one empty folder group and returns its node.
+  fn parse_folder(start_uri: &str) -> PlaylistFolderNode {
+    let mut nodes = parse_rootlist_items(&[
+      rootlist_item(start_uri),
+      rootlist_item("spotify:end-group:g1"),
+    ]);
+    assert_eq!(nodes.len(), 1, "expected exactly one folder node");
+    nodes.remove(0)
   }
 
   #[test]
@@ -3933,5 +3957,39 @@ mod rootlist_only_tests {
       })
       .collect();
     assert_eq!(order, vec!["Release Radar", "Mine"]);
+  }
+
+  #[test]
+  fn folder_name_suffix_is_percent_decoded() {
+    let folder = parse_folder("spotify:start-group:g1:Road%20Trip%20%26%20Chill");
+
+    assert_eq!(folder.name.as_deref(), Some("Road Trip & Chill"));
+    // Only the name is decoded; the group id still builds the folder uri.
+    assert_eq!(folder.uri, "spotify:folder:g1");
+  }
+
+  #[test]
+  fn encoded_colon_in_the_name_does_not_split_the_group_id() {
+    let folder = parse_folder("spotify:start-group:g1:Mix%3A+Chill");
+
+    assert_eq!(folder.name.as_deref(), Some("Mix: Chill"));
+    assert_eq!(folder.uri, "spotify:folder:g1");
+  }
+
+  #[test]
+  fn double_encoded_colon_is_decoded_only_once() {
+    // `%253A` is an encoded `%3A`; a single decode leaves the literal `%3A`.
+    // Decoding twice would turn it into `:` and change the displayed name.
+    let folder = parse_folder("spotify:start-group:g1:100%253A+Hits");
+
+    assert_eq!(folder.name.as_deref(), Some("100%3A Hits"));
+  }
+
+  #[test]
+  fn encoded_plus_stays_a_plus() {
+    // `+` means space, but `%2B` is a literal plus and must survive.
+    let folder = parse_folder("spotify:start-group:g1:C%2B%2B+Hits");
+
+    assert_eq!(folder.name.as_deref(), Some("C++ Hits"));
   }
 }

@@ -185,6 +185,8 @@ the release date of the track's album as the source reports it (`"1997"`, `"1997
 `"1997-01-20"`; Spotify sends `"0000"` for an unknown date), or `nil` when the source has none.
 It is filled in track lists such as search results and saved tracks; the track in the playback
 table itself always has `release_date = nil`, because the now-playing snapshot carries no date.
+The playback track's `image_url` is also `nil` for Subsonic, because Subsonic cover URLs carry
+login credentials.
 
 The cached reads for playlists, queue and search results refresh when the underlying data
 changes; they are cheap to call but can be empty until the app has actually fetched that data.

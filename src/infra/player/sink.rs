@@ -17,7 +17,7 @@ use librespot_playback::{
 };
 use log::{debug, info, warn};
 use rodio::cpal::traits::HostTrait;
-use rodio::cpal::{Device, SampleFormat, StreamError, SupportedStreamConfig};
+use rodio::cpal::{Device, DeviceDescription, SampleFormat, StreamError, SupportedStreamConfig};
 use rodio::{ChannelCount, DeviceSinkBuilder, DeviceTrait, Player};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
@@ -30,8 +30,18 @@ const WRITE_STALL_LIMIT: Duration = Duration::from_secs(2);
 const STOP_STALL_LIMIT: Duration = Duration::from_millis(500);
 const POLL: Duration = Duration::from_millis(10);
 const OPEN_TIMEOUT: Duration = Duration::from_secs(5);
+/// How often the device thread checks if the system default output moved.
+const DEFAULT_CHECK_INTERVAL: Duration = Duration::from_secs(1);
+const REOPEN_RETRY_MAX: Duration = Duration::from_secs(30);
 
-use super::sink_wait::{wait_decision, WaitDecision};
+use super::sink_wait::{default_moved, wait_decision, WaitDecision};
+
+/// The whole description, because its name is a generic label such as
+/// "Headphones". Not `id()`: cpal's WASAPI `id()` leaks a COM string per call.
+fn default_output_description() -> Option<DeviceDescription> {
+  let device = rodio::cpal::default_host().default_output_device()?;
+  device.description().ok()
+}
 
 /// Wait until at most `threshold` buffers are queued. Never blocks for longer
 /// than `stall_limit` without the queue shrinking.
@@ -68,6 +78,11 @@ pub struct SpotatuiSink {
   lost: Arc<AtomicBool>,
   /// Dropping this lets the device thread release the stream.
   _keepalive: mpsc::Sender<()>,
+  /// Set by the device thread when the system default output moved.
+  default_moved: Arc<AtomicBool>,
+  format: AudioFormat,
+  retry_at: Instant,
+  retry_delay: Duration,
 }
 
 /// Stands in when the device cannot be opened, so the failure reaches
@@ -108,7 +123,7 @@ fn sample_format(format: AudioFormat) -> SampleFormat {
 /// thread so the lookups are bounded by `OPEN_TIMEOUT` too.
 fn select_device_and_config(
   requested: Option<&str>,
-) -> Result<(Device, SupportedStreamConfig), String> {
+) -> Result<(Device, SupportedStreamConfig, Option<DeviceDescription>), String> {
   let host = rodio::cpal::default_host();
   let device = match requested {
     Some(name) => host
@@ -120,12 +135,10 @@ fn select_device_and_config(
       .default_output_device()
       .ok_or_else(|| "no audio output device available".to_string())?,
   };
+  let description = device.description().ok();
   info!(
     "Using audio device: {}",
-    device
-      .description()
-      .map(|d| d.name().to_string())
-      .unwrap_or_else(|_| "[unknown name]".into())
+    description.as_ref().map_or("[unknown name]", |d| d.name())
   );
 
   // Native stereo 44.1 kHz first, then the device's default rate (rodio
@@ -142,7 +155,7 @@ fn select_device_and_config(
         .or_else(|| c.try_with_sample_rate(default_config.sample_rate()))
     })
     .unwrap_or(default_config);
-  Ok((device, config))
+  Ok((device, config, description))
 }
 
 impl SpotatuiSink {
@@ -161,6 +174,8 @@ impl SpotatuiSink {
       }
     };
 
+    let moved = Arc::new(AtomicBool::new(false));
+    let moved_flag = Arc::clone(&moved);
     let (init_tx, init_rx) = mpsc::channel::<Result<Player, String>>();
     let (keepalive_tx, keepalive_rx) = mpsc::channel::<()>();
     // The device lookup and config queries also run on this thread, so
@@ -169,7 +184,7 @@ impl SpotatuiSink {
     std::thread::Builder::new()
       .name("spotatui-stream-audio".to_string())
       .spawn(move || {
-        let (device, config) = match select_device_and_config(requested.as_deref()) {
+        let (device, config, mut seen) = match select_device_and_config(requested.as_deref()) {
           Ok(selected) => selected,
           Err(e) => {
             let _ = init_tx.send(Err(e));
@@ -192,6 +207,17 @@ impl SpotatuiSink {
             if init_tx.send(Ok(player)).is_err() {
               return;
             }
+            // Each change of the default raises the flag once.
+            while requested.is_none()
+              && keepalive_rx.recv_timeout(DEFAULT_CHECK_INTERVAL)
+                == Err(mpsc::RecvTimeoutError::Timeout)
+            {
+              let now = default_output_description();
+              if default_moved(seen.as_ref(), now.as_ref()) {
+                moved_flag.store(true, Ordering::Relaxed);
+              }
+              seen = now.or(seen);
+            }
             let _ = keepalive_rx.recv();
           }
           Err(e) => {
@@ -209,7 +235,34 @@ impl SpotatuiSink {
       player,
       lost,
       _keepalive: keepalive_tx,
+      default_moved: moved,
+      format,
+      retry_at: Instant::now(),
+      retry_delay: DEFAULT_CHECK_INTERVAL,
     })
+  }
+
+  /// Reopen on the system default output when it moved to another device that
+  /// is still available, so no stream error ever reports the move.
+  /// A failed open stays pending and is retried with a doubling delay, because
+  /// a Bluetooth output can become the default before it can open.
+  fn follow_default_output(&mut self) {
+    if Instant::now() < self.retry_at || !self.default_moved.swap(false, Ordering::Relaxed) {
+      return;
+    }
+    info!("Default audio output changed; reopening the streaming output");
+    match Self::open(None, self.format) {
+      Ok(reopened) => {
+        reopened.player.play();
+        *self = reopened;
+      }
+      Err(e) => {
+        warn!("Could not open the new default audio output: {e}");
+        self.default_moved.store(true, Ordering::Relaxed);
+        self.retry_at = Instant::now() + self.retry_delay;
+        self.retry_delay = (self.retry_delay * 2).min(REOPEN_RETRY_MAX);
+      }
+    }
   }
 
   fn removed() -> SinkError {
@@ -247,6 +300,7 @@ impl Sink for SpotatuiSink {
     ) else {
       return Err(SinkError::InvalidParams("bad audio format".to_string()));
     };
+    self.follow_default_output();
     self.player.append(rodio::buffer::SamplesBuffer::new(
       channels,
       rate,

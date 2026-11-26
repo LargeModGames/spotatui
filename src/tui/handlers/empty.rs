@@ -113,8 +113,6 @@ mod tests {
 
     assert_eq!(current_route.active_block, ActiveBlock::Empty);
     assert_eq!(current_route.hovered_block, ActiveBlock::MyPlaylists);
-
-    // TODO: test the other cases when they are implemented
   }
 
   #[test]

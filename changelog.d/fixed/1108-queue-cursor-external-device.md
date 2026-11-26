@@ -1,0 +1,1 @@
+- **The Queue cursor reaches the Spotify queue rows of an external device**: with Soloist or another Connect device, j and k now move onto the rows the screen shows ([#1108](https://github.com/LargeModGames/spotatui/issues/1108)).
