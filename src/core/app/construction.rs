@@ -219,6 +219,10 @@ impl Default for App {
       qobuz_playback: None,
       #[cfg(feature = "internet-radio")]
       radio_playback: None,
+      #[cfg(feature = "internet-radio")]
+      radio_retuning: false,
+      #[cfg(feature = "internet-radio")]
+      playback_requests: 0,
       #[cfg(feature = "youtube")]
       youtube_playback: None,
       #[cfg(any(test, feature = "audio-decode"))]

@@ -485,6 +485,24 @@ fn owner_still_owns(queued: PlaybackOwner, now: PlaybackOwner) -> bool {
     )
 }
 
+impl IoEvent {
+  /// A request that decides what plays next. Dispatching one discards a
+  /// startup radio restore that has not taken the sink yet.
+  #[cfg(feature = "internet-radio")]
+  pub(crate) fn supersedes_radio_restore(&self) -> bool {
+    matches!(
+      self,
+      IoEvent::StartPlayback(..)
+        | IoEvent::PausePlayback
+        | IoEvent::NextTrack
+        | IoEvent::PreviousTrack
+        | IoEvent::ForcePreviousTrack
+        | IoEvent::AdvanceNativeQueue
+        | IoEvent::TransferPlaybackToDevice(..)
+    )
+  }
+}
+
 impl Network {
   pub fn new(spotify: Option<SpotifyLogin>, app: &Arc<Mutex<App>>) -> Self {
     Network {

@@ -22,18 +22,16 @@ impl App {
 
   fn apply_action(&mut self, action: Action) -> ActionOutcome {
     match action {
-      // Music's state is its own intent, which a start still loading has
-      // before any snapshot does.
-      Action::Play if self.apple_music_owns_playback() => self.set_apple_music_playing(true),
-      Action::Pause if self.apple_music_owns_playback() => self.set_apple_music_playing(false),
-      Action::Play => {
-        if !effective_is_playing(self) {
+      Action::Play | Action::Pause => {
+        let playing = matches!(action, Action::Play);
+        // Music has its own intent before a loading start produces a snapshot.
+        if self.apple_music_owns_playback() {
+          self.invalidate_radio_restore();
+          self.set_apple_music_playing(playing);
+        } else if effective_is_playing(self) != playing {
           self.toggle_playback();
-        }
-      }
-      Action::Pause => {
-        if effective_is_playing(self) {
-          self.toggle_playback();
+        } else {
+          self.invalidate_radio_restore();
         }
       }
       Action::TogglePlayback => self.toggle_playback(),

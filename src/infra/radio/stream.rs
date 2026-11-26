@@ -15,47 +15,41 @@
 //! the byte stream (so the decoder never sees them) and publishes each title
 //! into a shared cell the playbar reads every frame.
 //!
-//! The concrete reader stack —
-//! `IcyMetadataReader<StreamDownload<BoundedStorageProvider<MemoryStorageProvider>>>`
-//! — stays inside this module; callers get a boxed [`StreamReader`].
+//! The HTTP and ICY reader stack stays inside the radio module.
 
+use std::error::Error;
+use std::fmt;
 use std::io::{Read, Seek};
-use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use icy_metadata::{IcyHeaders, IcyMetadataReader};
-use stream_download::http::{reqwest, HttpStream};
-use stream_download::storage::bounded::BoundedStorageProvider;
-use stream_download::storage::memory::MemoryStorageProvider;
-use stream_download::{Settings, StreamDownload};
+use stream_download::http::{reqwest, HttpStream, HttpStreamError};
+use tokio::time::{timeout_at, Instant};
+
+use super::buffer::{self, StartupBuffer};
+use super::playlist::{self, ResponseBody};
+use crate::core::i18n::status_infra::{InfraStatusStrings, EN};
+use crate::infra::audio::{LocalPlayer, PreparedStream};
+
+pub(super) type HttpRadioStream = HttpStream<reqwest::Client>;
+pub(super) type RadioChunk = <HttpRadioStream as futures::TryStream>::Ok;
 
 /// The bounds [`LocalPlayer::prepare_stream`](crate::infra::audio::LocalPlayer::prepare_stream)
 /// requires, as one nameable trait so the reader stack can be boxed.
 pub trait StreamReader: Read + Seek + Send + Sync {}
 impl<T: Read + Seek + Send + Sync> StreamReader for T {}
 
-/// How many bytes to buffer before playback may start. At a typical 128 kbps
-/// (16 KiB/s) this is ~4 s of audio — enough of a cushion against jitter
-/// without a long tune-in delay. (stream-download's 256 KiB default would mean
-/// a ~16 s tune-in.)
-const PREFETCH_BYTES: u64 = 64 * 1024;
-
-/// Size of the in-memory ring buffer holding the live stream. Must comfortably
-/// exceed [`PREFETCH_BYTES`]; ~30 s of audio at 128 kbps.
-const RING_BUFFER_BYTES: usize = 512 * 1024;
-
 /// Cap on establishing the TCP+TLS connection to the station. A station that
 /// never completes the handshake fails fast instead of hanging the serial pump.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Cap on the format probe, the last unbounded step of tune-in. rodio's probe
+/// Cap on the format probe and startup buffer. rodio's probe
 /// scans for a start-of-stream marker it recognises, and a live stream has no
 /// end to stop it: a station whose codec symphonia does not register — MPEG-2
 /// ADTS AAC, which it does not, is common on European radio — leaves it
-/// scanning forever, on the serial pump. Generous next to a healthy probe,
-/// which matches within the first prefetched bytes.
+/// scanning forever.
 pub(super) const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Cap on the connect + header-wait phase (`HttpStream::new`). A station that
@@ -63,6 +57,44 @@ pub(super) const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 /// the pump forever. This bounds only the tune-in handshake — NOT the audio body,
 /// which is an infinite stream and must never be subject to a request timeout.
 const HEADER_TIMEOUT: Duration = Duration::from_secs(15);
+const TUNE_IN_TIMEOUT: Duration = HEADER_TIMEOUT.saturating_add(PROBE_TIMEOUT);
+
+#[derive(Debug)]
+pub(super) enum RadioOpenError {
+  InvalidHttpResponse,
+  Playlist,
+  Hls,
+  ProbeTimeout,
+}
+
+impl RadioOpenError {
+  pub(super) fn message(&self, strings: &InfraStatusStrings) -> &'static str {
+    match self {
+      Self::InvalidHttpResponse => strings.radio_invalid_http_response,
+      Self::Playlist => strings.radio_playlist_unresolved,
+      Self::Hls => strings.radio_hls_unsupported,
+      Self::ProbeTimeout => strings.radio_probe_timeout,
+    }
+  }
+}
+
+impl fmt::Display for RadioOpenError {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    f.write_str(self.message(&EN))
+  }
+}
+
+impl Error for RadioOpenError {}
+
+struct CancelDownload(Option<Box<dyn FnOnce() + Send>>);
+
+impl Drop for CancelDownload {
+  fn drop(&mut self) {
+    if let Some(cancel) = self.0.take() {
+      cancel();
+    }
+  }
+}
 
 /// A successfully opened radio stream, ready to hand to
 /// [`LocalPlayer::prepare_stream`](crate::infra::audio::LocalPlayer::prepare_stream).
@@ -77,7 +109,7 @@ pub struct OpenedStream {
   /// would never be seen. Cancelling marks the stream done and wakes every
   /// waiter, so the read returns, the probe hits end-of-stream and gives up,
   /// and the thread and its download go away together.
-  pub cancel: Box<dyn Fn() + Send + Sync>,
+  cancel: Box<dyn FnOnce() + Send>,
   /// Live now-playing title (`StreamTitle`), updated by the reader as metadata
   /// blocks arrive. Stays `None` for streams without ICY metadata.
   pub now_playing: Arc<Mutex<Option<String>>>,
@@ -86,6 +118,33 @@ pub struct OpenedStream {
   pub content_type: Option<String>,
   /// Station name self-reported via the `icy-name` header.
   pub station_name: Option<String>,
+  startup_buffer: StartupBuffer,
+  deadline: Instant,
+}
+
+impl OpenedStream {
+  pub(super) async fn prepare(self) -> Result<PreparedStream> {
+    let mut cancel = CancelDownload(Some(self.cancel));
+    let deadline = self.deadline.min(Instant::now() + PROBE_TIMEOUT);
+    if Instant::now() >= deadline {
+      return Err(RadioOpenError::ProbeTimeout.into());
+    }
+    let prepare = async {
+      let prepared = tokio::task::spawn_blocking(move || {
+        LocalPlayer::prepare_stream(self.reader, self.content_type.as_deref(), None)
+      })
+      .await??;
+      self.startup_buffer.wait().await?;
+      Ok::<_, anyhow::Error>(prepared)
+    };
+    let result = timeout_at(deadline, prepare).await;
+    if Instant::now() >= deadline {
+      return Err(RadioOpenError::ProbeTimeout.into());
+    }
+    let prepared = result.map_err(|_| RadioOpenError::ProbeTimeout)??;
+    cancel.0 = None;
+    Ok(prepared)
+  }
 }
 
 /// Connect to a radio stream URL and start buffering it.
@@ -95,6 +154,10 @@ pub struct OpenedStream {
 /// returned reader cancels the background download, so teardown is just
 /// "stop the sink" (rodio drops the decoder, the decoder drops the reader).
 pub async fn open_radio_stream(url: &str) -> Result<OpenedStream> {
+  open_until(url, Instant::now() + TUNE_IN_TIMEOUT).await
+}
+
+async fn open_until(url: &str, deadline: Instant) -> Result<OpenedStream> {
   let mut headers = reqwest::header::HeaderMap::new();
   // Ask the server to interleave ICY metadata into the stream.
   icy_metadata::add_icy_metadata_header(&mut headers);
@@ -111,37 +174,50 @@ pub async fn open_radio_stream(url: &str) -> Result<OpenedStream> {
     .build()
     .context("building radio stream HTTP client")?;
 
-  let parsed: reqwest::Url = url
+  let mut parsed: reqwest::Url = url
     .parse()
     .with_context(|| format!("invalid radio stream URL: {url}"))?;
-  // `HttpStream::new` connects and waits for response headers. A station that
-  // accepts the connection then withholds headers would hang the serial pump
-  // forever, so bound the header-wait. This wrapper covers ONLY the tune-in
-  // handshake; once `HttpStream` is returned, the infinite body is read without
-  // any request timeout.
-  let stream = tokio::time::timeout(HEADER_TIMEOUT, HttpStream::new(client, parsed))
+  let mut followed_playlist = false;
+  let (stream, content_type, prefix, started) = loop {
+    let mut stream = timeout_at(
+      deadline.min(Instant::now() + HEADER_TIMEOUT),
+      HttpStream::new(client.clone(), parsed.clone()),
+    )
     .await
-    .map_err(|_| anyhow!("timed out waiting for radio stream headers from {url}"))?
-    .map_err(|e| anyhow!("connecting to radio stream {url}: {e}"))?;
+    .map_err(|_| anyhow!("timed out waiting for radio stream headers"))?
+    .map_err(|e| connect_error(e, &parsed))?;
+    let content_type = stream
+      .content_type()
+      .as_ref()
+      .map(|ct| format!("{}/{}", ct.r#type, ct.subtype));
+    let started = Instant::now();
+    match playlist::inspect(
+      &mut stream,
+      content_type.as_deref(),
+      deadline.min(started + HEADER_TIMEOUT),
+      followed_playlist,
+    )
+    .await?
+    {
+      ResponseBody::Audio(prefix) => break (stream, content_type, prefix, started),
+      ResponseBody::Playlist(next) => {
+        parsed = next;
+        followed_playlist = true;
+      }
+    }
+  };
 
   let icy_headers = IcyHeaders::parse_from_headers(stream.headers());
   let station_name = icy_headers.name().map(str::to_owned);
-  let content_type = stream
-    .content_type()
-    .as_ref()
-    .map(|ct| format!("{}/{}", ct.r#type, ct.subtype));
-
-  let settings = Settings::default().prefetch_bytes(PREFETCH_BYTES);
-  let storage = BoundedStorageProvider::new(
-    MemoryStorageProvider,
-    NonZeroUsize::new(RING_BUFFER_BYTES).expect("ring buffer size is non-zero"),
-  );
-  let download = StreamDownload::from_stream(stream, storage, settings)
-    .await
-    .map_err(|e| anyhow!("buffering radio stream: {e}"))?;
-
-  let cancellation = download.cancellation_token();
-  let cancel: Box<dyn Fn() + Send + Sync> = Box::new(move || cancellation.cancel());
+  let (download, startup_buffer) = buffer::open(
+    stream,
+    prefix,
+    icy_headers.metadata_interval(),
+    icy_headers.bitrate(),
+    started,
+  )
+  .await?;
+  let cancel = Box::new(download.cancel());
 
   let now_playing: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
   let reader: Box<dyn StreamReader> = match icy_headers.metadata_interval() {
@@ -172,7 +248,24 @@ pub async fn open_radio_stream(url: &str) -> Result<OpenedStream> {
     now_playing,
     content_type,
     station_name,
+    startup_buffer,
+    deadline,
   })
+}
+
+fn connect_error(error: HttpStreamError<reqwest::Client>, url: &reqwest::Url) -> anyhow::Error {
+  if let HttpStreamError::FetchFailure(ref fetch) = error {
+    let mut cause = fetch.source();
+    while let Some(current) = cause {
+      // reqwest exposes the parse failure through its error chain, without a
+      // typed status-line error or access to the original bytes.
+      if current.to_string() == "invalid HTTP version parsed" {
+        return RadioOpenError::InvalidHttpResponse.into();
+      }
+      cause = current.source();
+    }
+  }
+  anyhow!("connecting to radio stream {url}: {error}")
 }
 
 fn clean_stream_title(raw: Option<&str>) -> Option<String> {
@@ -183,6 +276,10 @@ fn clean_stream_title(raw: Option<&str>) -> Option<String> {
     Some(title.to_string())
   }
 }
+
+#[cfg(test)]
+#[path = "stream_tests.rs"]
+mod tune_in_tests;
 
 #[cfg(test)]
 mod tests {
@@ -225,7 +322,7 @@ mod tests {
       "SomaFM sends an icy-name header"
     );
 
-    // Reading must yield audio bytes (prefetch already buffered some).
+    // Reading must yield audio bytes with ICY metadata removed.
     let mut reader = opened.reader;
     let bytes = tokio::task::spawn_blocking(move || {
       let mut buf = vec![0u8; 32 * 1024];
@@ -266,10 +363,8 @@ mod tests {
 
     let player = Arc::new(LocalPlayer::new().expect("open default output device"));
     let decode_player = Arc::clone(&player);
-    let (reader, mime) = (opened.reader, opened.content_type);
+    let prepared = opened.prepare().await.expect("stream should decode");
     tokio::task::spawn_blocking(move || {
-      let prepared =
-        LocalPlayer::prepare_stream(reader, mime.as_deref(), None).expect("stream should decode");
       decode_player
         .play_prepared(prepared)
         .expect("stream should play");
