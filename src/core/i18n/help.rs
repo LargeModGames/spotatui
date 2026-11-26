@@ -40,6 +40,8 @@ pub struct HelpStrings {
   pub active_mode: &'static str,
   pub audio_analysis: &'static str,
   pub visualizer_style: &'static str,
+  #[cfg(feature = "milkdrop")]
+  pub milkdrop_preset: &'static str,
   pub lyrics_view: &'static str,
   pub lyrics_scroll: &'static str,
   pub lyrics_follow: &'static str,
@@ -212,6 +214,8 @@ pub const EN: HelpStrings = HelpStrings {
   active_mode: "Enter active mode",
   audio_analysis: "Go to audio analysis screen",
   visualizer_style: "Cycle visualizer style (in audio analysis)",
+  #[cfg(feature = "milkdrop")]
+  milkdrop_preset: "Previous / next MilkDrop preset (in audio analysis)",
   lyrics_view: "Go to lyrics view",
   lyrics_scroll: "Scroll lyrics (pauses auto-follow)",
   lyrics_follow: "Resume following the current lyric line",

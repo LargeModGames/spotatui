@@ -643,6 +643,8 @@ pub fn help_entries_for(strings: &crate::core::i18n::Strings) -> Vec<HelpEntry> 
       help.context_sidebar_playlists,
     )
     .needs(Requirement::BrowseSource(Source::Spotify)),
+    #[cfg(feature = "milkdrop")]
+    row(help.milkdrop_preset, Literal("[ ]"), help.context_general),
   ]
 }
 
@@ -1026,6 +1028,14 @@ mod tests {
       "Spotify playlists sidebar".to_string(),
     ];
     entries.push(playlist_pin.clone());
+    #[cfg(feature = "milkdrop")]
+    let milkdrop_row = vec![
+      "Previous / next MilkDrop preset (in audio analysis)".to_string(),
+      "[ ]".to_string(),
+      "General".to_string(),
+    ];
+    #[cfg(feature = "milkdrop")]
+    entries.push(milkdrop_row.clone());
     let enabled = |row: &Vec<String>| {
       (cfg!(feature = "cover-art") || row[0] != "Go to cover art view")
         && (cfg!(feature = "ai-dj") || row[2] != "AI DJ")
@@ -1091,6 +1101,8 @@ mod tests {
           .unavailable_description(&pin_row[0], &hint);
       }
       expected.push(pin_row);
+      #[cfg(feature = "milkdrop")]
+      expected.push(milkdrop_row.clone());
       assert_eq!(
         help_rows(&app),
         expected,

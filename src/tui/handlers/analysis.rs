@@ -5,4 +5,6 @@ pub fn handler(key: Key, app: &mut App) {
   if key == Key::Char('V') {
     app.apply(Action::CycleVisualizerStyle);
   }
+  #[cfg(feature = "milkdrop")]
+  crate::tui::ui::milkdrop::handle_key(key, app.user_config.behavior.visualizer_style);
 }

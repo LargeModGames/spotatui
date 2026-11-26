@@ -9,7 +9,9 @@ use std::time::Instant;
 use ratatui::{buffer::Buffer, layout::Rect, style::Color};
 use tidewarp::{presets, ComfortMode, Config, Engine, PresetId, Transition};
 
+use crate::core::user_config::VisualizerStyle;
 use crate::infra::audio::RecentAudio;
+use crate::tui::event::Key;
 
 /// Seconds each preset plays before the next one blends in.
 const SECONDS_PER_PRESET: f64 = 30.0;
@@ -17,7 +19,8 @@ const BLEND_SECONDS: f64 = 5.0;
 
 struct State {
   engine: Engine,
-  presets: Vec<PresetId>,
+  /// The loaded presets with their display names.
+  presets: Vec<(PresetId, &'static str)>,
   current: usize,
   started: Instant,
   switched_at: f64,
@@ -34,11 +37,11 @@ impl State {
       comfort: ComfortMode::Calm,
       ..Config::default()
     });
-    let presets: Vec<PresetId> = presets::ALL
+    let presets: Vec<(PresetId, &'static str)> = presets::ALL
       .iter()
-      .filter_map(|p| engine.load_preset(p.text).ok())
+      .filter_map(|p| engine.load_preset(p.text).ok().map(|id| (id, p.name)))
       .collect();
-    if let Some(first) = presets.first() {
+    if let Some((first, _)) = presets.first() {
       let _ = engine.switch_to(*first, Transition::Cut);
     }
     State {
@@ -60,6 +63,50 @@ thread_local! {
 
 fn with_state<R>(f: impl FnOnce(&mut State) -> R) -> R {
   STATE.with(|cell| f(cell.borrow_mut().get_or_insert_with(State::new)))
+}
+
+impl State {
+  /// Blends `delta` presets forward (or back, when negative) and restarts the timer.
+  fn step(&mut self, delta: isize) {
+    let count = self.presets.len();
+    if count == 0 {
+      return;
+    }
+    // Both values are small, so the casts cannot overflow.
+    self.current = (self.current as isize + delta).rem_euclid(count as isize) as usize;
+    let _ = self.engine.switch_to(
+      self.presets[self.current].0,
+      Transition::Blend(BLEND_SECONDS),
+    );
+    self.switched_at = self.started.elapsed().as_secs_f64();
+  }
+}
+
+/// Blends to the next (`1`) or previous (`-1`) preset.
+fn step_preset(delta: isize) {
+  with_state(|state| state.step(delta));
+}
+
+/// `]` blends to the next preset and `[` to the previous one, while `style` is MilkDrop.
+pub fn handle_key(key: Key, style: VisualizerStyle) {
+  if style != VisualizerStyle::MilkDrop {
+    return;
+  }
+  match key {
+    Key::Char(']') => step_preset(1),
+    Key::Char('[') => step_preset(-1),
+    _ => {}
+  }
+}
+
+/// The name of the preset that is playing or blending in.
+pub fn current_name() -> &'static str {
+  with_state(|state| {
+    state
+      .presets
+      .get(state.current)
+      .map_or("", |(_, name)| *name)
+  })
 }
 
 /// Feeds the samples the capture took in since the last call.
@@ -87,13 +134,8 @@ pub fn render(buf: &mut Buffer, area: Rect) {
       state.size = (cols, rows);
     }
     let now = state.started.elapsed().as_secs_f64();
-    if !state.presets.is_empty() && now - state.switched_at > SECONDS_PER_PRESET {
-      state.current = (state.current + 1) % state.presets.len();
-      let _ = state.engine.switch_to(
-        state.presets[state.current],
-        Transition::Blend(BLEND_SECONDS),
-      );
-      state.switched_at = now;
+    if now - state.switched_at > SECONDS_PER_PRESET {
+      state.step(1);
     }
     if state
       .engine
@@ -116,4 +158,31 @@ pub fn render(buf: &mut Buffer, area: Rect) {
       }
     }
   });
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn brackets_change_the_preset_only_in_the_milkdrop_style() {
+    let first = current_name();
+    handle_key(Key::Char(']'), VisualizerStyle::Cava);
+    assert_eq!(current_name(), first);
+    handle_key(Key::Char(']'), VisualizerStyle::MilkDrop);
+    assert_ne!(current_name(), first);
+    handle_key(Key::Char('['), VisualizerStyle::MilkDrop);
+    assert_eq!(current_name(), first);
+  }
+
+  #[test]
+  fn stepping_moves_through_the_presets_and_wraps() {
+    let first = current_name();
+    step_preset(1);
+    assert_ne!(current_name(), first);
+    step_preset(-1);
+    assert_eq!(current_name(), first);
+    step_preset(-1);
+    assert_eq!(current_name(), presets::ALL.last().unwrap().name);
+  }
 }

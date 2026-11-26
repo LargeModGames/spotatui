@@ -61,6 +61,8 @@ pub fn draw_in(f: &mut Frame<'_>, app: &App, area: Rect, margin: u16) {
   let tick_rate = normalize_tick_rate_milliseconds(tick_rate as i64);
   let visualizer_style = app.user_config.behavior.visualizer_style;
   let pitch_view = app.pitch_view_shows();
+  #[cfg(feature = "milkdrop")]
+  let milkdrop_title = format!("MilkDrop: {}", super::milkdrop::current_name());
   let (style_name, chart_name) = if pitch_view {
     (
       app.strings().screens.spotify_pitch,
@@ -79,7 +81,7 @@ pub fn draw_in(f: &mut Frame<'_>, app: &App, area: Rect, margin: u16) {
         VisualizerStyle::RackEq => app.strings().screens.rack_eq,
         VisualizerStyle::Cassette => app.strings().screens.cassette_deck,
         #[cfg(feature = "milkdrop")]
-        VisualizerStyle::MilkDrop => "MilkDrop",
+        VisualizerStyle::MilkDrop => &milkdrop_title,
       },
       app.strings().screens.spectrum,
     )
