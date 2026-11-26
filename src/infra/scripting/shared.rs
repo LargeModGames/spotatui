@@ -96,7 +96,8 @@ pub(crate) fn storage_namespace_id(name: &str) -> String {
   if base == id {
     id
   } else {
-    format!("{id}_{:016x}", fnv1a_64(base.as_bytes()))
+    // `.` lies outside `[A-Za-z0-9_-]`, so hashed namespaces can never collide with unchanged names.
+    format!("{id}.{:016x}", fnv1a_64(base.as_bytes()))
   }
 }
 

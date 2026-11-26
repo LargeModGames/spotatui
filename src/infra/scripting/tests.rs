@@ -2959,6 +2959,47 @@ mod storage_tests {
   }
 
   #[test]
+  fn hashed_namespaces_stay_distinct_from_clean_names() {
+    use super::super::shared::storage_namespace_id;
+
+    let dotted_ns = storage_namespace_id("..lua");
+    let clean_ns = storage_namespace_id("__af63a34c86018bb1.lua");
+    assert_ne!(dotted_ns, clean_ns);
+    assert!(dotted_ns.contains('.'));
+    assert_eq!(clean_ns, "__af63a34c86018bb1");
+
+    let cfg = temp_config_dir();
+    {
+      let mut engine = engine_with_dir(&cfg);
+      engine
+        .load_source("..lua", r#"spotatui.storage_set("v", "dot")"#)
+        .unwrap();
+      engine
+        .load_source(
+          "__af63a34c86018bb1.lua",
+          r#"spotatui.storage_set("v", "clean")"#,
+        )
+        .unwrap();
+      engine.flush_storage(true);
+    }
+
+    let mut reload = engine_with_dir(&cfg);
+    reload
+      .load_source("..lua", r#"pre_dot = spotatui.storage_get("v")"#)
+      .unwrap();
+    reload
+      .load_source(
+        "__af63a34c86018bb1.lua",
+        r#"pre_clean = spotatui.storage_get("v")"#,
+      )
+      .unwrap();
+    let globals = reload.lua.globals();
+    assert_eq!(globals.get::<String>("pre_dot").unwrap(), "dot");
+    assert_eq!(globals.get::<String>("pre_clean").unwrap(), "clean");
+    std::fs::remove_dir_all(&cfg).unwrap();
+  }
+
+  #[test]
   fn corrupt_storage_file_starts_empty() {
     let cfg = temp_config_dir();
     write_file(&cfg.join("plugin-data").join("a.json"), "{not json");
