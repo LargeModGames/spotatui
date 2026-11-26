@@ -941,6 +941,15 @@
       "contributions": [
         "code"
       ]
+    },
+    {
+      "login": "momolly1024",
+      "name": "Molly",
+      "avatar_url": "https://avatars.githubusercontent.com/u/61406208?v=4",
+      "profile": "https://github.com/momolly1024",
+      "contributions": [
+        "doc"
+      ]
     }
   ],
   "contributorsPerLine": 7,
