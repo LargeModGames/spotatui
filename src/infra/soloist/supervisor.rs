@@ -428,6 +428,10 @@ struct Seen {
   bad_key: bool,
   /// Soloist is logged in now; a logout clears it.
   logged_in: bool,
+  /// This child logged in at least once, so a later crash is not a rejected key.
+  ever_logged_in: bool,
+  /// A pairing line read while still logged in: the logout event may arrive just after it.
+  pairing_held: bool,
   /// This child's first login ran its one-time steps.
   login_handled: bool,
   pairing_shown: bool,
@@ -436,19 +440,25 @@ struct Seen {
 
 impl Seen {
   /// The login state an event reports; after a logout the pairing prompt may show again.
-  fn auth(&mut self, logged_in: bool) {
+  fn auth(&mut self, logged_in: bool) -> Option<Notice> {
     if logged_in {
       self.logged_in = true;
+      self.ever_logged_in = true;
     } else if std::mem::take(&mut self.logged_in) {
-      self.pairing_shown = false;
+      self.pairing_shown = std::mem::take(&mut self.pairing_held);
+      if self.pairing_shown {
+        return Some(Notice::NotPaired);
+      }
     }
+    None
   }
 
   fn note(&mut self, event: &LogEvent) -> Option<Notice> {
     match event {
       LogEvent::AnotherSession => self.another_session = true,
       LogEvent::Expired => self.expired = true,
-      LogEvent::WaitingForLogin if !self.logged_in && !self.pairing_shown => {
+      LogEvent::WaitingForLogin if self.logged_in => self.pairing_held = true,
+      LogEvent::WaitingForLogin if !self.pairing_shown => {
         self.pairing_shown = true;
         return Some(Notice::NotPaired);
       }
@@ -475,7 +485,9 @@ impl Seen {
   ) -> Outcome {
     match status.map(|status| self.exit(status, shared)) {
       // A rejected key stays rejected on a restart; after a login the key was not the cause.
-      Some(Exit::Crashed(_)) if self.bad_key && !self.logged_in => Outcome::Fatal(Notice::BadKey),
+      Some(Exit::Crashed(_)) if self.bad_key && !self.ever_logged_in => {
+        Outcome::Fatal(Notice::BadKey)
+      }
       Some(exit) => Outcome::Exited(exit),
       None if self.expired => Outcome::Fatal(Notice::Expired),
       None if self.bad_key => Outcome::Fatal(Notice::BadKey),
@@ -789,7 +801,9 @@ async fn run_once(
           }
           let logged_in = matches!(event, Event::Auth { logged_in: true, .. } | Event::State(_));
           if logged_in || matches!(event, Event::Auth { logged_in: false, .. }) {
-            seen.auth(logged_in);
+            if let Some(notice) = seen.auth(logged_in) {
+              notify_link(app, config, shared, &link, notice).await;
+            }
           }
           {
             let current = current_app(app, config, shared)
@@ -1407,18 +1421,21 @@ mod tests {
       &handshake_script(
         port,
         "while [ ! -f \"$data/release\" ]; do sleep 0.01; done\n\
-         echo 'client expired'\nsleep 0.3\nexit 1",
+         while [ ! -f \"$data/closed\" ]; do sleep 0.01; done\n\
+         sleep 0.3\nexit 10",
       ),
     );
     let app = Arc::new(Mutex::new(App::default()));
     let shared = Shared::default();
     let mut first_login = true;
+    // The child stays alive until the socket is gone, then exits with the expiry code: only a
+    // supervisor that waits for the exit code sees `Expired`, a kill reads as a crash.
     let observe = async {
       let socket = accept_soloist(&listener).await;
       wait_until(async || app.lock().await.soloist_link().is_some()).await;
       std::fs::write(config.data_dir.join("release"), "").unwrap();
-      tokio::time::sleep(Duration::from_millis(100)).await;
       drop(socket);
+      std::fs::write(config.data_dir.join("closed"), "").unwrap();
     };
     let (outcome, ()) = tokio::time::timeout(Duration::from_secs(8), async {
       tokio::join!(
@@ -1509,6 +1526,36 @@ mod tests {
   }
 
   #[test]
+  fn a_pairing_line_read_just_before_the_logout_still_shows_the_prompt() {
+    // The other order, logout then line, is `a_logout_lets_the_pairing_prompt_show_again`.
+    let mut seen = Seen::default();
+    seen.auth(true);
+    assert_eq!(seen.note(&LogEvent::WaitingForLogin), None);
+    assert_eq!(seen.auth(false), Some(Notice::NotPaired));
+    assert_eq!(seen.note(&LogEvent::WaitingForLogin), None);
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn a_crash_after_a_login_is_not_a_rejected_key() {
+    use std::os::unix::process::ExitStatusExt;
+    let shared = Shared::default();
+    let crashed = || Some(Ok(std::process::ExitStatus::from_raw(1 << 8)));
+    let mut seen = Seen::default();
+    assert_eq!(seen.note(&LogEvent::LoginFailed), Some(Notice::BadKey));
+    assert!(matches!(
+      seen.startup_failure(crashed(), &shared),
+      Outcome::Fatal(Notice::BadKey)
+    ));
+    seen.auth(true);
+    seen.auth(false);
+    assert!(matches!(
+      seen.startup_failure(crashed(), &shared),
+      Outcome::Exited(Exit::Crashed(Some(1)))
+    ));
+  }
+
+  #[test]
   fn a_logout_lets_the_pairing_prompt_show_again() {
     let mut seen = Seen::default();
     assert_eq!(
@@ -1516,8 +1563,7 @@ mod tests {
       Some(Notice::NotPaired)
     );
     seen.auth(true);
-    assert_eq!(seen.note(&LogEvent::WaitingForLogin), None);
-    seen.auth(false);
+    assert_eq!(seen.auth(false), None);
     assert_eq!(
       seen.note(&LogEvent::WaitingForLogin),
       Some(Notice::NotPaired)
