@@ -20,6 +20,10 @@
   playback request dispatched after the restore began discards it: the pump
   drops the pending work, and `finish_radio` compares
   `App::playback_requests` under the lock before it takes the sink.
+- Radio claims the sink (`App::claim_decoded_sink`) only once the station is
+  prepared, right before it releases librespot, so a station that fails to
+  connect leaves Spotify as it was. From that claim on, the usual rule holds:
+  a failed player open or stage keeps the claim.
 - A station switch keeps the old session in `radio_playback` and sets
   `App::set_radio_retuning` while the shared player restages, so the tick
   neither ends the session on the empty sink nor clears `last_session.yml`.

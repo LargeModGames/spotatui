@@ -363,8 +363,8 @@ pub(crate) async fn finish_radio(app: &Arc<Mutex<App>>, tune_in: RadioTuneIn) {
     (prepared, previous)
   };
   release_other_backends(app).await;
+  // A failed start keeps the claim, so a bare resume cannot wake librespot.
   let Some(player) = acquire_player(app, previous).await else {
-    app.lock().await.release_decoded_sink_claim();
     return;
   };
 
@@ -387,17 +387,7 @@ pub(crate) async fn finish_radio(app: &Arc<Mutex<App>>, tune_in: RadioTuneIn) {
   };
   guard.set_radio_retuning(false);
   if let Some(error) = error {
-    if guard
-      .radio_playback
-      .as_ref()
-      .is_some_and(|old| old.player.is_finished())
-    {
-      guard.radio_playback = None;
-    }
-    if guard.radio_playback.is_none() {
-      guard.release_decoded_sink_claim();
-    }
-    guard.set_status_message(error, 6);
+    radio_stage_failed(&mut guard, error);
     return;
   }
 
@@ -414,6 +404,19 @@ pub(crate) async fn finish_radio(app: &Arc<Mutex<App>>, tune_in: RadioTuneIn) {
   if let Some(id) = directory_id {
     tokio::spawn(async move { RadioSource::new().click(&id).await });
   }
+}
+
+/// Drop an old station that already went silent and report why the new one
+/// did not start. The claim stays: a failed start still owns the sink.
+fn radio_stage_failed(app: &mut App, error: String) {
+  if app
+    .radio_playback
+    .as_ref()
+    .is_some_and(|old| old.player.is_finished())
+  {
+    app.radio_playback = None;
+  }
+  app.set_status_message(error, 6);
 }
 
 /// Begin playing the station at `uri`, taking over the session.
@@ -465,6 +468,15 @@ mod tests {
     assert!(app.status_message().is_some());
     assert!(!app.decoded_sink_claimed());
     assert!(app.radio_playback.is_none());
+  }
+
+  #[test]
+  fn a_station_that_fails_to_stage_keeps_the_radio_claim() {
+    let mut app = test_app();
+    app.claim_decoded_sink(Source::Radio);
+    radio_stage_failed(&mut app, "no audio".to_owned());
+    assert!(app.decoded_sink_claimed());
+    assert!(app.status_message().is_some());
   }
 
   fn failed_restore(requests: u64) -> RadioTuneIn {
