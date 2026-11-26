@@ -837,7 +837,9 @@ fn ensure_storage_loaded(shared: &Rc<ScriptShared>, namespace: &str) {
       Some(result) => result,
       None => namespace
         .split_once('.')
-        .and_then(|(legacy_id, _)| shared.storage_path(legacy_id))
+        .map(|(legacy_id, _)| legacy_id)
+        .filter(|legacy_id| !shared.loaded_namespaces.borrow().contains(*legacy_id))
+        .and_then(|legacy_id| shared.storage_path(legacy_id))
         .and_then(|legacy_path| read_storage_map(&legacy_path))
         .flatten(),
     })

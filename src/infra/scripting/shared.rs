@@ -143,6 +143,9 @@ pub(crate) struct ScriptShared {
   pub(super) storage: RefCell<BTreeMap<String, serde_json::Map<String, serde_json::Value>>>,
   /// Namespaces with unflushed writes.
   pub(super) storage_dirty: RefCell<BTreeSet<String>>,
+  /// Namespaces of plugins discovered/loaded in this engine, so hashed-namespace
+  /// plugins only fall back to `<id>.json` when no clean `<id>` plugin owns it.
+  pub(super) loaded_namespaces: RefCell<BTreeSet<String>>,
 }
 
 impl ScriptShared {
@@ -165,6 +168,7 @@ impl ScriptShared {
       config_dir: RefCell::new(None),
       storage: RefCell::new(BTreeMap::new()),
       storage_dirty: RefCell::new(BTreeSet::new()),
+      loaded_namespaces: RefCell::new(BTreeSet::new()),
     }
   }
 

@@ -3045,6 +3045,40 @@ mod storage_tests {
   }
 
   #[test]
+  fn legacy_save_skipped_when_clean_plugin_loaded() {
+    let cfg = tempfile::tempdir().unwrap();
+    write_file(
+      &cfg.path().join("plugins/mix_notes.lua"),
+      r#"
+        existing = spotatui.storage_get("token")
+        if existing == nil then
+          spotatui.storage_set("token", "clean-secret")
+        end
+      "#,
+    );
+
+    {
+      let mut engine = ScriptEngine::new().unwrap();
+      assert_eq!(engine.load_user_scripts(cfg.path()), 1);
+      engine.flush_storage(true);
+    }
+
+    // Adding `mix.notes.lua` alongside `mix_notes.lua` (and loading it first
+    // alphabetically in a fresh engine without a hashed save) must not seed it
+    // from `mix_notes.json`.
+    write_file(
+      &cfg.path().join("plugins/mix.notes.lua"),
+      r#"dotted_seen = spotatui.storage_get("token") or "missing""#,
+    );
+
+    let mut fresh = ScriptEngine::new().unwrap();
+    assert_eq!(fresh.load_user_scripts(cfg.path()), 2);
+    let globals = fresh.lua.globals();
+    assert_eq!(globals.get::<String>("dotted_seen").unwrap(), "missing");
+    assert_eq!(globals.get::<String>("existing").unwrap(), "clean-secret");
+  }
+
+  #[test]
   fn corrupt_storage_file_starts_empty() {
     let cfg = temp_config_dir();
     write_file(&cfg.join("plugin-data").join("a.json"), "{not json");
