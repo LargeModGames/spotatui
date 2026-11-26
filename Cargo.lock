@@ -6766,6 +6766,7 @@ dependencies = [
 [[package]]
 name = "tidewarp"
 version = "0.1.0"
+source = "git+https://github.com/LargeModGames/tidewarp#269653112871db5e2479d6d3b83ba29ee6ab8661"
 dependencies = [
  "bytemuck",
  "pollster",

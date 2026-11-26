@@ -29,8 +29,8 @@ exclude = [
 [dependencies]
 rspotify = { version = "0.16", default-features = false, features = ["cli", "env-file", "client-reqwest"] }
 ratatui = { version = "0.30", features = ["crossterm", "layout-cache"], default-features = false, optional = true }
-# Local path until tidewarp is published; this branch must not be pushed before then.
-tidewarp = { path = "../tidewarp/crates/tidewarp", optional = true, features = ["gpu"] }
+# A git dependency until tidewarp is on crates.io.
+tidewarp = { git = "https://github.com/LargeModGames/tidewarp", optional = true, features = ["gpu"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_yaml = "0.9"
