@@ -928,6 +928,22 @@ impl App {
   pub fn toggle_save_current_item(&mut self) {
     let refused = self.strings().status.app.current_source_cannot_like;
     let uri = match self.playing_item() {
+      PlayingItem::Spotify(_) | PlayingItem::Nothing
+        if self.spotify_connected
+          && self.is_streaming_active
+          && self.native_track_info.is_some() =>
+      {
+        // While Spotify's context catches up after a skip, use the same
+        // identity as the now-playing snapshot. Native local files cannot be saved.
+        Ok(
+          crate::infra::media_metadata::tracking_playback_snapshot(self).and_then(|snapshot| {
+            snapshot
+              .item_id
+              .filter(|id| !id.starts_with("spotify:local:"))?;
+            snapshot.item_uri
+          }),
+        )
+      }
       PlayingItem::Spotify(PlayableItem::Track(track)) => Ok(track.id.as_ref().map(|id| id.uri())),
       PlayingItem::Spotify(PlayableItem::Episode(episode)) => Ok(Some(episode.id.uri())),
       PlayingItem::Spotify(_) | PlayingItem::Nothing => Ok(None),

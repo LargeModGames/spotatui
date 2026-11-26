@@ -44,6 +44,90 @@ impl PlaybackOwner {
   }
 }
 
+/// A Connect device id, with the reported name as a fallback when Spotify omits the id.
+#[derive(Debug)]
+enum SpotifyDevice {
+  Id(String),
+  Name(String),
+}
+
+impl SpotifyDevice {
+  fn from_context(context: &CurrentPlaybackContext) -> Self {
+    match &context.device.id {
+      Some(id) => Self::Id(id.clone()),
+      None => Self::Name(context.device.name.clone()),
+    }
+  }
+
+  fn matches(&self, context: &CurrentPlaybackContext) -> bool {
+    match (self, &context.device.id) {
+      (Self::Id(id), Some(current)) => id == current,
+      (Self::Name(name), None) => *name == context.device.name,
+      _ => false,
+    }
+  }
+
+  fn id(&self) -> Option<&str> {
+    match self {
+      Self::Id(id) if !id.is_empty() => Some(id),
+      Self::Id(_) | Self::Name(_) => None,
+    }
+  }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SpotifyControl {
+  Playing,
+  Shuffle,
+}
+
+#[derive(Debug)]
+pub(crate) struct SpotifyControlRequest {
+  pub(crate) control: SpotifyControl,
+  pub(crate) enabled: bool,
+  device: SpotifyDevice,
+}
+
+impl SpotifyControlRequest {
+  pub(crate) fn device_id(&self) -> Option<&str> {
+    self.device.id()
+  }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum SpotifySeekCommand {
+  Position(u32),
+  NextTrack,
+}
+
+pub(crate) struct SpotifySeekRequest {
+  pub(super) target: SpotifySeekTarget,
+  pub(crate) command: SpotifySeekCommand,
+}
+
+impl SpotifySeekRequest {
+  pub(crate) fn device_id(&self) -> Option<&str> {
+    self.target.device.id()
+  }
+
+  pub(crate) fn expected_item(&self) -> &SpotifySeekItem {
+    &self.target.item
+  }
+}
+
+pub(super) struct SpotifySeekTarget {
+  device: SpotifyDevice,
+  item: SpotifySeekItem,
+}
+
+pub(crate) enum SpotifySeekItem {
+  Track(rspotify::model::TrackId<'static>),
+  Episode(rspotify::model::EpisodeId<'static>),
+  // For tracks without a Spotify id, keep the seek only while the playback
+  // state still has the same timestamp.
+  Unidentified(chrono::DateTime<chrono::Utc>),
+}
+
 /// The item a track-level action on "what is playing now" can act on.
 pub(super) enum PlayingItem<'a> {
   /// Spotify owns playback and the cached context names the item. Under
@@ -286,7 +370,169 @@ impl App {
       }
       return;
     }
+    let control = match event {
+      IoEvent::StartPlayback(None, None, None) => Some((SpotifyControl::Playing, true)),
+      IoEvent::PausePlayback => Some((SpotifyControl::Playing, false)),
+      IoEvent::Shuffle(enabled) => Some((SpotifyControl::Shuffle, enabled)),
+      _ => None,
+    };
+    if let Some((control, enabled)) = control {
+      if let Some(context) = self.spotify_control_context() {
+        let request = Arc::new(SpotifyControlRequest {
+          control,
+          enabled,
+          device: SpotifyDevice::from_context(context),
+        });
+        if self.try_dispatch(IoEvent::SpotifyControl(Arc::clone(&request))) {
+          *self.pending_spotify_control_mut(control) = Some(request);
+        }
+        return;
+      }
+    }
     self.dispatch(event);
+  }
+
+  fn spotify_control_context(&self) -> Option<&CurrentPlaybackContext> {
+    self
+      .external_spotify_context()
+      .filter(|_| !self.soloist_is_target())
+  }
+
+  fn external_spotify_context(&self) -> Option<&CurrentPlaybackContext> {
+    self
+      .current_playback_context
+      .as_ref()
+      .filter(|_| self.playback_owner() == PlaybackOwner::Spotify && !self.native_parked_here())
+  }
+
+  fn pending_spotify_control_mut(
+    &mut self,
+    control: SpotifyControl,
+  ) -> &mut Option<Arc<SpotifyControlRequest>> {
+    match control {
+      SpotifyControl::Playing => &mut self.pending_spotify_playing,
+      SpotifyControl::Shuffle => &mut self.pending_spotify_shuffle,
+    }
+  }
+
+  pub(crate) fn spotify_control_state(&self, control: SpotifyControl) -> Option<bool> {
+    let context = self.spotify_control_context()?;
+    let (pending, observed) = match control {
+      SpotifyControl::Playing => (&self.pending_spotify_playing, context.is_playing),
+      SpotifyControl::Shuffle => (&self.pending_spotify_shuffle, context.shuffle_state),
+    };
+    Some(
+      pending
+        .as_ref()
+        .filter(|request| request.device.matches(context))
+        .map_or(observed, |request| request.enabled),
+    )
+  }
+
+  pub(crate) fn spotify_control_is_current(&self, request: &Arc<SpotifyControlRequest>) -> bool {
+    let pending = match request.control {
+      SpotifyControl::Playing => &self.pending_spotify_playing,
+      SpotifyControl::Shuffle => &self.pending_spotify_shuffle,
+    };
+    pending
+      .as_ref()
+      .is_some_and(|pending| Arc::ptr_eq(pending, request))
+      && self
+        .spotify_control_context()
+        .is_some_and(|context| request.device.matches(context))
+  }
+
+  /// Commit a remote command's result while its request is still current.
+  pub(crate) fn apply_spotify_control_result(&mut self, request: &SpotifyControlRequest) {
+    let Some(context) = self.current_playback_context.as_mut() else {
+      return;
+    };
+    match request.control {
+      SpotifyControl::Playing => {
+        context.is_playing = request.enabled;
+        #[cfg(feature = "streaming")]
+        if !request.enabled {
+          self.pending_start_playback = None;
+          self.native_load_watchdog = None;
+          if let Some(player) = &self.streaming_player {
+            player.cancel_play_after_transfer();
+          }
+        }
+      }
+      SpotifyControl::Shuffle => {
+        context.shuffle_state = request.enabled;
+        self.runtime_state.shuffle_enabled = request.enabled;
+        self.schedule_state_save(PersistedRuntimeState::shuffle_enabled(request.enabled));
+      }
+    }
+    self.poll_playback_soon();
+  }
+
+  /// A reply to an older command must leave a newer intent in place.
+  pub(crate) fn finish_spotify_control(&mut self, request: &Arc<SpotifyControlRequest>) {
+    let pending = self.pending_spotify_control_mut(request.control);
+    if pending
+      .as_ref()
+      .is_some_and(|pending| Arc::ptr_eq(pending, request))
+    {
+      *pending = None;
+    }
+  }
+
+  pub(super) fn spotify_seek_target(&self) -> Option<SpotifySeekTarget> {
+    let context = self.external_spotify_context()?;
+    let item = match context.item.as_ref()? {
+      PlayableItem::Track(track) => track.id.clone().map_or(
+        SpotifySeekItem::Unidentified(context.timestamp),
+        SpotifySeekItem::Track,
+      ),
+      PlayableItem::Episode(episode) => SpotifySeekItem::Episode(episode.id.clone()),
+      PlayableItem::Unknown(_) => return None,
+    };
+    Some(SpotifySeekTarget {
+      device: SpotifyDevice::from_context(context),
+      item,
+    })
+  }
+
+  pub(super) fn spotify_seek_is_current(&self, target: &SpotifySeekTarget) -> bool {
+    let Some(context) = self.external_spotify_context() else {
+      return false;
+    };
+    target.device.matches(context)
+      && match (&target.item, context.item.as_ref()) {
+        (SpotifySeekItem::Track(id), Some(PlayableItem::Track(track))) => {
+          track.id.as_ref() == Some(id)
+        }
+        (SpotifySeekItem::Episode(id), Some(PlayableItem::Episode(episode))) => *id == episode.id,
+        (SpotifySeekItem::Unidentified(timestamp), Some(PlayableItem::Track(track))) => {
+          track.id.is_none() && *timestamp == context.timestamp
+        }
+        _ => false,
+      }
+  }
+
+  /// Publish a successful poll. The retry clock can also move on an error or
+  /// native event, so it cannot identify a new progress sample on its own.
+  pub(crate) fn set_polled_playback(
+    &mut self,
+    context: CurrentPlaybackContext,
+    received_at: Instant,
+  ) {
+    for pending in [
+      &mut self.pending_spotify_playing,
+      &mut self.pending_spotify_shuffle,
+    ] {
+      if pending
+        .as_ref()
+        .is_some_and(|request| !request.device.matches(&context))
+      {
+        *pending = None;
+      }
+    }
+    self.current_playback_context = Some(context);
+    self.polled_progress_at = Some(received_at);
+    self.discard_stale_api_seek();
   }
 
   /// Answer a Spotify gesture the parked native backend cannot serve.
@@ -567,6 +813,7 @@ impl App {
   /// does inside a seek's settle window, where any report can predate the seek.
   #[cfg(feature = "soloist")]
   pub(crate) fn overlay_soloist_snapshot(&mut self, polled: bool) {
+    let settling_seek = self.settling_api_seek_at();
     let Some(link) = self.soloist_link.as_ref() else {
       return;
     };
@@ -581,9 +828,6 @@ impl App {
       &link.snapshot(),
       chrono::Utc::now().timestamp_millis(),
     );
-    let settling_seek = self
-      .last_api_seek
-      .filter(|at| at.elapsed().as_millis() < SEEK_POSITION_IGNORE_MS);
     if let Some(seek_at) = settling_seek {
       // Keep a suppressed poll stale, so the tick does not resync from it later.
       if polled {
@@ -591,7 +835,9 @@ impl App {
       }
     } else if let Some(progress) = context.progress.filter(|_| polled || wrote_position) {
       self.song_progress_ms = progress.num_milliseconds().max(0) as u128;
-      self.instant_since_last_current_playback_poll = Instant::now();
+      let now = Instant::now();
+      self.instant_since_last_current_playback_poll = now;
+      self.polled_progress_at = Some(now);
     }
   }
 
@@ -1211,7 +1457,8 @@ mod tests {
     app.current_playback_context = Some(make_external_context());
     app.is_streaming_active = false;
     app.toggle_playback();
-    assert!(matches!(rx.try_recv(), Ok(IoEvent::PausePlayback)));
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::SpotifyControl(request))
+      if request.control == SpotifyControl::Playing && !request.enabled));
     assert!(recovery_rx.try_recv().is_err());
 
     // Nothing is known to resume: no rebuild.
@@ -1765,9 +2012,8 @@ mod soloist_tests {
     app.apply_soloist_event(&link, &Event::Playback(Status::Playing));
     assert_eq!(app.song_progress_ms, 9_000, "an event rewound the clock");
 
-    app.song_progress_ms = 60_000;
-    let seek_at = Instant::now();
-    app.last_api_seek = Some(seek_at);
+    app.seek_to(60_000);
+    let seek_at = app.settling_api_seek_at().expect("seek in flight");
     app.overlay_soloist_snapshot(true);
     assert_eq!(app.song_progress_ms, 60_000, "a poll undid the seek");
     assert_eq!(app.instant_since_last_current_playback_poll, seek_at);

@@ -491,11 +491,29 @@ fn no_active_device() -> anyhow::Error {
 
 /// The device a command goes to: `device_id` from the query, else the active one.
 fn target(cluster: &Cluster, query: &[(&str, String)]) -> anyhow::Result<String> {
-  match query_value(query, "device_id") {
+  let device = query_value(query, "device_id");
+  if requires_active_device(query) {
+    let state = &cluster.player_state;
+    let item_matches = query_value(query, "expected_item_uri")
+      .is_none_or(|uri| uri == state.track.uri.as_str())
+      && query_value(query, "expected_item_timestamp")
+        .is_none_or(|timestamp| timestamp.parse::<i64>().ok() == Some(state.timestamp));
+    if !item_matches || !device.is_some_and(|id| !id.is_empty() && id == cluster.active_device_id) {
+      return Err(api_error(
+        StatusCode::CONFLICT,
+        crate::infra::network::playback::PLAYBACK_TARGET_CHANGED,
+      ));
+    }
+  }
+  match device {
     Some(id) if !id.is_empty() => Ok(id.to_string()),
     _ if !cluster.active_device_id.is_empty() => Ok(cluster.active_device_id.clone()),
     _ => Err(no_active_device()),
   }
+}
+
+fn requires_active_device(query: &[(&str, String)]) -> bool {
+  query_value(query, "require_active_device") == Some("true")
 }
 
 async fn command(
@@ -511,7 +529,7 @@ async fn command(
     .send_player_command(&to, command)
     .await
     .map_err(command_error)?;
-  if query_value(query, "device_id").is_some() {
+  if query_value(query, "device_id").is_some() && !requires_active_device(query) {
     observer.assume_active(&to, None);
   }
   Ok(Value::Null)
@@ -960,6 +978,37 @@ mod tests {
       target(&cluster, &[("device_id", String::new())]).unwrap(),
       "speaker"
     );
+  }
+
+  #[test]
+  fn a_bound_command_requires_its_device_to_still_be_active() {
+    let mut cluster = Cluster::new();
+    cluster.active_device_id = "speaker".into();
+    let query = [
+      ("device_id", "phone".to_string()),
+      ("require_active_device", "true".to_string()),
+    ];
+
+    assert!(target(&cluster, &query).is_err());
+    cluster.active_device_id = "phone".into();
+    assert_eq!(target(&cluster, &query).unwrap(), "phone");
+  }
+
+  #[test]
+  fn a_bound_seek_requires_its_item_on_the_active_device() {
+    let mut cluster = Cluster::new();
+    cluster.active_device_id = "phone".into();
+    let query = [
+      ("device_id", "phone".to_string()),
+      ("require_active_device", "true".to_string()),
+      ("expected_item_uri", "spotify:track:old".to_string()),
+    ];
+    let state = cluster.player_state.mut_or_insert_default();
+    state.track.mut_or_insert_default().uri = "spotify:track:new".into();
+    assert!(target(&cluster, &query).is_err());
+    let state = cluster.player_state.mut_or_insert_default();
+    state.track.mut_or_insert_default().uri = "spotify:track:old".into();
+    assert_eq!(target(&cluster, &query).unwrap(), "phone");
   }
 
   #[test]

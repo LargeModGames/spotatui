@@ -5,7 +5,7 @@
 //! keybinding, so native-streaming fast paths and throttling/coalescing are
 //! automatically honoured.
 
-use crate::core::app::{ActiveBlock, App, RouteId};
+use crate::core::app::{ActiveBlock, App, RouteId, SpotifyControl};
 use crate::core::plugin_api;
 use crate::infra::network::IoEvent;
 
@@ -47,8 +47,9 @@ impl App {
       Action::VolumeUp => self.increase_volume(),
       Action::VolumeDown => self.decrease_volume(),
       Action::SetShuffle(desired) => {
-        let current = plugin_api::playback_state(self)
-          .map(|p| p.shuffle)
+        let current = self
+          .spotify_control_state(SpotifyControl::Shuffle)
+          .or_else(|| plugin_api::playback_state(self).map(|p| p.shuffle))
           .unwrap_or(false);
         if current != desired {
           self.shuffle();
@@ -375,8 +376,9 @@ impl App {
 
 /// Returns `true` when the current playback state indicates active playback.
 fn effective_is_playing(app: &App) -> bool {
-  plugin_api::playback_state(app)
-    .map(|p| p.is_playing)
+  app
+    .spotify_control_state(SpotifyControl::Playing)
+    .or_else(|| plugin_api::playback_state(app).map(|p| p.is_playing))
     .unwrap_or(false)
 }
 

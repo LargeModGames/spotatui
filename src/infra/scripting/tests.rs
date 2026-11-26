@@ -712,7 +712,7 @@ mod http_tests {
 #[cfg(test)]
 mod drain_tests {
   use super::*;
-  use crate::core::app::App;
+  use crate::core::app::{App, SpotifyControl};
   use crate::core::user_config::UserConfig;
   use crate::infra::network::IoEvent;
   use chrono::Duration as ChronoDuration;
@@ -727,6 +727,11 @@ mod drain_tests {
     let (tx, rx) = channel();
     let app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
     (app, rx)
+  }
+
+  fn make_engine() -> ScriptEngine {
+    // Draining local effects does not need the system's proxy settings.
+    ScriptEngine::with_http_client_builder(reqwest::Client::builder().no_proxy()).unwrap()
   }
 
   #[allow(deprecated)]
@@ -785,14 +790,16 @@ mod drain_tests {
     let (mut app, rx) = make_app();
     app.current_playback_context = Some(make_context(true, false));
 
-    let engine = ScriptEngine::new().unwrap();
+    let engine = make_engine();
     push_effect(&engine, Action::Pause);
     engine.drain_effects(&mut app);
 
-    match rx.try_recv() {
-      Ok(IoEvent::PausePlayback) => {}
-      _ => panic!("expected PausePlayback, got unexpected variant (IoEvent is not Debug)"),
-    }
+    let Ok(IoEvent::SpotifyControl(request)) = rx.try_recv() else {
+      panic!("expected a remote Spotify pause request");
+    };
+    assert_eq!(request.control, SpotifyControl::Playing);
+    assert!(!request.enabled);
+    assert!(app.spotify_control_is_current(&request));
   }
 
   #[test]
@@ -800,7 +807,7 @@ mod drain_tests {
     let (mut app, rx) = make_app();
     app.current_playback_context = Some(make_context(false, false));
 
-    let engine = ScriptEngine::new().unwrap();
+    let engine = make_engine();
     push_effect(&engine, Action::Pause);
     engine.drain_effects(&mut app);
 
@@ -812,16 +819,16 @@ mod drain_tests {
     let (mut app, rx) = make_app();
     app.current_playback_context = Some(make_context(false, false));
 
-    let engine = ScriptEngine::new().unwrap();
+    let engine = make_engine();
     push_effect(&engine, Action::Play);
     engine.drain_effects(&mut app);
 
-    match rx.try_recv() {
-      Ok(IoEvent::StartPlayback(None, None, None)) => {}
-      _ => panic!(
-        "expected StartPlayback(None,None,None), got unexpected variant (IoEvent is not Debug)"
-      ),
-    }
+    let Ok(IoEvent::SpotifyControl(request)) = rx.try_recv() else {
+      panic!("expected a remote Spotify play request");
+    };
+    assert_eq!(request.control, SpotifyControl::Playing);
+    assert!(request.enabled);
+    assert!(app.spotify_control_is_current(&request));
   }
 
   #[test]
@@ -829,7 +836,7 @@ mod drain_tests {
     let (mut app, rx) = make_app();
     app.current_playback_context = Some(make_context(true, false));
 
-    let engine = ScriptEngine::new().unwrap();
+    let engine = make_engine();
     push_effect(&engine, Action::Play);
     engine.drain_effects(&mut app);
 
@@ -841,14 +848,16 @@ mod drain_tests {
     let (mut app, rx) = make_app();
     app.current_playback_context = Some(make_context(false, false));
 
-    let engine = ScriptEngine::new().unwrap();
+    let engine = make_engine();
     push_effect(&engine, Action::SetShuffle(true));
     engine.drain_effects(&mut app);
 
-    match rx.try_recv() {
-      Ok(IoEvent::Shuffle(true)) => {}
-      _ => panic!("expected Shuffle(true), got unexpected variant (IoEvent is not Debug)"),
-    }
+    let Ok(IoEvent::SpotifyControl(request)) = rx.try_recv() else {
+      panic!("expected a remote Spotify shuffle request");
+    };
+    assert_eq!(request.control, SpotifyControl::Shuffle);
+    assert!(request.enabled);
+    assert!(app.spotify_control_is_current(&request));
   }
 
   #[test]
@@ -856,7 +865,7 @@ mod drain_tests {
     let (mut app, rx) = make_app();
     app.current_playback_context = Some(make_context(false, false));
 
-    let engine = ScriptEngine::new().unwrap();
+    let engine = make_engine();
     push_effect(&engine, Action::SetShuffle(false));
     engine.drain_effects(&mut app);
 
@@ -867,7 +876,7 @@ mod drain_tests {
   fn drain_set_volume_sets_pending_volume() {
     let (mut app, _rx) = make_app();
 
-    let engine = ScriptEngine::new().unwrap();
+    let engine = make_engine();
     push_effect(&engine, Action::SetVolume(80));
     engine.drain_effects(&mut app);
 
@@ -879,13 +888,16 @@ mod drain_tests {
     let (mut app, rx) = make_app();
     app.current_playback_context = Some(make_context_with_track(true));
 
-    let engine = ScriptEngine::new().unwrap();
+    let engine = make_engine();
     push_effect(&engine, Action::SeekTo(30_000));
     engine.drain_effects(&mut app);
 
     match rx.try_recv() {
-      Ok(IoEvent::Seek(ms)) => assert_eq!(ms, 30_000),
-      _ => panic!("expected Seek(30000), got unexpected variant (IoEvent is not Debug)"),
+      Ok(IoEvent::SpotifySeek(request)) => assert!(matches!(
+        request.command,
+        crate::core::app::SpotifySeekCommand::Position(30_000)
+      )),
+      _ => panic!("expected a Spotify seek to 30000 ms"),
     }
   }
 
@@ -893,7 +905,7 @@ mod drain_tests {
   fn drain_notify_error_sets_error_flag_on_app() {
     let (mut app, _rx) = make_app();
 
-    let engine = ScriptEngine::new().unwrap();
+    let engine = make_engine();
     push_effect(
       &engine,
       Action::NotifyError("plugin crashed".to_string(), 6),
@@ -908,7 +920,7 @@ mod drain_tests {
   fn drain_notify_error_blocks_subsequent_normal_notify() {
     let (mut app, _rx) = make_app();
 
-    let engine = ScriptEngine::new().unwrap();
+    let engine = make_engine();
     push_effect(&engine, Action::NotifyError("error msg".to_string(), 6));
     push_effect(&engine, Action::Notify("normal msg".to_string(), 4));
     engine.drain_effects(&mut app);

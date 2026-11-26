@@ -38,10 +38,6 @@ use rspotify::{
 use std::cell::Cell;
 use std::path::PathBuf;
 use std::sync::mpsc::Sender;
-// Bare `Arc` here is only ever named by the streaming player, the MPRIS manager,
-// and the decoded queue-slot accessors below (whose gate is the queueable
-// sources, not `audio-decode` — a radio-only build has no queue slot).
-#[cfg(any(feature = "queue", all(feature = "mpris", target_os = "linux")))]
 use std::sync::Arc;
 use std::{
   cmp::{max, min},
@@ -173,7 +169,8 @@ pub use plugins::*;
 pub use queue::*;
 pub use route::*;
 pub use scrollable_pages::*;
-pub use seek::*;
+#[cfg(feature = "streaming")]
+pub use seek::SEEK_POSITION_IGNORE_MS;
 pub use session::*;
 pub use settings_schema::*;
 pub use status::*;
@@ -198,10 +195,14 @@ pub struct App {
   /// dispatches while we're just waiting for confirmation.
   pub last_dispatched_volume: Option<u8>,
   pub instant_since_last_current_playback_poll: Instant,
+  /// Receipt time of the Spotify position the next tick has yet to consume.
+  polled_progress_at: Option<Instant>,
   /// `timestamp` of the playback state the track-end poll already ran for.
   track_end_polled_for: Option<chrono::DateTime<chrono::Utc>>,
   /// When the poll after a Web API command is due.
   command_poll_at: Option<Instant>,
+  pending_spotify_playing: Option<Arc<SpotifyControlRequest>>,
+  pending_spotify_shuffle: Option<Arc<SpotifyControlRequest>>,
   navigation_stack: Vec<Route>,
   pub spectrum_data: Option<crate::infra::audio::SpectrumData>,
   pub audio_capture_active: bool,
@@ -352,10 +353,7 @@ pub struct App {
   /// Pending seek position to send to player (throttled to avoid overwhelming librespot)
   #[cfg(feature = "streaming")]
   pending_native_seek: Option<u32>,
-  /// Last time an API seek was sent (for throttling external device control)
-  last_api_seek: Option<Instant>,
-  /// Pending seek position for API (throttled to avoid overwhelming Spotify API)
-  pending_api_seek: Option<u32>,
+  api_seek: Option<seek::ApiSeek>,
   /// Last time a decoded-source seek was dispatched (for throttling drags)
   last_source_seek: Option<Instant>,
   /// Pending decoded-source seek position (throttled; drags coalesce to the last target)
@@ -746,7 +744,19 @@ impl App {
   }
 
   pub fn dispatch(&mut self, action: IoEvent) {
-    self.try_dispatch(action);
+    let changes_playback = self.api_seek.is_some()
+      && matches!(
+        action,
+        IoEvent::StartPlayback(Some(_), _, _)
+          | IoEvent::StartPlayback(_, Some(_), _)
+          | IoEvent::NextTrack
+          | IoEvent::PreviousTrack
+          | IoEvent::ForcePreviousTrack
+          | IoEvent::TransferPlaybackToDevice(..)
+      );
+    if self.try_dispatch(action) && changes_playback {
+      self.api_seek = None;
+    }
   }
 
   fn try_dispatch(&mut self, action: IoEvent) -> bool {

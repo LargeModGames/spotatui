@@ -455,6 +455,10 @@ async fn answer(
   body: Option<&Value>,
 ) -> anyhow::Result<Value> {
   #[cfg(test)]
+  if let Some(result) = fake::scripted_answer(method, path, query, body) {
+    return result;
+  }
+  #[cfg(test)]
   if let Some(base_url) = fake::base_url() {
     return fake::request(&base_url, method, path, query, body).await;
   }
@@ -473,8 +477,34 @@ pub(crate) mod fake {
   use super::*;
   use std::cell::RefCell;
 
+  type Answer =
+    dyn FnMut(&Method, &str, &[(&str, String)], Option<&Value>) -> anyhow::Result<Value>;
   thread_local! {
     static BASE_URL: RefCell<Option<String>> = const { RefCell::new(None) };
+    static ANSWER: RefCell<Option<Box<Answer>>> = const { RefCell::new(None) };
+  }
+
+  /// Answer requests made by this test thread in memory.
+  pub(crate) fn use_scripted_spotify(
+    answer: impl FnMut(&Method, &str, &[(&str, String)], Option<&Value>) -> anyhow::Result<Value>
+      + 'static,
+  ) -> FakeSpotify {
+    ANSWER.with(|slot| slot.replace(Some(Box::new(answer))));
+    FakeSpotify
+  }
+
+  pub(super) fn scripted_answer(
+    method: &Method,
+    path: &str,
+    query: &[(&str, String)],
+    body: Option<&Value>,
+  ) -> Option<anyhow::Result<Value>> {
+    ANSWER.with(|slot| {
+      slot
+        .borrow_mut()
+        .as_mut()
+        .map(|answer| answer(method, path, query, body))
+    })
   }
 
   /// Sends this thread's Spotify calls to `base_url` until the guard drops.
@@ -488,6 +518,7 @@ pub(crate) mod fake {
   impl Drop for FakeSpotify {
     fn drop(&mut self) {
       BASE_URL.with(|url| *url.borrow_mut() = None);
+      ANSWER.with(|slot| *slot.borrow_mut() = None);
     }
   }
 
