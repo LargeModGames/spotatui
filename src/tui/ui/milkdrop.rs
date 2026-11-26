@@ -11,7 +11,6 @@ use ratatui::{buffer::Buffer, layout::Rect, style::Color};
 use tidewarp::{presets, presets::BuiltinPreset, Config, Engine, PresetId, Transition};
 
 use crate::core::paths;
-use crate::core::user_config::VisualizerStyle;
 use crate::infra::audio::RecentAudio;
 use crate::tui::event::Key;
 
@@ -180,9 +179,9 @@ fn step_preset(delta: isize) {
   with_state(|state| state.step(delta));
 }
 
-/// `]` blends to the next preset and `[` to the previous one, while `style` is MilkDrop.
-pub fn handle_key(key: Key, style: VisualizerStyle) {
-  if style != VisualizerStyle::MilkDrop {
+/// `]` blends to the next preset and `[` to the previous one, while MilkDrop is `shown`.
+pub fn handle_key(key: Key, shown: bool) {
+  if !shown {
     return;
   }
   match key {
@@ -258,13 +257,13 @@ mod tests {
   use super::*;
 
   #[test]
-  fn brackets_change_the_preset_only_in_the_milkdrop_style() {
+  fn brackets_change_the_preset_only_while_milkdrop_is_shown() {
     let first = current_name();
-    handle_key(Key::Char(']'), VisualizerStyle::Cava);
+    handle_key(Key::Char(']'), false);
     assert_eq!(current_name(), first);
-    handle_key(Key::Char(']'), VisualizerStyle::MilkDrop);
+    handle_key(Key::Char(']'), true);
     assert_ne!(current_name(), first);
-    handle_key(Key::Char('['), VisualizerStyle::MilkDrop);
+    handle_key(Key::Char('['), true);
     assert_eq!(current_name(), first);
   }
 

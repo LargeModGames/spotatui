@@ -240,9 +240,6 @@ pub enum VisualizerStyle {
   RackEq,
   /// Cassette Deck: turning reels, LED level bars and a tape counter
   Cassette,
-  /// MilkDrop: feedback visuals from the tidewarp engine's built-in presets
-  #[cfg(feature = "milkdrop")]
-  MilkDrop,
 }
 
 impl VisualizerStyle {
@@ -257,19 +254,7 @@ impl VisualizerStyle {
       VisualizerStyle::Outrun,
       VisualizerStyle::RackEq,
       VisualizerStyle::Cassette,
-      #[cfg(feature = "milkdrop")]
-      VisualizerStyle::MilkDrop,
     ]
-  }
-
-  /// The style to write to config.yml. MilkDrop is saved as Cava, because a build
-  /// without the `milkdrop` feature cannot read it.
-  pub fn saved(self) -> Self {
-    #[cfg(feature = "milkdrop")]
-    if self == VisualizerStyle::MilkDrop {
-      return VisualizerStyle::Cava;
-    }
-    self
   }
 
   pub fn next(&self) -> Self {
@@ -643,6 +628,8 @@ pub struct KeyBindingsString {
   copy_song_url: Option<String>,
   copy_album_url: Option<String>,
   audio_analysis: Option<String>,
+  #[cfg(feature = "milkdrop")]
+  milkdrop: Option<String>,
   #[serde(alias = "basic_view")]
   lyrics_view: Option<String>,
   miniplayer_view: Option<String>,
@@ -720,6 +707,8 @@ pub struct KeyBindings {
   pub copy_song_url: Key,
   pub copy_album_url: Key,
   pub audio_analysis: Key,
+  #[cfg(feature = "milkdrop")]
+  pub milkdrop: Key,
   pub lyrics_view: Key,
   pub miniplayer_view: Key,
   pub cover_art_view: Key,
@@ -1407,6 +1396,8 @@ impl UserConfig {
         copy_song_url: Key::Char('c'),
         copy_album_url: Key::Char('C'),
         audio_analysis: Key::Char('v'),
+        #[cfg(feature = "milkdrop")]
+        milkdrop: Key::Char('m'),
         lyrics_view: Key::Char('B'),
         miniplayer_view: Key::Char('T'),
         cover_art_view: Key::Char('G'),
@@ -1670,6 +1661,8 @@ impl UserConfig {
     to_keys!(copy_song_url);
     to_keys!(copy_album_url);
     to_keys!(audio_analysis);
+    #[cfg(feature = "milkdrop")]
+    to_keys!(milkdrop);
     to_keys!(lyrics_view);
     to_keys!(miniplayer_view);
     to_keys!(cover_art_view);
@@ -2436,6 +2429,8 @@ impl UserConfig {
       k.copy_song_url,
       k.copy_album_url,
       k.audio_analysis,
+      #[cfg(feature = "milkdrop")]
+      k.milkdrop,
       k.lyrics_view,
       k.miniplayer_view,
       k.cover_art_view,
@@ -2627,7 +2622,7 @@ impl UserConfig {
       playing_icon: Some(self.behavior.playing_icon.clone()),
       paused_icon: Some(self.behavior.paused_icon.clone()),
       set_window_title: Some(self.behavior.set_window_title),
-      visualizer_style: Some(self.behavior.visualizer_style.saved()),
+      visualizer_style: Some(self.behavior.visualizer_style),
       relay_server_url: Some(self.behavior.relay_server_url.clone()),
       sync_token: self.behavior.sync_token.clone(),
       local_music_path: self.behavior.local_music_path.clone(),
@@ -2777,6 +2772,8 @@ impl UserConfig {
       copy_song_url: Some(key_to_config_string(self.keys.copy_song_url)),
       copy_album_url: Some(key_to_config_string(self.keys.copy_album_url)),
       audio_analysis: Some(key_to_config_string(self.keys.audio_analysis)),
+      #[cfg(feature = "milkdrop")]
+      milkdrop: Some(key_to_config_string(self.keys.milkdrop)),
       lyrics_view: Some(key_to_config_string(self.keys.lyrics_view)),
       miniplayer_view: Some(key_to_config_string(self.keys.miniplayer_view)),
       cover_art_view: Some(key_to_config_string(self.keys.cover_art_view)),

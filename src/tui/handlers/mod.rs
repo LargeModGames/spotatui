@@ -331,6 +331,15 @@ pub fn handle_app(key: Key, app: &mut App) {
       copy_url(app, Action::CopyUrl(CopyTarget::CurrentAlbum));
     }
     _ if key == app.user_config.keys.audio_analysis => {
+      #[cfg(feature = "milkdrop")]
+      {
+        app.view.milkdrop = false;
+      }
+      app.apply(Action::Navigate(NavTarget::Analysis));
+    }
+    #[cfg(feature = "milkdrop")]
+    _ if key == app.user_config.keys.milkdrop => {
+      app.view.milkdrop = true;
       app.apply(Action::Navigate(NavTarget::Analysis));
     }
     _ if key == app.user_config.keys.lyrics_view => {
@@ -1549,5 +1558,19 @@ mod tests {
 
     assert_eq!(app.get_current_route().id, RouteId::Home);
     assert_eq!(app.get_current_route().active_block, ActiveBlock::Empty);
+  }
+
+  #[cfg(feature = "milkdrop")]
+  #[test]
+  fn m_shows_milkdrop_and_v_the_visualizer_style() {
+    let mut app = App::default();
+
+    handle_app(Key::Char('m'), &mut app);
+    assert_eq!(app.get_current_route().id, RouteId::Analysis);
+    assert!(app.view.milkdrop);
+
+    handle_app(Key::Char('v'), &mut app);
+    assert_eq!(app.get_current_route().id, RouteId::Analysis);
+    assert!(!app.view.milkdrop);
   }
 }

@@ -454,9 +454,7 @@ pub async fn start_ui(
           },
         );
         #[cfg(feature = "milkdrop")]
-        if app.user_config.behavior.visualizer_style
-          == crate::core::user_config::VisualizerStyle::MilkDrop
-        {
+        if app.view.milkdrop {
           if let Some(audio) = driver.recent_audio() {
             ui::milkdrop::feed(&audio);
           }

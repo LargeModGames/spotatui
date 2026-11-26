@@ -80,13 +80,17 @@ pub fn draw_in(f: &mut Frame<'_>, app: &App, area: Rect, margin: u16) {
         VisualizerStyle::Outrun => app.strings().screens.outrun,
         VisualizerStyle::RackEq => app.strings().screens.rack_eq,
         VisualizerStyle::Cassette => app.strings().screens.cassette_deck,
-        #[cfg(feature = "milkdrop")]
-        VisualizerStyle::MilkDrop => &milkdrop_title,
       },
       app.strings().screens.spectrum,
     )
   };
 
+  #[cfg(feature = "milkdrop")]
+  let style_name = if app.view.milkdrop && !pitch_view {
+    milkdrop_title.as_str()
+  } else {
+    style_name
+  };
   let info_block = Block::default()
     .title(Span::styled(
       app.strings().screens.visualization_title(style_name),
@@ -157,6 +161,11 @@ pub fn draw_in(f: &mut Frame<'_>, app: &App, area: Rect, margin: u16) {
     f.render_widget(bar_chart_block, visualizer_area);
 
     // Render the appropriate visualizer based on user setting
+    #[cfg(feature = "milkdrop")]
+    if app.view.milkdrop {
+      super::milkdrop::render(f.buffer_mut(), inner_area);
+      return;
+    }
     match visualizer_style {
       VisualizerStyle::BarGraph => render_bar_graph(f, &spectrum.bands, inner_area),
       VisualizerStyle::Cava => render_cava(
@@ -165,8 +174,6 @@ pub fn draw_in(f: &mut Frame<'_>, app: &App, area: Rect, margin: u16) {
         inner_area,
         app.user_config.theme.analysis_bar.into(),
       ),
-      #[cfg(feature = "milkdrop")]
-      VisualizerStyle::MilkDrop => super::milkdrop::render(f.buffer_mut(), inner_area),
       VisualizerStyle::HeadUnit => head_unit::render(
         f.buffer_mut(),
         inner_area,
@@ -228,8 +235,6 @@ fn retro_style(style: VisualizerStyle) -> Option<retro::Retro> {
     VisualizerStyle::RackEq => Some(retro::Retro::RackEq),
     VisualizerStyle::Cassette => Some(retro::Retro::Cassette),
     VisualizerStyle::Cava | VisualizerStyle::BarGraph | VisualizerStyle::HeadUnit => None,
-    #[cfg(feature = "milkdrop")]
-    VisualizerStyle::MilkDrop => None,
   }
 }
 

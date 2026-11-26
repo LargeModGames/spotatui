@@ -644,6 +644,12 @@ pub fn help_entries_for(strings: &crate::core::i18n::Strings) -> Vec<HelpEntry> 
     .needs(Requirement::BrowseSource(Source::Spotify)),
     #[cfg(feature = "milkdrop")]
     row(help.milkdrop_preset, Literal("[ ]"), help.context_general),
+    #[cfg(feature = "milkdrop")]
+    row(
+      help.milkdrop_open,
+      Binding(|k| k.milkdrop),
+      help.context_general,
+    ),
   ]
 }
 
@@ -1035,12 +1041,20 @@ mod tests {
     entries.push(playlist_pin.clone());
     #[cfg(feature = "milkdrop")]
     let milkdrop_row = vec![
-      "Previous / next MilkDrop preset (in audio analysis)".to_string(),
+      "Previous / next MilkDrop preset (in MilkDrop)".to_string(),
       "[ ]".to_string(),
       "General".to_string(),
     ];
     #[cfg(feature = "milkdrop")]
     entries.push(milkdrop_row.clone());
+    #[cfg(feature = "milkdrop")]
+    let milkdrop_open_row = vec![
+      "Show MilkDrop visuals".to_string(),
+      "m".to_string(),
+      "General".to_string(),
+    ];
+    #[cfg(feature = "milkdrop")]
+    entries.push(milkdrop_open_row.clone());
     let enabled = |row: &Vec<String>| {
       row[0] != "Move selection to middle of list"
         && (cfg!(feature = "cover-art") || row[0] != "Go to cover art view")
@@ -1109,6 +1123,8 @@ mod tests {
       expected.push(pin_row);
       #[cfg(feature = "milkdrop")]
       expected.push(milkdrop_row.clone());
+      #[cfg(feature = "milkdrop")]
+      expected.push(milkdrop_open_row.clone());
       assert_eq!(
         help_rows(&app),
         expected,

@@ -26,6 +26,9 @@ pub struct ViewState {
   /// Whether the user asked for the now playing panel beside the main content.
   /// The layout still leaves it out on the search screen and when it would not fit.
   pub now_playing_panel: bool,
+  /// The visualizer screen shows MilkDrop instead of the visualizer style.
+  #[cfg(feature = "milkdrop")]
+  pub milkdrop: bool,
   /// The pre-order index of the split border the mouse drags, from Down until Up.
   pub dragged_pane_split: Option<usize>,
   /// What the terminal can report about key presses, probed at startup and
