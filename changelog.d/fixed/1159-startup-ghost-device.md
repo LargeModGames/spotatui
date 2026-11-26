@@ -1,0 +1,1 @@
+- **A second Spotify Connect device no longer shows up after a fast start**: when recovery published a player before startup finished, startup replaced it and left a ghost device. Startup now shuts down its own player instead ([#1159](https://github.com/LargeModGames/spotatui/issues/1159)).

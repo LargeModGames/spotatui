@@ -1,0 +1,1 @@
+- **GUI Stats names are no longer cut off in a narrow pane**: the lists stack by the width of the pane, not of the window ([#1078](https://github.com/LargeModGames/spotatui/issues/1078)).

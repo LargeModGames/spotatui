@@ -704,3 +704,58 @@ async fn load_local_tracks(app: &Arc<Mutex<App>>, playlist_uri: &str, epoch: u64
   };
   app.set_status_message(message, 6);
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::core::user_config::UserConfig;
+  use std::sync::mpsc::channel;
+  use std::time::SystemTime;
+
+  /// An app whose configured music folder is `root`.
+  fn app_with_music_root(root: &std::path::Path) -> Arc<Mutex<App>> {
+    let (tx, _rx) = channel();
+    let mut config = UserConfig::new();
+    config.behavior.local_music_path = Some(root.to_string_lossy().into_owned());
+    Arc::new(Mutex::new(App::new(tx, config, Some(SystemTime::now()))))
+  }
+
+  #[tokio::test]
+  async fn get_local_playlists_lists_the_music_folders() {
+    let dir = tempfile::tempdir().unwrap();
+    let album = dir.path().join("Album");
+    std::fs::create_dir(&album).unwrap();
+    super::super::tests::write_wav(&album.join("song.wav"), 44100, 200);
+    let app = app_with_music_root(dir.path());
+
+    assert!(route_local_event(&app, &IoEvent::GetLocalPlaylists).await);
+
+    let app = app.lock().await;
+    let names: Vec<&str> = app
+      .local_playlists()
+      .iter()
+      .map(|p| p.name.as_str())
+      .collect();
+    assert_eq!(names, ["Album"]);
+  }
+
+  #[tokio::test]
+  async fn get_local_tracks_fills_the_track_table_with_the_folder() {
+    let dir = tempfile::tempdir().unwrap();
+    let album = dir.path().join("Album");
+    std::fs::create_dir(&album).unwrap();
+    super::super::tests::write_wav(&album.join("song.wav"), 44100, 200);
+    let app = app_with_music_root(dir.path());
+    let uri = super::super::path_to_file_uri(&album);
+
+    assert!(route_local_event(&app, &IoEvent::GetLocalTracks(uri)).await);
+
+    let app = app.lock().await;
+    assert_eq!(app.track_table.tracks.len(), 1);
+    assert!(app.track_table.tracks[0].is_local);
+    assert!(matches!(
+      app.track_table.context,
+      Some(TrackTableContext::LocalPlaylist)
+    ));
+  }
+}

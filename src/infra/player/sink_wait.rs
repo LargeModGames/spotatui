@@ -30,11 +30,28 @@ pub(super) fn wait_decision(
   }
 }
 
+/// Whether the system default output moved off the opened device. A device
+/// that cannot be read is no evidence of a move.
+pub(super) fn default_moved<T: PartialEq + ?Sized>(
+  opened: Option<&T>,
+  current: Option<&T>,
+) -> bool {
+  matches!((opened, current), (Some(a), Some(b)) if a != b)
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
 
   const LIMIT: Duration = Duration::from_secs(2);
+
+  #[test]
+  fn a_default_output_change_counts_only_when_both_names_read() {
+    assert!(default_moved(Some("Speakers"), Some("Headphones")));
+    assert!(!default_moved(Some("Speakers"), Some("Speakers")));
+    assert!(!default_moved(Some("Speakers"), None));
+    assert!(!default_moved(None, Some("Headphones")));
+  }
 
   #[test]
   fn a_queue_under_the_threshold_is_done() {

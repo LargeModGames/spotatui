@@ -1,11 +1,8 @@
 //! Local-files media source — scan a music directory and expose its audio
-//! files via the multi-source [`MediaSource`] and [`Streamer`] traits.
+//! files through the multi-source [`MediaSource`] trait.
 //!
-//! Gated behind the `local-files` Cargo feature. Nothing in the main dispatch
-//! layer calls this yet; it will be wired in Phase 3 of the multi-source
-//! refactor.
+//! Gated behind the `local-files` Cargo feature.
 
-// Not yet wired into dispatch / UI.
 #![allow(dead_code)]
 
 pub mod dispatch;
@@ -106,7 +103,7 @@ use lofty::read_from_path;
 use url::Url;
 
 use crate::core::plugin_api::{ArtistRef, PlaylistInfo, TrackInfo};
-use crate::core::source::{MediaSource, Streamer};
+use crate::core::source::MediaSource;
 
 // ---------------------------------------------------------------------------
 // Audio-file extension filter
@@ -207,9 +204,7 @@ impl MediaSource for LocalSource {
   /// The `"(root)"` entry, when present, is always placed first so loose files
   /// at the root are easy to find.
   ///
-  /// TODO(multi-source): move std::fs::read_dir calls into tokio::task::spawn_blocking
-  ///   or tokio::fs before wiring — blocking I/O on the async executor stalls
-  ///   the Tokio runtime under slow/remote filesystems.
+  /// Does blocking I/O: callers run it on the blocking pool.
   async fn playlists(&self) -> Result<Vec<PlaylistInfo>> {
     // An unreadable root stays fatal; the walk skips unreadable folders.
     std::fs::read_dir(&self.root).with_context(|| format!("reading music root {:?}", self.root))?;
@@ -280,9 +275,7 @@ impl MediaSource for LocalSource {
   /// (i.e. `file://<abs-path>`). Tags are read via `lofty`; missing fields
   /// fall back to the file name / empty string.
   ///
-  /// TODO(multi-source): move blocking lofty tag-reads into tokio::task::spawn_blocking
-  ///   before wiring — lofty::read_from_path does synchronous file I/O and will
-  ///   stall the Tokio runtime for large directories.
+  /// Does blocking I/O: callers run it on the blocking pool.
   async fn tracks(&self, playlist_uri: &str) -> Result<Vec<TrackInfo>> {
     let dir_path = file_uri_to_path(playlist_uri)
       .with_context(|| format!("parsing playlist URI: {playlist_uri}"))?;
@@ -308,73 +301,6 @@ impl MediaSource for LocalSource {
         .then_with(|| name_order(&a.name, &b.name))
     });
     Ok(tracks)
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Streamer skeleton
-// ---------------------------------------------------------------------------
-
-impl Streamer for LocalSource {
-  /// Open the audio file at `uri` and construct a symphonia decoder to prove
-  /// the decode pipeline is reachable.
-  ///
-  /// The decoded frames are NOT yet routed anywhere — the rodio sink wiring
-  /// lives in `src/infra/player/streaming.rs` and is out of scope for this
-  /// slice.
-  ///
-  /// TODO(multi-source): route decoded frames into the shared sink (Phase 3 wiring)
-  /// TODO(multi-source): move blocking file I/O into tokio::task::spawn_blocking
-  ///   before wiring — std::fs::File::open and symphonia probing are synchronous
-  ///   and will stall the Tokio executor thread on slow/remote filesystems.
-  async fn stream(&self, uri: &str) -> Result<()> {
-    use symphonia::core::codecs::audio::AudioDecoderOptions;
-    use symphonia::core::formats::probe::Hint;
-    use symphonia::core::formats::{FormatOptions, TrackType};
-    use symphonia::core::io::MediaSourceStream;
-    use symphonia::core::meta::MetadataOptions;
-
-    let path =
-      file_uri_to_path(uri).with_context(|| format!("parsing track URI for streaming: {uri}"))?;
-
-    let file =
-      std::fs::File::open(&path).with_context(|| format!("opening audio file {:?}", path))?;
-
-    let mss = MediaSourceStream::new(Box::new(file), Default::default());
-
-    let mut hint = Hint::new();
-    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-      hint.with_extension(ext);
-    }
-
-    let format = symphonia::default::get_probe()
-      .probe(
-        &hint,
-        mss,
-        FormatOptions::default(),
-        MetadataOptions::default(),
-      )
-      .context("probing audio format")?;
-
-    // Find the first audio track with a known codec.
-    let track = format
-      .default_track(TrackType::Audio)
-      .context("no audio tracks found in file")?;
-
-    let _decoder = symphonia::default::get_codecs()
-      .make_audio_decoder(
-        track
-          .codec_params
-          .as_ref()
-          .context("codec parameters missing")?
-          .audio()
-          .context("track is not an audio codec")?,
-        &AudioDecoderOptions::default(),
-      )
-      .context("constructing audio decoder")?;
-
-    // TODO(multi-source): route decoded frames into the shared sink (Phase 3 wiring)
-    Ok(())
   }
 }
 
@@ -757,7 +683,7 @@ mod tests {
   /// Write a minimal valid WAV file (44-byte header + silence).
   ///
   /// Symphonia can probe and decode this without external data.
-  fn write_wav(path: &Path, sample_rate: u32, num_samples: u32) {
+  pub(super) fn write_wav(path: &Path, sample_rate: u32, num_samples: u32) {
     let data_size = num_samples * 2; // 16-bit mono
     let file_size = 36 + data_size;
 
@@ -1103,42 +1029,6 @@ mod tests {
     let tracks = rows(root, &folder);
     let names: Vec<&str> = tracks.iter().map(|t| t.name.as_str()).collect();
     assert_eq!(names, vec!["A", "b", "c", "Z"]);
-  }
-
-  // ---------------------------------------------------------------------------
-  // Streamer skeleton
-  // ---------------------------------------------------------------------------
-
-  #[test]
-  fn streamer_constructs_decoder_for_valid_wav() {
-    let dir = tempfile::tempdir().unwrap();
-    let wav = dir.path().join("sample.wav");
-    write_wav(&wav, 44100, 1000);
-
-    let src = LocalSource::new(dir.path());
-    let uri = path_to_file_uri(&wav);
-
-    let result = tokio::runtime::Runtime::new()
-      .unwrap()
-      .block_on(src.stream(&uri));
-
-    assert!(
-      result.is_ok(),
-      "streamer should succeed for valid WAV: {result:?}"
-    );
-  }
-
-  #[test]
-  fn streamer_errors_for_missing_file() {
-    let dir = tempfile::tempdir().unwrap();
-    let src = LocalSource::new(dir.path());
-    let uri = "file:///nonexistent/path/track.wav";
-
-    let result = tokio::runtime::Runtime::new()
-      .unwrap()
-      .block_on(src.stream(uri));
-
-    assert!(result.is_err(), "streamer should fail for missing file");
   }
 
   // ---------------------------------------------------------------------------

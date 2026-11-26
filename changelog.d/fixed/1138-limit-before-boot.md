@@ -1,1 +1,0 @@
-- **`list --limit` and `search --limit` refuse a bad value before they start**: `spotatui list --limit abc` or `--limit 0`, and `spotatui search --limit 11`, booted and logged in before failing. They now stop at once with "limit must be a whole number, 1 or more" or "limit must be between 1 and 10" ([#1138](https://github.com/LargeModGames/spotatui/issues/1138)).

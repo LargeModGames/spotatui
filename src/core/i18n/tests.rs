@@ -1,6 +1,14 @@
 use super::*;
 
 #[test]
+fn zh_hans_playlist_sort_title_uses_the_sidebar_word_for_playlists() {
+  let playlists = ZH_HANS.sidebar.playlists;
+  assert!(ZH_HANS.popups.sort_playlists.contains(playlists));
+  assert!(ZH_HANS.gui.sort_playlists.contains(playlists));
+  assert!(ZH_HANS.help.context_sidebar_playlists.contains(playlists));
+}
+
+#[test]
 fn template_values_are_literal_and_placeholders_can_be_reordered() {
   assert_eq!(
     format_template(
