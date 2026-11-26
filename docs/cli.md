@@ -22,7 +22,30 @@ Running `spotatui` with no subcommand starts the terminal UI. `spotatui --help` 
 
 ## Output format
 
-`--format` (on `playback`, `play`, `list` and `search`) takes these placeholders: `%a` artist, `%b` album, `%p` playlist, `%t` track, `%h` show, `%u` URI, `%f` flags, `%s` status, `%v` volume, `%d` device, `%r` progress.
+`-f, --format <FORMAT>` (on `playback`, `play`, `list` and `search`) takes these placeholders: `%a` artist, `%b` album, `%p` playlist, `%t` track, `%h` show, `%u` URI, `%f` flags, `%s` status, `%v` volume, `%d` device, `%r` progress.
+
+Without `--format`, formatted output uses a default that depends on the other flags. `--share-track` and `--share-album` print a URL and ignore `-f`, so the table leaves them out:
+
+| Subcommand | When | Default format |
+| --- | --- | --- |
+| `playback` | without `--seek`, `--volume` or `--transfer` | `%f %s %t - %a` |
+| `playback` | with `--seek` | `%f %s %t - %a %r` |
+| `playback` | with `--volume` | `%v% %f %s %t - %a` |
+| `playback` | with `--transfer` | `%f %s %t - %a on %d` |
+| `play` | always | `%f %s %t - %a` |
+| `list` | with `--devices` | `%v% %d` |
+| `list` | with `--liked` | `%t - %a (%u)` |
+| `list` | with `--playlists` | `%p (%u)` |
+| `list` | with `--playlist-tracks` | `%t - %a (%u)` |
+| `search` | with `--tracks` | `%t - %a (%u)` |
+| `search` | with `--playlists` | `%p (%u)` |
+| `search` | with `--artists` | `%a (%u)` |
+| `search` | with `--albums` | `%b - %a (%u)` |
+| `search` | with `--shows` | `%h - %a (%u)` |
+
+When `playback` gets more than one of `--seek`, `--volume` and `--transfer`, the first of them in that order picks the default, so `spotatui pb --seek 10 --volume 60` uses the format `%f %s %t - %a %r`. `list` and `search` take only one of the flags in the table at a time.
+
+The `%` after `%v` is printed as is, so `%v% %d` prints `60% Kitchen speaker`.
 
 ## `playback` (alias `pb`)
 
@@ -43,7 +66,7 @@ Control playback on the active device. With no flag it prints the status.
 | `--seek <±SECONDS>` | Seek relative (`+10`, `-10`) or absolute (`10`) |
 | `-v, --volume <0-100>` | Set the volume |
 
-`--next` and `--previous` cannot be combined with other flags.
+`--next` and `--previous` cannot be used together, and of the other `playback` flags work only with `--seek`, `--device` and `-f, --format`.
 
 ```bash
 spotatui pb --toggle
@@ -78,7 +101,7 @@ spotatui play --playlist --name "Your Playlist" --random
 | `--playlist-tracks <URI>` | List the tracks of a playlist, given its `spotify:playlist:` URI or `open.spotify.com/playlist/` link |
 | `--limit <N>` | Maximum results: 1-50, or any number of tracks with `--playlist-tracks` |
 
-With `--playlist-tracks`, every track of the playlist is listed unless `--limit` stops it earlier, and the default format is `%t - %a (%u)`. A playlist episode fills `%t` with its name and `%h` with its show.
+With `--playlist-tracks`, every track of the playlist is listed unless `--limit` stops it earlier. A playlist episode fills `%t` with its name and `%h` with its show.
 
 ```bash
 spotatui list --liked --limit 50
