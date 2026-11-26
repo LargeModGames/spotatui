@@ -1,0 +1,1 @@
+- **A 502 error mentioning "429" is no longer treated as a Spotify rate limit**: errors are now classified by their HTTP status, so a failed speaker named e.g. "Studio 429" no longer triggers the rate-limit path ([#1184](https://github.com/LargeModGames/spotatui/issues/1184)).
