@@ -66,7 +66,7 @@ Control playback on the active device. With no flag it prints the status.
 | `--seek <±SECONDS>` | Seek relative (`+10`, `-10`) or absolute (`10`) |
 | `-v, --volume <0-100>` | Set the volume |
 
-`--next` and `--previous` cannot be used together, and work only with `--seek`, `--device` and `-f, --format`.
+`--next` and `--previous` cannot be used together, and of the other `playback` flags work only with `--seek`, `--device` and `-f, --format`.
 
 ```bash
 spotatui pb --toggle
