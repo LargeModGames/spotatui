@@ -165,15 +165,17 @@ pub(crate) async fn build_source(app: &Arc<Mutex<App>>) -> YouTubeSource {
 /// M2 search, only the songs block is populated — each row is a video; Enter
 /// dispatches the `youtube:` URIs back through this module.
 async fn run_youtube_search(app: &Arc<Mutex<App>>, query: &str) {
+  let Some(source_rev) = app.lock().await.begin_search(Source::YouTube) else {
+    return;
+  };
   let source = build_source(app).await;
-  run_youtube_search_with(app, query, source.search(query)).await;
+  run_youtube_search_with(app, source_rev, query, source.search(query)).await;
 }
 
-async fn run_youtube_search_with<F>(app: &Arc<Mutex<App>>, query: &str, search: F)
+async fn run_youtube_search_with<F>(app: &Arc<Mutex<App>>, source_rev: u64, query: &str, search: F)
 where
   F: std::future::Future<Output = Result<super::SearchResults>>,
 {
-  let source_rev = app.lock().await.source_revision();
   match search.await {
     Ok(results) => {
       app
@@ -1352,7 +1354,12 @@ mod tests {
     let (finish_tx, finish_rx) = tokio::sync::oneshot::channel::<()>();
     let task_app = Arc::clone(&app);
     let task = tokio::spawn(async move {
-      run_youtube_search_with(&task_app, "Kygo Firestone", async move {
+      let source_rev = task_app
+        .lock()
+        .await
+        .begin_search(Source::YouTube)
+        .expect("current search should begin");
+      run_youtube_search_with(&task_app, source_rev, "Kygo Firestone", async move {
         let _ = ready_tx.send(());
         let _ = finish_rx.await;
         Ok(super::super::SearchResults {
@@ -1375,5 +1382,31 @@ mod tests {
     assert_eq!(guard.active_source, crate::core::source::Source::Spotify);
     assert!(guard.search_results().tracks.is_none());
     assert!(guard.search_results().query.is_none());
+  }
+
+  #[tokio::test]
+  async fn queued_youtube_search_superseded_before_start_is_dropped() {
+    let app = Arc::new(Mutex::new(test_app()));
+    let dir = tempfile::tempdir().unwrap();
+    let (_tx, _rx) = std::sync::mpsc::channel();
+    {
+      let mut guard = App::new(_tx, crate::core::user_config::UserConfig::new(), None);
+      guard.state_path = Some(dir.path().join("state.yml"));
+      guard.user_config.behavior.ytdlp_path =
+        Some(dir.path().join("missing-yt-dlp").display().to_string());
+      guard.set_active_source(Source::YouTube);
+      guard.dispatch(IoEvent::GetYouTubeSearchResults("Kygo".to_string()));
+      guard.set_active_source(Source::Spotify);
+      *app.lock().await = guard;
+    }
+
+    assert!(route_youtube_event(&app, &IoEvent::GetYouTubeSearchResults("Kygo".to_string())).await);
+    let guard = app.lock().await;
+    assert_eq!(guard.active_source, Source::Spotify);
+    assert!(
+      !guard.status_message_is_error(),
+      "superseded search must exit before spawning yt-dlp or setting an error"
+    );
+    assert!(guard.search_results().tracks.is_none());
   }
 }

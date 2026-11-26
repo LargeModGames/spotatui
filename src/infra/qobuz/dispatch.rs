@@ -462,10 +462,12 @@ fn finish_qobuz_tracks(
 
 /// Run a catalog search and populate the songs block of `app.search_results`.
 async fn run_qobuz_search(app: &Arc<Mutex<App>>, query: &str) {
+  let Some(source_rev) = app.lock().await.begin_search(Source::Qobuz) else {
+    return;
+  };
   let Some(source) = build_source(app, WhenLoggedOut::Login).await else {
     return;
   };
-  let source_rev = app.lock().await.source_revision();
   match source.search(query).await {
     Ok(results) => {
       app
@@ -474,8 +476,9 @@ async fn run_qobuz_search(app: &Arc<Mutex<App>>, query: &str) {
         .show_source_search_tracks_if_current(source_rev, query, results.tracks);
     }
     Err(e) => {
-      if app.lock().await.source_revision() == source_rev {
-        report(app, QobuzStep::Search, e).await;
+      let mut guard = app.lock().await;
+      if guard.source_revision() == source_rev {
+        report_locked(&mut guard, QobuzStep::Search, e);
       }
     }
   }
@@ -1116,6 +1119,24 @@ mod tests {
   fn qobuz_uris_are_recognised_by_scheme() {
     assert!(is_qobuz_uri("qobuz:track:1"));
     assert!(!is_qobuz_uri("subsonic:track:1"));
+  }
+
+  #[tokio::test]
+  async fn queued_qobuz_search_superseded_before_start_is_dropped() {
+    let dir = tempfile::tempdir().unwrap();
+    let (tx, _rx) = std::sync::mpsc::channel();
+    let mut inner = App::new(tx, crate::core::user_config::UserConfig::new(), None);
+    inner.state_path = Some(dir.path().join("state.yml"));
+    inner.set_active_source(Source::Qobuz);
+    inner.dispatch(IoEvent::GetQobuzSearchResults("miles".to_string()));
+    inner.set_active_source(Source::Spotify);
+    let app = Arc::new(Mutex::new(inner));
+
+    assert!(route_qobuz_event(&app, &IoEvent::GetQobuzSearchResults("miles".to_string())).await);
+    let guard = app.lock().await;
+    assert_eq!(guard.active_source, Source::Spotify);
+    assert!(!guard.status_message_is_error());
+    assert!(guard.search_results().tracks.is_none());
   }
 }
 

@@ -266,10 +266,12 @@ async fn load_subsonic_tracks(app: &Arc<Mutex<App>>, playlist_uri: &str, epoch: 
 /// ids, so those blocks are left `None` to avoid dead rows. Album/artist
 /// drill-down is a tracked follow-up.
 async fn run_subsonic_search(app: &Arc<Mutex<App>>, query: &str) {
+  let Some(source_rev) = app.lock().await.begin_search(Source::Subsonic) else {
+    return;
+  };
   let Some(source) = build_source(app).await else {
     return;
   };
-  let source_rev = app.lock().await.source_revision();
   match source.search(query).await {
     Ok(results) => {
       app

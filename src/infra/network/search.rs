@@ -1,5 +1,6 @@
 use super::{IoEvent, Network};
 use crate::core::plugin_api::{AlbumInfo, ArtistInfo, PlaylistInfo, ShowInfo, TrackInfo};
+use crate::core::source::Source;
 use crate::infra::network::mapping::map_page;
 use anyhow::anyhow;
 use rspotify::model::{
@@ -78,7 +79,9 @@ impl SearchNetwork for Network {
       ("offset", "0".to_string()),
     ];
 
-    let source_rev = self.app.lock().await.source_revision();
+    let Some(source_rev) = self.app.lock().await.begin_search(Source::Spotify) else {
+      return;
+    };
 
     let (track_search, album_search, show_search, playlist_search, artist_search) = tokio::join!(
       self.spotify_get_typed::<TrackSearchResponse>("search", &track_query),
@@ -91,21 +94,27 @@ impl SearchNetwork for Network {
     let track_result = match track_search {
       Ok(res) => Some(res.tracks),
       Err(e) => {
-        self.handle_error(anyhow!(e)).await;
+        self
+          .handle_search_error_if_current(source_rev, anyhow!(e))
+          .await;
         return;
       }
     };
     let album_result = match album_search {
       Ok(res) => Some(res.albums),
       Err(e) => {
-        self.handle_error(anyhow!(e)).await;
+        self
+          .handle_search_error_if_current(source_rev, anyhow!(e))
+          .await;
         return;
       }
     };
     let show_result = match show_search {
       Ok(res) => Some(res.shows),
       Err(e) => {
-        self.handle_error(anyhow!(e)).await;
+        self
+          .handle_search_error_if_current(source_rev, anyhow!(e))
+          .await;
         return;
       }
     };
@@ -224,6 +233,14 @@ impl SearchNetwork for Network {
   }
 }
 
+impl Network {
+  async fn handle_search_error_if_current(&mut self, source_rev: u64, err: anyhow::Error) {
+    if self.app.lock().await.source_revision() == source_rev {
+      self.handle_error(err).await;
+    }
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -283,5 +300,62 @@ mod tests {
     })
     .await
     .expect("search limit test timed out");
+  }
+
+  #[tokio::test]
+  async fn stale_queued_spotify_search_skips_http_after_source_switch() {
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+      let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+      let base_url = format!("http://{}/v1/", listener.local_addr().unwrap());
+      let seen = Arc::new(std::sync::Mutex::new(0usize));
+      let count = seen.clone();
+      let server = tokio::spawn(async move {
+        while let Ok((mut stream, _)) = listener.accept().await {
+          *count.lock().unwrap() += 1;
+          stream
+            .write_all(b"HTTP/1.1 500 Internal Server Error\r\nconnection: close\r\n\r\n")
+            .await
+            .unwrap();
+        }
+      });
+
+      let (tx, _rx) = std::sync::mpsc::channel();
+      let mut app = App::new(tx, UserConfig::new(), Some(std::time::SystemTime::now()));
+      let state_dir = tempfile::tempdir().unwrap();
+      app.state_path = Some(state_dir.path().join("state.yml"));
+      app.dispatch(IoEvent::GetSearchResults("queen".to_string(), None));
+      app.set_active_source(Source::YouTube);
+      let app = Arc::new(Mutex::new(app));
+      let (spotify, _fake) = fake_spotify_login(base_url);
+      let mut network = Network::new(Some(spotify), &app);
+
+      network.get_search_results("queen".to_string(), None).await;
+      server.abort();
+
+      assert_eq!(
+        *seen.lock().unwrap(),
+        0,
+        "superseded queued search should not send HTTP requests"
+      );
+    })
+    .await
+    .expect("stale queued search test timed out");
+  }
+
+  #[tokio::test]
+  async fn handle_search_error_if_current_drops_stale_error() {
+    let (tx, _rx) = std::sync::mpsc::channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(std::time::SystemTime::now()));
+    let state_dir = tempfile::tempdir().unwrap();
+    app.state_path = Some(state_dir.path().join("state.yml"));
+    let initial_rev = app.source_revision();
+    app.set_active_source(Source::YouTube);
+    let app = Arc::new(Mutex::new(app));
+    let mut network = Network::new(None, &app);
+
+    network
+      .handle_search_error_if_current(initial_rev, anyhow!("stale failure"))
+      .await;
+    assert!(!app.lock().await.status_message_is_error());
   }
 }

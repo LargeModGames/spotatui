@@ -149,7 +149,9 @@ async fn load_radio_stations(app: &Arc<Mutex<App>>) {
 /// Like the Subsonic search, only the songs block is populated — each row is a
 /// station; Enter on one dispatches its `radio:` URI back through this module.
 async fn run_radio_search(app: &Arc<Mutex<App>>, query: &str) {
-  let source_rev = app.lock().await.source_revision();
+  let Some(source_rev) = app.lock().await.begin_search(Source::Radio) else {
+    return;
+  };
   let source = RadioSource::new();
   match source.search(query).await {
     Ok(results) => {
