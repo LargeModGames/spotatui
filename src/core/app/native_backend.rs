@@ -312,10 +312,6 @@ impl App {
       self.native_backend_pending = false;
       return false;
     }
-    if self.active_decoded_source() {
-      self.park_cancelled_native_recovery();
-      return false;
-    }
     if self.native_parked && !self.native_should_drive() {
       return false;
     }
@@ -997,7 +993,7 @@ mod tests {
   }
 
   #[test]
-  fn a_rebuild_under_a_decoded_owner_is_parked_until_the_claim_is_released() {
+  fn a_rebuild_under_a_decoded_owner_is_refused_only_while_parked() {
     let (tx, _rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
     app.native_parked = true;
@@ -1010,10 +1006,9 @@ mod tests {
     assert!(app.accept_rebuilt_native_backend());
     assert!(!app.native_parked);
 
-    // A rebuild started before a decoded claim must also be refused.
+    // A decoded queue slot over a Spotify context parks nothing.
     app.claim_decoded_sink(Source::YouTube);
-    assert!(!app.accept_rebuilt_native_backend());
-    assert!(app.native_backend_parked());
+    assert!(app.accept_rebuilt_native_backend());
   }
 
   #[test]

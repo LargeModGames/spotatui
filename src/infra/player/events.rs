@@ -177,41 +177,16 @@ enum RebuildOutcome<P> {
   Superseded,
   /// An error we give up on
   Failed(StreamingBuildError),
-  /// A decoded owner interrupted the rebuild.
-  DecodedOwner,
   /// The frontend exited or another engine took over.
   Cancelled,
 }
 
-/// Who else wants the audio sink, and so must stop a rebuild.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RebuildCancellation {
-  DecodedOwner,
-  /// The frontend exited, another engine was selected, or Music took the sink.
-  Cancelled,
-}
-
-impl RebuildCancellation {
-  fn outcome<P>(self) -> RebuildOutcome<P> {
-    match self {
-      Self::DecodedOwner => RebuildOutcome::DecodedOwner,
-      Self::Cancelled => RebuildOutcome::Cancelled,
-    }
-  }
-}
-
-/// Why a rebuild is no longer useful: frontend gone, another engine, or a decoded owner.
-fn rebuild_cancellation(app: &App) -> Option<RebuildCancellation> {
-  if app.io_tx_clone().is_none()
+/// Whether a rebuild is no longer useful: the frontend exited, another engine
+/// was selected, or Music took the sink.
+fn rebuild_cancelled(app: &App) -> bool {
+  app.io_tx_clone().is_none()
     || !app.native_engine_still_selected()
     || app.apple_music_owns_playback()
-  {
-    Some(RebuildCancellation::Cancelled)
-  } else if app.active_decoded_source() {
-    Some(RebuildCancellation::DecodedOwner)
-  } else {
-    None
-  }
 }
 
 /// Park for a Music interruption only while the frontend and native engine
@@ -226,7 +201,7 @@ fn park_for_apple_music_recovery(app: &mut App) {
 }
 
 /// Finish a cancelled librespot recovery without clearing Soloist's startup flag.
-fn finish_cancelled_recovery(app: &mut App, interrupted_by_decoded: bool) {
+fn finish_cancelled_recovery(app: &mut App) {
   if !app.native_engine_still_selected() {
     return;
   }
@@ -234,7 +209,7 @@ fn finish_cancelled_recovery(app: &mut App, interrupted_by_decoded: bool) {
   if app.io_tx_clone().is_none() {
     return;
   }
-  if app.apple_music_owns_playback() || interrupted_by_decoded {
+  if app.apple_music_owns_playback() {
     app.park_cancelled_native_recovery();
   }
   // Music or a decoded source may have let go between detection and cleanup.
@@ -277,11 +252,11 @@ where
       return RebuildOutcome::Superseded;
     }
     app.note_native_rebuild_started(chain_started);
-    if let Some(cancellation) = rebuild_cancellation(&app) {
+    if rebuild_cancelled(&app) {
       // Music can release its claim before the handler's cleanup re-reads
       // ownership; park now so the backend stays reacquirable either way.
       park_for_apple_music_recovery(&mut app);
-      return cancellation.outcome();
+      return RebuildOutcome::Cancelled;
     }
     // Startup can publish a player while the chain sleeps; replay over it,
     // crediting the retry time first so a start parked before it is not expired.
@@ -326,9 +301,9 @@ where
           if app.native_recovery_generation() != request.generation {
             return RebuildOutcome::Superseded;
           }
-          if let Some(cancellation) = rebuild_cancellation(&app) {
+          if rebuild_cancelled(&app) {
             park_for_apple_music_recovery(&mut app);
-            return cancellation.outcome();
+            return RebuildOutcome::Cancelled;
           }
 
           if !e.is_retryable() {
@@ -700,13 +675,13 @@ async fn handle_streaming_recovery<B: RecoveryBackend>(
       RebuildOutcome::Superseded => {
         info!("native streaming recovery superseded by a newer rebuild request");
       }
-      RebuildOutcome::DecodedOwner | RebuildOutcome::Cancelled => {
+      RebuildOutcome::Cancelled => {
         info!(
           "native streaming recovery cancelled: another owner took the sink or the frontend exited"
         );
         let mut app = ctx.app.lock().await;
         if app.native_recovery_generation() == request.generation {
-          finish_cancelled_recovery(&mut app, matches!(outcome, RebuildOutcome::DecodedOwner));
+          finish_cancelled_recovery(&mut app);
         }
       }
       RebuildOutcome::Failed(e) => {
@@ -2227,30 +2202,6 @@ mod tests {
   }
 
   #[test]
-  fn decoded_owner_cancels_recovery_and_can_reacquire_after_release() {
-    use crate::core::{app::App, source::Source, user_config::UserConfig};
-    use std::sync::mpsc::channel;
-    use std::time::SystemTime;
-
-    let (tx, _rx) = channel();
-    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
-    let (recovery_tx, mut recovery_rx) = tokio::sync::mpsc::unbounded_channel();
-    app.streaming_recovery_tx = Some(recovery_tx);
-    app.claim_decoded_sink(Source::YouTube);
-    assert!(matches!(
-      super::rebuild_cancellation(&app),
-      Some(super::RebuildCancellation::DecodedOwner)
-    ));
-    app.native_backend_pending = true;
-    super::finish_cancelled_recovery(&mut app, true);
-    assert!(!app.native_backend_pending);
-    assert!(app.native_backend_parked());
-    app.release_decoded_sink_claim();
-    assert!(app.reacquire_parked_backend());
-    assert!(recovery_rx.try_recv().unwrap().reacquire);
-  }
-
-  #[test]
   fn apple_music_cancellation_preserves_the_absent_backend_for_reacquisition() {
     use crate::core::{app::App, user_config::UserConfig};
     use std::sync::mpsc::channel;
@@ -2260,13 +2211,10 @@ mod tests {
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
     app.claim_apple_music();
     assert!(app.apple_music_owns_playback());
-    assert!(matches!(
-      super::rebuild_cancellation(&app),
-      Some(super::RebuildCancellation::Cancelled)
-    ));
+    assert!(super::rebuild_cancelled(&app));
 
     app.native_backend_pending = true;
-    super::finish_cancelled_recovery(&mut app, false);
+    super::finish_cancelled_recovery(&mut app);
     assert!(!app.native_backend_pending);
     assert!(app.native_backend_parked());
   }
@@ -2293,7 +2241,7 @@ mod tests {
     assert!(app.finish_apple_music_handoff(handoff));
     app.park_start_playback(Some("spotify:playlist:parked".to_string()), None, None);
 
-    super::finish_cancelled_recovery(&mut app, false);
+    super::finish_cancelled_recovery(&mut app);
 
     let request = recovery_rx.try_recv().expect("a rebuild is queued");
     assert!(request.reacquire);
@@ -2318,7 +2266,7 @@ mod tests {
     let handoff = app.begin_apple_music_handoff();
     assert!(app.finish_apple_music_handoff(handoff));
 
-    super::finish_cancelled_recovery(&mut app, false);
+    super::finish_cancelled_recovery(&mut app);
 
     assert!(app.native_backend_parked());
     assert!(!app.native_backend_pending);
@@ -2353,7 +2301,7 @@ mod tests {
     assert!(app.reacquire_parked_backend_for_queue_slot());
     assert!(recovery_rx.try_recv().is_err(), "no request while pending");
 
-    super::finish_cancelled_recovery(&mut app, false);
+    super::finish_cancelled_recovery(&mut app);
 
     let request = recovery_rx
       .try_recv()
@@ -2421,7 +2369,7 @@ mod tests {
         let mut guard = app.lock().await;
         guard.streaming_recovery_tx = Some(recovery_tx);
         if !slot_publishes_first {
-          super::finish_cancelled_recovery(&mut guard, false);
+          super::finish_cancelled_recovery(&mut guard);
         }
       }
       assert!(route_queue_event(&app, &IoEvent::AdvanceNativeQueue).await);
@@ -2429,7 +2377,7 @@ mod tests {
         let mut guard = app.lock().await;
         assert!(guard.queue_now_is_spotify());
         if slot_publishes_first {
-          super::finish_cancelled_recovery(&mut guard, false);
+          super::finish_cancelled_recovery(&mut guard);
         }
       }
 
@@ -2494,7 +2442,7 @@ mod tests {
     let handoff = app.begin_apple_music_handoff();
     assert!(app.finish_apple_music_handoff(handoff));
     assert!(!app.apple_music_owns_playback());
-    super::finish_cancelled_recovery(&mut app, false);
+    super::finish_cancelled_recovery(&mut app);
     assert!(
       app.native_backend_parked(),
       "the backend must stay reacquirable after Music releases"
@@ -2539,7 +2487,7 @@ mod tests {
     assert!(app.apple_music_owns_playback());
     let handoff = app.begin_apple_music_handoff();
     assert!(app.finish_apple_music_handoff(handoff));
-    super::finish_cancelled_recovery(&mut app, false);
+    super::finish_cancelled_recovery(&mut app);
     assert!(app.native_backend_parked());
   }
 
@@ -2627,8 +2575,53 @@ mod tests {
     assert!(matches!(io_rx.try_recv(), Err(TryRecvError::Empty)));
   }
 
+  /// The sleep/wake repro: a paused decoded claim predating the rebuild must
+  /// not stop the chain — the rebuilt device installs and nothing replays
+  /// over the owner holding the sink.
+  #[tokio::test(start_paused = true)]
+  async fn a_rebuild_under_a_paused_decoded_owner_installs_and_stays_quiet() {
+    use crate::core::source::Source;
+    use crate::core::user_config::UserConfig;
+    use std::sync::mpsc::{channel, TryRecvError};
+    use std::time::SystemTime;
+
+    let (tx, io_rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    let generation = app.begin_native_recovery();
+    app.native_backend_pending = true;
+    app.claim_decoded_sink(Source::YouTube);
+    let app = Arc::new(tokio::sync::Mutex::new(app));
+    let (ctx, request_tx) = recovery_context(Arc::clone(&app));
+
+    let script = move |attempt: u32, _published: ScriptedSlot| -> BuildAttempt<ScriptedPlayer> {
+      Box::pin(async move { Ok(ScriptedPlayer::new(attempt)) })
+    };
+    let backend = ScriptedBackend::new(script);
+    let record = backend.clone();
+    request_tx
+      .send(restore_request(generation))
+      .expect("the recovery channel is open");
+
+    run_recovery_handler_until_parked(handle_streaming_recovery(ctx, backend)).await;
+
+    assert_eq!(
+      record.events(),
+      [BuildEvent::Published(1), BuildEvent::Watched(1)],
+      "the rebuilt device installs under the paused decoded owner"
+    );
+    {
+      let mut app = app.lock().await;
+      assert!(!app.native_backend_pending);
+      assert!(app.active_decoded_source());
+    }
+    assert!(
+      matches!(io_rx.try_recv(), Err(TryRecvError::Empty)),
+      "nothing replays over the owner holding the sink"
+    );
+  }
+
   #[test]
-  fn frontend_shutdown_is_not_a_decoded_owner_cancellation() {
+  fn a_frontend_shutdown_cancels_without_parking_even_under_a_decoded_claim() {
     use crate::core::{app::App, source::Source, user_config::UserConfig};
     use std::sync::mpsc::channel;
     use std::time::SystemTime;
@@ -2637,12 +2630,9 @@ mod tests {
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
     app.claim_decoded_sink(Source::YouTube);
     app.close_io_channel();
-    assert!(matches!(
-      super::rebuild_cancellation(&app),
-      Some(super::RebuildCancellation::Cancelled)
-    ));
+    assert!(super::rebuild_cancelled(&app));
     app.native_backend_pending = true;
-    super::finish_cancelled_recovery(&mut app, false);
+    super::finish_cancelled_recovery(&mut app);
     assert!(!app.native_backend_pending);
     assert!(!app.native_backend_parked());
   }
@@ -2666,16 +2656,11 @@ mod tests {
     app.user_config.behavior.playback_engine = PlaybackEngine::Soloist;
     assert!(app.apply_playback_engine().is_some());
     assert!(app.native_backend_pending);
-    assert!(matches!(
-      super::rebuild_cancellation(&app),
-      Some(super::RebuildCancellation::Cancelled)
-    ));
+    assert!(super::rebuild_cancelled(&app));
 
-    for interrupted_by_decoded in [false, true] {
-      super::finish_cancelled_recovery(&mut app, interrupted_by_decoded);
-      assert!(app.native_backend_pending);
-      assert!(!app.native_backend_parked());
-    }
+    super::finish_cancelled_recovery(&mut app);
+    assert!(app.native_backend_pending);
+    assert!(!app.native_backend_parked());
   }
 
   #[test]
