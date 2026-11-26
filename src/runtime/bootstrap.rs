@@ -197,15 +197,6 @@ pub(super) fn install_panic_hook() {
   }));
 }
 
-/// Whether an uncommented `enable_global_song_count:` line appears in a config
-/// that a YAML `Value` could not parse, so the typed loader's value for it came
-/// from the file rather than the default.
-fn config_text_sets_global_song_count(config_string: &str) -> bool {
-  config_string
-    .lines()
-    .any(|line| line.trim_start().starts_with("enable_global_song_count:"))
-}
-
 /// Prompt once for the anonymous global song counter opt-in and persist the
 /// choice into `config.yml`. Asked before the first-run source picker so the
 /// answer applies to whichever source(s) the user sets up. Non-interactive runs
@@ -213,8 +204,13 @@ fn config_text_sets_global_song_count(config_string: &str) -> bool {
 fn prompt_global_song_count_opt_in(
   user_config: &mut UserConfig,
   first_run: bool,
+  saved_answer: Option<bool>,
   onboarding: &dyn Onboarding,
 ) -> Result<()> {
+  if !should_prompt_global_song_count(first_run, saved_answer.is_some()) {
+    return Ok(());
+  }
+
   let config_paths = match &user_config.path_to_config {
     Some(path) => path,
     None => {
@@ -223,33 +219,15 @@ fn prompt_global_song_count_opt_in(
     }
   };
 
-  // The source picker keys off the same first-run signal, so asking here keeps
-  // the two in step even when a stale config (e.g. one silently opted out by an
-  // older build) already carries the setting. Outside a first run, only ask
-  // when the config predates the setting.
-  let config_has_answer = config_paths.config_file_path.exists() && {
-    let config_string = fs::read_to_string(&config_paths.config_file_path)?;
-    // The typed config loader can accept keys that a YAML Value rejects, such
-    // as a duplicate `plugin_commands` key. Saving the answer would fail on the
-    // same parse, so asking again would repeat on every launch: treat such a
-    // file as answered. Keep the value the typed loader read only when the file
-    // spells the key out; otherwise the `true` default was never an answer, so
-    // the counter stays off.
-    match serde_yaml::from_str::<serde_yaml::Value>(&config_string) {
-      Ok(config) => config["behavior"]["enable_global_song_count"]
-        .as_bool()
-        .is_some(),
-      Err(_) => {
-        if !config_text_sets_global_song_count(&config_string) {
-          user_config.behavior.enable_global_song_count = false;
-        }
-        true
-      }
+  if !first_run && config_paths.config_file_path.exists() {
+    let contents = fs::read_to_string(&config_paths.config_file_path)?;
+    // The typed loader accepts some configs (e.g. duplicate plugin commands)
+    // that cannot be patched as a YAML Value. Stay opted out without repeatedly
+    // asking for an answer that cannot be saved.
+    if serde_yaml::from_str::<serde_yaml::Value>(&contents).is_err() {
+      user_config.behavior.enable_global_song_count = false;
+      return Ok(());
     }
-  };
-
-  if !should_prompt_global_song_count(first_run, config_has_answer) {
-    return Ok(());
   }
 
   let interactive = onboarding.is_interactive();
@@ -471,7 +449,7 @@ pub(super) async fn boot(
     let path = UserConfigPaths { config_file_path };
     user_config.path_to_config.replace(path);
   }
-  user_config.load_config()?;
+  let song_counter_answer = user_config.load_config()?;
   let system_language = if options.subcommand.is_some() {
     crate::core::i18n::Language::En
   } else {
@@ -563,15 +541,10 @@ pub(super) async fn boot(
     },
     _ => PersistedRuntimeState::default(),
   };
-  let mut state = if should_save_initial_state {
-    runtime_state.to_persisted()
-  } else {
-    let mut state = default_fields;
-    state.merge_patch(&legacy_radio_fields);
-    state.merge_patch(&legacy_runtime_fields);
-    state.merge_patch(&legacy_client_fields);
-    state
-  };
+  let mut state = default_fields;
+  state.merge_patch(&legacy_radio_fields);
+  state.merge_patch(&legacy_runtime_fields);
+  state.merge_patch(&legacy_client_fields);
   // Pin the legacy decision once. Future saves must distinguish an old saved
   // source from the default source written before the first picker completes.
   if persisted_state.first_run_complete.is_none() {
@@ -579,7 +552,12 @@ pub(super) async fn boot(
   }
   if can_save_initial_state && !state.is_empty() {
     if let Some(path) = &state_path {
-      if let Err(e) = crate::core::state::save(path, &state) {
+      let saved = if should_save_initial_state {
+        crate::core::state::save_initial(path, &state)
+      } else {
+        crate::core::state::save(path, &state)
+      };
+      if let Err(e) = saved {
         log::warn!("[state] failed to save initial runtime state: {e}");
       }
     }
@@ -625,7 +603,12 @@ pub(super) async fn boot(
   // Global song counter opt-in (interactive TUI only). Asked before the source
   // picker so the choice applies no matter which source(s) the user sets up.
   if options.subcommand.is_none() {
-    prompt_global_song_count_opt_in(&mut user_config, first_run, onboarding.as_ref())?;
+    prompt_global_song_count_opt_in(
+      &mut user_config,
+      first_run,
+      song_counter_answer,
+      onboarding.as_ref(),
+    )?;
   }
 
   // First-run source picker (interactive UI launch only): picking Spotify logs
@@ -1133,7 +1116,7 @@ mod tests {
     let mut user_config = user_config_at(config_path.clone());
     let onboarding = ScriptedOnboarding::with_answers(&["y"]);
 
-    prompt_global_song_count_opt_in(&mut user_config, true, &onboarding).unwrap();
+    prompt_global_song_count_opt_in(&mut user_config, true, None, &onboarding).unwrap();
 
     assert!(user_config.behavior.enable_global_song_count);
     let persisted = std::fs::read_to_string(&config_path).unwrap();
@@ -1152,7 +1135,7 @@ mod tests {
     let mut user_config = user_config_at(config_path.clone());
     let onboarding = ScriptedOnboarding::with_answers(&["nope"]);
 
-    prompt_global_song_count_opt_in(&mut user_config, true, &onboarding).unwrap();
+    prompt_global_song_count_opt_in(&mut user_config, true, None, &onboarding).unwrap();
 
     assert!(!user_config.behavior.enable_global_song_count);
     let persisted = std::fs::read_to_string(&config_path).unwrap();
@@ -1167,7 +1150,7 @@ mod tests {
     let mut user_config = user_config_at(config_path.clone());
     let onboarding = ScriptedOnboarding::non_interactive(&[]);
 
-    prompt_global_song_count_opt_in(&mut user_config, true, &onboarding).unwrap();
+    prompt_global_song_count_opt_in(&mut user_config, true, None, &onboarding).unwrap();
 
     // Never enable anonymous telemetry for a user we couldn't prompt.
     assert!(!user_config.behavior.enable_global_song_count);
@@ -1182,12 +1165,15 @@ mod tests {
   fn duplicate_plugin_commands_without_a_song_counter_key_keep_the_counter_off() {
     let contents =
       "behavior:\n  show_loading_indicator: true\nplugin_commands:\n  example: x\n  example: y\n";
-    for (interactive, label) in [(true, "interactive launch"), (false, "CLI run")] {
+    for (interactive, label) in [
+      (true, "interactive launch"),
+      (false, "non-interactive launch"),
+    ] {
       let dir = tempfile::tempdir().unwrap();
       let config_path = dir.path().join("config.yml");
       std::fs::write(&config_path, contents).unwrap();
       let mut config = user_config_at(config_path.clone());
-      config.load_config().unwrap();
+      let saved_answer = config.load_config().unwrap();
       assert!(config.behavior.enable_global_song_count, "{label}");
       let onboarding = if interactive {
         ScriptedOnboarding::with_answers(&["y"])
@@ -1195,7 +1181,7 @@ mod tests {
         ScriptedOnboarding::non_interactive(&[])
       };
 
-      prompt_global_song_count_opt_in(&mut config, false, &onboarding).unwrap();
+      prompt_global_song_count_opt_in(&mut config, false, saved_answer, &onboarding).unwrap();
 
       assert!(!onboarding.saw("Would you like to participate?"), "{label}");
       assert!(!config.behavior.enable_global_song_count, "{label}");
@@ -1211,12 +1197,15 @@ mod tests {
   fn duplicate_plugin_commands_keep_the_saved_song_counter_answer() {
     let contents =
       "behavior:\n  enable_global_song_count: true\nplugin_commands:\n  example: x\n  example: y\n";
-    for (interactive, label) in [(true, "interactive launch"), (false, "CLI run")] {
+    for (interactive, label) in [
+      (true, "interactive launch"),
+      (false, "non-interactive launch"),
+    ] {
       let dir = tempfile::tempdir().unwrap();
       let config_path = dir.path().join("config.yml");
       std::fs::write(&config_path, contents).unwrap();
       let mut config = user_config_at(config_path.clone());
-      config.load_config().unwrap();
+      let saved_answer = config.load_config().unwrap();
       assert!(config.behavior.enable_global_song_count, "{label}");
       let onboarding = if interactive {
         ScriptedOnboarding::with_answers(&["n"])
@@ -1224,7 +1213,7 @@ mod tests {
         ScriptedOnboarding::non_interactive(&[])
       };
 
-      prompt_global_song_count_opt_in(&mut config, false, &onboarding).unwrap();
+      prompt_global_song_count_opt_in(&mut config, false, saved_answer, &onboarding).unwrap();
 
       assert!(!onboarding.saw("Would you like to participate?"), "{label}");
       assert!(config.behavior.enable_global_song_count, "{label}");
@@ -1237,6 +1226,41 @@ mod tests {
   }
 
   #[test]
+  fn duplicate_plugin_commands_do_not_turn_null_into_song_counter_consent() {
+    let contents =
+      "behavior:\n  enable_global_song_count: null\nplugin_commands:\n  example: x\n  example: y\n";
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.yml");
+    std::fs::write(&path, contents).unwrap();
+    let mut config = user_config_at(path.clone());
+    let saved_answer = config.load_config().unwrap();
+    let onboarding = ScriptedOnboarding::with_answers(&[]);
+
+    prompt_global_song_count_opt_in(&mut config, false, saved_answer, &onboarding).unwrap();
+
+    assert!(!config.behavior.enable_global_song_count);
+    assert!(onboarding.asked.lock().unwrap().is_empty());
+    assert_eq!(std::fs::read_to_string(path).unwrap(), contents);
+  }
+
+  #[test]
+  fn duplicate_plugin_commands_keep_quoted_song_counter_consent() {
+    let contents = "behavior:\n  \"enable_global_song_count\": true\nplugin_commands:\n  example: x\n  example: y\n";
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.yml");
+    std::fs::write(&path, contents).unwrap();
+    let mut config = user_config_at(path.clone());
+    let saved_answer = config.load_config().unwrap();
+    let onboarding = ScriptedOnboarding::with_answers(&[]);
+
+    prompt_global_song_count_opt_in(&mut config, false, saved_answer, &onboarding).unwrap();
+
+    assert!(config.behavior.enable_global_song_count);
+    assert!(onboarding.asked.lock().unwrap().is_empty());
+    assert_eq!(std::fs::read_to_string(path).unwrap(), contents);
+  }
+
+  #[test]
   fn a_failed_global_song_counter_write_does_not_abort_boot() {
     let dir = tempfile::tempdir().unwrap();
     // A missing parent fails the write on every platform, root included.
@@ -1244,7 +1268,7 @@ mod tests {
     let mut user_config = user_config_at(config_path.clone());
     let onboarding = ScriptedOnboarding::with_answers(&["y"]);
 
-    prompt_global_song_count_opt_in(&mut user_config, true, &onboarding).unwrap();
+    prompt_global_song_count_opt_in(&mut user_config, true, None, &onboarding).unwrap();
 
     assert!(user_config.behavior.enable_global_song_count);
     assert!(!config_path.exists());
@@ -1266,10 +1290,10 @@ mod tests {
       )
       .unwrap();
       let mut config = user_config_at(config_path.clone());
-      config.load_config().unwrap();
+      let saved_answer = config.load_config().unwrap();
       let onboarding = ScriptedOnboarding::with_answers(&[answer]);
 
-      prompt_global_song_count_opt_in(&mut config, false, &onboarding).unwrap();
+      prompt_global_song_count_opt_in(&mut config, false, saved_answer, &onboarding).unwrap();
 
       let saved: serde_yaml::Value =
         serde_yaml::from_str(&std::fs::read_to_string(&config_path).unwrap()).unwrap();
@@ -1279,10 +1303,10 @@ mod tests {
       );
       assert_eq!(saved["theme"]["preset"].as_str(), Some("Dracula"));
       let mut reloaded = user_config_at(config_path);
-      reloaded.load_config().unwrap();
+      let saved_answer = reloaded.load_config().unwrap();
       assert_eq!(reloaded.behavior.enable_global_song_count, enable);
       let second_launch = ScriptedOnboarding::with_answers(&[]);
-      prompt_global_song_count_opt_in(&mut reloaded, false, &second_launch).unwrap();
+      prompt_global_song_count_opt_in(&mut reloaded, false, saved_answer, &second_launch).unwrap();
       assert!(second_launch.asked.lock().unwrap().is_empty());
     }
   }
@@ -1309,10 +1333,10 @@ mod tests {
       let path = dir.path().join("config.yml");
       std::fs::write(&path, contents).unwrap();
       let mut config = user_config_at(path.clone());
-      config.load_config().unwrap();
+      let saved_answer = config.load_config().unwrap();
       let onboarding = ScriptedOnboarding::with_answers(&["n"]);
 
-      prompt_global_song_count_opt_in(&mut config, false, &onboarding).unwrap();
+      prompt_global_song_count_opt_in(&mut config, false, saved_answer, &onboarding).unwrap();
 
       assert_eq!(onboarding.asked.lock().unwrap().len(), 1);
       let saved: serde_yaml::Value =

@@ -71,6 +71,26 @@ pub async fn forget_spotify_login() {
 /// half-written bytes into place. On a failed write or rename the temp file is
 /// removed best-effort so aborted writes do not accumulate.
 pub(crate) fn write_private_file_atomic(path: &Path, contents: &[u8]) -> Result<()> {
+  write_private_file_with(path, contents, |tmp, target| fs::rename(tmp, target))
+}
+
+/// Publish a complete private file only if no writer has created the target.
+pub(crate) fn write_private_file_if_absent(path: &Path, contents: &[u8]) -> Result<()> {
+  write_private_file_with(path, contents, |tmp, target| {
+    let result = fs::hard_link(tmp, target);
+    let _ = fs::remove_file(tmp);
+    match result {
+      Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+      result => result,
+    }
+  })
+}
+
+fn write_private_file_with(
+  path: &Path,
+  contents: &[u8],
+  publish: impl FnOnce(&Path, &Path) -> std::io::Result<()>,
+) -> Result<()> {
   // Follow the link chain by hand: `canonicalize` fails on a dangling link and
   // would let the rename replace the link itself. The bound stops a link loop.
   // `join` keeps an absolute link and resolves a relative one against the
@@ -89,11 +109,11 @@ pub(crate) fn write_private_file_atomic(path: &Path, contents: &[u8]) -> Result<
     ));
   }
   let tmp = unique_temp_path(&target);
-  // Clean up on either failure (write or rename). Each attempt uses a fresh
+  // Clean up on either failure (write or publish). Each attempt uses a fresh
   // unique name, so a leaked temp from a partial write would otherwise persist.
   if let Err(error) = create_private_file_exclusive(&tmp)
     .and_then(|mut file| std::io::Write::write_all(&mut file, contents))
-    .and_then(|()| std::fs::rename(&tmp, &target))
+    .and_then(|()| publish(&tmp, &target))
   {
     let _ = std::fs::remove_file(&tmp);
     return Err(error.into());

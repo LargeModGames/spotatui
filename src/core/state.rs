@@ -182,6 +182,7 @@ impl RuntimeState {
     }
   }
 
+  #[cfg(test)]
   pub fn to_persisted(&self) -> PersistedRuntimeState {
     PersistedRuntimeState {
       first_run_complete: Some(self.first_run_complete),
@@ -602,7 +603,12 @@ pub fn save(path: &Path, state: &PersistedRuntimeState) -> Result<()> {
       return Err(PlaylistPinLimitReached.into());
     }
   }
-  write_state(path, &merged)
+  write_state(path, &merged, crate::core::auth::write_private_file_atomic)
+}
+
+/// Create the initial state without replacing state another launch saved first.
+pub(crate) fn save_initial(path: &Path, state: &PersistedRuntimeState) -> Result<()> {
+  write_state(path, state, crate::core::auth::write_private_file_if_absent)
 }
 
 /// Remove one pin from the latest saved list.
@@ -639,7 +645,7 @@ pub fn save_removing_pinned_playlists(
       accounts.remove(uri.trim());
     }
   }
-  write_state(path, &merged)
+  write_state(path, &merged, crate::core::auth::write_private_file_atomic)
 }
 
 /// Remove a radio station without sending a stale full station list.
@@ -652,16 +658,20 @@ pub fn save_removing_radio_station(path: &Path, url: &str) -> Result<()> {
   } else {
     merged.radio_stations = Some(Vec::new());
   }
-  write_state(path, &merged)
+  write_state(path, &merged, crate::core::auth::write_private_file_atomic)
 }
 
-fn write_state(path: &Path, state: &PersistedRuntimeState) -> Result<()> {
+fn write_state(
+  path: &Path,
+  state: &PersistedRuntimeState,
+  write: impl FnOnce(&Path, &[u8]) -> Result<()>,
+) -> Result<()> {
   let state = sanitized_persisted_state(state);
   let yaml = serde_yaml::to_string(&state).context("serializing runtime state")?;
   path
     .parent()
     .map_or(Ok(()), crate::core::paths::ensure_private_dir)
-    .and_then(|()| crate::core::auth::write_private_file_atomic(path, yaml.as_bytes()))
+    .and_then(|()| write(path, yaml.as_bytes()))
     .with_context(|| format!("writing {}", path.display()))
 }
 
@@ -997,16 +1007,19 @@ mod tests {
   fn a_stale_initial_save_cannot_undo_completed_setup() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("state.yml");
+    let initial = RuntimeState::default().to_persisted();
     save(
       &path,
       &PersistedRuntimeState {
         first_run_complete: Some(true),
-        ..Default::default()
+        ..PersistedRuntimeState::active_source(Source::Local)
       },
     )
     .unwrap();
-    save(&path, &RuntimeState::default().to_persisted()).unwrap();
-    assert_eq!(load(&path).unwrap().first_run_complete, Some(true));
+    save_initial(&path, &initial).unwrap();
+    let saved = load(&path).unwrap();
+    assert_eq!(saved.first_run_complete, Some(true));
+    assert_eq!(saved.active_source, Some(Source::Local));
   }
 
   fn lyrics_beside_main() -> PaneNode {

@@ -2447,7 +2447,8 @@ impl UserConfig {
     self.plugin_command_keys = result;
   }
 
-  pub fn load_config(&mut self) -> Result<()> {
+  /// Load settings and return the user's explicit song-counter choice, if any.
+  pub fn load_config(&mut self) -> Result<Option<bool>> {
     let paths = match &self.path_to_config {
       Some(path) => path,
       None => {
@@ -2459,7 +2460,7 @@ impl UserConfig {
       let config_string = fs::read_to_string(&paths.config_file_path)?;
       // serde fails if file is empty
       if config_string.trim().is_empty() {
-        return Ok(());
+        return Ok(None);
       }
 
       let config_yml: UserConfigString = serde_yaml::from_str(&config_string)?;
@@ -2472,6 +2473,10 @@ impl UserConfig {
         .behavior
         .as_ref()
         .and_then(|behavior| behavior.banner_gradient);
+      let song_counter_answer = config_yml
+        .behavior
+        .as_ref()
+        .and_then(|behavior| behavior.enable_global_song_count);
       if let Some(behavior) = config_yml.behavior {
         self.load_behaviorconfig(behavior)?;
       }
@@ -2489,9 +2494,9 @@ impl UserConfig {
         self.load_tablesconfig(tables);
       }
 
-      Ok(())
+      Ok(song_counter_answer)
     } else {
-      Ok(())
+      Ok(None)
     }
   }
 
