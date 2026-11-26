@@ -212,7 +212,6 @@ pub fn help_entries_for(strings: &crate::core::i18n::Strings) -> Vec<HelpEntry> 
       help.context_general_playlist_search,
     ),
     row(help.list_top, Literal("H"), help.context_general),
-    row(help.list_middle, Literal("M"), help.context_general),
     row(help.list_bottom, Literal("L"), help.context_general),
     row(help.search, Binding(|k| k.search), help.context_general).needs(SEARCH),
     row(help.filter_help, Binding(|k| k.search), help.context_help),
@@ -528,7 +527,7 @@ pub fn help_entries_for(strings: &crate::core::i18n::Strings) -> Vec<HelpEntry> 
     )
     .needs(SPOTIFY),
     row(help.playlist_delete, Literal("D"), help.context_playlist).needs(PLAYLIST_WRITE),
-    row(help.playlist_mirror, Literal("m"), help.context_playlist).needs(PLAYLIST_SYNC),
+    row(help.playlist_mirror, Literal("M"), help.context_playlist).needs(PLAYLIST_SYNC),
     row(help.radio_remove, Literal("D"), help.context_radio).needs(RADIO),
     row(
       help.follow_artist_playlist,
@@ -771,7 +770,7 @@ pub fn default_binding(action: &Action) -> Exposure<TuiSurface> {
     Action::UnfollowPlaylist(_) => literal("D", "Playlist"),
     Action::DeletePlaylist(_) => literal("D", "Playlist"),
     Action::SetPlaylistPinned { .. } => binding(|k| k.pin_playlist),
-    Action::OpenPlaylistSyncPicker => literal("m", "Playlist"),
+    Action::OpenPlaylistSyncPicker => literal("M", "Playlist"),
     Action::LinkPlaylistTo(_) => literal(ENTER, "Mirror playlist picker"),
     Action::RunPlaylistSync => literal("s", "Playlist sync"),
     Action::RemovePlaylistSyncLink(_) => literal(ENTER, "Remove link confirmation"),
@@ -1015,6 +1014,12 @@ mod tests {
     for row in entries.iter_mut().filter(|row| row[0] == "Open settings") {
       row[1] = open_settings.clone();
     }
+    for row in entries
+      .iter_mut()
+      .filter(|row| row[0] == "Mirror playlist onto another source")
+    {
+      row[1] = "M".to_string();
+    }
     // New rows append to the historical table so its indexed views stay valid.
     let sidebar_sort = vec![
       "Open sort menu".to_string(),
@@ -1037,7 +1042,8 @@ mod tests {
     #[cfg(feature = "milkdrop")]
     entries.push(milkdrop_row.clone());
     let enabled = |row: &Vec<String>| {
-      (cfg!(feature = "cover-art") || row[0] != "Go to cover art view")
+      row[0] != "Move selection to middle of list"
+        && (cfg!(feature = "cover-art") || row[0] != "Go to cover art view")
         && (cfg!(feature = "ai-dj") || row[2] != "AI DJ")
     };
     let app = App::default_connected();

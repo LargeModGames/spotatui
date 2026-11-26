@@ -462,8 +462,8 @@ plugin_commands:
 
 Each entry maps a command name to a key string. The key string uses the same format as the
 built-in keybindings (e.g. `ctrl-l`, `alt-x`, `f1`, `space`). Entries are skipped when
-the key string is invalid, the key is one of the reserved navigation keys (`H`, `M`, `L` for the
-top/middle/bottom list jumps, and `up`, `down`, `left`, `right`, `backspace`, `enter`), or the
+the key string is invalid, the key is one of the reserved navigation keys (`H`, `L` for the
+top/bottom list jumps, and `up`, `down`, `left`, `right`, `backspace`, `enter`), or the
 key already has a named action bound to it. The remaining entries are loaded normally, and each
 skipped entry logs a warning.
 

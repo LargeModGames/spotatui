@@ -149,10 +149,6 @@ fn handle_add_to_playlist_picker(key: Key, app: &mut App) {
     k if common_key_events::high_event(k) && row_count > 0 => {
       app.view.playlist_picker_selected_index = common_key_events::on_high_press_handler();
     }
-    k if common_key_events::middle_event(k) && row_count > 0 => {
-      app.view.playlist_picker_selected_index =
-        common_key_events::on_middle_press_handler(&picker_rows);
-    }
     k if common_key_events::low_event(k) && row_count > 0 => {
       app.view.playlist_picker_selected_index =
         common_key_events::on_low_press_handler(&picker_rows);
@@ -208,9 +204,6 @@ fn handle_playlist_sync_picker(key: Key, app: &mut App) {
     }
     k if common_key_events::high_event(k) && row_count > 0 => {
       app.view.playlist_sync_picker_index = common_key_events::on_high_press_handler();
-    }
-    k if common_key_events::middle_event(k) && row_count > 0 => {
-      app.view.playlist_sync_picker_index = common_key_events::on_middle_press_handler(&rows);
     }
     k if common_key_events::low_event(k) && row_count > 0 => {
       app.view.playlist_sync_picker_index = common_key_events::on_low_press_handler(&rows);

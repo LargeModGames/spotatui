@@ -25,10 +25,6 @@ pub fn handler(key: Key, app: &mut App) {
     k if common_key_events::high_event(k) => {
       app.view.playlist_sync_selected_link = common_key_events::on_high_press_handler();
     }
-    k if common_key_events::middle_event(k) => {
-      let next = common_key_events::on_middle_press_handler(app.playlist_sync_links());
-      app.view.playlist_sync_selected_link = next;
-    }
     k if common_key_events::low_event(k) => {
       let next = common_key_events::on_low_press_handler(app.playlist_sync_links());
       app.view.playlist_sync_selected_link = next;

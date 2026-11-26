@@ -65,16 +65,6 @@ pub fn handler(key: Key, app: &mut App) {
         }
       }
     }
-    k if common_key_events::middle_event(k) => {
-      if app.view.source_device_focus == SourceFocus::Devices {
-        if let Some(p) = app.devices() {
-          if app.view.selected_device_index.is_some() {
-            let next_index = common_key_events::on_middle_press_handler(&p.devices);
-            app.view.selected_device_index = Some(next_index);
-          }
-        }
-      }
-    }
     k if common_key_events::low_event(k) => {
       if app.view.source_device_focus == SourceFocus::Devices {
         if let Some(p) = app.devices() {

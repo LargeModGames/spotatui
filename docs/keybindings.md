@@ -73,7 +73,7 @@ Change the pin key in **Settings → Keybindings → Pin / Unpin Playlist** or w
 by another listed action. If the config file gives pinning the same key as
 navigation or another sidebar action, navigation and the existing action keep
 priority: this includes entering a playlist, sorting (`,`), deleting (`D`),
-mirroring (`m`), and the `H` / `M` / `L` list jumps. Choose a different pin key
+mirroring (`M`), and the `H` / `L` list jumps. Choose a different pin key
 to use both actions.
 
 Like other named actions, `pin_playlist` reserves its configured key against
@@ -114,7 +114,7 @@ arrow key also moves the focus, and `Alt-Shift` with an arrow key swaps panes. S
 | Close every pane and show the main layout again | `Alt-0` | `reset_panes` |
 
 A few keys in the help menu are fixed and have no config name: the sort menu
-(`,`), the visualizer style picker (`V`), list jumps `H` / `M` / `L`, the
+(`,`), the visualizer style picker (`V`), list jumps `H` / `L`, the
 layout keys (`{` / `}`, `(` / `)`, `|`), `s` (save the selected track), and
 `w` (add a track to a playlist). They cannot be rebound from
 `config.yml`.
@@ -156,8 +156,8 @@ A value that is a single character is taken as-is, so `"A"` means Shift+a.
 > and `"del"` maps to the **Delete** key — the opposite of what most people
 > expect.
 
-Some keys are reserved and cannot be remapped through Settings: `H`, `M` and
-`L` (jump to the top, middle and bottom of a list), `up`, `down`, `left`,
+Some keys are reserved and cannot be remapped through Settings: `H` and
+`L` (jump to the top and bottom of a list), `up`, `down`, `left`,
 `right`, `backspace` and `enter`. The Settings screen refuses them with an
 error, and a `plugin_commands` binding on one of them is skipped with a log
 warning. Because `"delete"` counts as Backspace (see the note above), a plugin

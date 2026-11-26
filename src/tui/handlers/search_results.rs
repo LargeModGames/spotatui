@@ -187,42 +187,6 @@ fn handle_high_press_on_selected_block(app: &mut App) {
   }
 }
 
-fn handle_middle_press_on_selected_block(app: &mut App) {
-  match app.view.search_selected_block {
-    SearchResultBlock::AlbumSearch => {
-      if let Some(result) = &app.search_results().albums {
-        let next_index = common_key_events::on_middle_press_handler(&result.items);
-        app.view.search_selected_album_index = Some(next_index);
-      }
-    }
-    SearchResultBlock::SongSearch => {
-      if let Some(result) = &app.search_results().tracks {
-        let next_index = common_key_events::on_middle_press_handler(&result.items);
-        app.view.search_selected_tracks_index = Some(next_index);
-      }
-    }
-    SearchResultBlock::ArtistSearch => {
-      if let Some(result) = &app.search_results().artists {
-        let next_index = common_key_events::on_middle_press_handler(&result.items);
-        app.view.search_selected_artists_index = Some(next_index);
-      }
-    }
-    SearchResultBlock::PlaylistSearch => {
-      if let Some(result) = &app.search_results().playlists {
-        let next_index = common_key_events::on_middle_press_handler(&result.items);
-        app.view.search_selected_playlists_index = Some(next_index);
-      }
-    }
-    SearchResultBlock::ShowSearch => {
-      if let Some(result) = &app.search_results().shows {
-        let next_index = common_key_events::on_middle_press_handler(&result.items);
-        app.view.search_selected_shows_index = Some(next_index);
-      }
-    }
-    SearchResultBlock::Empty => {}
-  }
-}
-
 fn handle_low_press_on_selected_block(app: &mut App) {
   match app.view.search_selected_block {
     SearchResultBlock::AlbumSearch => {
@@ -494,10 +458,6 @@ fn handle_radio_key(key: Key, app: &mut App) {
       app.view.search_selected_block = SearchResultBlock::SongSearch;
       handle_high_press_on_selected_block(app);
     }
-    k if common_key_events::middle_event(k) => {
-      app.view.search_selected_block = SearchResultBlock::SongSearch;
-      handle_middle_press_on_selected_block(app);
-    }
     k if common_key_events::low_event(k) => {
       app.view.search_selected_block = SearchResultBlock::SongSearch;
       handle_low_press_on_selected_block(app);
@@ -603,11 +563,6 @@ pub fn handler(key: Key, app: &mut App) {
       && app.view.search_selected_block != SearchResultBlock::Empty =>
     {
       handle_high_press_on_selected_block(app);
-    }
-    k if common_key_events::middle_event(k)
-      && app.view.search_selected_block != SearchResultBlock::Empty =>
-    {
-      handle_middle_press_on_selected_block(app);
     }
     k if common_key_events::low_event(k)
       && app.view.search_selected_block != SearchResultBlock::Empty =>

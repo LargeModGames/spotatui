@@ -573,7 +573,6 @@ pub fn key_to_config_string(key: &Key) -> String {
 fn check_reserved_keys(key: Key) -> Result<()> {
   let reserved = [
     Key::Char('H'),
-    Key::Char('M'),
     Key::Char('L'),
     Key::Up,
     Key::Down,

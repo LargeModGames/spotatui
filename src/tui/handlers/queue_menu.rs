@@ -17,9 +17,6 @@ pub fn handler(key: Key, app: &mut App) {
     Key::Char('K') => reorder(-1, app),
     // Row 0 is the now-playing header, so the rows run 0..row_count.
     k if common_key_events::high_event(k) => app.view.queue_selected_index = 0,
-    k if common_key_events::middle_event(k) => {
-      app.view.queue_selected_index = (row_count(app) - 1) / 2;
-    }
     k if common_key_events::low_event(k) => {
       app.view.queue_selected_index = row_count(app) - 1;
     }
@@ -186,14 +183,11 @@ mod tests {
   }
 
   #[test]
-  fn h_selects_the_now_playing_row_and_m_the_middle_row() {
+  fn h_selects_the_now_playing_row() {
     let mut app = app_with_queue(&["A", "B", "C"]);
     app.view.queue_selected_index = 3;
     handler(Key::Char('H'), &mut app);
     assert_eq!(app.view.queue_selected_index, 0);
-    // Rows: [now playing, A, B, C] => middle index 1.
-    handler(Key::Char('M'), &mut app);
-    assert_eq!(app.view.queue_selected_index, 1);
   }
 
   #[test]

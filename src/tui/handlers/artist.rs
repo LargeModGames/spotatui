@@ -136,26 +136,6 @@ fn handle_high_press_on_selected_block(app: &mut App) {
   }
 }
 
-fn handle_middle_press_on_selected_block(app: &mut App) {
-  if let Some(artist) = &mut app.artist {
-    match artist.artist_selected_block {
-      ArtistBlock::TopTracks => {
-        let next_index = common_key_events::on_middle_press_handler(&artist.top_tracks);
-        artist.selected_top_track_index = next_index;
-      }
-      ArtistBlock::Albums => {
-        let next_index = common_key_events::on_middle_press_handler(&artist.albums.items);
-        artist.selected_album_index = next_index;
-      }
-      ArtistBlock::RelatedArtists => {
-        let next_index = common_key_events::on_middle_press_handler(&artist.related_artists);
-        artist.selected_related_artist_index = next_index;
-      }
-      ArtistBlock::Empty => {}
-    }
-  }
-}
-
 fn handle_low_press_on_selected_block(app: &mut App) {
   if let Some(artist) = &mut app.artist {
     match artist.artist_selected_block {
@@ -356,11 +336,6 @@ pub fn handler(key: Key, app: &mut App) {
         && artist.artist_selected_block != ArtistBlock::Empty =>
       {
         handle_high_press_on_selected_block(app);
-      }
-      k if common_key_events::middle_event(k)
-        && artist.artist_selected_block != ArtistBlock::Empty =>
-      {
-        handle_middle_press_on_selected_block(app);
       }
       k if common_key_events::low_event(k)
         && artist.artist_selected_block != ArtistBlock::Empty =>

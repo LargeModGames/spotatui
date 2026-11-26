@@ -50,7 +50,6 @@ pub fn handler(key: Key, app: &mut App) {
       }
     },
     k if common_key_events::high_event(k) => handle_high_event(app),
-    k if common_key_events::middle_event(k) => handle_middle_event(app),
     k if common_key_events::low_event(k) => handle_low_event(app),
     Key::Char('s') => handle_save_event(app),
     Key::Char('w') => handle_save_album_event(app),
@@ -126,24 +125,6 @@ fn handle_high_event(app: &mut App) {
     AlbumTableContext::Simplified => {
       if let Some(selected_album_simplified) = &mut app.selected_album_simplified {
         let next_index = common_key_events::on_high_press_handler();
-        selected_album_simplified.selected_index = next_index;
-      }
-    }
-  }
-}
-
-fn handle_middle_event(app: &mut App) {
-  match app.album_table_context {
-    AlbumTableContext::Full => {
-      if let Some(selected_album) = &app.selected_album_full {
-        let next_index = common_key_events::on_middle_press_handler(&selected_album.album.tracks);
-        app.view.saved_album_tracks_index = next_index;
-      };
-    }
-    AlbumTableContext::Simplified => {
-      if let Some(selected_album_simplified) = &mut app.selected_album_simplified {
-        let next_index =
-          common_key_events::on_middle_press_handler(&selected_album_simplified.tracks.items);
         selected_album_simplified.selected_index = next_index;
       }
     }
