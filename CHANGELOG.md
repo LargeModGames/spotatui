@@ -15,7 +15,6 @@
 ### Changed
 
 - **Log files are named after the run**: instead of `spotatuilog<pid>`, each run writes `spotatui_<UTC timestamp>.log` in the temp directory, for example `spotatui_2026-11-20_18-42-07Z.log`. The name is picked once at startup and stays the same for the whole run. `spotatui` still prints the resolved path when it starts and exits. The [Logging docs](https://github.com/LargeModGames/spotatui/blob/main/docs/configuration.md#logging) and the bug-report instructions now show the new name.
-- **CLI docs list the output defaults**: `docs/cli.md` now gives the `-f` short flag and the default `--format` of each subcommand and flag ([#1046](https://github.com/LargeModGames/spotatui/issues/1046)).
 
 ### Fixed
 

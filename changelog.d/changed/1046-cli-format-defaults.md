@@ -1,0 +1,1 @@
+- **CLI docs list the output defaults**: `docs/cli.md` now gives the `-f` short flag and the default `--format` of each subcommand and flag ([#1046](https://github.com/LargeModGames/spotatui/issues/1046)).

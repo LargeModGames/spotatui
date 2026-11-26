@@ -24,7 +24,7 @@ Running `spotatui` with no subcommand starts the terminal UI. `spotatui --help` 
 
 `-f, --format <FORMAT>` (on `playback`, `play`, `list` and `search`) takes these placeholders: `%a` artist, `%b` album, `%p` playlist, `%t` track, `%h` show, `%u` URI, `%f` flags, `%s` status, `%v` volume, `%d` device, `%r` progress.
 
-Without `--format`, each subcommand uses a default that depends on its other flags:
+Without `--format`, formatted output uses a default that depends on the other flags. `--share-track` and `--share-album` print a URL and ignore `-f`, so the table leaves them out:
 
 | Subcommand | When | Default format |
 | --- | --- | --- |
@@ -66,7 +66,7 @@ Control playback on the active device. With no flag it prints the status.
 | `--seek <±SECONDS>` | Seek relative (`+10`, `-10`) or absolute (`10`) |
 | `-v, --volume <0-100>` | Set the volume |
 
-`--next` and `--previous` cannot be combined with other flags.
+`--next` and `--previous` cannot be used together, and work only with `--seek`, `--device` and `-f, --format`.
 
 ```bash
 spotatui pb --toggle
