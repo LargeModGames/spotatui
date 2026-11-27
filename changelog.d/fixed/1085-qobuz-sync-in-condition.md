@@ -1,0 +1,1 @@
+- **Qobuz playlist sync no longer fails with an "IN() condition" error**: a chunk that Qobuz filters down to nothing is skipped, and the next chunk is sent ([#1085](https://github.com/LargeModGames/spotatui/issues/1085)).

@@ -114,36 +114,65 @@ impl App {
       self.browse_apple_music(crate::infra::apple_music::Browse::Tracks(uri));
       return;
     }
-    let (context, event) = if uri.starts_with("file:") {
-      (
-        TrackTableContext::LocalPlaylist,
-        IoEvent::GetLocalTracks(uri),
-      )
+    let (context, event): (_, fn(String, u64) -> IoEvent) = if uri.starts_with("file:") {
+      (TrackTableContext::LocalPlaylist, IoEvent::GetLocalTracks)
     } else if uri.starts_with("subsonic:") {
       (
         TrackTableContext::SubsonicPlaylist,
-        IoEvent::GetSubsonicTracks(uri),
+        IoEvent::GetSubsonicTracks,
       )
     } else if uri.starts_with(YOUTUBE_PLAYLIST_PREFIX) {
       (
         TrackTableContext::YouTubePlaylist,
-        IoEvent::GetYouTubeTracks(uri),
+        IoEvent::GetYouTubeTracks,
       )
     } else if uri.starts_with("qobuz:") {
-      (
-        TrackTableContext::QobuzPlaylist,
-        IoEvent::GetQobuzTracks(uri),
-      )
+      (TrackTableContext::QobuzPlaylist, IoEvent::GetQobuzTracks)
     } else {
       // Unknown scheme: silent no-op, like the other opening paths.
       return;
     };
-    self.dispatch(event);
     self.source_table_uri = None;
     self.show_tracks_in_table(Vec::new(), context);
+    // The empty table is the loading state. Bind the epoch before the request
+    // enters the queue, since the same URI can be opened again before it runs.
+    self.source_track_table_load_epoch = Some(self.track_table_epoch);
+    self.dispatch_without_spinner(event(uri, self.track_table_epoch));
+  }
+
+  /// Whether a decoded-source list load still owns the empty track table: the
+  /// search box's loading indicator, which these loads no longer pin globally.
+  pub fn is_source_track_table_loading(&self) -> bool {
+    self
+      .source_track_table_load_epoch
+      .is_some_and(|epoch| self.is_current_source_track_table_load(epoch))
+  }
+
+  /// The pump finished the list load opened at `epoch`, whatever its result.
+  pub(crate) fn finish_source_track_table_load(&mut self, epoch: u64) {
+    if self.source_track_table_load_epoch == Some(epoch) {
+      self.source_track_table_load_epoch = None;
+    }
+  }
+
+  /// Whether the shared track table still belongs to this playlist request.
+  pub(crate) fn is_current_source_track_table_load(&self, epoch: u64) -> bool {
+    // Opening an album from search can change the context without replacing
+    // the rows or bumping the epoch.
+    self.track_table_epoch == epoch
+      && matches!(
+        self.track_table.context,
+        Some(
+          TrackTableContext::LocalPlaylist
+            | TrackTableContext::SubsonicPlaylist
+            | TrackTableContext::QobuzPlaylist
+            | TrackTableContext::YouTubePlaylist
+        )
+      )
   }
 
   /// Show the rows of the decoded-source list `uri` in the shared track table.
+  /// The caller checks the request under the same App lock.
   #[cfg_attr(
     not(any(
       feature = "local-files",
@@ -501,6 +530,37 @@ mod tests {
   }
   use super::*;
   use crate::core::app::test_support::*;
+
+  #[test]
+  fn a_source_playlist_load_keeps_its_loading_flag_until_finished_or_replaced() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.open_source_playlist_tracks("subsonic:playlist:1".into());
+    let Ok(IoEvent::GetSubsonicTracks(_, first)) = rx.try_recv() else {
+      panic!("expected GetSubsonicTracks");
+    };
+    assert!(!app.is_loading);
+    assert!(app.is_source_track_table_loading());
+
+    app.open_source_playlist_tracks("subsonic:playlist:2".into());
+    let Ok(IoEvent::GetSubsonicTracks(_, second)) = rx.try_recv() else {
+      panic!("expected GetSubsonicTracks");
+    };
+    app.finish_source_track_table_load(first);
+    assert!(
+      app.is_source_track_table_loading(),
+      "the older load must not end the newer one's flag"
+    );
+    app.finish_source_track_table_load(second);
+    assert!(!app.is_source_track_table_loading());
+
+    app.open_source_playlist_tracks("subsonic:playlist:3".into());
+    app.set_track_table(Vec::new(), TrackTableContext::SavedTracks);
+    assert!(
+      !app.is_source_track_table_loading(),
+      "another list replaced the table the load was filling"
+    );
+  }
 
   fn empty_playlist_page(
     offset: u32,

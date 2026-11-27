@@ -240,6 +240,11 @@ impl QobuzSource {
     }
   }
 
+  /// The login token this source sends.
+  pub(super) fn token(&self) -> &str {
+    &self.token
+  }
+
   #[cfg(test)]
   fn with_base(base: impl Into<String>) -> Self {
     QobuzSource {
@@ -865,7 +870,8 @@ impl Searcher for QobuzSource {
 }
 
 impl PlaylistWriter for QobuzSource {
-  /// Append tracks, [`WRITE_CHUNK`] ids per call; Qobuz dedupes server-side.
+  /// Append tracks, [`WRITE_CHUNK`] ids per call; Qobuz dedupes server-side and
+  /// answers a chunk it filtered down to nothing with an "IN() condition" 400.
   async fn add_tracks(&self, playlist_uri: &str, track_uris: &[String]) -> Result<()> {
     let playlist_id = playlist_id_from_uri(playlist_uri)?;
     let ids: Vec<&str> = track_uris
@@ -882,7 +888,14 @@ impl PlaylistWriter for QobuzSource {
             ("no_duplicate", "true".to_string()),
           ],
         )
-        .await?;
+        .await
+        .or_else(|e| {
+          if e.to_string().contains("IN() condition") {
+            Ok(IgnoredAny)
+          } else {
+            Err(e)
+          }
+        })?;
     }
     Ok(())
   }
@@ -1253,6 +1266,18 @@ mod tests {
     assert_eq!(sent(&seen[0]).matches("%2C").count(), 49);
     assert!(sent(&seen[1]).contains("track_ids=50"));
     assert_eq!(sent(&seen[1]).matches("%2C").count(), 0);
+  }
+
+  #[tokio::test]
+  async fn add_tracks_skips_a_chunk_qobuz_emptied_and_sends_the_next() {
+    const EMPTIED: &str = r#"{"status":"error","code":400,"message":"You must pass at least one parameter when using an IN() condition."}"#;
+    let (base, server) = serve(vec![("400 Bad Request", EMPTIED), ("200 OK", WRITE_OK)]).await;
+    let uris: Vec<String> = (0..51).map(|i| format!("qobuz:track:{i}")).collect();
+    QobuzSource::with_base(base)
+      .add_tracks("qobuz:playlist:111", &uris)
+      .await
+      .unwrap();
+    assert_eq!(server.await.unwrap().len(), 2);
   }
 
   #[tokio::test]

@@ -1,10 +1,9 @@
 //! Bounded references to Subsonic covers handed to the page, never its login URLs.
 
 use serde_json::Value;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Mutex, PoisonError};
 
-const MAX_COVERS: usize = 4096;
 const MAX_URL_BYTES: usize = 8 * 1024;
 pub(super) const COVER_PREFIX: &str = "subsonic-cover:";
 
@@ -16,6 +15,12 @@ struct Registry {
   next: u64,
   urls: BTreeMap<u64, String>,
   ids: HashMap<String, u64>,
+  channels: HashMap<String, ChannelCovers>,
+}
+
+struct ChannelCovers {
+  revision: u64,
+  ids: HashSet<u64>,
 }
 
 impl CoverLinks {
@@ -63,10 +68,43 @@ impl CoverLinks {
 
   /// Replace private cover URLs at the serialization boundary, including nested rows.
   pub(super) fn rewrite(&self, value: &mut Value) {
+    let kind = value
+      .get("kind")
+      .and_then(Value::as_str)
+      .unwrap_or_default()
+      .to_owned();
+    let revision = value.get("rev").and_then(Value::as_u64).unwrap_or_default();
+    let mut registry = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+    // A socket's resync can be encoded after a newer broadcast.
+    let stale = registry
+      .channels
+      .get(&kind)
+      .is_some_and(|channel| revision < channel.revision);
+    let mut ids = HashSet::new();
+    registry.rewrite(value, &mut ids, stale);
+    if !stale {
+      registry.replace_channel(kind, revision, ids);
+    }
+  }
+
+  pub(super) fn resolve(&self, reference: &str) -> Option<String> {
+    let id = reference.strip_prefix(COVER_PREFIX)?.parse::<u64>().ok()?;
+    self
+      .0
+      .lock()
+      .unwrap_or_else(PoisonError::into_inner)
+      .urls
+      .get(&id)
+      .cloned()
+  }
+}
+
+impl Registry {
+  fn rewrite(&mut self, value: &mut Value, ids: &mut HashSet<u64>, stale: bool) {
     match value {
       Value::Array(items) => {
         for item in items {
-          self.rewrite(item);
+          self.rewrite(item, ids, stale);
         }
       }
       Value::Object(fields) => {
@@ -90,51 +128,59 @@ impl CoverLinks {
                   && image.len() <= MAX_URL_BYTES
               })
               .and_then(|_| {
-                self
-                  .0
-                  .lock()
-                  .unwrap_or_else(PoisonError::into_inner)
-                  .register(image)
-              });
+                if stale {
+                  return self.ids.get(image).copied();
+                }
+                let id = self.register(image)?;
+                ids.insert(id);
+                Some(id)
+              })
+              .map(|id| format!("{COVER_PREFIX}{id}"));
             fields.insert("image_url".to_string(), reference.into());
           }
         }
         for field in fields.values_mut() {
-          self.rewrite(field);
+          self.rewrite(field, ids, stale);
         }
       }
       _ => {}
     }
   }
 
-  pub(super) fn resolve(&self, reference: &str) -> Option<String> {
-    let id = reference.strip_prefix(COVER_PREFIX)?.parse::<u64>().ok()?;
-    self
-      .0
-      .lock()
-      .unwrap_or_else(PoisonError::into_inner)
-      .urls
-      .get(&id)
-      .cloned()
+  fn replace_channel(&mut self, kind: String, revision: u64, ids: HashSet<u64>) {
+    // Only the replaced channel can release covers. Other channels keep their rows.
+    let Some(previous) = self
+      .channels
+      .insert(kind, ChannelCovers { revision, ids })
+      .filter(|channel| !channel.ids.is_empty())
+    else {
+      return;
+    };
+    let released = previous.ids.into_iter().filter(|id| {
+      !self
+        .channels
+        .values()
+        .any(|channel| channel.ids.contains(id))
+    });
+    for id in released {
+      if let Some(url) = self.urls.remove(&id) {
+        self.ids.remove(&url);
+      }
+    }
+    self.ids.shrink_to(self.urls.len());
   }
-}
 
-impl Registry {
-  fn register(&mut self, url: &str) -> Option<String> {
+  fn register(&mut self, url: &str) -> Option<u64> {
     let id = match self.ids.get(url) {
       Some(id) => *id,
       None => {
         self.next = self.next.checked_add(1)?;
-        if self.urls.len() == MAX_COVERS {
-          let (_, old) = self.urls.pop_first()?;
-          self.ids.remove(&old);
-        }
         self.urls.insert(self.next, url.to_string());
         self.ids.insert(url.to_string(), self.next);
         self.next
       }
     };
-    Some(format!("{COVER_PREFIX}{id}"))
+    Some(id)
   }
 }
 
@@ -248,22 +294,124 @@ mod tests {
   }
 
   #[test]
-  fn the_registry_evicts_old_covers_without_reusing_their_references() {
+  fn small_cover_pushes_keep_the_large_tables_oldest_row_restorable() {
     let covers = CoverLinks::default();
-    let mut first = json!({"image_url": PRIVATE});
-    covers.rewrite(&mut first);
-    let first = first["image_url"].as_str().unwrap().to_string();
-    let mut last = Value::Null;
-    for id in 0..MAX_COVERS {
-      last = json!({"image_url": format!("{PRIVATE}{id}")});
-      covers.rewrite(&mut last);
+    let tracks: Vec<_> = (0..5000)
+      .map(|id| {
+        json!({
+          "uri": format!("subsonic:track:{id}"),
+          "image_url": format!("{PRIVATE}&row={id}"),
+        })
+      })
+      .collect();
+    let oldest = tracks[0].clone();
+    let table = push(&covers, "track_table", 1, json!({"tracks": tracks}));
+    for (kind, key, image) in [
+      ("queue", "native", format!("{PRIVATE}&row=4999")),
+      ("search", "tracks", format!("{PRIVATE}&new=1")),
+    ] {
+      push(&covers, kind, 1, json!({(key): [{"image_url": image}]}));
+      let mut queued = table["payload"]["tracks"][0].clone();
+      covers.restore(&mut queued);
+      assert_eq!(queued, oldest, "after the one-row {kind} push");
     }
-    assert!(covers.resolve(&first).is_none());
-    assert!(covers
-      .resolve(last["image_url"].as_str().unwrap())
-      .is_some());
+    for row in table["payload"]["tracks"].as_array().unwrap() {
+      assert!(covers.resolve(row["image_url"].as_str().unwrap()).is_some());
+    }
+  }
+
+  #[test]
+  fn replacing_a_list_releases_only_covers_unused_by_other_channels() {
+    for replacement in [
+      json!([]),
+      json!([{"image_url": "https://i.scdn.co/image/a"}]),
+    ] {
+      let covers = CoverLinks::default();
+      let shared = format!("{PRIVATE}&shared=1");
+      let table = push(
+        &covers,
+        "track_table",
+        1,
+        json!({"tracks": [
+          {"image_url": PRIVATE},
+          {"image_url": shared},
+        ]}),
+      );
+      let queue = push(
+        &covers,
+        "queue",
+        1,
+        json!({"native": [{"image_url": shared}]}),
+      );
+      let expired_ref = table["payload"]["tracks"][0]["image_url"].as_str().unwrap();
+      let shared_ref = table["payload"]["tracks"][1]["image_url"].as_str().unwrap();
+      assert_eq!(queue["payload"]["native"][0]["image_url"], shared_ref);
+
+      push(&covers, "source", 2, json!({"active": "Spotify"}));
+      assert_eq!(covers.resolve(expired_ref).as_deref(), Some(PRIVATE));
+      push(&covers, "track_table", 2, json!({"tracks": replacement}));
+      assert!(covers.resolve(expired_ref).is_none());
+      assert_eq!(covers.resolve(shared_ref).as_deref(), Some(shared.as_str()));
+      push(&covers, "queue", 2, json!({"native": []}));
+      {
+        let registry = covers.0.lock().unwrap();
+        assert!(registry.urls.is_empty());
+        assert!(registry.ids.is_empty());
+      }
+
+      let table = push(
+        &covers,
+        "track_table",
+        3,
+        json!({"tracks": [{"image_url": PRIVATE}]}),
+      );
+      assert_ne!(table["payload"]["tracks"][0]["image_url"], expired_ref);
+      assert!(covers.resolve(expired_ref).is_none());
+    }
+  }
+
+  #[test]
+  fn stale_list_revisions_neither_register_nor_release_covers() {
+    let covers = CoverLinks::default();
+    let table = push(
+      &covers,
+      "track_table",
+      2,
+      json!({"tracks": [{"image_url": PRIVATE}]}),
+    );
+    let current = table["payload"]["tracks"][0]["image_url"].as_str().unwrap();
+    let older = push(
+      &covers,
+      "track_table",
+      1,
+      json!({"tracks": [
+        {"image_url": PRIVATE},
+        {"image_url": format!("{PRIVATE}&old=1")},
+      ]}),
+    );
+    assert_eq!(older["payload"]["tracks"][0]["image_url"], current);
+    assert!(older["payload"]["tracks"][1]["image_url"].is_null());
+    push(&covers, "track_table", 1, json!({"tracks": []}));
+    assert_eq!(covers.resolve(current).as_deref(), Some(PRIVATE));
+    push(&covers, "track_table", 3, json!({"tracks": []}));
+    assert!(covers.resolve(current).is_none());
+
+    push(&covers, "search", 2, json!({"tracks": []}));
+    let older = push(
+      &covers,
+      "search",
+      1,
+      json!({"tracks": [{"image_url": PRIVATE}]}),
+    );
+    assert!(older["payload"]["tracks"][0]["image_url"].is_null());
     let registry = covers.0.lock().unwrap();
-    assert_eq!(registry.urls.len(), MAX_COVERS);
-    assert_eq!(registry.ids.len(), MAX_COVERS);
+    assert!(registry.urls.is_empty());
+    assert!(registry.ids.is_empty());
+  }
+
+  fn push(covers: &CoverLinks, kind: &str, rev: u64, payload: Value) -> Value {
+    let mut message = json!({"kind": kind, "rev": rev, "payload": payload});
+    covers.rewrite(&mut message);
+    message
   }
 }

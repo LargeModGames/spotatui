@@ -62,8 +62,8 @@ pub async fn route_youtube_event(app: &Arc<Mutex<App>>, event: &IoEvent) -> bool
       load_playlists(app).await;
       true
     }
-    IoEvent::GetYouTubeTracks(uri) => {
-      load_playlist_tracks(app, uri).await;
+    IoEvent::GetYouTubeTracks(uri, epoch) => {
+      load_playlist_tracks(app, uri, *epoch).await;
       true
     }
     IoEvent::CreateYouTubePlaylist(name) => {
@@ -244,47 +244,41 @@ async fn load_playlists(app: &Arc<Mutex<App>>) {
 }
 
 /// Open a playlist's saved tracks in the shared track table.
-async fn load_playlist_tracks(app: &Arc<Mutex<App>>, uri: &str) {
-  let file = match read_playlists_file().await {
-    Ok(f) => f,
-    Err(e) => {
-      set_error(
-        app,
-        crate::infra::app_strings(app)
-          .await
-          .status
-          .infra
-          .youtube_playlists_failed(&e.to_string()),
-      )
-      .await;
+async fn load_playlist_tracks(app: &Arc<Mutex<App>>, uri: &str, epoch: u64) {
+  if !app.lock().await.is_current_source_track_table_load(epoch) {
+    return;
+  }
+  let result = read_playlists_file().await.map(|file| {
+    super::playlists::find_playlist(&file, uri).map(|playlist| {
+      playlist
+        .tracks
+        .iter()
+        .map(super::playlists::stored_to_track_info)
+        .collect()
+    })
+  });
+  let mut app = app.lock().await;
+  if !app.is_current_source_track_table_load(epoch) {
+    return;
+  }
+  let strings = app.strings();
+  let message = match result {
+    Ok(Some(rows)) => {
+      app.set_source_track_table(
+        uri,
+        rows,
+        crate::core::app::TrackTableContext::YouTubePlaylist,
+      );
+      app.youtube_open_playlist = Some(uri.to_string());
       return;
     }
+    Ok(None) => strings.status.infra.youtube_playlist_missing.to_string(),
+    Err(e) => strings
+      .status
+      .infra
+      .youtube_playlists_failed(&e.to_string()),
   };
-  let Some(playlist) = super::playlists::find_playlist(&file, uri) else {
-    set_error(
-      app,
-      crate::infra::app_strings(app)
-        .await
-        .status
-        .infra
-        .youtube_playlist_missing
-        .to_string(),
-    )
-    .await;
-    return;
-  };
-  let rows: Vec<TrackInfo> = playlist
-    .tracks
-    .iter()
-    .map(super::playlists::stored_to_track_info)
-    .collect();
-  let mut guard = app.lock().await;
-  guard.set_source_track_table(
-    uri,
-    rows,
-    crate::core::app::TrackTableContext::YouTubePlaylist,
-  );
-  guard.youtube_open_playlist = Some(uri.to_string());
+  app.set_status_message(message, 6);
 }
 
 /// Create a playlist and refresh the sidebar.
@@ -1158,7 +1152,8 @@ mod tests {
   async fn playlist_lifecycle_through_dispatch() {
     let path = super::super::playlists::default_playlists_path().unwrap();
 
-    let app = Arc::new(Mutex::new(test_app()));
+    let (tx, rx) = channel();
+    let app = Arc::new(Mutex::new(App::new(tx, UserConfig::new(), None)));
 
     // Empty file → empty sidebar list.
     assert!(route_youtube_event(&app, &IoEvent::GetYouTubePlaylists).await);
@@ -1213,7 +1208,18 @@ mod tests {
     assert_eq!(app.lock().await.youtube_playlists()[0].track_count, 1);
 
     // Open the playlist into the shared track table.
-    assert!(route_youtube_event(&app, &IoEvent::GetYouTubeTracks(playlist_uri.clone())).await);
+    app
+      .lock()
+      .await
+      .open_source_playlist_tracks(playlist_uri.clone());
+    let older_open = rx.try_recv().unwrap();
+    app
+      .lock()
+      .await
+      .open_source_playlist_tracks(playlist_uri.clone());
+    assert!(route_youtube_event(&app, &older_open).await);
+    assert!(app.lock().await.youtube_open_playlist.is_none());
+    assert!(route_youtube_event(&app, &rx.try_recv().unwrap()).await);
     {
       let guard = app.lock().await;
       assert_eq!(guard.track_table.tracks.len(), 1);

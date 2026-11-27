@@ -1,0 +1,1 @@
+- **The DJ and MCP queue named tracks without a Spotify login**: names resolve through YouTube instead of a "catalogue unavailable" error ([#1109](https://github.com/LargeModGames/spotatui/issues/1109)).

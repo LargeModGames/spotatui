@@ -16,6 +16,44 @@ use rspotify::model::{
 };
 use std::collections::HashMap;
 
+/// Run one test in a child with a temporary HOME and XDG directories. Returns
+/// true in the child; the parent verifies its result and returns false.
+pub fn in_isolated_process(test_name: &str, config_home: &str) -> bool {
+  const CHILD: &str = "SPOTATUI_ISOLATED_TEST";
+  if std::env::var(CHILD).as_deref() == Ok(test_name) {
+    return true;
+  }
+  let dir = tempfile::tempdir().unwrap();
+  let home = dir.path().join("home");
+  let temp = dir.path().join("tmp");
+  std::fs::create_dir(&home).unwrap();
+  std::fs::create_dir(&temp).unwrap();
+  // Do not mutate the environment of the shared, multithreaded test process.
+  let output = std::process::Command::new(std::env::current_exe().unwrap())
+    .args(["--exact", test_name, "--nocapture"])
+    .env(CHILD, test_name)
+    .env("HOME", home)
+    .env("TMPDIR", temp)
+    .env("XDG_CONFIG_HOME", dir.path().join(config_home))
+    .env("XDG_STATE_HOME", dir.path().join("state"))
+    .env("XDG_CACHE_HOME", dir.path().join("cache"))
+    .env("XDG_DATA_HOME", dir.path().join("data"))
+    .env(
+      "SPOTATUI_LAST_SESSION_PATH",
+      dir.path().join("last_session.yml"),
+    )
+    .env("SPOTATUI_SKIP_UPDATE", "1")
+    .output()
+    .unwrap();
+  let stdout = String::from_utf8_lossy(&output.stdout);
+  assert!(
+    output.status.success() && stdout.contains("1 passed; 0 failed"),
+    "{stdout}\n{}",
+    String::from_utf8_lossy(&output.stderr)
+  );
+  false
+}
+
 /// A queue-slot [`TrackInfo`] with only its `uri` and `name` set.
 #[cfg(feature = "streaming")]
 pub fn queued_track(uri: &str, name: &str) -> TrackInfo {
@@ -188,8 +226,17 @@ pub fn app_with_playbar(position: &str) -> App {
   app
 }
 
+/// Play on another device, with `queue` as the Spotify queue mirror.
+#[cfg(feature = "tui")]
+pub fn play_elsewhere_with_queue(app: &mut App, queue: Vec<crate::core::plugin_api::PlayableInfo>) {
+  app.current_playback_context = Some(playing_with_art("a", "u"));
+  app.queue = Some(crate::core::app::QueueState {
+    currently_playing: None,
+    queue,
+  });
+}
+
 /// A Spotify track playing on another device, its album art at `image_url`.
-#[cfg_attr(not(any(feature = "gui", feature = "dj-core")), allow(dead_code))]
 pub fn playing_with_art(id: &str, image_url: &str) -> rspotify::model::CurrentPlaybackContext {
   use rspotify::model::{
     context::Actions, CurrentlyPlayingType, Device, DeviceType, Image, PlayableItem, RepeatState,

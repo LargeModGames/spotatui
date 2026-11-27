@@ -101,6 +101,7 @@ impl App {
   }
 
   pub fn toggle_playback(&mut self) {
+    self.invalidate_radio_restore();
     if self.relay_party_toggle() {
       return;
     }

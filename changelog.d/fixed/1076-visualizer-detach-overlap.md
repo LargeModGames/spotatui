@@ -1,0 +1,1 @@
+- **The detach button no longer covers "Next style" on the GUI visualizer screen** ([#1076](https://github.com/LargeModGames/spotatui/issues/1076)).

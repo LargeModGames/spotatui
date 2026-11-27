@@ -6,6 +6,7 @@
   padding: 24px 24px 0;
   overflow-y: auto;
   outline: none;
+  container-type: inline-size;
 }
 
 .stats-head {
@@ -258,7 +259,7 @@
   border-top: none;
 }
 
-@media (max-width: 1100px) {
+@container (max-width: 860px) {
   .stats-plays {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }

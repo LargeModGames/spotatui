@@ -3,7 +3,7 @@
 //! shared by the terminal UI (`launch_ui`) and the browser frontend.
 
 use super::bootstrap::Boot;
-use super::pump::start_tokio;
+use super::pump::{start_tokio, RadioRestore};
 #[cfg(feature = "streaming")]
 use super::streaming::launch::{deferred_streaming_startup, DeferredStreamingContext};
 use crate::core::app::App;
@@ -653,16 +653,31 @@ pub(super) async fn prepare_frontend(boot: Boot) -> FrontendHandles {
     if !restore_queue.is_empty() {
       network.app.lock().await.native_queue = restore_queue;
     }
+    let radio_restore = RadioRestore::new();
+    #[cfg(feature = "internet-radio")]
+    let mut radio_restore = radio_restore;
     if let Some(session) = restore_playback {
-      // Resume off the event pump: a slow source (yt-dlp download, remote
-      // fetch) must not stall the Spotify startup events the UI's first render
-      // queues (user, playlists, current playback). The restore drives the
-      // source's own start path, which serializes on the `App` lock like every
-      // other event, so running it concurrently is safe.
-      let restore_app = Arc::clone(&network.app);
-      tokio::spawn(async move {
-        restore_playback_session(&restore_app, session, initial_startup_behavior).await;
-      });
+      match session {
+        #[cfg(feature = "internet-radio")]
+        crate::core::persisted_playback::PersistedPlayback::Radio { station, paused } => {
+          if station.uri.is_some() {
+            let paused = restore_paused(initial_startup_behavior, paused);
+            let requests = network.app.lock().await.playback_requests();
+            radio_restore.spawn(crate::infra::radio::dispatch::prepare_radio(
+              station,
+              paused,
+              Some(requests),
+            ));
+          }
+        }
+        session => {
+          // Keep slow sources off the event pump during initial UI loads.
+          let restore_app = Arc::clone(&network.app);
+          tokio::spawn(async move {
+            restore_playback_session(&restore_app, session, initial_startup_behavior).await;
+          });
+        }
+      }
     } else if network.spotify.is_some() {
       // Spotify startup play/pause only applies with a Spotify session; a
       // free-source launch has nothing to activate here. When native
@@ -694,7 +709,7 @@ pub(super) async fn prepare_frontend(boot: Boot) -> FrontendHandles {
       }
     }
 
-    start_tokio(sync_io_rx, &mut network).await;
+    start_tokio(sync_io_rx, &mut network, radio_restore).await;
   });
   FrontendHandles {
     app: cloned_app,
@@ -888,15 +903,16 @@ async fn restore_playback_session(
   session: crate::core::persisted_playback::PersistedPlayback,
   startup_behavior: StartupBehavior,
 ) {
-  #[cfg(feature = "audio-decode")]
+  #[cfg(any(
+    feature = "local-files",
+    feature = "subsonic",
+    feature = "qobuz",
+    feature = "youtube"
+  ))]
   use crate::core::persisted_playback::PersistedPlayback;
 
-  // Resolve whether the restored track should end up paused.
-  let resolve_paused = |saved_paused: bool| match startup_behavior {
-    StartupBehavior::Play => false,
-    StartupBehavior::Pause => true,
-    StartupBehavior::Continue => saved_paused,
-  };
+  #[cfg(feature = "audio-decode")]
+  let resolve_paused = |saved_paused| restore_paused(startup_behavior, saved_paused);
 
   match session {
     #[cfg(feature = "local-files")]
@@ -1042,29 +1058,18 @@ async fn restore_playback_session(
         s.shuffle_backup = shuffle;
       }
     }
-    #[cfg(feature = "internet-radio")]
-    PersistedPlayback::Radio { station, paused } => {
-      let Some(uri) = station.uri.clone() else {
-        return;
-      };
-      // Seed the browse table so the start path's station snapshot resolves.
-      app.lock().await.track_table.tracks = vec![station];
-      crate::infra::radio::dispatch::route_radio_event(
-        app,
-        &IoEvent::StartPlayback(Some(uri), None, None),
-      )
-      .await;
-      // A live stream has no seekable position; only apply the pause decision.
-      let guard = app.lock().await;
-      if let Some(s) = guard.radio_playback.as_ref() {
-        if resolve_paused(paused) {
-          s.player.pause();
-        }
-      }
-    }
     // Any variant whose source feature is disabled in this build.
     #[allow(unreachable_patterns)]
     _ => {}
+  }
+}
+
+#[cfg(feature = "audio-decode")]
+fn restore_paused(behavior: StartupBehavior, saved_paused: bool) -> bool {
+  match behavior {
+    StartupBehavior::Play => false,
+    StartupBehavior::Pause => true,
+    StartupBehavior::Continue => saved_paused,
   }
 }
 

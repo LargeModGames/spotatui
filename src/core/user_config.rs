@@ -154,11 +154,13 @@ pub fn parse_update_delay_secs(value: &str) -> Result<u64, String> {
     ("s", 1_u64, "seconds"),
   ] {
     if let Some(amount) = value.strip_suffix(suffix) {
-      return amount
+      let amount = amount
         .trim()
         .parse::<u64>()
-        .map(|v| v * multiplier)
-        .map_err(|_| format!("Invalid {label} value"));
+        .map_err(|_| format!("Invalid {label} value"))?;
+      return amount
+        .checked_mul(multiplier)
+        .ok_or_else(|| format!("Invalid {label} value: delay is too large"));
     }
   }
 
@@ -182,6 +184,15 @@ pub fn format_update_delay_secs(secs: u64) -> String {
 
 pub(crate) fn default_app_config_dir() -> Option<PathBuf> {
   crate::core::paths::app_config_dir()
+}
+
+fn config_paths_in(app_config_dir: PathBuf) -> Result<UserConfigPaths> {
+  // Restrict only the app directory, which can hold plaintext credentials.
+  // Its parent (for example ~/.config) is shared with other applications.
+  crate::core::paths::ensure_private_dir(&app_config_dir)?;
+  Ok(UserConfigPaths {
+    config_file_path: app_config_dir.join(FILE_NAME),
+  })
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -805,6 +816,8 @@ pub struct BehaviorConfigString {
   #[cfg(feature = "ai-dj")]
   pub dj_api_key: Option<String>,
   #[cfg(feature = "ai-dj")]
+  pub dj_max_tokens: Option<u32>,
+  #[cfg(feature = "ai-dj")]
   pub dj_batch_size: Option<usize>,
   #[cfg(feature = "ai-dj")]
   pub dj_history_period: Option<String>,
@@ -975,6 +988,12 @@ pub struct BehaviorConfig {
   /// plaintext secret.
   #[cfg(feature = "ai-dj")]
   pub dj_api_key: Option<String>,
+  /// Per-step completion token budget for the HTTP backends (`anthropic`,
+  /// `openai_compat`). Reasoning models spend tokens on chain-of-thought before
+  /// producing the reply JSON, so raising this prevents empty `length`-truncated
+  /// responses.
+  #[cfg(feature = "ai-dj")]
+  pub dj_max_tokens: u32,
   /// How many tracks the DJ queues per round. Clamped to the resolver's cap.
   #[cfg(feature = "ai-dj")]
   pub dj_batch_size: usize,
@@ -1110,8 +1129,8 @@ impl BehaviorConfig {
   /// the DJ in their YAML before the picker existed: those values can only have
   /// been typed, because `save_config` writes the defaults back verbatim.
   ///
-  /// Deliberately absent: `dj_batch_size`, `dj_history_period`, `dj_avoid_library`
-  /// and the timeout are tuning, not a choice of AI. So is `dj_agent_prompt_via`,
+  /// Deliberately absent: `dj_batch_size`, `dj_history_period`, `dj_avoid_library`,
+  /// `dj_max_tokens` and the timeout are tuning, not a choice of AI. So is `dj_agent_prompt_via`,
   /// and that one is the trap — `save_config` already wrote `stdin` into every
   /// existing install, so counting it would mean nobody is ever asked, including
   /// the Claude Pro users this picker exists for.
@@ -1498,6 +1517,8 @@ impl UserConfig {
         #[cfg(feature = "ai-dj")]
         dj_api_key: None,
         #[cfg(feature = "ai-dj")]
+        dj_max_tokens: crate::infra::dj::brain::DEFAULT_MAX_TOKENS,
+        #[cfg(feature = "ai-dj")]
         dj_batch_size: crate::infra::dj::DEFAULT_BATCH,
         #[cfg(feature = "ai-dj")]
         dj_history_period: "30d".to_string(),
@@ -1564,35 +1585,7 @@ impl UserConfig {
   pub fn get_or_build_paths(&mut self) -> Result<()> {
     match default_app_config_dir() {
       Some(app_config_dir) => {
-        let home_config_dir = app_config_dir
-          .parent()
-          .ok_or_else(|| anyhow!("Invalid app config directory"))?;
-
-        if !home_config_dir.exists() {
-          fs::create_dir(home_config_dir)?;
-        }
-
-        if !app_config_dir.exists() {
-          fs::create_dir(&app_config_dir)?;
-        }
-
-        // Restrict the app's own config directory (holds config.yml, which
-        // carries the Subsonic password and party sync_token in cleartext,
-        // plus the Spotify token cache) to owner-only. Never touch
-        // `home_config_dir` (`~/.config`) — that's shared with every other
-        // application on the system.
-        #[cfg(unix)]
-        {
-          use std::os::unix::fs::PermissionsExt;
-          fs::set_permissions(&app_config_dir, fs::Permissions::from_mode(0o700))?;
-        }
-
-        let config_file_path = &app_config_dir.join(FILE_NAME);
-
-        let paths = UserConfigPaths {
-          config_file_path: config_file_path.to_path_buf(),
-        };
-        self.path_to_config = Some(paths);
+        self.path_to_config = Some(config_paths_in(app_config_dir)?);
         Ok(())
       }
       None => Err(anyhow!("No $HOME directory found for client config")),
@@ -1917,7 +1910,13 @@ impl UserConfig {
     }
 
     if let Some(discord_rpc_client_id) = behavior_config.discord_rpc_client_id {
-      self.behavior.discord_rpc_client_id = Some(discord_rpc_client_id);
+      // A blank id is unset, so presence falls back to the built-in app id.
+      let trimmed = discord_rpc_client_id.trim();
+      self.behavior.discord_rpc_client_id = if trimmed.is_empty() {
+        None
+      } else {
+        Some(trimmed.to_string())
+      };
     }
 
     if let Some(visualizer_style) = behavior_config.visualizer_style {
@@ -2072,6 +2071,12 @@ impl UserConfig {
       }
       if let Some(dj_api_key) = behavior_config.dj_api_key {
         self.behavior.dj_api_key = Some(dj_api_key).filter(|key| !key.trim().is_empty());
+      }
+      if let Some(dj_max_tokens) = behavior_config.dj_max_tokens {
+        self.behavior.dj_max_tokens = dj_max_tokens.clamp(
+          crate::infra::dj::brain::MAX_TOKENS_MIN,
+          crate::infra::dj::brain::MAX_TOKENS_MAX,
+        );
       }
       if let Some(dj_batch_size) = behavior_config.dj_batch_size {
         self.behavior.dj_batch_size = dj_batch_size.clamp(1, crate::infra::dj::MAX_BATCH);
@@ -2473,7 +2478,8 @@ impl UserConfig {
     self.plugin_command_keys = result;
   }
 
-  pub fn load_config(&mut self) -> Result<()> {
+  /// Load settings and return the user's explicit song-counter choice, if any.
+  pub fn load_config(&mut self) -> Result<Option<bool>> {
     let paths = match &self.path_to_config {
       Some(path) => path,
       None => {
@@ -2485,7 +2491,7 @@ impl UserConfig {
       let config_string = fs::read_to_string(&paths.config_file_path)?;
       // serde fails if file is empty
       if config_string.trim().is_empty() {
-        return Ok(());
+        return Ok(None);
       }
 
       let config_yml: UserConfigString = serde_yaml::from_str(&config_string)?;
@@ -2498,6 +2504,10 @@ impl UserConfig {
         .behavior
         .as_ref()
         .and_then(|behavior| behavior.banner_gradient);
+      let song_counter_answer = config_yml
+        .behavior
+        .as_ref()
+        .and_then(|behavior| behavior.enable_global_song_count);
       if let Some(behavior) = config_yml.behavior {
         self.load_behaviorconfig(behavior)?;
       }
@@ -2515,9 +2525,9 @@ impl UserConfig {
         self.load_tablesconfig(tables);
       }
 
-      Ok(())
+      Ok(song_counter_answer)
     } else {
-      Ok(())
+      Ok(None)
     }
   }
 
@@ -2665,6 +2675,8 @@ impl UserConfig {
       dj_base_url: self.behavior.dj_base_url.clone(),
       #[cfg(feature = "ai-dj")]
       dj_api_key: self.behavior.dj_api_key.clone(),
+      #[cfg(feature = "ai-dj")]
+      dj_max_tokens: Some(self.behavior.dj_max_tokens),
       #[cfg(feature = "ai-dj")]
       dj_batch_size: Some(self.behavior.dj_batch_size),
       #[cfg(feature = "ai-dj")]
@@ -2977,6 +2989,97 @@ fn resolve_table_specs(
 
 #[cfg(test)]
 mod tests {
+  #[test]
+  fn config_directory_failures_include_the_path_and_preserve_a_blocking_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let blocker = dir.path().join("not-a-directory");
+    std::fs::write(&blocker, "keep").unwrap();
+    for path in [blocker.clone(), blocker.join("config").join("spotatui")] {
+      let error = super::config_paths_in(path.clone()).err().unwrap();
+      assert!(
+        error.to_string().contains(&path.display().to_string()),
+        "{error}"
+      );
+      assert_eq!(std::fs::read_to_string(&blocker).unwrap(), "keep");
+    }
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn creating_config_paths_restricts_only_the_app_directory() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let parent = dir.path().join("config");
+    std::fs::create_dir(&parent).unwrap();
+    std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    super::config_paths_in(parent.join("spotatui")).unwrap();
+
+    assert_eq!(
+      std::fs::metadata(&parent).unwrap().permissions().mode() & 0o777,
+      0o755
+    );
+    assert_eq!(
+      std::fs::metadata(parent.join("spotatui"))
+        .unwrap()
+        .permissions()
+        .mode()
+        & 0o777,
+      0o700
+    );
+  }
+
+  #[test]
+  fn config_paths_create_missing_parent_directories() {
+    let dir = tempfile::tempdir().unwrap();
+    let app_config_dir = dir.path().join("missing/parents/config/spotatui");
+    assert!(!app_config_dir.parent().unwrap().exists());
+
+    let paths = super::config_paths_in(app_config_dir.clone()).unwrap();
+
+    assert_eq!(
+      paths.config_file_path,
+      app_config_dir.join(super::FILE_NAME)
+    );
+    assert!(app_config_dir.is_dir());
+  }
+
+  #[test]
+  fn update_delay_rejects_overflow_without_panicking() {
+    for (suffix, multiplier) in [("d", 86400), ("h", 3600), ("m", 60)] {
+      let max = u64::MAX / multiplier;
+      assert_eq!(
+        super::parse_update_delay_secs(&format!("{max}{suffix}")),
+        Ok(max * multiplier)
+      );
+      let error = super::parse_update_delay_secs(&format!("{}{suffix}", max + 1))
+        .expect_err("overflow must be rejected");
+      assert!(error.contains("too large"), "{error}");
+    }
+    assert_eq!(
+      super::parse_update_delay_secs(&u64::MAX.to_string()),
+      Ok(u64::MAX)
+    );
+    assert_eq!(
+      super::parse_update_delay_secs(&format!("{}s", u64::MAX)),
+      Ok(u64::MAX)
+    );
+    let too_many_digits = (u128::from(u64::MAX) + 1).to_string();
+    assert!(super::parse_update_delay_secs(&too_many_digits).is_err());
+    assert!(super::parse_update_delay_secs(&format!("{too_many_digits}d")).is_err());
+  }
+
+  #[test]
+  fn an_overflowing_configured_update_delay_returns_a_load_error() {
+    let behavior: super::BehaviorConfigString =
+      serde_yaml::from_str(&format!("auto_update_delay: '{}d'", u64::MAX)).unwrap();
+    let error = super::UserConfig::new()
+      .load_behaviorconfig(behavior)
+      .unwrap_err();
+    assert!(error.to_string().contains("Invalid auto-update delay"));
+    assert!(error.to_string().contains("too large"));
+  }
+
   #[test]
   fn the_playlist_pin_key_is_free_by_default_and_round_trips_config() {
     use super::{KeyBindingsString, UserConfig};
@@ -3599,6 +3702,7 @@ dj_agent_model: haiku
 dj_model: some-model
 dj_base_url: http://localhost:11434/v1
 dj_api_key: secret
+dj_max_tokens: 16384
 dj_batch_size: 7
 dj_history_period: 7d
 dj_configured: true
@@ -3635,6 +3739,7 @@ volume_increment: 5
     config.behavior.dj_model = Some("some-model".to_string());
     config.behavior.dj_base_url = Some("http://localhost:1234/v1".to_string());
     config.behavior.dj_api_key = Some("sk-not-a-real-key".to_string());
+    config.behavior.dj_max_tokens = 16_384;
     config.behavior.dj_avoid_library = true;
     config.behavior.dj_configured = Some(true);
 
@@ -3651,6 +3756,7 @@ volume_increment: 5
       dj_model: config.behavior.dj_model.clone(),
       dj_base_url: config.behavior.dj_base_url.clone(),
       dj_api_key: config.behavior.dj_api_key.clone(),
+      dj_max_tokens: Some(config.behavior.dj_max_tokens),
       dj_avoid_library: Some(config.behavior.dj_avoid_library),
       dj_configured: config.behavior.dj_configured,
       ..Default::default()
@@ -3680,6 +3786,7 @@ volume_increment: 5
       reloaded.behavior.dj_api_key.as_deref(),
       Some("sk-not-a-real-key")
     );
+    assert_eq!(reloaded.behavior.dj_max_tokens, 16_384);
     assert!(reloaded.behavior.dj_avoid_library);
     assert_eq!(reloaded.behavior.dj_configured, Some(true));
   }
@@ -3744,6 +3851,7 @@ dj_agent_command:
   - -p
 dj_agent_prompt_via: stdin
 dj_agent_timeout_secs: 90
+dj_max_tokens: 8192
 dj_batch_size: 6
 dj_history_period: 30d
 dj_avoid_library: false
@@ -3816,7 +3924,9 @@ dj_api_key: null
   fn tuning_the_dj_is_not_choosing_an_ai() {
     // Batch size and the history window are knobs, not a backend choice, so a user
     // who touched them is still owed the question.
-    let config = loaded("dj_batch_size: 3\ndj_history_period: 7d\ndj_avoid_library: true");
+    let config = loaded(
+      "dj_batch_size: 3\ndj_history_period: 7d\ndj_avoid_library: true\ndj_max_tokens: 16384",
+    );
     assert!(!config.behavior.dj_is_configured());
   }
 
@@ -4058,6 +4168,25 @@ dj_api_key: null
     let behavior: BehaviorConfigString = serde_yaml::from_str("sync_token: '   '\n").unwrap();
     config.load_behaviorconfig(behavior).unwrap();
     assert_eq!(config.behavior.sync_token, None);
+  }
+
+  #[test]
+  fn discord_rpc_client_id_trims_and_treats_blank_as_unset() {
+    use super::{BehaviorConfigString, UserConfig};
+
+    let behavior: BehaviorConfigString =
+      serde_yaml::from_str("discord_rpc_client_id: ' 123 '\n").unwrap();
+    let mut config = UserConfig::new();
+    config.load_behaviorconfig(behavior).unwrap();
+    assert_eq!(
+      config.behavior.discord_rpc_client_id,
+      Some("123".to_string())
+    );
+
+    let behavior: BehaviorConfigString =
+      serde_yaml::from_str("discord_rpc_client_id: ' '\n").unwrap();
+    config.load_behaviorconfig(behavior).unwrap();
+    assert_eq!(config.behavior.discord_rpc_client_id, None);
   }
 
   #[test]

@@ -1,0 +1,1 @@
+- **Spotify gateway timeouts now report 504**: when Spotify answered `504 Gateway Timeout`, the error said `503 Service Unavailable`. It now says `504 Gateway Timeout` ([#1185](https://github.com/LargeModGames/spotatui/issues/1185)).

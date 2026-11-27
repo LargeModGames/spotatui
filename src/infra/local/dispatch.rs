@@ -56,8 +56,8 @@ pub async fn route_local_event(app: &Arc<Mutex<App>>, event: &IoEvent) -> bool {
       load_local_playlists(app).await;
       true
     }
-    IoEvent::GetLocalTracks(uri) => {
-      load_local_tracks(app, uri).await;
+    IoEvent::GetLocalTracks(uri, epoch) => {
+      load_local_tracks(app, uri, *epoch).await;
       true
     }
     // Start playing a folder of local files: queue every track and start at the
@@ -616,25 +616,11 @@ async fn set_error(app: &Arc<Mutex<App>>, message: String) {
 
 /// The configured music-library root, or `None` (with a status message) if it
 /// is unset.
-async fn music_root(app: &Arc<Mutex<App>>) -> Option<String> {
-  let root = app
-    .lock()
-    .await
-    .user_config
-    .behavior
-    .local_music_path
-    .clone();
+fn music_root(app: &mut App) -> Option<String> {
+  let root = app.user_config.behavior.local_music_path.clone();
   if root.is_none() {
-    set_error(
-      app,
-      crate::infra::app_strings(app)
-        .await
-        .status
-        .infra
-        .local_no_folder
-        .to_string(),
-    )
-    .await;
+    let message = app.strings().status.infra.local_no_folder;
+    app.set_status_message(message, 6);
   }
   root
 }
@@ -644,7 +630,7 @@ async fn music_root(app: &Arc<Mutex<App>>) -> Option<String> {
 /// `LocalSource`'s methods are async but do blocking filesystem I/O, so they run
 /// on the blocking pool (via `block_on`) rather than stalling the executor.
 async fn load_local_playlists(app: &Arc<Mutex<App>>) {
-  let Some(root) = music_root(app).await else {
+  let Some(root) = music_root(&mut *app.lock().await) else {
     return;
   };
   let result = tokio::task::spawn_blocking(move || {
@@ -684,8 +670,15 @@ async fn load_local_playlists(app: &Arc<Mutex<App>>) {
 
 /// Scan a folder's audio files into the shared track table (tagged as
 /// [`TrackTableContext::LocalPlaylist`] so selecting a row plays the file).
-async fn load_local_tracks(app: &Arc<Mutex<App>>, playlist_uri: &str) {
-  let Some(root) = music_root(app).await else {
+async fn load_local_tracks(app: &Arc<Mutex<App>>, playlist_uri: &str, epoch: u64) {
+  let root = {
+    let mut app = app.lock().await;
+    if !app.is_current_source_track_table_load(epoch) {
+      return;
+    }
+    music_root(&mut app)
+  };
+  let Some(root) = root else {
     return;
   };
   let uri = playlist_uri.to_string();
@@ -693,32 +686,83 @@ async fn load_local_tracks(app: &Arc<Mutex<App>>, playlist_uri: &str) {
     futures::executor::block_on(LocalSource::new(root).tracks(&uri))
   })
   .await;
-  match result {
+  let mut app = app.lock().await;
+  if !app.is_current_source_track_table_load(epoch) {
+    return;
+  }
+  let strings = app.strings();
+  let message = match result {
     Ok(Ok(tracks)) => {
-      let mut app = app.lock().await;
       app.set_source_track_table(playlist_uri, tracks, TrackTableContext::LocalPlaylist);
+      return;
     }
-    Ok(Err(e)) => {
-      set_error(
-        app,
-        crate::infra::app_strings(app)
-          .await
-          .status
-          .infra
-          .local_read_failed(&e.to_string()),
-      )
-      .await
-    }
-    Err(e) => {
-      set_error(
-        app,
-        crate::infra::app_strings(app)
-          .await
-          .status
-          .infra
-          .local_tracks_scan_failed(&e.to_string()),
-      )
-      .await
-    }
+    Ok(Err(e)) => strings.status.infra.local_read_failed(&e.to_string()),
+    Err(e) => strings
+      .status
+      .infra
+      .local_tracks_scan_failed(&e.to_string()),
+  };
+  app.set_status_message(message, 6);
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::core::user_config::UserConfig;
+  use std::sync::mpsc::channel;
+  use std::time::SystemTime;
+
+  /// An app whose configured music folder is `root`.
+  fn app_with_music_root(root: &std::path::Path) -> Arc<Mutex<App>> {
+    let (tx, _rx) = channel();
+    let mut config = UserConfig::new();
+    config.behavior.local_music_path = Some(root.to_string_lossy().into_owned());
+    Arc::new(Mutex::new(App::new(tx, config, Some(SystemTime::now()))))
+  }
+
+  #[tokio::test]
+  async fn get_local_playlists_lists_the_music_folders() {
+    let dir = tempfile::tempdir().unwrap();
+    let album = dir.path().join("Album");
+    std::fs::create_dir(&album).unwrap();
+    super::super::tests::write_wav(&album.join("song.wav"), 44100, 200);
+    let app = app_with_music_root(dir.path());
+
+    assert!(route_local_event(&app, &IoEvent::GetLocalPlaylists).await);
+
+    let app = app.lock().await;
+    let names: Vec<&str> = app
+      .local_playlists()
+      .iter()
+      .map(|p| p.name.as_str())
+      .collect();
+    assert_eq!(names, ["Album"]);
+  }
+
+  #[tokio::test]
+  async fn get_local_tracks_fills_the_track_table_with_the_folder() {
+    let dir = tempfile::tempdir().unwrap();
+    let album = dir.path().join("Album");
+    std::fs::create_dir(&album).unwrap();
+    super::super::tests::write_wav(&album.join("song.wav"), 44100, 200);
+    let (tx, rx) = channel();
+    let mut config = UserConfig::new();
+    config.behavior.local_music_path = Some(dir.path().to_string_lossy().into_owned());
+    let app = Arc::new(Mutex::new(App::new(tx, config, Some(SystemTime::now()))));
+    let uri = super::super::path_to_file_uri(&album);
+    app.lock().await.open_source_playlist_tracks(uri);
+    let event = rx
+      .try_recv()
+      .expect("opening the folder dispatches its load");
+
+    assert!(route_local_event(&app, &event).await);
+
+    let app = app.lock().await;
+    assert_eq!(app.track_table.tracks.len(), 1);
+    assert!(app.track_table.tracks[0].is_local);
+    assert!(matches!(
+      app.track_table.context,
+      Some(TrackTableContext::LocalPlaylist)
+    ));
   }
 }

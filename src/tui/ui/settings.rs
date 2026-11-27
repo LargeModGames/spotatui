@@ -284,13 +284,18 @@ fn draw_settings_list(f: &mut Frame<'_>, app: &App, area: Rect, scroll_offset: &
     .collect();
 
   let filtering = !app.view.settings_filter.trim().is_empty();
+  let offered = app
+    .settings_items
+    .iter()
+    .filter(|setting| app.setting_offered(setting))
+    .count();
   let count = if filtering {
     app
       .strings()
       .settings
-      .filtered_count(visible.len(), app.settings_items.len())
+      .filtered_count(visible.len(), offered)
   } else {
-    app.strings().settings.item_count(app.settings_items.len())
+    app.strings().settings.item_count(offered)
   };
   let title = app.strings().settings.category_title(
     app.view.settings_category.localized_name(app.strings()),
@@ -689,6 +694,80 @@ mod tests {
     assert!(rendered.contains("←/→ to try another tab"));
     assert!(rendered.contains("Behavior Settings (0 of "));
     assert!(!rendered.contains("Volume Increment"));
+  }
+
+  #[test]
+  fn settings_title_counts_only_the_rows_drawn_without_a_session() {
+    let mut app = filtered_app("", false);
+    let offered = app
+      .settings_items
+      .iter()
+      .filter(|setting| app.setting_offered(setting))
+      .count();
+    assert!(offered < app.settings_items.len());
+    let behavior_rendered = rendered(&app);
+    assert!(
+      behavior_rendered.contains(&format!("Behavior Settings ({offered} items)")),
+      "{behavior_rendered}"
+    );
+
+    app.view.settings_category = SettingsCategory::Icons;
+    app.load_settings_for_category();
+    let icons_offered = app
+      .settings_items
+      .iter()
+      .filter(|setting| app.setting_offered(setting))
+      .count();
+    assert!(icons_offered < app.settings_items.len());
+    let icons_rendered = rendered(&app);
+    assert!(
+      icons_rendered.contains(&format!("Icons Settings ({icons_offered} items)")),
+      "{icons_rendered}"
+    );
+
+    app.view.settings_category = SettingsCategory::Keybindings;
+    app.load_settings_for_category();
+    let key_total = app.settings_items.len();
+    let keybindings_rendered = rendered(&app);
+    assert!(
+      keybindings_rendered.contains(&format!("Keybindings Settings ({key_total} items)")),
+      "{keybindings_rendered}"
+    );
+
+    app.view.settings_category = SettingsCategory::Behavior;
+    app.spotify_connected = true;
+    app.load_settings_for_category();
+    let connected_total = app.settings_items.len();
+    let connected_rendered = rendered(&app);
+    assert!(
+      connected_rendered.contains(&format!("Behavior Settings ({connected_total} items)")),
+      "{connected_rendered}"
+    );
+  }
+
+  #[test]
+  fn settings_title_filter_total_counts_only_the_rows_drawn() {
+    let app = filtered_app("zzzzzzzz", false);
+    let offered = app
+      .settings_items
+      .iter()
+      .filter(|setting| app.setting_offered(setting))
+      .count();
+    assert!(offered < app.settings_items.len());
+    let output = rendered(&app);
+    assert!(
+      output.contains(&format!("Behavior Settings (0 of {offered})")),
+      "{output}"
+    );
+
+    let matching = filtered_app("volinc", false);
+    let visible_count = filtered_settings(&matching).len();
+    assert!(visible_count > 0);
+    let matching_output = rendered(&matching);
+    assert!(
+      matching_output.contains(&format!("Behavior Settings ({visible_count} of {offered})")),
+      "{matching_output}"
+    );
   }
 
   #[test]

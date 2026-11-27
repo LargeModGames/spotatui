@@ -283,6 +283,7 @@ pub(crate) fn upstream_error(error: librespot_core::Error) -> anyhow::Error {
     ErrorKind::PermissionDenied => StatusCode::FORBIDDEN,
     ErrorKind::Unauthenticated => StatusCode::UNAUTHORIZED,
     ErrorKind::ResourceExhausted => StatusCode::TOO_MANY_REQUESTS,
+    ErrorKind::DeadlineExceeded => StatusCode::GATEWAY_TIMEOUT,
     ErrorKind::InvalidArgument | ErrorKind::FailedPrecondition => StatusCode::BAD_REQUEST,
     _ => StatusCode::SERVICE_UNAVAILABLE,
   };
@@ -435,5 +436,17 @@ mod tests {
     assert_eq!(user.id.id(), "jay");
     assert_eq!(user.display_name.as_deref(), Some("jay"));
     assert_eq!(user.country, Some(rspotify::model::Country::Netherlands));
+  }
+
+  #[test]
+  fn an_upstream_gateway_timeout_retains_its_status() {
+    use librespot_core::http_client::HttpClientError;
+
+    let upstream = HttpClientError::StatusCode(StatusCode::GATEWAY_TIMEOUT);
+    let error = upstream_error(upstream.into())
+      .downcast::<SpotifyApiError>()
+      .unwrap();
+
+    assert_eq!(error.status, StatusCode::GATEWAY_TIMEOUT, "{error}");
   }
 }
