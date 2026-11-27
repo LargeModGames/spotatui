@@ -2351,7 +2351,7 @@ mod tests {
   /// with the expiry message rather than restoring a stale snapshot.
   #[tokio::test(start_paused = true)]
   async fn an_expired_bare_parked_resume_does_not_restore_the_snapshot() {
-    use crate::core::app::max_parked_age;
+    use crate::core::app::max_parked_start_age;
     use crate::core::user_config::UserConfig;
     use crate::infra::network::IoEvent;
     use std::sync::mpsc::channel;
@@ -2373,7 +2373,7 @@ mod tests {
       Box::pin(async move {
         let mut app = app.lock().await;
         if let Some(pending) = app.pending_start_playback.as_mut() {
-          pending.parked_at = Instant::now() - max_parked_age() - Duration::from_secs(60);
+          pending.pressed_at = Instant::now() - max_parked_start_age() - Duration::from_secs(60);
         }
         Ok(ScriptedPlayer::new(attempt))
       })
@@ -2399,6 +2399,76 @@ mod tests {
         "an expired resume must not restore the snapshot"
       );
     }
+  }
+
+  /// The retry chain is unbounded and credits its whole wait back, so only the
+  /// hard limit drops a press carried through a long outage.
+  #[tokio::test(start_paused = true)]
+  async fn a_press_that_waited_out_a_long_outage_is_dropped_when_the_network_returns() {
+    use crate::core::app::max_parked_start_age;
+    use crate::core::user_config::UserConfig;
+    use crate::infra::network::IoEvent;
+    use std::sync::mpsc::{channel, TryRecvError};
+    use std::time::SystemTime;
+
+    let (tx, io_rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    assert_eq!(app.begin_native_recovery(), 1);
+    app.park_start_playback(Some("spotify:playlist:pressed".to_string()), None, None);
+    app.native_backend_pending = true;
+    let app = Arc::new(tokio::sync::Mutex::new(app));
+    let (ctx, recovery_tx) = recovery_context(Arc::clone(&app));
+
+    // Minute 2 of a 40-minute outage: past the limit, with all but 10 s of the
+    // wait credited back. Only the hard limit can drop it.
+    let app_for_script = Arc::clone(&app);
+    let script = move |attempt: u32, _published: ScriptedSlot| -> BuildAttempt<ScriptedPlayer> {
+      let app = Arc::clone(&app_for_script);
+      Box::pin(async move {
+        if attempt == 1 {
+          let mut app = app.lock().await;
+          if let Some(pending) = app.pending_start_playback.as_mut() {
+            let age = max_parked_start_age() + Duration::from_secs(60);
+            pending.pressed_at = Instant::now() - age;
+            pending.recovery_credit = age - Duration::from_secs(10);
+          }
+          return Err(transient_build_failure());
+        }
+        Ok(ScriptedPlayer::new(attempt))
+      })
+    };
+    let backend = ScriptedBackend::new(script);
+    let record = backend.clone();
+    recovery_tx
+      .send(restore_request(1))
+      .expect("the recovery channel is open");
+
+    run_recovery_handler_until_parked(handle_streaming_recovery(ctx, backend)).await;
+
+    assert_eq!(record.attempts(), 2, "the chain retried through the outage");
+    assert_eq!(
+      record.events(),
+      [BuildEvent::Published(2), BuildEvent::Watched(2)],
+      "the backend is still rebuilt"
+    );
+    {
+      let app = app.lock().await;
+      assert!(
+        app.pending_start_playback.is_none(),
+        "the press must not survive the outage"
+      );
+      assert_eq!(
+        app.status_message(),
+        Some(crate::core::i18n::EN.status.app.native_request_expired)
+      );
+    }
+    while let Ok(event) = io_rx.try_recv() {
+      assert!(
+        !matches!(event, IoEvent::StartPlayback(..)),
+        "nothing may start out loud when the network returns"
+      );
+    }
+    assert!(matches!(io_rx.try_recv(), Err(TryRecvError::Empty)));
   }
 
   #[tokio::test(start_paused = true)]
@@ -2976,11 +3046,17 @@ mod tests {
   /// replay does not drop the same parked start as expired.
   #[tokio::test(start_paused = true)]
   async fn a_superseded_chain_credits_its_retry_time_to_the_parked_start() {
-    use crate::core::app::max_parked_age;
+    use crate::core::app::{max_parked_start_age, parked_start_window};
     use crate::core::user_config::UserConfig;
     use crate::infra::network::IoEvent;
     use std::sync::mpsc::{channel, TryRecvError};
     use std::time::SystemTime;
+
+    // The soft window only matters under the hard limit; a raised
+    // `SPOTATUI_STREAMING_INIT_TIMEOUT_SECS` leaves no credit-based case.
+    if parked_start_window() >= max_parked_start_age() {
+      return;
+    }
 
     let (tx, io_rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
@@ -3014,7 +3090,10 @@ mod tests {
               .expect("the blocking wait finished");
             let mut app = app.lock().await;
             if let Some(pending) = app.pending_start_playback.as_mut() {
-              pending.parked_at = Instant::now() - max_parked_age() - Duration::from_millis(100);
+              // Past the soft window, inside the hard limit: only the chain's
+              // credit keeps this alive.
+              pending.pressed_at =
+                Instant::now() - parked_start_window() - Duration::from_millis(100);
             }
             Ok(ScriptedPlayer::new(attempt))
           }
@@ -3070,7 +3149,7 @@ mod tests {
     // own wait comes from a short real sleep below.
     let pre_park = Duration::from_millis(200);
     if let Some(pending) = app.pending_start_playback.as_mut() {
-      pending.parked_at = Instant::now() - pre_park;
+      pending.pressed_at = Instant::now() - pre_park;
     }
     app.native_backend_pending = true;
     let app = Arc::new(tokio::sync::Mutex::new(app));
@@ -3104,17 +3183,19 @@ mod tests {
     ));
     assert!(matches!(io_rx.try_recv(), Err(TryRecvError::Empty)));
 
-    // The replay leaves the start in place, so its age shows whether the
-    // handler credited the same interval a second time.
+    // The replay leaves the start in place, so the credit shows whether the
+    // handler credited the same interval twice.
     let app = app.lock().await;
     let pending = app
       .pending_start_playback
       .as_ref()
       .expect("the parked start remains");
-    let age = Instant::now().saturating_duration_since(pending.parked_at);
+    let uncredited = Instant::now()
+      .saturating_duration_since(pending.pressed_at)
+      .saturating_sub(pending.recovery_credit);
     assert!(
-      age >= Duration::from_millis(100),
-      "the pre-recovery wait must survive the replay: {age:?}"
+      uncredited >= Duration::from_millis(100),
+      "the pre-recovery wait must survive the replay: {uncredited:?}"
     );
   }
 
@@ -3287,20 +3368,27 @@ mod tests {
   /// before the chain began replays instead of being reported expired.
   #[tokio::test(start_paused = true)]
   async fn the_reused_player_replay_credits_chain_time_to_a_parked_start() {
-    use crate::core::app::max_parked_age;
+    use crate::core::app::{max_parked_start_age, parked_start_window};
     use crate::core::user_config::UserConfig;
     use crate::infra::network::IoEvent;
     use std::sync::mpsc::{channel, TryRecvError};
     use std::time::SystemTime;
 
+    // Under a raised `SPOTATUI_STREAMING_INIT_TIMEOUT_SECS` only the hard limit
+    // can expire a request, so there is no credit-based case to exercise.
+    if parked_start_window() >= max_parked_start_age() {
+      return;
+    }
+
     let (tx, io_rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
     assert_eq!(app.begin_native_recovery(), 1);
     app.park_start_playback(Some("spotify:playlist:parked".to_string()), None, None);
-    // Expired already, were it not for the chain time the replay credits.
-    let chain = Duration::from_secs(180);
+    // Past the soft window, still inside the hard limit: were it not for the
+    // chain time the replay credits, this would be reported expired.
+    let chain = parked_start_window() + Duration::from_secs(1);
     if let Some(pending) = app.pending_start_playback.as_mut() {
-      pending.parked_at = Instant::now() - max_parked_age() - chain + Duration::from_secs(1);
+      pending.pressed_at = Instant::now() - chain;
     }
     let chain_started = Instant::now() - chain;
     let app = Arc::new(tokio::sync::Mutex::new(app));

@@ -148,7 +148,8 @@ impl NativePlaybackRecoverySnapshot {
       context_uri: None,
       uris: Some(uris.clone()),
       offset: Some(next_index),
-      parked_at: Instant::now(),
+      pressed_at: Instant::now(),
+      recovery_credit: Duration::ZERO,
       recovery_attempts: 0,
     })
   }
