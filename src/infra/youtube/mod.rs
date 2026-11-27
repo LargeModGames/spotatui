@@ -332,13 +332,7 @@ impl YouTubeSource {
     } else {
       Vec::new()
     };
-    self
-      .run_command(args, &extra_args, timeout)
-      .await
-      .map_err(|error| {
-        let hint = YtdlpError::WithConfigHint(error.to_string());
-        error.context(hint)
-      })
+    self.run_command(args, &extra_args, timeout).await
   }
 
   /// Run `yt-dlp` with `args`, returning stdout. Fails with the tail of
@@ -404,7 +398,7 @@ impl YouTubeSource {
         .rev()
         .collect::<Vec<_>>()
         .join(" | ");
-      bail!(
+      let error = anyhow!(
         "yt-dlp failed ({}): {}",
         status,
         if tail.is_empty() {
@@ -413,6 +407,11 @@ impl YouTubeSource {
           tail.as_str()
         }
       );
+      if status.code().is_some() {
+        let hint = YtdlpError::WithConfigHint(error.to_string());
+        return Err(error.context(hint));
+      }
+      return Err(error);
     }
     Ok(stdout)
   }
@@ -823,20 +822,20 @@ mod tests {
     assert!(err.to_string().contains("403"), "got: {err}");
   }
 
-  #[test]
-  fn missing_binary_yields_actionable_error() {
-    let rt = tokio::runtime::Runtime::new().unwrap();
+  #[tokio::test]
+  async fn missing_binary_shows_install_advice_without_the_configuration_hint() {
+    let dir = tempfile::tempdir().unwrap();
     let source = YouTubeSource {
-      ytdlp: "definitely-not-a-real-binary".into(),
+      ytdlp: dir.path().join("yt-dlp").to_str().unwrap().into(),
       extra_args: None,
     };
-    let err = rt
-      .block_on(source.search_videos("test"))
+    let err = source
+      .search_videos("test")
+      .await
       .expect_err("missing binary must error");
-    assert!(
-      err.to_string().contains("install yt-dlp"),
-      "error should tell the user what to do, got: {err}"
-    );
+    let message = error_detail(&status_infra::EN, &err);
+    assert!(message.contains("install yt-dlp"), "{message}");
+    assert!(!message.contains(YTDLP_ARGS_ENV), "{message}");
   }
 
   #[cfg(unix)]
@@ -872,7 +871,19 @@ printf '%s\n' '{"id":"5NV6Rdv1a3I","title":"Song","duration":1}'
 "#;
 
     #[tokio::test]
-    async fn the_configuration_hint_comes_before_a_long_ytdlp_diagnostic() {
+    async fn a_timeout_does_not_include_the_configuration_hint() {
+      let (_dir, source) = fake_ytdlp("exec sleep 60");
+      let error = source
+        .run(&[], Duration::from_millis(10))
+        .await
+        .unwrap_err();
+      let message = error_detail(&status_infra::EN, &error);
+      assert!(message.starts_with("yt-dlp timed out after"), "{message}");
+      assert!(!message.contains(YTDLP_ARGS_ENV), "{message}");
+    }
+
+    #[tokio::test]
+    async fn a_nonzero_exit_puts_the_configuration_hint_before_the_diagnostic() {
       // The terminal playbar shows a status on one line and cuts off the rest.
       let diagnostic = format!("ERROR: {}", "x".repeat(400));
       let (_dir, source) = fake_ytdlp(&format!("printf '%s\\n' '{diagnostic}' >&2\nexit 1"));
@@ -885,7 +896,7 @@ printf '%s\n' '{"id":"5NV6Rdv1a3I","title":"Song","duration":1}'
       ] {
         let message = error_detail(&strings.status.infra, &error);
         assert!(!message.contains('\n'), "{message}");
-        let hint = message.find("SPOTATUI_YTDLP_ARGS").expect("hint");
+        let hint = message.find(YTDLP_ARGS_ENV).expect("hint");
         let detail = message.find(&diagnostic).expect("diagnostic");
         assert!(hint < detail, "{message}");
       }
