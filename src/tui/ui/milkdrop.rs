@@ -1,14 +1,23 @@
-//! The MilkDrop visualizer style: tidewarp's built-in presets, drawn with half-blocks.
+//! The MilkDrop visualizer style: tidewarp's built-in presets, drawn as real pixels where
+//! the terminal has the Kitty or Sixel protocol, and as half-blocks elsewhere.
 //!
 //! The engine lives in a thread-local, like the retro styles' animation state, because
-//! draw functions only see `&App`. The runner feeds it the capture's new samples.
+//! draw functions only see `&App`. The runner feeds it the capture's new samples, and
+//! writes the encoded image with [`flush`] after ratatui drew the frame.
 
 use std::cell::RefCell;
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::time::Instant;
 
-use ratatui::{buffer::Buffer, layout::Rect, style::Color};
+use crossterm::{cursor::MoveTo, queue, terminal};
+use ratatui::{
+  buffer::{Buffer, CellDiffOption},
+  layout::Rect,
+  style::Color,
+};
 use tidewarp::{presets, presets::BuiltinPreset, Config, Engine, PresetId, Transition};
+use tidewarp_term::{fit, kitty, sixel, Protocol};
 
 use crate::core::paths;
 use crate::infra::audio::RecentAudio;
@@ -17,6 +26,8 @@ use crate::tui::event::Key;
 /// Seconds each preset plays before the next one blends in.
 const SECONDS_PER_PRESET: f64 = 30.0;
 const BLEND_SECONDS: f64 = 5.0;
+/// The id of the MilkDrop Kitty image, apart from the cover art's images.
+const KITTY_ID: u32 = 0x6d69_6c6b;
 
 /// Where a preset's text comes from.
 enum Source {
@@ -50,7 +61,14 @@ struct State {
   switched_at: f64,
   written: u64,
   rgba: Vec<u8>,
-  size: (u16, u16),
+  /// The engine size the last render asked for.
+  size: (u32, u32),
+  /// The encoded image of the last render and the area it covers, for [`flush`].
+  image: Vec<u8>,
+  pending: Option<(Rect, Protocol)>,
+  sixel: sixel::Encoder,
+  /// A Kitty image is on the screen; it stays above the text until it is deleted.
+  kitty_shown: bool,
 }
 
 /// The `.milk` files under the user's preset folder, sorted by path. The folder is
@@ -120,6 +138,10 @@ impl State {
       written: 0,
       rgba: Vec::new(),
       size: (0, 0),
+      image: Vec::new(),
+      pending: None,
+      sixel: sixel::Encoder::default(),
+      kitty_shown: false,
     };
     state.show(0, 1, Transition::Cut);
     state
@@ -212,19 +234,44 @@ pub fn feed(audio: &RecentAudio) {
   });
 }
 
-/// Renders the engine at the area's size, two pixels per cell, and writes the cells.
+/// The image protocol of the terminal, from the cover art's probe.
+fn frame_protocol() -> Option<(Protocol, (u32, u32))> {
+  #[cfg(feature = "cover-art")]
+  {
+    crate::tui::cover_art::frame_protocol()
+  }
+  #[cfg(not(feature = "cover-art"))]
+  {
+    None
+  }
+}
+
+/// Renders the engine for the area: as an image that [`flush`] writes after the frame
+/// when the terminal has Kitty or Sixel, otherwise as half-block cells, two pixels each.
 pub fn render(buf: &mut Buffer, area: Rect) {
+  render_with(buf, area, frame_protocol());
+}
+
+fn render_with(buf: &mut Buffer, area: Rect, protocol: Option<(Protocol, (u32, u32))>) {
   if area.width == 0 || area.height == 0 {
     return;
   }
   with_state(|state| {
     let (cols, rows) = (area.width, area.height);
-    let (width, height) = (usize::from(cols), usize::from(rows) * 2);
-    if state.size != (cols, rows) {
-      state.engine.resize(u32::from(cols), u32::from(rows) * 2);
-      state.rgba.resize(width * height * 4, 0);
-      state.size = (cols, rows);
+    let fitted = protocol.map(|(protocol, cell)| fit(protocol, (cols, rows), cell));
+    let size = fitted.map_or((u32::from(cols), u32::from(rows) * 2), |s| {
+      (s.width, s.height)
+    });
+    if state.size != size {
+      state.engine.resize(size.0, size.1);
+      state.size = size;
     }
+    // The engine clamps each side to the GPU limit, so its own size is the frame's.
+    let (width, height) = {
+      let config = state.engine.config();
+      (config.width as usize, config.height as usize)
+    };
+    state.rgba.resize(width * height * 4, 0);
     let now = state.started.elapsed().as_secs_f64();
     if now - state.switched_at > SECONDS_PER_PRESET {
       state.step(1);
@@ -234,6 +281,43 @@ pub fn render(buf: &mut Buffer, area: Rect) {
       .render_into(now, &mut state.rgba, width * 4)
       .is_err()
     {
+      return;
+    }
+    if let (Some((protocol, cell)), Some(fitted)) = (protocol, fitted) {
+      let rendered = (width as u32, height as u32);
+      state.image.clear();
+      // A Kitty image fills the area. A Sixel image is drawn pixel for pixel and can
+      // end inside the last row or column, whose cells ratatui must still clear.
+      let covered = match protocol {
+        Protocol::Kitty => {
+          kitty::encode(
+            &state.rgba,
+            rendered,
+            (cols, rows),
+            KITTY_ID,
+            &mut state.image,
+          );
+          area
+        }
+        Protocol::Sixel => {
+          state
+            .sixel
+            .encode(&state.rgba, rendered, fitted.scale, 256, &mut state.image);
+          let whole = |pixels: u32, cell: u32| (pixels * fitted.scale / cell.max(1)) as u16;
+          Rect {
+            width: whole(rendered.0, cell.0).min(cols),
+            height: whole(rendered.1 / 6 * 6, cell.1).min(rows),
+            ..area
+          }
+        }
+      };
+      // Ratatui leaves skipped cells alone, so the image is not drawn over.
+      for position in covered.positions() {
+        if let Some(cell) = buf.cell_mut(position) {
+          cell.set_diff_option(CellDiffOption::Skip);
+        }
+      }
+      state.pending = Some((covered, protocol));
       return;
     }
     for row in 0..rows {
@@ -252,9 +336,121 @@ pub fn render(buf: &mut Buffer, area: Rect) {
   });
 }
 
+/// Writes the image the last render encoded at its area, after ratatui drew `buf`. An
+/// overlay that took cells of the area wins: the image waits, and a Kitty image, which
+/// stays above the text, is deleted. When MilkDrop is not shown, it deletes the Kitty
+/// image too. Without an engine, nothing happens.
+pub fn flush(buf: &Buffer, out: &mut impl Write) -> io::Result<()> {
+  STATE.with(|cell| {
+    let mut slot = cell.borrow_mut();
+    let Some(state) = slot.as_mut() else {
+      return Ok(());
+    };
+    let pending = state.pending.take();
+    let visible =
+      pending.filter(|(area, _)| area.positions().all(|position| skipped(buf, position)));
+    let mut bytes = Vec::new();
+    match visible {
+      Some((area, protocol)) => {
+        queue!(
+          out,
+          terminal::BeginSynchronizedUpdate,
+          MoveTo(area.x, area.y)
+        )?;
+        out.write_all(&state.image)?;
+        queue!(out, terminal::EndSynchronizedUpdate)?;
+        state.kitty_shown = protocol == Protocol::Kitty;
+      }
+      None if state.kitty_shown => {
+        kitty::delete(KITTY_ID, &mut bytes);
+        out.write_all(&bytes)?;
+        state.kitty_shown = false;
+      }
+      None => return Ok(()),
+    }
+    out.flush()
+  })
+}
+
+fn skipped(buf: &Buffer, position: ratatui::layout::Position) -> bool {
+  buf
+    .cell(position)
+    .is_some_and(|cell| cell.diff_option == CellDiffOption::Skip)
+}
+
+/// Deletes the Kitty image on exit.
+pub fn clear(out: &mut impl Write) {
+  STATE.with(|cell| {
+    if let Some(state) = cell.borrow_mut().as_mut().filter(|s| s.kitty_shown) {
+      let mut bytes = Vec::new();
+      kitty::delete(KITTY_ID, &mut bytes);
+      let _ = out.write_all(&bytes);
+      let _ = out.flush();
+      state.kitty_shown = false;
+    }
+  });
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  fn flushed(buf: &Buffer) -> Vec<u8> {
+    let mut out = Vec::new();
+    flush(buf, &mut out).unwrap();
+    out
+  }
+
+  #[test]
+  fn a_sixel_frame_is_written_at_its_area_after_the_cells_are_skipped() {
+    let area = Rect::new(2, 1, 8, 3);
+    let mut buf = Buffer::empty(Rect::new(0, 0, 12, 5));
+    render_with(&mut buf, area, Some((Protocol::Sixel, (10, 20))));
+    assert!(area.positions().all(|p| skipped(&buf, p)));
+    assert!(!skipped(&buf, (0, 0).into()));
+    let out = String::from_utf8_lossy(&flushed(&buf)).into_owned();
+    // Synchronized output, the cursor at column 3 row 2, then the Sixel image.
+    assert!(out.starts_with("\x1b[?2026h\x1b[2;3H\x1bPq"), "{out:?}");
+    assert!(out.ends_with("\x1b[?2026l"), "{out:?}");
+    // Nothing is pending until the next render.
+    assert!(flushed(&buf).is_empty());
+  }
+
+  #[test]
+  fn a_sixel_row_the_image_covers_only_in_part_is_not_skipped() {
+    // Two rows of 23 pixels are 46 pixels; the image is 42, whole bands of six.
+    let area = Rect::new(0, 0, 8, 2);
+    let mut buf = Buffer::empty(area);
+    render_with(&mut buf, area, Some((Protocol::Sixel, (10, 23))));
+    assert!((0..8).all(|x| skipped(&buf, (x, 0).into())));
+    assert!((0..8).all(|x| !skipped(&buf, (x, 1).into())));
+    assert!(!flushed(&buf).is_empty());
+  }
+
+  #[test]
+  fn an_overlay_over_the_area_holds_the_image_and_deletes_a_kitty_image() {
+    let area = Rect::new(0, 0, 6, 2);
+    let mut buf = Buffer::empty(area);
+    render_with(&mut buf, area, Some((Protocol::Kitty, (10, 20))));
+    assert!(String::from_utf8_lossy(&flushed(&buf)).contains("\x1b_Ga=T"));
+    render_with(&mut buf, area, Some((Protocol::Kitty, (10, 20))));
+    // A popup draws one cell of the area.
+    buf[(1, 1)]
+      .set_diff_option(CellDiffOption::None)
+      .set_symbol("x");
+    let out = String::from_utf8_lossy(&flushed(&buf)).into_owned();
+    assert_eq!(out, format!("\x1b_Ga=d,d=I,i={KITTY_ID},q=2\x1b\\"));
+  }
+
+  #[test]
+  fn without_a_protocol_the_cells_are_half_blocks() {
+    let area = Rect::new(0, 0, 4, 2);
+    let mut buf = Buffer::empty(area);
+    render_with(&mut buf, area, None);
+    assert!(area
+      .positions()
+      .all(|p| !skipped(&buf, p) && buf[p].symbol() == "\u{2580}"));
+  }
 
   #[test]
   fn brackets_change_the_preset_only_while_milkdrop_is_shown() {

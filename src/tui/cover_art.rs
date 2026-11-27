@@ -182,6 +182,20 @@ pub fn full_image_support() -> bool {
     .is_some_and(CoverArtRenderer::full_image_support)
 }
 
+/// The protocol and the cell size in pixels (width, height) for animated frames, when
+/// the probed terminal draws Kitty or Sixel images.
+#[cfg(feature = "milkdrop")]
+pub fn frame_protocol() -> Option<(tidewarp_term::Protocol, (u32, u32))> {
+  let picker = &RENDERER.get()?.picker;
+  let protocol = match picker.protocol_type() {
+    ProtocolType::Kitty => tidewarp_term::Protocol::Kitty,
+    ProtocolType::Sixel => tidewarp_term::Protocol::Sixel,
+    ProtocolType::Iterm2 | ProtocolType::Halfblocks => return None,
+  };
+  let cell = picker.font_size();
+  Some((protocol, (u32::from(cell.width), u32::from(cell.height))))
+}
+
 /// Height-to-width ratio of one terminal cell, from the cell size measured at
 /// startup. `None` for the halfblocks fallback or when the terminal did not
 /// report its cell size; callers then fall back to their own estimate.
