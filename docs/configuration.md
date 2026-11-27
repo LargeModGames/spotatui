@@ -282,6 +282,8 @@ Builds with the `milkdrop` cargo feature (`cargo run --features milkdrop`) play 
 
 spotatui ships six presets of its own. It also plays every `.milk` file in the `milkdrop` folder of the config directory (`~/.config/spotatui/milkdrop`, created at start), subfolders included. Presets with pixel shaders (most MilkDrop 2 presets) render on the GPU; without a usable GPU, only the presets without shaders play.
 
+In a terminal with the Kitty graphics protocol or Sixel (for example kitty, Ghostty, WezTerm, foot or Windows Terminal), MilkDrop draws real pixels; other terminals get colored half-blocks. The protocol is detected in builds with the `cover-art` feature, which every release build has.
+
 ## Listening history
 
 spotatui keeps a local play history at `$XDG_STATE_HOME/spotatui/history/listens.jsonl` when `XDG_STATE_HOME` is an absolute path, otherwise `~/.local/state/spotatui/history/listens.jsonl`. It powers the Stats screen and `spotatui history recap`. Short or skipped plays are stored but left out of recap totals.
