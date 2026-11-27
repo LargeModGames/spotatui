@@ -393,9 +393,16 @@ impl App {
   }
 
   fn spotify_control_context(&self) -> Option<&CurrentPlaybackContext> {
-    self
-      .external_spotify_context()
-      .filter(|_| !self.soloist_is_target())
+    // A bound request needs a device ID. The ordinary transport can still
+    // ask Spotify to use its current device when the report has no ID.
+    self.external_spotify_context().filter(|context| {
+      !self.soloist_is_target()
+        && context
+          .device
+          .id
+          .as_deref()
+          .is_some_and(|id| !id.is_empty())
+    })
   }
 
   fn external_spotify_context(&self) -> Option<&CurrentPlaybackContext> {

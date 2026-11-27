@@ -159,6 +159,30 @@ fn pause_supersedes_a_remote_play_before_the_playback_poll() {
 }
 
 #[test]
+fn remote_controls_use_normal_transport_without_a_device_id() {
+  for id in [None, Some(String::new())] {
+    let (mut app, rx) = app_with_channel();
+    let mut context = playback_context_with_track(false);
+    context.device.id = id;
+    app.current_playback_context = Some(context.clone());
+
+    app.apply(Action::Play);
+    assert!(matches!(
+      rx.try_recv(),
+      Ok(IoEvent::StartPlayback(None, None, None))
+    ));
+
+    context.is_playing = true;
+    app.current_playback_context = Some(context);
+    app.apply(Action::Pause);
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::PausePlayback)));
+
+    app.apply(Action::SetShuffle(true));
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::Shuffle(true))));
+  }
+}
+
+#[test]
 fn a_finished_remote_play_can_be_retried_if_playback_did_not_change() {
   let (mut app, rx) = app_with_channel();
   app.current_playback_context = Some(playback_context_with_track(false));
