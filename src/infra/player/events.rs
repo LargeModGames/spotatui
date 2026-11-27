@@ -3384,9 +3384,9 @@ mod tests {
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
     assert_eq!(app.begin_native_recovery(), 1);
     app.park_start_playback(Some("spotify:playlist:parked".to_string()), None, None);
-    // Past the soft window, still inside the hard limit: were it not for the
+    // Past the soft window, strictly inside the hard limit: were it not for the
     // chain time the replay credits, this would be reported expired.
-    let chain = parked_start_window() + Duration::from_secs(1);
+    let chain = parked_start_window() + (max_parked_start_age() - parked_start_window()) / 2;
     if let Some(pending) = app.pending_start_playback.as_mut() {
       pending.pressed_at = Instant::now() - chain;
     }

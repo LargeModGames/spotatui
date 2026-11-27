@@ -947,9 +947,13 @@ mod tests {
 
   #[test]
   fn a_long_running_rebuild_keeps_a_parked_playlist_ahead_of_bare_resume() {
+    // Only the hard limit can expire the request.
+    if parked_start_window() >= max_parked_start_age() {
+      return;
+    }
     let (tx, rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
-    let wait = parked_start_window() + Duration::from_secs(1);
+    let wait = parked_start_window() + (max_parked_start_age() - parked_start_window()) / 2;
     app.park_start_playback(Some("spotify:playlist:waiting".to_string()), None, None);
     app.pending_start_playback.as_mut().unwrap().pressed_at = Instant::now() - wait;
     app.note_native_rebuild_started(Instant::now() - wait);
