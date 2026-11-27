@@ -336,14 +336,35 @@ mod tests {
       .contains("stopped at"));
 
     let capped = DjLibrary {
+      tracks: MAX_LIBRARY_TRACKS,
       truncated: true,
       ..full
     };
+    let summary = capped.summary_with(&crate::core::i18n::EN);
     assert!(
-      capped
-        .summary_with(&crate::core::i18n::EN)
-        .contains("not filtered"),
+      summary.contains("not filtered"),
       "a partial index has to say so, or the filter looks broken"
+    );
+    assert!(
+      summary.contains(&format!("stopped at {MAX_LIBRARY_TRACKS}")),
+      "{summary}"
+    );
+  }
+
+  #[test]
+  fn an_unreadable_playlist_does_not_look_like_the_track_cap_was_reached() {
+    let partial = DjLibrary {
+      tracks: 12,
+      playlists: 2,
+      truncated: true,
+      ..DjLibrary::default()
+    };
+    let summary = partial.summary_with(&crate::core::i18n::EN);
+
+    assert!(summary.contains("not filtered"), "{summary}");
+    assert!(
+      !summary.contains(&MAX_LIBRARY_TRACKS.to_string()),
+      "{summary}"
     );
   }
 }

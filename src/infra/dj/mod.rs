@@ -73,7 +73,9 @@ pub struct DjLibrary {
   pub ids: std::collections::HashSet<String>,
   pub playlists: usize,
   pub tracks: usize,
-  /// Whether the crawl stopped at [`MAX_LIBRARY_TRACKS`].
+  /// Whether the index is incomplete: the crawl stopped at
+  /// [`MAX_LIBRARY_TRACKS`], or a playlist could not be read. `tracks` tells the
+  /// two apart, since only the cap brings it to the limit.
   pub truncated: bool,
 }
 
@@ -82,7 +84,11 @@ impl DjLibrary {
   pub fn summary_with(&self, strings: &crate::core::i18n::Strings) -> String {
     let mut text = strings.status.infra.dj_indexed(self.tracks, self.playlists);
     if self.truncated {
-      text.push_str(&strings.status.infra.dj_index_capped(MAX_LIBRARY_TRACKS));
+      if self.tracks >= MAX_LIBRARY_TRACKS {
+        text.push_str(&strings.status.infra.dj_index_capped(MAX_LIBRARY_TRACKS));
+      } else {
+        text.push_str(strings.status.infra.dj_index_incomplete);
+      }
     }
     text
   }
