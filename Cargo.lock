@@ -1531,7 +1531,7 @@ version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ab8ecd87370524b461f8557c119c405552c396ed91fc0a8eec68679eab26f94a"
 dependencies = [
- "libloading 0.7.4",
+ "libloading 0.8.9",
 ]
 
 [[package]]
@@ -6765,8 +6765,9 @@ dependencies = [
 
 [[package]]
 name = "tidewarp"
-version = "0.1.0"
-source = "git+https://github.com/LargeModGames/tidewarp#269653112871db5e2479d6d3b83ba29ee6ab8661"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "624e4d02f7af40c917b3805fa8dfdfebc1caa2891a4955967b9cc57b52076c60"
 dependencies = [
  "bytemuck",
  "pollster",
@@ -7929,16 +7930,18 @@ dependencies = [
 
 [[package]]
 name = "wgslift"
-version = "0.0.0"
-source = "git+https://github.com/LargeModGames/wgslift#d1412038b3e4af90e43a998eed091762ad5fdeb7"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3c7b016185cd4e57ab8d8053242444df0d47f8eb3271a49c3fbbd0fdc1b4a500"
 dependencies = [
  "wgslift-syntax",
 ]
 
 [[package]]
 name = "wgslift-syntax"
-version = "0.0.0"
-source = "git+https://github.com/LargeModGames/wgslift#d1412038b3e4af90e43a998eed091762ad5fdeb7"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e5f885f7e7970122a6714448e45dbb5b059d80ce5cdce664ed2ca024ada851f"
 
 [[package]]
 name = "which"
