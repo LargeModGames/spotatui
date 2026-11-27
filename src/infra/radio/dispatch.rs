@@ -161,18 +161,15 @@ async fn run_radio_search(app: &Arc<Mutex<App>>, query: &str, source_rev: u64) {
         .show_source_search_tracks_if_current(source_rev, query, results.tracks);
     }
     Err(e) => {
-      if app.lock().await.source_revision() != source_rev {
-        return;
-      }
-      set_error(
-        app,
-        crate::infra::app_strings(app)
-          .await
+      let mut guard = app.lock().await;
+      if guard.source_revision() == source_rev {
+        let message = guard
+          .strings()
           .status
           .infra
-          .radio_search_failed(&e.to_string()),
-      )
-      .await
+          .radio_search_failed(&e.to_string());
+        guard.set_status_message(message, 6);
+      }
     }
   }
 }

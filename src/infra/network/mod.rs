@@ -734,19 +734,15 @@ impl Network {
 
     if !bypass_auth {
       if self.spotify.is_none() {
-        self
-          .show_status_message(
-            self
-              .strings()
-              .await
-              .status
-              .infra
-              .spotify_not_connected
-              .to_string(),
-            6,
-          )
-          .await;
         let mut app = self.app.lock().await;
+        let is_current_search = !matches!(
+          &io_event,
+          IoEvent::GetSearchResults(_, _, source_rev) if app.source_revision() != *source_rev
+        );
+        if is_current_search {
+          let message = app.strings().status.infra.spotify_not_connected.to_string();
+          app.set_status_message(message, 6);
+        }
         app.is_loading = false;
         app.is_volume_change_in_flight = false;
         if is_playback_poll {
@@ -1229,9 +1225,8 @@ impl Network {
     }
   }
 
-  async fn handle_error(&mut self, e: anyhow::Error) {
+  pub(crate) fn report_error_locked(&self, app: &mut App, e: anyhow::Error) {
     let rate_limited = requests::is_rate_limited_error(&e);
-    let mut app = self.app.lock().await;
     // The first hit of a window under the pump: every later event is held
     // back, so a status message is enough. The CLI keeps its exit signal.
     if self.defers_rate_limited && rate_limited {
@@ -1243,7 +1238,12 @@ impl Network {
       app.set_error_status_message(message, 8);
       return;
     }
-    report_request_error(&mut app, e);
+    report_request_error(app, e);
+  }
+
+  async fn handle_error(&mut self, e: anyhow::Error) {
+    let mut app = self.app.lock().await;
+    self.report_error_locked(&mut app, e);
   }
 
   /// Holds a Spotify-bound event back while a rate-limit window is open: queued

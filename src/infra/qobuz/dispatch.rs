@@ -177,6 +177,8 @@ enum WhenLoggedOut {
   Login,
   /// A track listing can prompt for login while it still owns the table.
   LoginForTracks(u64),
+  /// A search can prompt for login only while its source revision is still current.
+  LoginForSearch(u64),
   /// Playback paths only show the login message.
   Message,
 }
@@ -185,6 +187,7 @@ impl WhenLoggedOut {
   fn is_current(self, app: &App) -> bool {
     match self {
       Self::LoginForTracks(epoch) => app.is_current_source_track_table_load(epoch),
+      Self::LoginForSearch(source_rev) => app.source_revision() == source_rev,
       Self::Login | Self::Message => true,
     }
   }
@@ -198,7 +201,9 @@ async fn build_source(
 ) -> Option<QobuzSource> {
   let Some(token) = auth::current_token() else {
     match when_logged_out {
-      WhenLoggedOut::Login | WhenLoggedOut::LoginForTracks(_) => {
+      WhenLoggedOut::Login
+      | WhenLoggedOut::LoginForTracks(_)
+      | WhenLoggedOut::LoginForSearch(_) => {
         let mut app = app.lock().await;
         if when_logged_out.is_current(&app) {
           app.dispatch(IoEvent::QobuzLogin);
@@ -465,9 +470,12 @@ async fn run_qobuz_search(app: &Arc<Mutex<App>>, query: &str, source_rev: u64) {
   if app.lock().await.source_revision() != source_rev {
     return;
   }
-  let Some(source) = build_source(app, WhenLoggedOut::Login).await else {
+  let Some(source) = build_source(app, WhenLoggedOut::LoginForSearch(source_rev)).await else {
     return;
   };
+  if app.lock().await.source_revision() != source_rev {
+    return;
+  }
   match source.search(query).await {
     Ok(results) => {
       app
@@ -1143,6 +1151,26 @@ mod tests {
     assert_eq!(guard.active_source, Source::Spotify);
     assert!(!guard.status_message_is_error());
     assert!(guard.search_results().tracks.is_none());
+  }
+
+  #[tokio::test]
+  async fn stale_qobuz_search_setup_does_not_dispatch_login() {
+    let dir = tempfile::tempdir().unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut inner = App::new(tx, crate::core::user_config::UserConfig::new(), None);
+    inner.state_path = Some(dir.path().join("state.yml"));
+    inner.set_active_source(Source::Qobuz);
+    let stale_rev = inner.source_revision();
+    inner.set_active_source(Source::Spotify);
+    let app = Arc::new(Mutex::new(inner));
+
+    assert!(build_source(&app, WhenLoggedOut::LoginForSearch(stale_rev))
+      .await
+      .is_none());
+    assert!(
+      rx.try_recv().is_err(),
+      "stale setup must not queue QobuzLogin"
+    );
   }
 }
 
