@@ -6163,6 +6163,7 @@ dependencies = [
  "stream-download",
  "tempfile",
  "tidewarp",
+ "tidewarp-term",
  "tokio",
  "tokio-rustls",
  "tokio-tungstenite 0.30.0",
@@ -6775,6 +6776,12 @@ dependencies = [
  "wgpu",
  "wgslift",
 ]
+
+[[package]]
+name = "tidewarp-term"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dd364aeabbc2f8689e5fc9900d56b10ab7fff9fe83e6ced04a3bb4a2ae58fbcf"
 
 [[package]]
 name = "tiff"
