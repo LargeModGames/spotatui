@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **Unused GUI strings removed**: removed 11 unused GUI strings left from the old Discover range picker ([#1051](https://github.com/LargeModGames/spotatui/issues/1051)).
+
 ## [v0.49.0] 2026-11-25
 
 ### Added
