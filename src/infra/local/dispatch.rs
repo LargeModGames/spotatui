@@ -611,7 +611,7 @@ async fn teardown_local(app: &Arc<Mutex<App>>) {
 }
 
 async fn set_error(app: &Arc<Mutex<App>>, message: String) {
-  app.lock().await.set_status_message(message, 6);
+  app.lock().await.set_error_status_message(message, 6);
 }
 
 /// The configured music-library root, or `None` (with a status message) if it
@@ -620,7 +620,7 @@ fn music_root(app: &mut App) -> Option<String> {
   let root = app.user_config.behavior.local_music_path.clone();
   if root.is_none() {
     let message = app.strings().status.infra.local_no_folder;
-    app.set_status_message(message, 6);
+    app.set_error_status_message(message, 6);
   }
   root
 }
@@ -702,7 +702,7 @@ async fn load_local_tracks(app: &Arc<Mutex<App>>, playlist_uri: &str, epoch: u64
       .infra
       .local_tracks_scan_failed(&e.to_string()),
   };
-  app.set_status_message(message, 6);
+  app.set_error_status_message(message, 6);
 }
 
 #[cfg(test)]
@@ -764,5 +764,41 @@ mod tests {
       app.track_table.context,
       Some(TrackTableContext::LocalPlaylist)
     ));
+  }
+
+  #[tokio::test]
+  async fn load_local_playlists_without_folder_marks_status_as_error() {
+    let (tx, _rx) = channel();
+    let mut config = UserConfig::new();
+    config.behavior.local_music_path = None;
+    let app = Arc::new(Mutex::new(App::new(tx, config, Some(SystemTime::now()))));
+
+    assert!(route_local_event(&app, &IoEvent::GetLocalPlaylists).await);
+
+    let app = app.lock().await;
+    assert!(app.status_message().is_some());
+    assert!(app.status_message_is_error());
+  }
+
+  #[tokio::test]
+  async fn get_local_tracks_for_missing_folder_marks_status_as_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let missing = dir.path().join("MissingAlbum");
+    let (tx, rx) = channel();
+    let mut config = UserConfig::new();
+    config.behavior.local_music_path = Some(dir.path().to_string_lossy().into_owned());
+    let app = Arc::new(Mutex::new(App::new(tx, config, Some(SystemTime::now()))));
+    let uri = super::super::path_to_file_uri(&missing);
+    app.lock().await.open_source_playlist_tracks(uri);
+    let event = rx
+      .try_recv()
+      .expect("opening the folder dispatches its load");
+
+    assert!(route_local_event(&app, &event).await);
+
+    let app = app.lock().await;
+    assert!(app.track_table.tracks.is_empty());
+    assert!(app.status_message().is_some());
+    assert!(app.status_message_is_error());
   }
 }
