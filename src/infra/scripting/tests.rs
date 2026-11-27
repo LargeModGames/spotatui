@@ -3113,6 +3113,47 @@ mod storage_tests {
   }
 
   #[test]
+  fn legacy_save_migrates_distinct_case_save_on_case_sensitive_volume() {
+    let cfg = tempfile::tempdir().unwrap();
+    write_file(
+      &cfg.path().join("plugins/Mix_Notes.lua"),
+      r#"
+        existing = spotatui.storage_get("token")
+        if existing == nil then
+          spotatui.storage_set("token", "upper-secret")
+        end
+      "#,
+    );
+
+    {
+      let mut engine = ScriptEngine::new().unwrap();
+      assert_eq!(engine.load_user_scripts(cfg.path()), 1);
+      engine.flush_storage(true);
+    }
+
+    let lower_legacy = cfg.path().join("plugin-data/mix_notes.json");
+    if lower_legacy.exists() {
+      // Case-insensitive volumes cannot store two distinct case-variant saves side by side.
+      return;
+    }
+
+    write_file(&lower_legacy, r#"{"token":"lower-secret"}"#);
+    write_file(
+      &cfg.path().join("plugins/mix.notes.lua"),
+      r#"dotted_seen = spotatui.storage_get("token") or "missing""#,
+    );
+
+    let mut fresh = ScriptEngine::new().unwrap();
+    assert_eq!(fresh.load_user_scripts(cfg.path()), 2);
+    let globals = fresh.lua.globals();
+    assert_eq!(
+      globals.get::<String>("dotted_seen").unwrap(),
+      "lower-secret"
+    );
+    assert_eq!(globals.get::<String>("existing").unwrap(), "upper-secret");
+  }
+
+  #[test]
   fn corrupt_storage_file_starts_empty() {
     let cfg = temp_config_dir();
     write_file(&cfg.join("plugin-data").join("a.json"), "{not json");

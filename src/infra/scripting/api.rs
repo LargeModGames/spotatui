@@ -824,9 +824,22 @@ fn read_storage_map(
   }
 }
 
+/// Returns `true` when both optional paths resolve to the same on-disk file
+/// (e.g. `Mix_Notes.json` and `mix_notes.json` on a case-insensitive volume).
+fn same_save_file(a: Option<&std::path::PathBuf>, b: &std::path::Path) -> bool {
+  let Some(a) = a else {
+    return false;
+  };
+  match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+    (Ok(ca), Ok(cb)) => ca == cb,
+    _ => false,
+  }
+}
+
 /// Load a namespace from disk on first touch. When a hashed namespace file
 /// (`<id>.<hash>.json`) does not exist yet, fall back to the legacy `<id>.json`
-/// file as the starting value. Missing or corrupt files map to an empty namespace.
+/// file as the starting value unless another loaded plugin owns that save path.
+/// Missing or corrupt files map to an empty namespace.
 fn ensure_storage_loaded(shared: &Rc<ScriptShared>, namespace: &str) {
   if shared.storage.borrow().contains_key(namespace) {
     return;
@@ -838,14 +851,19 @@ fn ensure_storage_loaded(shared: &Rc<ScriptShared>, namespace: &str) {
       None => namespace
         .split_once('.')
         .map(|(legacy_id, _)| legacy_id)
-        .filter(|legacy_id| {
-          !shared
-            .loaded_namespaces
-            .borrow()
-            .iter()
-            .any(|loaded| loaded.eq_ignore_ascii_case(legacy_id))
+        .and_then(|legacy_id| {
+          let legacy_path = shared.storage_path(legacy_id)?;
+          let owned_by_loaded = shared.loaded_namespaces.borrow().iter().any(|loaded| {
+            loaded == legacy_id
+              || (loaded.eq_ignore_ascii_case(legacy_id)
+                && same_save_file(shared.storage_path(loaded).as_ref(), &legacy_path))
+          });
+          if owned_by_loaded {
+            None
+          } else {
+            Some(legacy_path)
+          }
         })
-        .and_then(|legacy_id| shared.storage_path(legacy_id))
         .and_then(|legacy_path| read_storage_map(&legacy_path))
         .flatten(),
     })
