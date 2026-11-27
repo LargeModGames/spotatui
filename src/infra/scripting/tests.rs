@@ -3079,6 +3079,40 @@ mod storage_tests {
   }
 
   #[test]
+  fn legacy_save_skipped_when_case_alias_clean_plugin_loaded() {
+    let cfg = tempfile::tempdir().unwrap();
+    write_file(
+      &cfg.path().join("plugins/Mix_Notes.lua"),
+      r#"
+        existing = spotatui.storage_get("token")
+        if existing == nil then
+          spotatui.storage_set("token", "upper-secret")
+        end
+      "#,
+    );
+
+    {
+      let mut engine = ScriptEngine::new().unwrap();
+      assert_eq!(engine.load_user_scripts(cfg.path()), 1);
+      engine.flush_storage(true);
+    }
+
+    // On case-insensitive volumes `mix_notes.json` aliases `Mix_Notes.json`;
+    // `mix.notes.lua` must not treat it as its own legacy save while
+    // `Mix_Notes.lua` is installed.
+    write_file(
+      &cfg.path().join("plugins/mix.notes.lua"),
+      r#"dotted_seen = spotatui.storage_get("token") or "missing""#,
+    );
+
+    let mut fresh = ScriptEngine::new().unwrap();
+    assert_eq!(fresh.load_user_scripts(cfg.path()), 2);
+    let globals = fresh.lua.globals();
+    assert_eq!(globals.get::<String>("dotted_seen").unwrap(), "missing");
+    assert_eq!(globals.get::<String>("existing").unwrap(), "upper-secret");
+  }
+
+  #[test]
   fn corrupt_storage_file_starts_empty() {
     let cfg = temp_config_dir();
     write_file(&cfg.join("plugin-data").join("a.json"), "{not json");
