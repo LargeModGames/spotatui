@@ -978,7 +978,7 @@ async fn start_native_context_via_api(
       // native device never emits a player event, the watchdog fires again and
       // the bounded attempt counter eventually drops the request with a
       // message instead of leaving it parked forever.
-      app.park_start_playback(
+      app.refresh_parked_start_playback(
         Some(context.uri()),
         uris.map(|list| list.iter().map(|u| u.uri()).collect()),
         offset,
@@ -1822,7 +1822,7 @@ impl PlaybackNetwork for Network {
           // Optimistic UI update; the watchdog corrects it if no player event
           // ever confirms the load (zombie session).
           let mut app = self.app.lock().await;
-          app.park_start_playback(parked_context, parked_uris, offset);
+          app.refresh_parked_start_playback(parked_context, parked_uris, offset);
           app.native_load_watchdog = Some(Instant::now());
           if let Some(ctx) = &mut app.current_playback_context {
             ctx.is_playing = true;
@@ -1996,7 +1996,7 @@ impl PlaybackNetwork for Network {
                     repeat,
                   );
                   // Same zombie-session net as the direct load route.
-                  app.park_start_playback(parked_context, parked_uris, offset);
+                  app.refresh_parked_start_playback(parked_context, parked_uris, offset);
                   app.native_load_watchdog = Some(Instant::now());
                   if let Some(ctx) = &mut app.current_playback_context {
                     ctx.is_playing = true;

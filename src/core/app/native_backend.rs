@@ -369,33 +369,48 @@ impl App {
       .map_or(Duration::ZERO, |started| {
         now.saturating_duration_since(started)
       });
-    // Re-parking the same request (a replay's success path) keeps its press
-    // time, so a deferred replay cannot renew the window.
-    let same_request = self.pending_start_playback.as_ref().is_some_and(|pending| {
-      pending.context_uri == context_uri && pending.uris == uris && pending.offset == offset
-    });
     let waiting = self
       .pending_start_playback
       .as_ref()
       .filter(|pending| !pending.expired_at(now, credit));
+    let same_request = waiting.is_some_and(|pending| {
+      pending.context_uri == context_uri && pending.uris == uris && pending.offset == offset
+    });
     if context_uri.is_none() && uris.is_none() && offset.is_none() {
       if waiting.is_some() && !same_request {
         return;
       }
       self.arm_native_play_intent();
     }
-    // An identical park leaves the request, and its window, untouched.
-    if same_request {
-      return;
+    if !same_request {
+      self.pending_start_playback = Some(PendingStartPlayback {
+        context_uri,
+        uris,
+        offset,
+        pressed_at: now,
+        recovery_credit: Duration::ZERO,
+        recovery_attempts: 0,
+      });
     }
-    self.pending_start_playback = Some(PendingStartPlayback {
-      context_uri,
-      uris,
-      offset,
-      pressed_at: now,
-      recovery_credit: Duration::ZERO,
-      recovery_attempts: 0,
+  }
+
+  /// Keeps the parked request a dispatched load belongs to, press time included.
+  ///
+  /// Unlike [`park_start_playback`], an expired request is not treated as new,
+  /// so a replay deferred past the limit cannot renew it.
+  #[cfg(feature = "streaming")]
+  pub(crate) fn refresh_parked_start_playback(
+    &mut self,
+    context_uri: Option<String>,
+    uris: Option<Vec<String>>,
+    offset: Option<usize>,
+  ) {
+    let same_request = self.pending_start_playback.as_ref().is_some_and(|pending| {
+      pending.context_uri == context_uri && pending.uris == uris && pending.offset == offset
     });
+    if !same_request {
+      self.park_start_playback(context_uri, uris, offset);
+    }
   }
 
   /// The configured Spotify startup Play/Pause, sent once deferred native
@@ -871,19 +886,34 @@ mod tests {
 
   /// A replayed press re-parks itself after the limit: it must keep its window.
   #[test]
-  fn an_expired_replay_that_parks_again_keeps_its_press_time() {
+  fn a_load_success_refresh_keeps_the_expired_press_time() {
     let (tx, _rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
     app.park_start_playback(Some("spotify:playlist:p".to_string()), None, None);
     let pressed_at = Instant::now() - max_parked_start_age() - Duration::from_secs(5);
     app.pending_start_playback.as_mut().unwrap().pressed_at = pressed_at;
 
-    // The load succeeded, so the success path parks the same request again.
-    app.park_start_playback(Some("spotify:playlist:p".to_string()), None, None);
+    // The dispatched load succeeded, so the success path refreshes it.
+    app.refresh_parked_start_playback(Some("spotify:playlist:p".to_string()), None, None);
 
     let pending = app.pending_start_playback.as_ref().unwrap();
     assert_eq!(pending.pressed_at, pressed_at);
     assert!(pending.expired_at(Instant::now(), Duration::ZERO));
+  }
+
+  /// A real press on the same target is not the request that expired.
+  #[test]
+  fn a_press_on_the_same_target_after_it_expired_gets_a_new_deadline() {
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.park_start_playback(Some("spotify:playlist:p".to_string()), None, None);
+    app.pending_start_playback.as_mut().unwrap().pressed_at =
+      Instant::now() - max_parked_start_age() - Duration::from_secs(5);
+
+    app.park_start_playback(Some("spotify:playlist:p".to_string()), None, None);
+
+    let pending = app.pending_start_playback.as_ref().unwrap();
+    assert!(!pending.expired_at(Instant::now(), Duration::ZERO));
   }
 
   #[test]
