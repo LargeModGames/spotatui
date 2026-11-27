@@ -1,0 +1,1 @@
+- **The AI DJ's avoid-library filter treats an artist name with a comma as one name**: a song by `Tyler, The Creator` in your playlists no longer hides a same-titled song by `Tyler` ([#1187](https://github.com/LargeModGames/spotatui/issues/1187)).

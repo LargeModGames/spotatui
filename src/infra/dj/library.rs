@@ -13,7 +13,7 @@
 //! [`super::resolve`] does: they take `&Network` and *return* an answer instead of
 //! writing into `App`.
 
-use super::{dedupe_key, DjLibrary, MAX_LIBRARY_TRACKS};
+use super::{library_key, DjLibrary, MAX_LIBRARY_TRACKS};
 use crate::infra::network::Network;
 use serde::Deserialize;
 use std::collections::HashSet;
@@ -208,13 +208,14 @@ async fn collect_playlist(
       let Some(name) = track.name.as_deref().filter(|name| !name.is_empty()) else {
         continue;
       };
-      let artists = track
+      // The first artist's full name: joining the list and splitting it again
+      // at commas would turn `Tyler, The Creator` into `Tyler`.
+      let artist = track
         .artists
         .iter()
-        .filter_map(|artist| artist.name.clone())
-        .collect::<Vec<_>>()
-        .join(", ");
-      library.keys.insert(dedupe_key(name, &artists));
+        .find_map(|artist| artist.name.as_deref())
+        .unwrap_or_default();
+      library.keys.insert(library_key(name, artist));
       if let Some(id) = track.id.clone() {
         library.ids.insert(id);
       }
