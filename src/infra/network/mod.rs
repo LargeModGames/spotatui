@@ -249,7 +249,7 @@ pub enum IoEvent {
   GetQobuzSearchResults(String, u64),
   /// Start the in-TUI Qobuz browser login (handled by `infra::qobuz::dispatch`).
   #[cfg_attr(not(feature = "qobuz"), allow(dead_code))]
-  QobuzLogin,
+  QobuzLogin(Option<u64>),
   /// A start held back while Music paused: sent after an acknowledged pause
   /// or proof the Apple Event was not delivered. The Music router hands
   /// `event` back to the pump. Never bypasses the claim gate.
@@ -599,7 +599,7 @@ impl Network {
         | IoEvent::GetQobuzPlaylists
         | IoEvent::GetQobuzTracks(..)
         | IoEvent::GetQobuzSearchResults(..)
-        | IoEvent::QobuzLogin
+        | IoEvent::QobuzLogin(..)
         | IoEvent::AppleMusicHandoff { .. }
         | IoEvent::AppleMusicVolume { .. }
         | IoEvent::AppleMusicPage { .. }
@@ -1169,7 +1169,7 @@ impl Network {
       IoEvent::GetQobuzPlaylists
       | IoEvent::GetQobuzTracks(..)
       | IoEvent::GetQobuzSearchResults(..)
-      | IoEvent::QobuzLogin => {}
+      | IoEvent::QobuzLogin(..) => {}
       // Consumed by infra::apple_music::dispatch; only a build without the
       // Apple Music router gets here.
       IoEvent::AppleMusicHandoff { .. } | IoEvent::AppleMusicPage { .. } => {
