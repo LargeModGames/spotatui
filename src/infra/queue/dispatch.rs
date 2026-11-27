@@ -1902,7 +1902,7 @@ mod tests {
       let mut guard = app.lock().await;
       guard.streaming_recovery_tx = Some(recovery_tx);
       guard.seed_native_parked();
-      guard.park_start_playback(Some("spotify:playlist:older".to_string()), None, None);
+      guard.park_start_playback(Some("spotify:playlist:older".to_string()), None, None, None);
     }
 
     assert!(

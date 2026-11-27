@@ -50,6 +50,7 @@ pub trait PlaybackNetwork {
     context_id: Option<PlayContextId<'static>>,
     uris: Option<Vec<PlayableId<'static>>>,
     offset: Option<usize>,
+    pressed_at: Option<std::time::Instant>,
   );
   #[cfg(feature = "streaming")]
   async fn restore_native_playback(&mut self, generation: u64);
@@ -978,10 +979,11 @@ async fn start_native_context_via_api(
       // native device never emits a player event, the watchdog fires again and
       // the bounded attempt counter eventually drops the request with a
       // message instead of leaving it parked forever.
-      app.refresh_parked_start_playback(
+      app.park_start_playback(
         Some(context.uri()),
         uris.map(|list| list.iter().map(|u| u.uri()).collect()),
         offset,
+        None,
       );
       app.native_load_watchdog = Some(Instant::now());
       app.dispatch(IoEvent::GetCurrentPlayback);
@@ -1518,7 +1520,11 @@ impl PlaybackNetwork for Network {
     context_id: Option<PlayContextId<'static>>,
     uris: Option<Vec<PlayableId<'static>>>,
     offset: Option<usize>,
+    pressed_at: Option<std::time::Instant>,
   ) {
+    // Only the streaming park reads the carried press time.
+    #[cfg(not(feature = "streaming"))]
+    let _ = pressed_at;
     // An explicit Spotify start that reached this handler passed every source
     // router and the pump's prelude: Spotify takes the sink, so the decoded
     // claim ends here. A bare resume never releases it.
@@ -1610,6 +1616,7 @@ impl PlaybackNetwork for Network {
           .as_ref()
           .map(|list| list.iter().map(|u| u.uri()).collect()),
         offset,
+        pressed_at,
       );
       if need_parking {
         return;
@@ -1822,7 +1829,7 @@ impl PlaybackNetwork for Network {
           // Optimistic UI update; the watchdog corrects it if no player event
           // ever confirms the load (zombie session).
           let mut app = self.app.lock().await;
-          app.refresh_parked_start_playback(parked_context, parked_uris, offset);
+          app.park_start_playback(parked_context, parked_uris, offset, pressed_at);
           app.native_load_watchdog = Some(Instant::now());
           if let Some(ctx) = &mut app.current_playback_context {
             ctx.is_playing = true;
@@ -1996,7 +2003,7 @@ impl PlaybackNetwork for Network {
                     repeat,
                   );
                   // Same zombie-session net as the direct load route.
-                  app.refresh_parked_start_playback(parked_context, parked_uris, offset);
+                  app.park_start_playback(parked_context, parked_uris, offset, pressed_at);
                   app.native_load_watchdog = Some(Instant::now());
                   if let Some(ctx) = &mut app.current_playback_context {
                     ctx.is_playing = true;
@@ -2062,6 +2069,7 @@ impl PlaybackNetwork for Network {
                 .as_ref()
                 .map(|list| list.iter().map(|u| u.uri()).collect()),
               offset,
+              pressed_at,
             );
             let strings = app.strings();
             app.set_status_message(strings.status.infra.native_reconnect_resume, 6);
@@ -2854,7 +2862,7 @@ impl PlaybackNetwork for Network {
         let uris = next
           .uris
           .map(|items| crate::infra::network::ids::playable_ids(&items));
-        self.start_playback(None, uris, next.offset).await;
+        self.start_playback(None, uris, next.offset, None).await;
         return;
       }
       if raw_list_exhausted {
@@ -2923,7 +2931,7 @@ impl PlaybackNetwork for Network {
           log::info!(
             "continuation for {previous_track_id}: resuming the already-selected next item"
           );
-          self.start_playback(None, None, None).await;
+          self.start_playback(None, None, None, None).await;
         } else {
           warn!(
             "continuation for {previous_track_id}: paused with no current item; nothing to resume"
@@ -2957,14 +2965,16 @@ impl PlaybackNetwork for Network {
     match (context, track) {
       (Some(context), Some(track)) => {
         self
-          .start_playback(Some(context), Some(vec![track]), None)
+          .start_playback(Some(context), Some(vec![track]), None, None)
           .await;
       }
       (Some(context), None) => {
-        self.start_playback(Some(context), None, None).await;
+        self.start_playback(Some(context), None, None, None).await;
       }
       (None, Some(track)) => {
-        self.start_playback(None, Some(vec![track]), None).await;
+        self
+          .start_playback(None, Some(vec![track]), None, None)
+          .await;
       }
       (None, None) => {
         let mut app = self.app.lock().await;
@@ -3274,9 +3284,10 @@ mod tests {
           crate::infra::network::ids::play_context_id(PLAYLIST),
           None,
           Some(3),
+          None,
         )
         .await;
-      network.start_playback(None, None, None).await;
+      network.start_playback(None, None, None, None).await;
       server.await.unwrap();
 
       let mut app = app.lock().await;
@@ -3288,7 +3299,7 @@ mod tests {
       app.replay_pending_start_playback();
       assert!(matches!(
         rx.try_recv(),
-        Ok(IoEvent::StartPlayback(Some(context), None, Some(3))) if context == PLAYLIST
+        Ok(IoEvent::ReplayStartPlayback(Some(context), None, Some(3), _)) if context == PLAYLIST
       ));
     })
     .await
@@ -3311,7 +3322,7 @@ mod tests {
       let (spotify, _fake) = fake_spotify_login(base_url);
       let mut network = Network::new(Some(spotify), &app);
 
-      network.start_playback(None, None, None).await;
+      network.start_playback(None, None, None, None).await;
       assert!(
         app
           .lock()
@@ -4081,6 +4092,7 @@ mod tests {
       Some("spotify:playlist:parked".to_string()),
       None,
       None,
+      None,
     ));
     assert!(app.pending_start_playback.is_some());
     assert!(
@@ -4105,7 +4117,12 @@ mod tests {
       false,
       RepeatState::Off,
     );
-    app.park_start_playback(Some("spotify:playlist:explicit".to_string()), None, None);
+    app.park_start_playback(
+      Some("spotify:playlist:explicit".to_string()),
+      None,
+      None,
+      None,
+    );
     app.queue_now = Some(QueueNowPlaying::Spotify {
       track: queued_track("spotify:track:queued"),
     });
@@ -4342,6 +4359,7 @@ mod tests {
     network
       .start_playback(
         crate::infra::network::ids::play_context_id(PLAYLIST),
+        None,
         None,
         None,
       )

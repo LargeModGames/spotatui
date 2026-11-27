@@ -2241,7 +2241,12 @@ mod tests {
     // Music lets go, and a new play parks itself while the rebuild is pending.
     let handoff = app.begin_apple_music_handoff();
     assert!(app.finish_apple_music_handoff(handoff));
-    app.park_start_playback(Some("spotify:playlist:parked".to_string()), None, None);
+    app.park_start_playback(
+      Some("spotify:playlist:parked".to_string()),
+      None,
+      None,
+      None,
+    );
 
     super::finish_cancelled_recovery(&mut app);
 
@@ -2330,7 +2335,7 @@ mod tests {
     let generation = app
       .prepare_native_playback_recovery(42_000, true)
       .expect("a retained snapshot");
-    app.park_start_playback(None, None, None);
+    app.park_start_playback(None, None, None, None);
     let request = StreamingRecoveryRequest {
       reacquire: true,
       restore_playback: true,
@@ -2361,7 +2366,7 @@ mod tests {
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
     app.last_track_id = Some("spotify:track:old".to_string());
     assert!(app.prepare_native_playback_recovery(42_000, true).is_some());
-    app.park_start_playback(None, None, None);
+    app.park_start_playback(None, None, None, None);
     let generation = app.begin_native_recovery();
     app.native_backend_pending = true;
     let app = Arc::new(tokio::sync::Mutex::new(app));
@@ -2414,7 +2419,12 @@ mod tests {
     let (tx, io_rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
     assert_eq!(app.begin_native_recovery(), 1);
-    app.park_start_playback(Some("spotify:playlist:pressed".to_string()), None, None);
+    app.park_start_playback(
+      Some("spotify:playlist:pressed".to_string()),
+      None,
+      None,
+      None,
+    );
     app.native_backend_pending = true;
     let app = Arc::new(tokio::sync::Mutex::new(app));
     let (ctx, recovery_tx) = recovery_context(Arc::clone(&app));
@@ -2975,7 +2985,12 @@ mod tests {
     let (tx, io_rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
     assert_eq!(app.begin_native_recovery(), 1);
-    app.park_start_playback(Some("spotify:playlist:parked".to_string()), None, None);
+    app.park_start_playback(
+      Some("spotify:playlist:parked".to_string()),
+      None,
+      None,
+      None,
+    );
     // A start asked for while the backend is gone waits on this flag.
     app.native_backend_pending = true;
     let app = Arc::new(tokio::sync::Mutex::new(app));
@@ -3035,7 +3050,7 @@ mod tests {
     ));
     assert!(matches!(
       io_rx.try_recv(),
-      Ok(IoEvent::StartPlayback(Some(ref context), None, None))
+      Ok(IoEvent::ReplayStartPlayback(Some(ref context), None, None, _))
         if context == "spotify:playlist:parked"
     ));
     // Once only: nothing was replayed over the superseded build.
@@ -3061,7 +3076,12 @@ mod tests {
     let (tx, io_rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
     assert_eq!(app.begin_native_recovery(), 1);
-    app.park_start_playback(Some("spotify:playlist:parked".to_string()), None, None);
+    app.park_start_playback(
+      Some("spotify:playlist:parked".to_string()),
+      None,
+      None,
+      None,
+    );
     app.native_backend_pending = true;
     let app = Arc::new(tokio::sync::Mutex::new(app));
     let (ctx, recovery_tx) = recovery_context(Arc::clone(&app));
@@ -3118,7 +3138,7 @@ mod tests {
     assert!(
       matches!(
         io_rx.try_recv(),
-        Ok(IoEvent::StartPlayback(Some(ref context), None, None))
+        Ok(IoEvent::ReplayStartPlayback(Some(ref context), None, None, _))
           if context == "spotify:playlist:parked"
       ),
       "the parked start outlives the superseded chain's wait"
@@ -3143,7 +3163,12 @@ mod tests {
     let (tx, io_rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
     assert_eq!(app.begin_native_recovery(), 1);
-    app.park_start_playback(Some("spotify:playlist:parked".to_string()), None, None);
+    app.park_start_playback(
+      Some("spotify:playlist:parked".to_string()),
+      None,
+      None,
+      None,
+    );
     // A short wait before recovery: crediting the chain twice would eat into
     // this too. std Instant is frozen under paused Tokio time, so the chain's
     // own wait comes from a short real sleep below.
@@ -3178,7 +3203,7 @@ mod tests {
     ));
     assert!(matches!(
       io_rx.try_recv(),
-      Ok(IoEvent::StartPlayback(Some(ref context), None, None))
+      Ok(IoEvent::ReplayStartPlayback(Some(ref context), None, None, _))
         if context == "spotify:playlist:parked"
     ));
     assert!(matches!(io_rx.try_recv(), Err(TryRecvError::Empty)));
@@ -3210,7 +3235,12 @@ mod tests {
     let (tx, io_rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
     assert_eq!(app.begin_native_recovery(), 1);
-    app.park_start_playback(Some("spotify:playlist:parked".to_string()), None, None);
+    app.park_start_playback(
+      Some("spotify:playlist:parked".to_string()),
+      None,
+      None,
+      None,
+    );
     app.native_backend_pending = true;
     let app = Arc::new(tokio::sync::Mutex::new(app));
     let (ctx, recovery_tx) = recovery_context(Arc::clone(&app));
@@ -3253,7 +3283,7 @@ mod tests {
     ));
     assert!(matches!(
       io_rx.try_recv(),
-      Ok(IoEvent::StartPlayback(Some(ref context), None, None))
+      Ok(IoEvent::ReplayStartPlayback(Some(ref context), None, None, _))
         if context == "spotify:playlist:parked"
     ));
     assert!(matches!(io_rx.try_recv(), Err(TryRecvError::Empty)));
@@ -3270,7 +3300,12 @@ mod tests {
     let (tx, io_rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
     assert_eq!(app.begin_native_recovery(), 1);
-    app.park_start_playback(Some("spotify:playlist:parked".to_string()), None, None);
+    app.park_start_playback(
+      Some("spotify:playlist:parked".to_string()),
+      None,
+      None,
+      None,
+    );
     app.native_backend_pending = true;
     let app = Arc::new(tokio::sync::Mutex::new(app));
     let (ctx, recovery_tx) = recovery_context(Arc::clone(&app));
@@ -3306,7 +3341,7 @@ mod tests {
     ));
     assert!(matches!(
       io_rx.try_recv(),
-      Ok(IoEvent::StartPlayback(Some(ref context), None, None))
+      Ok(IoEvent::ReplayStartPlayback(Some(ref context), None, None, _))
         if context == "spotify:playlist:parked"
     ));
     assert!(matches!(io_rx.try_recv(), Err(TryRecvError::Empty)));
@@ -3323,7 +3358,12 @@ mod tests {
     let (tx, io_rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
     assert_eq!(app.begin_native_recovery(), 1);
-    app.park_start_playback(Some("spotify:playlist:parked".to_string()), None, None);
+    app.park_start_playback(
+      Some("spotify:playlist:parked".to_string()),
+      None,
+      None,
+      None,
+    );
     let app = Arc::new(tokio::sync::Mutex::new(app));
     let (ctx, recovery_tx) = recovery_context(Arc::clone(&app));
 
@@ -3357,7 +3397,7 @@ mod tests {
     // The current request replayed the parked start over the live player once.
     assert!(matches!(
       io_rx.try_recv(),
-      Ok(IoEvent::StartPlayback(Some(ref context), None, None))
+      Ok(IoEvent::ReplayStartPlayback(Some(ref context), None, None, _))
         if context == "spotify:playlist:parked"
     ));
     // The stale duplicate replayed nothing.
@@ -3383,7 +3423,12 @@ mod tests {
     let (tx, io_rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
     assert_eq!(app.begin_native_recovery(), 1);
-    app.park_start_playback(Some("spotify:playlist:parked".to_string()), None, None);
+    app.park_start_playback(
+      Some("spotify:playlist:parked".to_string()),
+      None,
+      None,
+      None,
+    );
     // Past the soft window, strictly inside the hard limit: were it not for the
     // chain time the replay credits, this would be reported expired.
     let chain = parked_start_window() + (max_parked_start_age() - parked_start_window()) / 2;
@@ -3440,7 +3485,7 @@ mod tests {
     ));
     assert!(matches!(
       io_rx.try_recv(),
-      Ok(IoEvent::StartPlayback(Some(ref context), None, None))
+      Ok(IoEvent::ReplayStartPlayback(Some(ref context), None, None, _))
         if context == "spotify:playlist:parked"
     ));
     assert!(matches!(io_rx.try_recv(), Err(TryRecvError::Empty)));

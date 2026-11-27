@@ -101,7 +101,7 @@ pub async fn route_qobuz_event(app: &Arc<Mutex<App>>, event: &IoEvent) -> bool {
     },
     // Any other start is a foreign play: relinquish the device, then let the
     // normal dispatch run.
-    IoEvent::StartPlayback(..) => {
+    IoEvent::StartPlayback(..) | IoEvent::ReplayStartPlayback(..) => {
       teardown_qobuz(app).await;
       false
     }

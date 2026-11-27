@@ -99,7 +99,7 @@ pub async fn route_subsonic_event(app: &Arc<Mutex<App>>, event: &IoEvent) -> boo
     },
     // Any other start is a local/Spotify play: relinquish the device, then let
     // the normal dispatch run.
-    IoEvent::StartPlayback(..) => {
+    IoEvent::StartPlayback(..) | IoEvent::ReplayStartPlayback(..) => {
       teardown_subsonic(app).await;
       false
     }

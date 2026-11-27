@@ -22,6 +22,10 @@ fn start_playback_uri(event: &IoEvent) -> Option<&str> {
   match event {
     IoEvent::StartPlayback(Some(uri), _, _) => Some(uri),
     IoEvent::StartPlayback(None, Some(uris), _) => uris.first().map(String::as_str),
+    #[cfg(feature = "streaming")]
+    IoEvent::ReplayStartPlayback(Some(uri), _, _, _) => Some(uri),
+    #[cfg(feature = "streaming")]
+    IoEvent::ReplayStartPlayback(None, Some(uris), _, _) => uris.first().map(String::as_str),
     _ => None,
   }
 }
@@ -33,6 +37,15 @@ fn start_playback_uri(event: &IoEvent) -> Option<&str> {
 fn start_playback_has_taker(event: &IoEvent, spotify_session: bool) -> bool {
   match event {
     IoEvent::StartPlayback(None, None, None) => true,
+    #[cfg(feature = "streaming")]
+    IoEvent::ReplayStartPlayback(..) => match start_playback_uri(event) {
+      Some(uri) if uri.starts_with("radio:") => cfg!(feature = "internet-radio"),
+      Some(uri) => match queue_item_source(uri) {
+        QueueItemSource::Spotify => spotify_session,
+        source => source_available(source),
+      },
+      None => spotify_session,
+    },
     IoEvent::StartPlayback(..) => match start_playback_uri(event) {
       // Radio is never queued, so `queue_item_source` does not know its scheme.
       Some(uri) if uri.starts_with("radio:") => cfg!(feature = "internet-radio"),
@@ -280,6 +293,27 @@ mod tests {
 
     assert!(start_playback_has_taker(&resume, false));
     assert!(start_playback_has_taker(&resume, true));
+  }
+
+  /// A replay carries its press time, and the gate must still read its URI: the
+  /// `_ => true` arm it used to fall into let a sessionless replay through to
+  /// the Spotify handler instead of being dropped.
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn a_replayed_start_is_gated_like_the_press_it_replays() {
+    let replay = IoEvent::ReplayStartPlayback(
+      None,
+      Some(vec!["spotify:track:x".to_string()]),
+      Some(0),
+      std::time::Instant::now(),
+    );
+
+    assert_eq!(start_playback_uri(&replay), Some("spotify:track:x"));
+    assert!(start_playback_has_taker(&replay, true));
+    assert!(
+      !start_playback_has_taker(&replay, false),
+      "a replay without a session has no taker"
+    );
   }
 
   #[test]

@@ -355,6 +355,7 @@ impl Network {
           .as_ref()
           .map(|list| list.iter().map(|u| u.uri()).collect()),
         offset,
+        None,
       );
       app.native_load_watchdog = Some(Instant::now());
       if let Some(ctx) = &mut app.current_playback_context {

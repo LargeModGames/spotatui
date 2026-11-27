@@ -273,7 +273,7 @@ impl App {
       let bare_resume = matches!(event, IoEvent::StartPlayback(None, None, None));
       if !bare_resume || self.native_backend_pending {
         if bare_resume {
-          self.park_start_playback(None, None, None);
+          self.park_start_playback(None, None, None, None);
         }
         self.refuse_parked_gesture();
       } else if self.native_playback_recovery.is_none() {
@@ -1231,7 +1231,12 @@ mod tests {
   fn a_bare_resume_during_the_rebuild_keeps_an_explicit_parked_start() {
     let (mut app, rx, mut recovery_rx) = parked_native_app();
     app.native_backend_pending = true;
-    app.park_start_playback(Some("spotify:playlist:explicit".to_string()), None, None);
+    app.park_start_playback(
+      Some("spotify:playlist:explicit".to_string()),
+      None,
+      None,
+      None,
+    );
 
     app.toggle_playback();
 
