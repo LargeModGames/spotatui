@@ -44,17 +44,33 @@ impl SoloistStart {
 /// Stop a running Soloist, then start the engine the settings name, with the saved key.
 /// A request a later engine change superseded does nothing; the later one switches.
 pub(crate) async fn apply_engine(app: Arc<Mutex<App>>, request: u64) {
+  apply_engine_on(app, request, supervisor::shared()).await;
+}
+
+pub(super) async fn apply_engine_on(
+  app: Arc<Mutex<App>>,
+  request: u64,
+  shared: &supervisor::Shared,
+) {
   let _switch = ENGINE_SWITCH.lock().await;
-  if !app.lock().await.is_current_engine_request(request) {
-    return;
+  {
+    let app = app.lock().await;
+    if app.io_tx_clone().is_none() || !app.is_current_engine_request(request) {
+      return;
+    }
   }
-  if !supervisor::stop_for_restart(std::time::Duration::from_secs(5)).await {
-    log::warn!("soloist: the old engine has not stopped yet; switching once it exits");
-    supervisor::wait_stopped().await;
+  if !shared
+    .stop_for_restart(std::time::Duration::from_secs(5))
+    .await
+  {
+    return;
   }
   let start = {
     let mut app = app.lock().await;
-    if !app.is_current_engine_request(request) {
+    if app.io_tx_clone().is_none()
+      || shared.is_shutting_down()
+      || !app.is_current_engine_request(request)
+    {
       return;
     }
     app.apply_playback_engine()
@@ -70,7 +86,10 @@ pub(crate) fn deferred_soloist_startup(app: Arc<Mutex<App>>, start: SoloistStart
     let session = crate::infra::spotify::session::current().await;
     let _switch = ENGINE_SWITCH.lock().await;
     let mut current = app.lock().await;
-    if !current.is_current_soloist_start(start.generation) {
+    if current.io_tx_clone().is_none()
+      || supervisor::shared().is_shutting_down()
+      || !current.is_current_soloist_start(start.generation)
+    {
       return;
     }
     if let Err(unavailable) = session {

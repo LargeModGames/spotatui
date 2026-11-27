@@ -39,15 +39,16 @@ pub struct Config {
 }
 
 #[derive(Default)]
-struct Shared {
+pub(super) struct Shared {
   shutting_down: AtomicBool,
+  stopping_for_restart: AtomicBool,
   running: AtomicBool,
   stop: Notify,
   link: StdMutex<Option<Arc<SoloistLink>>>,
   done: StdMutex<Option<oneshot::Receiver<()>>>,
 }
 
-fn shared() -> &'static Arc<Shared> {
+pub(super) fn shared() -> &'static Arc<Shared> {
   static SHARED: OnceLock<Arc<Shared>> = OnceLock::new();
   SHARED.get_or_init(Arc::default)
 }
@@ -65,7 +66,7 @@ pub(super) const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 pub fn start(app: Arc<Mutex<App>>, config: Config) {
   let shared = shared().clone();
-  if shared.shutting_down.load(Ordering::SeqCst) || shared.running.swap(true, Ordering::SeqCst) {
+  if shared.is_stopping() || shared.running.swap(true, Ordering::SeqCst) {
     return;
   }
   clear_stale_stop(&shared);
@@ -109,6 +110,10 @@ pub async fn stop(timeout: Duration) {
 
 async fn stop_on(shared: &Shared, timeout: Duration) {
   shared.shutting_down.store(true, Ordering::SeqCst);
+  stop_child(shared, timeout).await;
+}
+
+async fn stop_child(shared: &Shared, timeout: Duration) {
   let link = shared.link.lock().ok().and_then(|link| link.clone());
   if let Some(link) = link {
     let snapshot = link.snapshot();
@@ -129,11 +134,7 @@ async fn stop_on(shared: &Shared, timeout: Duration) {
   }
 }
 
-/// Wait, without a limit, until a supervisor a timed-out `stop` left behind has exited.
-pub async fn wait_stopped() {
-  wait_stopped_on(shared()).await;
-}
-
+/// Wait, without a limit, until a supervisor a timed-out stop left behind has exited.
 async fn wait_stopped_on(shared: &Shared) {
   let done = shared.done.lock().ok().and_then(|mut done| done.take());
   if let Some(done) = done {
@@ -141,11 +142,29 @@ async fn wait_stopped_on(shared: &Shared) {
   }
 }
 
-/// `stop`, after which `start` works again; true when no supervisor runs any more.
-pub async fn stop_for_restart(timeout: Duration) -> bool {
-  stop(timeout).await;
-  shared().shutting_down.store(false, Ordering::SeqCst);
-  !running()
+impl Shared {
+  pub(super) fn is_shutting_down(&self) -> bool {
+    self.shutting_down.load(Ordering::SeqCst)
+  }
+
+  fn is_stopping(&self) -> bool {
+    self.stopping_for_restart.load(Ordering::SeqCst) || self.is_shutting_down()
+  }
+
+  /// Stop the old child before switching. Quit leaves the shutdown flag set for the process.
+  pub(super) async fn stop_for_restart(&self, timeout: Duration) -> bool {
+    if self.is_shutting_down() {
+      return false;
+    }
+    self.stopping_for_restart.store(true, Ordering::SeqCst);
+    stop_child(self, timeout).await;
+    if self.running.load(Ordering::SeqCst) && !self.is_shutting_down() {
+      warn!("soloist: the old engine has not stopped yet; switching once it exits");
+      wait_stopped_on(self).await;
+    }
+    self.stopping_for_restart.store(false, Ordering::SeqCst);
+    !self.is_shutting_down()
+  }
 }
 
 enum Outcome {
@@ -160,8 +179,7 @@ async fn current_app<'a>(
   shared: &Shared,
 ) -> Option<MutexGuard<'a, App>> {
   let app = app.lock().await;
-  (!shared.shutting_down.load(Ordering::SeqCst) && app.is_current_soloist_start(config.generation))
-    .then_some(app)
+  (!shared.is_stopping() && app.is_current_soloist_start(config.generation)).then_some(app)
 }
 
 async fn notify(app: &Mutex<App>, config: &Config, shared: &Shared, notice: Notice) {
@@ -498,7 +516,7 @@ impl Seen {
   fn exit(&self, status: std::io::Result<std::process::ExitStatus>, shared: &Shared) -> Exit {
     process::classify_exit(
       status.ok().and_then(|status| status.code()),
-      shared.shutting_down.load(Ordering::SeqCst),
+      shared.is_stopping(),
       self.another_session,
       self.expired,
     )
@@ -1705,6 +1723,53 @@ mod tests {
       seen.note(&LogEvent::WaitingForLogin),
       Some(Notice::NotPaired)
     );
+  }
+
+  #[tokio::test]
+  async fn an_engine_switch_gives_up_while_quit_waits_for_the_soloist_child() {
+    use crate::core::user_config::UserConfig;
+    use crate::infra::network::IoEvent;
+
+    let shared = Shared::default();
+    let (done_tx, done_rx) = oneshot::channel();
+    *shared.done.lock().unwrap() = Some(done_rx);
+    shared.running.store(true, Ordering::SeqCst);
+
+    let (io_tx, io_rx) = std::sync::mpsc::channel();
+    let mut app = App::new(io_tx, UserConfig::new(), None);
+    app.user_config.behavior.enable_streaming = true;
+    let (recovery_tx, mut recovery_rx) = mpsc::unbounded_channel();
+    app.stand_by_librespot(recovery_tx);
+    app.playback_engine_changed();
+    let Ok(IoEvent::ApplyPlaybackEngine(request)) = io_rx.try_recv() else {
+      panic!("expected an engine switch request");
+    };
+    let app = Arc::new(Mutex::new(app));
+
+    let quit = stop_on(&shared, Duration::from_secs(5));
+    tokio::pin!(quit);
+    assert!(futures::poll!(&mut quit).is_pending());
+    assert!(shared.done.lock().unwrap().is_none());
+
+    tokio::time::timeout(
+      Duration::from_secs(2),
+      super::super::startup::apply_engine_on(Arc::clone(&app), request, &shared),
+    )
+    .await
+    .expect("the switch should give up before the child exits");
+
+    assert!(
+      matches!(
+        recovery_rx.try_recv(),
+        Err(mpsc::error::TryRecvError::Empty)
+      ),
+      "the engine switch requested a librespot rebuild during quit"
+    );
+    assert!(shared.shutting_down.load(Ordering::SeqCst));
+
+    shared.running.store(false, Ordering::SeqCst);
+    done_tx.send(()).unwrap();
+    quit.await;
   }
 
   #[tokio::test]
