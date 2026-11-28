@@ -311,6 +311,7 @@ Everyone who helped, with code or without. To get on this list, see [Recognition
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/momolly1024"><img src="https://avatars.githubusercontent.com/u/61406208?v=4&size=100" width="100px" height="100px" alt="Molly"/><br /><sub><b>Molly</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=momolly1024" title="Documentation">📖</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://alejandroborrego.dev"><img src="https://avatars.githubusercontent.com/u/210245044?v=4&size=100" width="100px" height="100px" alt="Alejandro Borrego"/><br /><sub><b>Alejandro Borrego</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=abp002" title="Code">💻</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://www.aimbytes.com/"><img src="https://avatars.githubusercontent.com/u/48155465?v=4&size=100" width="100px" height="100px" alt="Pranav Arya"/><br /><sub><b>Pranav Arya</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=pranavarya007" title="Tests">⚠️</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/maxwarren929-png"><img src="https://avatars.githubusercontent.com/u/264936309?v=4&size=100" width="100px" height="100px" alt="Ko"/><br /><sub><b>Ko</b></sub></a><br /><a href="https://github.com/LargeModGames/spotatui/commits?author=maxwarren929-png" title="Code">💻</a></td>
     </tr>
   </tbody>
 </table>
