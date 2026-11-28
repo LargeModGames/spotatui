@@ -89,6 +89,17 @@ pub async fn route_local_event(app: &Arc<Mutex<App>>, event: &IoEvent) -> bool {
       teardown_local(app).await;
       false
     }
+    #[cfg(feature = "streaming")]
+    IoEvent::ReplayStartPlayback(request) => {
+      // A dead replay (expired, or its request cancelled or superseded in
+      // flight) must not stop the local session; the network handler applies
+      // the same rule.
+      if app.lock().await.retire_expired_replay(request) {
+        return true;
+      }
+      teardown_local(app).await;
+      false
+    }
     IoEvent::PausePlayback => match player(app).await {
       Some(player) => {
         player.pause();
@@ -764,5 +775,101 @@ mod tests {
       app.track_table.context,
       Some(TrackTableContext::LocalPlaylist)
     ));
+  }
+}
+
+#[cfg(all(test, feature = "streaming"))]
+mod replay_routing_tests {
+  use super::*;
+  use crate::core::user_config::UserConfig;
+  use std::sync::mpsc::channel;
+  use std::time::SystemTime;
+
+  fn test_app() -> Arc<Mutex<App>> {
+    let (tx, _rx) = channel();
+    Arc::new(Mutex::new(App::new(
+      tx,
+      UserConfig::new(),
+      Some(SystemTime::now()),
+    )))
+  }
+
+  /// A dead replay (expired in a rate-limit window, or superseded in flight)
+  /// is swallowed here: with a local session live, this consume is what keeps
+  /// the file playing — the event must never reach the Spotify handler.
+  #[tokio::test]
+  async fn a_dead_replay_is_consumed_before_it_reaches_spotify() {
+    let app = test_app();
+    let request = {
+      let mut guard = app.lock().await;
+      guard.park_start_playback(Some("spotify:playlist:p".to_string()), None, None, None);
+      let mut request = guard.pending_start_playback.clone().unwrap();
+      request.pressed_at = std::time::Instant::now()
+        - crate::core::app::max_parked_start_age()
+        - std::time::Duration::from_secs(5);
+      guard.pending_start_playback = Some(request.clone());
+      request
+    };
+
+    assert!(route_local_event(&app, &IoEvent::ReplayStartPlayback(request)).await);
+    assert!(app.lock().await.pending_start_playback.is_none());
+  }
+
+  /// A live replay takes the session over: the local teardown runs and the
+  /// event falls through to the network handler.
+  #[tokio::test]
+  async fn a_live_replay_relinquishes_the_local_session() {
+    let app = test_app();
+    let request = {
+      let mut guard = app.lock().await;
+      guard.park_start_playback(Some("spotify:playlist:p".to_string()), None, None, None);
+      guard.pending_start_playback.clone().unwrap()
+    };
+
+    assert!(!route_local_event(&app, &IoEvent::ReplayStartPlayback(request)).await);
+  }
+
+  /// The full late-replay hand: a local session published before a held
+  /// replay keeps playing when the replay finally arrives dead.
+  #[tokio::test]
+  #[ignore = "needs an audio output device"]
+  async fn a_late_replay_leaves_the_local_session_playing() {
+    let app = test_app();
+    {
+      let mut guard = app.lock().await;
+      guard.local_playback = Some(LocalPlaybackState {
+        player: Arc::new(LocalPlayer::new().expect("audio output device")),
+        queue: vec!["file:///tmp/track.mp3".to_string()],
+        index: 0,
+        name: "Song".to_string(),
+        generated_name: None,
+        artists: String::new(),
+        album: String::new(),
+        duration_ms: 1_000,
+        advancing: false,
+        shuffle_backup: None,
+        failed_since_played: std::collections::HashSet::new(),
+        resume_at: None,
+      });
+      guard.park_start_playback(Some("spotify:playlist:p".to_string()), None, None, None);
+      let mut request = guard.pending_start_playback.clone().unwrap();
+      request.pressed_at = std::time::Instant::now()
+        - crate::core::app::max_parked_start_age()
+        - std::time::Duration::from_secs(5);
+      guard.pending_start_playback = Some(request);
+    }
+
+    // `route_local_event` re-locks `app`, so the replay runs off the guard.
+    let request = app
+      .lock()
+      .await
+      .pending_start_playback
+      .clone()
+      .expect("the aged replay is still parked");
+    assert!(route_local_event(&app, &IoEvent::ReplayStartPlayback(request)).await);
+    assert!(
+      app.lock().await.local_playback.is_some(),
+      "the local session keeps playing"
+    );
   }
 }

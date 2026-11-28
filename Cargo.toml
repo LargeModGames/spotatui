@@ -281,6 +281,8 @@ ai-dj = ["dj-core"]
 [dev-dependencies]
 tempfile = "3"
 ts-rs = "=12.0.1"
+# `#[tokio::test(start_paused = true)]` needs `test-util`, which `full` omits.
+tokio = { version = "1", features = ["test-util"] }
 
 [target.'cfg(unix)'.dev-dependencies]
 libc = "0.2"

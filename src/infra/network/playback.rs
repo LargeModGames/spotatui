@@ -43,6 +43,14 @@ const MAX_NATIVE_IDLE_RECOVERY_ATTEMPTS: u8 = 2;
 #[cfg(feature = "streaming")]
 const NATIVE_IDLE_RECOVERY_RETRY_INTERVAL: Duration = Duration::from_secs(5);
 
+/// What a replay carries: the request with its press time, credited rebuild
+/// time and retry budget. A placeholder in builds without streaming, where no
+/// replay exists but the trait must still name the type.
+#[cfg(feature = "streaming")]
+pub type StartPlaybackCarry = crate::core::app::StartPlaybackRequest;
+#[cfg(not(feature = "streaming"))]
+pub type StartPlaybackCarry = ();
+
 pub trait PlaybackNetwork {
   async fn get_current_playback(&mut self);
   async fn start_playback(
@@ -50,6 +58,7 @@ pub trait PlaybackNetwork {
     context_id: Option<PlayContextId<'static>>,
     uris: Option<Vec<PlayableId<'static>>>,
     offset: Option<usize>,
+    carried: Option<StartPlaybackCarry>,
   );
   #[cfg(feature = "streaming")]
   async fn restore_native_playback(&mut self, generation: u64);
@@ -855,19 +864,6 @@ async fn should_activate_native_streaming_for_playback(network: &Network) -> boo
   })
 }
 
-/// Whether the start must wait for a rebuilt backend. A parked backend is
-/// rebuilt for an explicit start only: the App side decides a bare resume.
-#[cfg(feature = "streaming")]
-async fn request_native_streaming_recovery_if_disconnected(
-  network: &Network,
-  explicit: bool,
-) -> bool {
-  let mut app = network.app.lock().await;
-  // A start while another device plays keeps its Connect route.
-  app.request_native_streaming_recovery_if_disconnected(true)
-    || (explicit && !app.spotify_playing_elsewhere() && app.reacquire_parked_backend())
-}
-
 #[cfg(feature = "streaming")]
 async fn requested_native_playback_origin(
   network: &Network,
@@ -928,7 +924,16 @@ async fn start_native_context_via_api(
   uris: Option<&[PlayableId<'static>]>,
   offset: Option<usize>,
   desired_shuffle_state: bool,
+  carried: Option<&crate::core::app::StartPlaybackRequest>,
 ) {
+  // The API round trips can outlive the press's window; a replay must not
+  // re-park itself with a renewed deadline or a reset retry budget.
+  if let Some(request) = carried {
+    let mut app = network.app.lock().await;
+    if app.retire_expired_replay(request) {
+      return;
+    }
+  }
   let body = api_playback_body(Some(&context), uris, offset);
   match network
     .spotify_api_request_json(
@@ -995,6 +1000,7 @@ async fn start_native_context_via_api(
         Some(context.uri()),
         uris.map(|list| list.iter().map(|u| u.uri()).collect()),
         offset,
+        carried,
       );
       app.native_load_watchdog = Some(Instant::now());
       app.dispatch(IoEvent::GetCurrentPlayback);
@@ -1531,7 +1537,24 @@ impl PlaybackNetwork for Network {
     context_id: Option<PlayContextId<'static>>,
     uris: Option<Vec<PlayableId<'static>>>,
     offset: Option<usize>,
+    carried: Option<StartPlaybackCarry>,
   ) {
+    // Only the streaming park reads the carried request.
+    #[cfg(not(feature = "streaming"))]
+    let _ = carried;
+    // A rate-limit window can hold a replay past its press's window; check
+    // the age before any playback effect.
+    #[cfg(feature = "streaming")]
+    let carried = match carried {
+      Some(request) => {
+        let mut app = self.app.lock().await;
+        if app.retire_expired_replay(&request) {
+          return;
+        }
+        Some(request)
+      }
+      None => None,
+    };
     // An explicit Spotify start that reached this handler passed every source
     // router and the pump's prelude: Spotify takes the sink, so the decoded
     // claim ends here. A bare resume never releases it.
@@ -1611,26 +1634,23 @@ impl PlaybackNetwork for Network {
       self.app.lock().await.clear_native_shuffle_session();
     }
 
-    // Check if we should use native streaming for playback
+    // Wait for a rebuilt backend when needed, parking the press under the same
+    // lock as the check: cancellation cleanup must not land between them.
     #[cfg(feature = "streaming")]
-    if request_native_streaming_recovery_if_disconnected(
-      self,
-      context_id.is_some() || uris.is_some(),
-    )
-    .await
     {
-      // Park the request instead of dropping it: the recovery handler replays
-      // it once the new session and device selection are in place, so the
-      // press that detected the disconnect still plays.
       let mut app = self.app.lock().await;
-      app.park_start_playback(
+      let need_parking = app.park_start_if_recovery_needed(
+        context_id.is_some() || uris.is_some(),
         context_id.as_ref().map(|c| c.uri()),
         uris
           .as_ref()
           .map(|list| list.iter().map(|u| u.uri()).collect()),
         offset,
+        carried.as_ref(),
       );
-      return;
+      if need_parking {
+        return;
+      }
     }
 
     #[cfg(feature = "streaming")]
@@ -1713,7 +1733,7 @@ impl PlaybackNetwork for Network {
       // Spirc/Spotify — see `native_shuffle`.
       if desired_shuffle_state
         && self
-          .try_start_native_shuffled_playback(&player, &context_id, &uris, offset)
+          .try_start_native_shuffled_playback(&player, &context_id, &uris, offset, carried.as_ref())
           .await
       {
         return;
@@ -1801,14 +1821,20 @@ impl PlaybackNetwork for Network {
       // was already accepted once and failed silently (the context never
       // resolved); take the Web API context route this time instead of
       // looping through the same silent failure until the request is dropped.
-      let retry_via_api = {
-        let app = self.app.lock().await;
-        app.pending_start_playback.as_ref().is_some_and(|pending| {
-          pending.recovery_attempts > 0
-            && pending.context_uri == parked_context
-            && pending.uris == parked_uris
-            && pending.offset == offset
-        })
+      let retry_via_api = match carried.as_ref() {
+        Some(request) => {
+          request.recovery_attempts > 0
+            && request.same_target(parked_context.as_deref(), parked_uris.as_deref(), offset)
+        }
+        None => {
+          let app = self.app.lock().await;
+          app.pending_start_playback.as_ref().is_some_and(|pending| {
+            pending.recovery_attempts > 0
+              && pending.context_uri == parked_context
+              && pending.uris == parked_uris
+              && pending.offset == offset
+          })
+        }
       };
       if retry_via_api {
         if let Some((device_id, context)) = api_fallback.clone() {
@@ -1822,6 +1848,7 @@ impl PlaybackNetwork for Network {
             uris.as_deref(),
             offset,
             desired_shuffle_state,
+            carried.as_ref(),
           )
           .await;
           return;
@@ -1839,7 +1866,7 @@ impl PlaybackNetwork for Network {
           // Optimistic UI update; the watchdog corrects it if no player event
           // ever confirms the load (zombie session).
           let mut app = self.app.lock().await;
-          app.park_start_playback(parked_context, parked_uris, offset);
+          app.park_start_playback(parked_context, parked_uris, offset, carried.as_ref());
           app.native_load_watchdog = Some(Instant::now());
           if let Some(ctx) = &mut app.current_playback_context {
             ctx.is_playing = true;
@@ -1875,6 +1902,7 @@ impl PlaybackNetwork for Network {
             uris.as_deref(),
             offset,
             desired_shuffle_state,
+            carried.as_ref(),
           )
           .await;
         }
@@ -2013,7 +2041,7 @@ impl PlaybackNetwork for Network {
                     repeat,
                   );
                   // Same zombie-session net as the direct load route.
-                  app.park_start_playback(parked_context, parked_uris, offset);
+                  app.park_start_playback(parked_context, parked_uris, offset, carried.as_ref());
                   app.native_load_watchdog = Some(Instant::now());
                   if let Some(ctx) = &mut app.current_playback_context {
                     ctx.is_playing = true;
@@ -2079,6 +2107,7 @@ impl PlaybackNetwork for Network {
                 .as_ref()
                 .map(|list| list.iter().map(|u| u.uri()).collect()),
               offset,
+              carried.as_ref(),
             );
             let strings = app.strings();
             app.set_status_message(strings.status.infra.native_reconnect_resume, 6);
@@ -2207,6 +2236,7 @@ impl PlaybackNetwork for Network {
       let mut app = self.app.lock().await;
       app.pending_start_playback = None;
       app.native_load_watchdog = None;
+      app.set_native_playback_intent(false);
     }
     // A pause on the Connect route must not leave a deferred play armed (#693).
     #[cfg(feature = "streaming")]
@@ -2870,7 +2900,7 @@ impl PlaybackNetwork for Network {
         let uris = next
           .uris
           .map(|items| crate::infra::network::ids::playable_ids(&items));
-        self.start_playback(None, uris, next.offset).await;
+        self.start_playback(None, uris, next.offset, None).await;
         return;
       }
       if raw_list_exhausted {
@@ -2939,7 +2969,7 @@ impl PlaybackNetwork for Network {
           log::info!(
             "continuation for {previous_track_id}: resuming the already-selected next item"
           );
-          self.start_playback(None, None, None).await;
+          self.start_playback(None, None, None, None).await;
         } else {
           warn!(
             "continuation for {previous_track_id}: paused with no current item; nothing to resume"
@@ -2973,14 +3003,16 @@ impl PlaybackNetwork for Network {
     match (context, track) {
       (Some(context), Some(track)) => {
         self
-          .start_playback(Some(context), Some(vec![track]), None)
+          .start_playback(Some(context), Some(vec![track]), None, None)
           .await;
       }
       (Some(context), None) => {
-        self.start_playback(Some(context), None, None).await;
+        self.start_playback(Some(context), None, None, None).await;
       }
       (None, Some(track)) => {
-        self.start_playback(None, Some(vec![track]), None).await;
+        self
+          .start_playback(None, Some(vec![track]), None, None)
+          .await;
       }
       (None, None) => {
         let mut app = self.app.lock().await;
@@ -3234,6 +3266,261 @@ mod tests {
     })
     .await
     .expect("pause test timed out");
+  }
+
+  #[cfg(feature = "streaming")]
+  async fn no_active_device_server<const N: usize>(
+    commands: [&'static str; N],
+  ) -> (String, tokio::task::JoinHandle<()>) {
+    use crate::infra::network::metadata::tests::read_http_request;
+    use tokio::io::AsyncWriteExt;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}/v1/", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+      let body = r#"{"error":{"status":404,"reason":"NO_ACTIVE_DEVICE"}}"#;
+      let response = format!(
+        "HTTP/1.1 404 Not Found\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+        body.len()
+      );
+      for command in commands {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let request = read_http_request(&mut stream).await;
+        assert!(
+          request.starts_with(&format!("PUT /v1/me/player/{command} ")),
+          "{request}"
+        );
+        stream.write_all(response.as_bytes()).await.unwrap();
+      }
+    });
+    (base_url, server)
+  }
+
+  /// Answers `200` for each `me/player/*` command, so the Web API context
+  /// route reaches its success arm.
+  #[cfg(feature = "streaming")]
+  async fn ok_server<const N: usize>(
+    commands: [&'static str; N],
+  ) -> (String, tokio::task::JoinHandle<()>) {
+    use crate::infra::network::metadata::tests::read_http_request;
+    use tokio::io::AsyncWriteExt;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}/v1/", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+      let body = "{}";
+      let response = format!(
+        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+        body.len()
+      );
+      for command in commands {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let request = read_http_request(&mut stream).await;
+        assert!(
+          request.starts_with(&format!("PUT /v1/me/player/{command}?")),
+          "{request}"
+        );
+        stream.write_all(response.as_bytes()).await.unwrap();
+      }
+    });
+    (base_url, server)
+  }
+
+  #[cfg(feature = "streaming")]
+  #[tokio::test]
+  async fn a_bare_resume_keeps_the_playlist_parked_by_no_active_device() {
+    use crate::core::user_config::UserConfig;
+    use crate::infra::network::metadata::tests::fake_spotify_login;
+    use tokio::sync::Mutex;
+
+    const PLAYLIST: &str = "spotify:playlist:37i9dQZF1DXcBWIGoYBM5M";
+    tokio::time::timeout(Duration::from_secs(30), async {
+      let (base_url, server) = no_active_device_server(["play", "play"]).await;
+
+      let (tx, rx) = std::sync::mpsc::channel();
+      let mut app = App::new(tx, UserConfig::new(), Some(std::time::SystemTime::now()));
+      app.native_backend_pending = true;
+      app.last_track_id = Some("spotify:track:0000000000000000000001".to_string());
+      assert!(app
+        .prepare_native_playback_recovery(42_000, false)
+        .is_some());
+      let app = Arc::new(Mutex::new(app));
+      let (spotify, _fake) = fake_spotify_login(base_url);
+      let mut network = Network::new(Some(spotify), &app);
+      network
+        .start_playback(
+          crate::infra::network::ids::play_context_id(PLAYLIST),
+          None,
+          Some(3),
+          None,
+        )
+        .await;
+      network.start_playback(None, None, None, None).await;
+      server.await.unwrap();
+
+      let mut app = app.lock().await;
+      assert!(app.api_error().is_empty());
+      assert!(app
+        .native_playback_recovery
+        .as_ref()
+        .is_some_and(|s| !s.desired_playing));
+      app.replay_pending_start_playback();
+      assert!(matches!(
+        rx.try_recv(),
+        Ok(IoEvent::ReplayStartPlayback(ref request))
+          if request.context_uri.as_deref() == Some(PLAYLIST) && request.offset == Some(3)
+      ));
+    })
+    .await
+    .expect("playback test timed out");
+  }
+
+  /// The API round trip can outlive the press's window; the re-park after it
+  /// must keep the request the replay carried, not mint a fresh deadline or
+  /// reset the retry budget.
+  #[cfg(feature = "streaming")]
+  #[tokio::test]
+  async fn an_api_fallback_repark_keeps_the_replay_deadline_and_retries() {
+    use crate::core::user_config::UserConfig;
+    use crate::infra::network::ids;
+    use crate::infra::network::metadata::tests::fake_spotify_login;
+    use tokio::sync::Mutex;
+
+    const PLAYLIST: &str = "spotify:playlist:37i9dQZF1DXcBWIGoYBM5M";
+    tokio::time::timeout(Duration::from_secs(30), async {
+      let (base_url, server) = ok_server(["play", "shuffle"]).await;
+
+      let (tx, _rx) = std::sync::mpsc::channel();
+      let mut app = App::new(tx, UserConfig::new(), Some(std::time::SystemTime::now()));
+      let mut request =
+        crate::core::app::StartPlaybackRequest::pressed(Some(PLAYLIST.to_string()), None, Some(3));
+      request.pressed_at = Instant::now() - Duration::from_secs(2);
+      request.recovery_attempts = 2;
+      app.park_start_playback(Some(PLAYLIST.to_string()), None, Some(3), Some(&request));
+      let app = Arc::new(Mutex::new(app));
+      let (spotify, _fake) = fake_spotify_login(base_url);
+      let mut network = Network::new(Some(spotify), &app);
+
+      start_native_context_via_api(
+        &mut network,
+        "device-1".to_string(),
+        ids::play_context_id(PLAYLIST).unwrap(),
+        None,
+        Some(3),
+        false,
+        Some(&request),
+      )
+      .await;
+      server.await.unwrap();
+
+      let app = app.lock().await;
+      let pending = app.pending_start_playback.as_ref().unwrap();
+      assert_eq!(
+        pending.pressed_at, request.pressed_at,
+        "the press time survives the round trip"
+      );
+      assert_eq!(
+        pending.recovery_attempts, 2,
+        "the retry budget survives the round trip"
+      );
+      assert!(app.native_load_watchdog.is_some());
+      assert!(app.api_error().is_empty());
+    })
+    .await
+    .expect("playback test timed out");
+  }
+
+  /// An expired replay arriving at the fallback is retired before any HTTP
+  /// goes out: no re-park, no request on the wire.
+  #[cfg(feature = "streaming")]
+  #[tokio::test]
+  async fn an_expired_replay_at_the_api_fallback_is_retired_before_the_request() {
+    use crate::core::user_config::UserConfig;
+    use crate::infra::network::ids;
+    use crate::infra::network::metadata::tests::fake_spotify_login;
+    use tokio::sync::Mutex;
+
+    const PLAYLIST: &str = "spotify:playlist:37i9dQZF1DXcBWIGoYBM5M";
+    tokio::time::timeout(Duration::from_secs(30), async {
+      let (tx, _rx) = std::sync::mpsc::channel();
+      let mut app = App::new(tx, UserConfig::new(), Some(std::time::SystemTime::now()));
+      let mut request =
+        crate::core::app::StartPlaybackRequest::pressed(Some(PLAYLIST.to_string()), None, Some(3));
+      request.pressed_at =
+        Instant::now() - crate::core::app::max_parked_start_age() - Duration::from_secs(5);
+      request.recovery_attempts = 2;
+      app.park_start_playback(Some(PLAYLIST.to_string()), None, Some(3), Some(&request));
+      let app = Arc::new(Mutex::new(app));
+      // A closed port: if the retirement ever skips, the HTTP call fails
+      // loudly into api_error instead of the assertions below passing.
+      let (spotify, _fake) = fake_spotify_login("http://127.0.0.1:1/v1/".to_string());
+      let mut network = Network::new(Some(spotify), &app);
+
+      start_native_context_via_api(
+        &mut network,
+        "device-1".to_string(),
+        ids::play_context_id(PLAYLIST).unwrap(),
+        None,
+        Some(3),
+        false,
+        Some(&request),
+      )
+      .await;
+
+      let app = app.lock().await;
+      assert!(app.pending_start_playback.is_none());
+      assert!(app.native_load_watchdog.is_none(), "no re-park happened");
+      assert!(app.api_error().is_empty(), "retirement precedes any HTTP");
+      assert_eq!(
+        app.status_message(),
+        Some(crate::core::i18n::EN.status.app.native_request_expired)
+      );
+    })
+    .await
+    .expect("playback test timed out");
+  }
+
+  #[cfg(feature = "streaming")]
+  #[tokio::test]
+  async fn a_pause_during_rebuild_disarms_a_parked_resume() {
+    use crate::infra::network::metadata::tests::fake_spotify_login;
+    use tokio::sync::Mutex;
+
+    tokio::time::timeout(Duration::from_secs(30), async {
+      let (base_url, server) = no_active_device_server(["play", "pause"]).await;
+      let mut app = App::default();
+      app.native_backend_pending = true;
+      app.last_track_id = Some("spotify:track:0000000000000000000001".to_string());
+      app.prepare_native_playback_recovery(42_000, false).unwrap();
+      let app = Arc::new(Mutex::new(app));
+      let (spotify, _fake) = fake_spotify_login(base_url);
+      let mut network = Network::new(Some(spotify), &app);
+
+      network.start_playback(None, None, None, None).await;
+      assert!(
+        app
+          .lock()
+          .await
+          .native_playback_recovery
+          .as_ref()
+          .unwrap()
+          .desired_playing
+      );
+      network.pause_playback().await;
+      server.await.unwrap();
+
+      let app = app.lock().await;
+      assert!(app.pending_start_playback.is_none());
+      assert!(
+        !app
+          .native_playback_recovery
+          .as_ref()
+          .unwrap()
+          .desired_playing
+      );
+    })
+    .await
+    .expect("playback test timed out");
   }
 
   #[tokio::test]
@@ -3960,6 +4247,38 @@ mod tests {
 
   #[cfg(feature = "streaming")]
   #[test]
+  fn a_waiting_start_parks_and_queues_a_rebuild_when_pending_was_cleared() {
+    use crate::core::user_config::UserConfig;
+    use std::sync::mpsc::channel;
+    use std::time::SystemTime;
+
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    let (recovery_tx, mut recovery_rx) = tokio::sync::mpsc::unbounded_channel();
+    app.streaming_recovery_tx = Some(recovery_tx);
+    app.park_cancelled_native_recovery();
+    assert!(app.native_backend_parked());
+    // Cleanup ran before the check, so no rebuild is in flight.
+    app.native_backend_pending = false;
+
+    assert!(app.park_start_if_recovery_needed(
+      true,
+      Some("spotify:playlist:parked".to_string()),
+      None,
+      None,
+      None,
+    ));
+    assert!(app.pending_start_playback.is_some());
+    assert!(
+      recovery_rx
+        .try_recv()
+        .expect("a rebuild is queued")
+        .reacquire
+    );
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
   fn yielding_clears_stale_native_intent_but_keeps_explicit_playback() {
     use crate::infra::queue::QueueNowPlaying;
 
@@ -3972,7 +4291,12 @@ mod tests {
       false,
       RepeatState::Off,
     );
-    app.park_start_playback(Some("spotify:playlist:explicit".to_string()), None, None);
+    app.park_start_playback(
+      Some("spotify:playlist:explicit".to_string()),
+      None,
+      None,
+      None,
+    );
     app.queue_now = Some(QueueNowPlaying::Spotify {
       track: queued_track("spotify:track:queued"),
     });
@@ -4209,6 +4533,7 @@ mod tests {
     network
       .start_playback(
         crate::infra::network::ids::play_context_id(PLAYLIST),
+        None,
         None,
         None,
       )

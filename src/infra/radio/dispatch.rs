@@ -78,6 +78,17 @@ pub async fn route_radio_event(app: &Arc<Mutex<App>>, event: &IoEvent) -> bool {
       teardown_radio(app).await;
       false
     }
+    #[cfg(feature = "streaming")]
+    IoEvent::ReplayStartPlayback(request) => {
+      // A dead replay (expired, or its request cancelled or superseded in
+      // flight) must not stop the radio session; the network handler applies
+      // the same rule.
+      if app.lock().await.retire_expired_replay(request) {
+        return true;
+      }
+      teardown_radio(app).await;
+      false
+    }
     IoEvent::PausePlayback => match player(app).await {
       Some(p) => {
         p.pause();

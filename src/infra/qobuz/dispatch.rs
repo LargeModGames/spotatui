@@ -105,6 +105,17 @@ pub async fn route_qobuz_event(app: &Arc<Mutex<App>>, event: &IoEvent) -> bool {
       teardown_qobuz(app).await;
       false
     }
+    #[cfg(feature = "streaming")]
+    IoEvent::ReplayStartPlayback(request) => {
+      // A dead replay (expired, or its request cancelled or superseded in
+      // flight) must not stop the Qobuz session; the network handler applies
+      // the same rule.
+      if app.lock().await.retire_expired_replay(request) {
+        return true;
+      }
+      teardown_qobuz(app).await;
+      false
+    }
     IoEvent::PausePlayback => match player(app).await {
       Some(p) => {
         p.pause();
@@ -1109,6 +1120,53 @@ mod tests {
   fn qobuz_uris_are_recognised_by_scheme() {
     assert!(is_qobuz_uri("qobuz:track:1"));
     assert!(!is_qobuz_uri("subsonic:track:1"));
+  }
+
+  /// A dead replay (expired in a rate-limit window, or superseded in flight)
+  /// is swallowed here: with a Qobuz session live, this consume is what keeps
+  /// it playing — the event must never reach the Spotify handler.
+  #[cfg(feature = "streaming")]
+  #[tokio::test]
+  async fn a_dead_replay_is_consumed_before_it_reaches_spotify() {
+    let (tx, _rx) = std::sync::mpsc::channel();
+    let app = Arc::new(Mutex::new(App::new(
+      tx,
+      crate::core::user_config::UserConfig::new(),
+      Some(std::time::SystemTime::now()),
+    )));
+    let request = {
+      let mut guard = app.lock().await;
+      guard.park_start_playback(Some("spotify:playlist:p".to_string()), None, None, None);
+      let mut request = guard.pending_start_playback.clone().unwrap();
+      request.pressed_at = std::time::Instant::now()
+        - crate::core::app::max_parked_start_age()
+        - std::time::Duration::from_secs(5);
+      guard.pending_start_playback = Some(request.clone());
+      request
+    };
+
+    assert!(route_qobuz_event(&app, &IoEvent::ReplayStartPlayback(request)).await);
+    assert!(app.lock().await.pending_start_playback.is_none());
+  }
+
+  /// A live replay takes the session over: the Qobuz teardown runs and the
+  /// event falls through to the network handler.
+  #[cfg(feature = "streaming")]
+  #[tokio::test]
+  async fn a_live_replay_relinquishes_the_qobuz_session() {
+    let (tx, _rx) = std::sync::mpsc::channel();
+    let app = Arc::new(Mutex::new(App::new(
+      tx,
+      crate::core::user_config::UserConfig::new(),
+      Some(std::time::SystemTime::now()),
+    )));
+    let request = {
+      let mut guard = app.lock().await;
+      guard.park_start_playback(Some("spotify:playlist:p".to_string()), None, None, None);
+      guard.pending_start_playback.clone().unwrap()
+    };
+
+    assert!(!route_qobuz_event(&app, &IoEvent::ReplayStartPlayback(request)).await);
   }
 }
 

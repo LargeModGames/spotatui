@@ -24,3 +24,20 @@ default once a second, and `write` reopens on the new default when it moved.
 - librespot reports full `spotify:track:<id>` URIs while app state uses bare
   base62 ids: normalize with `base62_id_of` at the event boundary
   (`spotify:local:` URIs stay whole).
+- A parked `StartPlayback` is a **user press with a deadline**, not a durable
+  intent. `StartPlaybackRequest::pressed_at` is fixed for the request's life and
+  `max_parked_start_age()` (2 min) measures from it whatever
+  `exclude_recovery_time_from_parked_start` credits back; the retry chain has no
+  limit of its own. The credit only discounts the soft `parked_start_window()`
+  (one player build). Never age `pressed_at` forward to make a credit fit.
+  Every age check — parking, replay dispatch, delivery in the routers and the
+  API fallback — goes through `retire_expired_replay` / `pending_start_is_expired`,
+  which add a rebuild in flight's wait the same way parking does; `IoEvent::ReplayStartPlayback`
+  carries the whole request so a replay cannot mint a fresh window or reset its
+  retry budget.
+- The recovery handler is generic over `RecoveryBackend` only so a test can
+  run the whole chain: drive `handle_streaming_recovery` with a scripted
+  backend under `#[tokio::test(start_paused = true)]` and assert on what it
+  published and dispatched. A test that calls `rebuild_with_retries` or
+  `replay_recovery_intent` itself still passes with the handler's install or
+  replay deleted.

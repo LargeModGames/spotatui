@@ -234,6 +234,10 @@ impl Default for App {
       #[cfg(feature = "streaming")]
       native_backend_pending: false,
       #[cfg(feature = "streaming")]
+      native_recovery_generation: 0,
+      #[cfg(feature = "streaming")]
+      native_rebuild_started_at: None,
+      #[cfg(feature = "streaming")]
       native_parked: false,
       #[cfg(feature = "streaming")]
       native_load_watchdog: None,

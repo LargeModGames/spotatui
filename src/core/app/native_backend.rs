@@ -3,11 +3,23 @@ use super::*;
 #[cfg(feature = "streaming")]
 const FRESH_NATIVE_ACTIVITY_WINDOW: Duration = Duration::from_secs(5);
 
-/// Longer than a whole player build, so a rebuild never expires the start it
-/// replays.
+/// How long a press may wait on a rebuild before it expires, ignoring credited
+/// recovery time. Longer than a whole player build.
 #[cfg(feature = "streaming")]
-fn max_parked_age() -> Duration {
+pub(crate) fn parked_start_window() -> Duration {
   crate::infra::player::player_build_timeout().saturating_add(Duration::from_secs(15))
+}
+
+/// The hard limit on a parked start, measured from the press alone: the retry
+/// chain is unbounded, so credit must never keep a request alive past this.
+#[cfg(feature = "streaming")]
+const MAX_PARKED_START_AGE: Duration = Duration::from_secs(120);
+
+/// Never shorter than one player build, which a raised
+/// `SPOTATUI_STREAMING_INIT_TIMEOUT_SECS` can stretch past the fixed limit.
+#[cfg(feature = "streaming")]
+pub(crate) fn max_parked_start_age() -> Duration {
+  MAX_PARKED_START_AGE.max(parked_start_window())
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -47,17 +59,98 @@ pub struct NativeTrackInfo {
   pub image_url: Option<String>,
 }
 
+/// One playback start: what to play, the press it belongs to, and the rebuild
+/// time already credited back. The single carrier for a start's deadline, so a
+/// fresh press, a replay, a shuffled start and an API fallback all age alike.
 #[cfg(feature = "streaming")]
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PendingStartPlayback {
+pub struct StartPlaybackRequest {
   pub context_uri: Option<String>,
   pub uris: Option<Vec<String>>,
   pub offset: Option<usize>,
-  pub parked_at: Instant,
+  /// When the user pressed play. Fixed for the life of the request; the hard
+  /// limit measures from here.
+  pub pressed_at: Instant,
+  /// Recovery time credited back, so a rebuild the press waited on does not age
+  /// it out. Bounded by the request's own age.
+  pub recovery_credit: Duration,
   pub recovery_attempts: u8,
 }
 
+#[cfg(feature = "streaming")]
+impl StartPlaybackRequest {
+  /// A fresh user press: its deadline starts now.
+  pub fn pressed(
+    context_uri: Option<String>,
+    uris: Option<Vec<String>>,
+    offset: Option<usize>,
+  ) -> Self {
+    Self {
+      context_uri,
+      uris,
+      offset,
+      pressed_at: Instant::now(),
+      recovery_credit: Duration::ZERO,
+      recovery_attempts: 0,
+    }
+  }
+
+  /// Whether this request addresses the same target.
+  pub(crate) fn same_target(
+    &self,
+    context_uri: Option<&str>,
+    uris: Option<&[String]>,
+    offset: Option<usize>,
+  ) -> bool {
+    self.context_uri.as_deref() == context_uri
+      && self.uris.as_deref() == uris
+      && self.offset == offset
+  }
+
+  /// Time since the press, less the credited recovery time. `extra_credit`
+  /// covers a chain still running, whose wait is not recorded yet.
+  fn uncredited_age(&self, now: Instant, extra_credit: Duration) -> Duration {
+    now
+      .saturating_duration_since(self.pressed_at)
+      .saturating_sub(self.recovery_credit.saturating_add(extra_credit))
+  }
+
+  /// The hard limit comes first: a retry chain that outlives it drops the press
+  /// however much it credited back.
+  fn expired_at(&self, now: Instant, extra_credit: Duration) -> bool {
+    now.saturating_duration_since(self.pressed_at) > max_parked_start_age()
+      || self.uncredited_age(now, extra_credit) > parked_start_window()
+  }
+}
+
 impl App {
+  /// Whether librespot is still the configured playback engine; exists in
+  /// every build so callers need no `#[cfg(feature = "soloist")]`.
+  #[cfg(feature = "streaming")]
+  pub(crate) fn native_engine_still_selected(&self) -> bool {
+    #[cfg(feature = "soloist")]
+    {
+      !self.soloist_engine_selected()
+    }
+    #[cfg(not(feature = "soloist"))]
+    {
+      true
+    }
+  }
+
+  /// Identity of the native backend rebuild currently wanted.
+  #[cfg(feature = "streaming")]
+  pub(crate) fn native_recovery_generation(&self) -> u64 {
+    self.native_recovery_generation
+  }
+
+  /// Start a new rebuild identity and return it.
+  #[cfg(feature = "streaming")]
+  pub(crate) fn begin_native_recovery(&mut self) -> u64 {
+    self.native_recovery_generation = self.native_recovery_generation.wrapping_add(1);
+    self.native_recovery_generation
+  }
+
   #[cfg(feature = "streaming")]
   pub(crate) fn mark_native_handed_off(&mut self) {
     self.native_handed_off = true;
@@ -106,6 +199,24 @@ impl App {
     true
   }
 
+  /// Whether this start must wait for a rebuild.
+  #[cfg(feature = "streaming")]
+  pub(crate) fn park_start_if_recovery_needed(
+    &mut self,
+    explicit: bool,
+    context_uri: Option<String>,
+    uris: Option<Vec<String>>,
+    offset: Option<usize>,
+    carried: Option<&StartPlaybackRequest>,
+  ) -> bool {
+    let wait = self.request_native_streaming_recovery_if_disconnected(true)
+      || (explicit && !self.spotify_playing_elsewhere() && self.reacquire_parked_backend());
+    if wait {
+      self.park_start_playback(context_uri, uris, offset, carried);
+    }
+    wait
+  }
+
   /// Tear down the current native session — even one that still passes
   /// `is_connected` — and request recovery. Called by the disconnect check
   /// above and by the load watchdog, which catches zombie sessions (half-open
@@ -147,9 +258,12 @@ impl App {
     }
 
     self.set_status_message(self.strings().status.app.native_disconnected, 8);
-    if let Some(tx) = &self.streaming_recovery_tx {
+    // Cloned so starting the new rebuild identity can borrow `self` mutably.
+    if let Some(tx) = self.streaming_recovery_tx.clone() {
+      let generation = self.begin_native_recovery();
       self.native_backend_pending = tx
         .send(crate::infra::player::StreamingRecoveryRequest {
+          generation,
           reselect_device,
           restore_playback: true,
           continue_after_track: None,
@@ -180,6 +294,14 @@ impl App {
     tokio::task::spawn_blocking(move || drop(player));
   }
 
+  /// Preserve the absent backend when another owner interrupts recovery.
+  #[cfg(feature = "streaming")]
+  pub(crate) fn park_cancelled_native_recovery(&mut self) {
+    if self.streaming_player.is_none() {
+      self.native_parked = true;
+    }
+  }
+
   /// Whether the park took the player and no rebuild has installed a new one.
   #[cfg(feature = "streaming")]
   pub(crate) fn native_backend_parked(&self) -> bool {
@@ -190,16 +312,30 @@ impl App {
   /// the caller holds its start back instead of routing it to another device.
   #[cfg(feature = "streaming")]
   pub(crate) fn reacquire_parked_backend(&mut self) -> bool {
+    self.reacquire_parked_backend_with(true)
+  }
+
+  /// Rebuild for a published queue slot. The slot carries the play intent, so
+  /// the rebuild must not restore a stale snapshot if the slot ends first.
+  #[cfg(feature = "streaming")]
+  pub(crate) fn reacquire_parked_backend_for_queue_slot(&mut self) -> bool {
+    self.reacquire_parked_backend_with(false)
+  }
+
+  #[cfg(feature = "streaming")]
+  fn reacquire_parked_backend_with(&mut self, reacquire: bool) -> bool {
     if !self.native_backend_parked() {
       return false;
     }
     if !self.native_backend_pending {
+      let generation = self.begin_native_recovery();
       self.native_backend_pending = self.streaming_recovery_tx.as_ref().is_some_and(|tx| {
         tx.send(crate::infra::player::StreamingRecoveryRequest {
+          generation,
           reselect_device: false,
           restore_playback: true,
           continue_after_track: None,
-          reacquire: true,
+          reacquire,
         })
         .is_ok()
       });
@@ -232,9 +368,7 @@ impl App {
   #[cfg(feature = "streaming")]
   pub(crate) fn accept_rebuilt_native_backend(&mut self) -> bool {
     // A rebuild that started before a switch to Soloist must not register a second device.
-    #[cfg(feature = "soloist")]
-    if self.soloist_engine_selected() {
-      self.native_backend_pending = false;
+    if !self.native_engine_still_selected() {
       return false;
     }
     // A rebuild may have started before Music took over. Park it, so an
@@ -252,27 +386,48 @@ impl App {
     true
   }
 
-  /// Park a StartPlayback request (string form, as `IoEvent::StartPlayback`
-  /// carries it) for replay once a usable backend exists. A newer request
-  /// replaces an older one — the user's latest intent wins.
+  /// Park a start for replay; a bare resume never replaces a live explicit target.
+  /// `carried` is set only by a replay, which keeps that request's press time,
+  /// credit and retries.
   #[cfg(feature = "streaming")]
   pub fn park_start_playback(
     &mut self,
     context_uri: Option<String>,
     uris: Option<Vec<String>>,
     offset: Option<usize>,
+    carried: Option<&StartPlaybackRequest>,
   ) {
-    let same_request = self.pending_start_playback.as_ref().is_some_and(|pending| {
-      pending.context_uri == context_uri && pending.uris == uris && pending.offset == offset
-    });
-    if !same_request {
-      self.pending_start_playback = Some(PendingStartPlayback {
-        context_uri,
-        uris,
-        offset,
-        parked_at: Instant::now(),
-        recovery_attempts: 0,
-      });
+    let now = Instant::now();
+    // A chain running since before the press credits its own wait.
+    let credit = self.in_flight_recovery_credit(now);
+    let same_target = |pending: &StartPlaybackRequest| {
+      pending.same_target(context_uri.as_deref(), uris.as_deref(), offset)
+    };
+    let waiting = self
+      .pending_start_playback
+      .as_ref()
+      .filter(|pending| !pending.expired_at(now, credit));
+    let live = waiting.map(&same_target);
+    if context_uri.is_none() && uris.is_none() && offset.is_none() {
+      if live == Some(false) {
+        return;
+      }
+      self.arm_native_play_intent();
+    }
+    // A replay keeps the request it carries, so a stale replay cannot mint a
+    // fresh window or reset its retry budget; a fresh press always starts its own.
+    if let Some(carried) = carried {
+      let already = self
+        .pending_start_playback
+        .as_ref()
+        .is_some_and(|pending| pending.pressed_at == carried.pressed_at && same_target(pending));
+      if !already {
+        self.pending_start_playback = Some(carried.clone());
+      }
+      return;
+    }
+    if live != Some(true) {
+      self.pending_start_playback = Some(StartPlaybackRequest::pressed(context_uri, uris, offset));
     }
   }
 
@@ -301,6 +456,49 @@ impl App {
     }
   }
 
+  #[cfg(feature = "streaming")]
+  pub(crate) fn note_native_rebuild_started(&mut self, started_at: Instant) {
+    self.native_rebuild_started_at = Some(started_at);
+  }
+
+  /// Recovery wait a rebuild in progress has not credited back yet. Every age
+  /// check adds it, so a replay delivered during a second rebuild does not
+  /// expire on time the park would have credited.
+  #[cfg(feature = "streaming")]
+  fn in_flight_recovery_credit(&self, now: Instant) -> Duration {
+    self
+      .native_rebuild_started_at
+      .map_or(Duration::ZERO, |started| {
+        now.saturating_duration_since(started)
+      })
+  }
+
+  /// Credit a rebuild's retry time back to a parked start. The credit never
+  /// exceeds the request's age, and only discounts the soft window: the hard
+  /// limit still measures from the press.
+  #[cfg(feature = "streaming")]
+  pub(crate) fn exclude_recovery_time_from_parked_start(&mut self, duration: Duration) {
+    self.native_rebuild_started_at = None;
+    let Some(pending) = self.pending_start_playback.as_mut() else {
+      return;
+    };
+    let age = Instant::now().saturating_duration_since(pending.pressed_at);
+    pending.recovery_credit = pending.recovery_credit.saturating_add(duration).min(age);
+  }
+
+  /// Whether a parked start has aged past its replay window. The bare-resume
+  /// restore route and the normal replay share this so neither can expire a
+  /// request the other would still accept.
+  #[cfg(feature = "streaming")]
+  pub(crate) fn pending_start_is_expired(&self) -> bool {
+    let now = Instant::now();
+    let credit = self.in_flight_recovery_credit(now);
+    self
+      .pending_start_playback
+      .as_ref()
+      .is_some_and(|pending| pending.expired_at(now, credit))
+  }
+
   /// Replay a parked StartPlayback through the normal dispatch path. No-op
   /// when nothing is parked.
   #[cfg(feature = "streaming")]
@@ -308,7 +506,7 @@ impl App {
     let Some(pending) = self.pending_start_playback.clone() else {
       return;
     };
-    if pending.parked_at.elapsed() > max_parked_age() {
+    if self.pending_start_is_expired() {
       self.pending_start_playback = None;
       self.set_status_message(self.strings().status.app.native_request_expired, 6);
       return;
@@ -317,11 +515,40 @@ impl App {
       return;
     }
     self.set_status_message(self.strings().status.app.resuming_request, 4);
-    self.dispatch(IoEvent::StartPlayback(
-      pending.context_uri,
-      pending.uris,
-      pending.offset,
-    ));
+    self.dispatch(IoEvent::ReplayStartPlayback(pending));
+  }
+
+  /// Retire a replay whose press aged past its window: clear the matching
+  /// parked request, report the expiry, and tell the caller to drop it.
+  ///
+  /// The rate-limit window can hold a `ReplayStartPlayback` between dispatch
+  /// and delivery, so this re-applies the dispatch's expiry rule before any
+  /// playback effect. It also credits a rebuild still in flight, exactly as
+  /// parking does, so a replay delivered during a second rebuild is not aged
+  /// out by time the park would have credited.
+  #[cfg(feature = "streaming")]
+  pub(crate) fn retire_expired_replay(&mut self, request: &StartPlaybackRequest) -> bool {
+    let now = Instant::now();
+    let credit = self.in_flight_recovery_credit(now);
+    let matched = self
+      .pending_start_playback
+      .as_ref()
+      .filter(|pending| pending.pressed_at == request.pressed_at);
+    let expired = match matched {
+      Some(pending) => pending.expired_at(now, credit),
+      // No matching parked request: it was cancelled (a pause) or superseded
+      // (a newer press) in flight, and the dispatch only sent a live request,
+      // so the replay is dead either way.
+      None => true,
+    };
+    if !expired {
+      return false;
+    }
+    if matched.is_some() {
+      self.pending_start_playback = None;
+    }
+    self.set_status_message(self.strings().status.app.native_request_expired, 6);
+    true
   }
 
   #[cfg(feature = "streaming")]
@@ -686,6 +913,7 @@ mod tests {
       Some("spotify:playlist:first".to_string()),
       Some(vec!["spotify:track:first".to_string()]),
       Some(1),
+      None,
     );
     app
       .pending_start_playback
@@ -697,6 +925,7 @@ mod tests {
       Some("spotify:playlist:first".to_string()),
       Some(vec!["spotify:track:first".to_string()]),
       Some(1),
+      None,
     );
     assert_eq!(
       app
@@ -707,7 +936,12 @@ mod tests {
       2
     );
 
-    app.park_start_playback(Some("spotify:playlist:second".to_string()), None, None);
+    app.park_start_playback(
+      Some("spotify:playlist:second".to_string()),
+      None,
+      None,
+      None,
+    );
     assert_eq!(
       app
         .pending_start_playback
@@ -716,6 +950,136 @@ mod tests {
         .recovery_attempts,
       0
     );
+  }
+
+  /// The reviewer's case: a press on the same target, arriving through the
+  /// playback handler while the rebuild is pending, after the previous request
+  /// for that target expired. It must get its own deadline.
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn a_fresh_press_through_the_park_path_after_an_expired_one_gets_its_deadline() {
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    let (recovery_tx, _recovery_rx) = tokio::sync::mpsc::unbounded_channel();
+    app.streaming_recovery_tx = Some(recovery_tx);
+    app.native_parked = true;
+    // The first press expired while the rebuild was still pending.
+    app.park_start_playback(Some("spotify:playlist:p".to_string()), None, None, None);
+    app.pending_start_playback.as_mut().unwrap().pressed_at =
+      Instant::now() - max_parked_start_age() - Duration::from_secs(5);
+
+    // The user presses play on the same playlist again: `start_playback` parks
+    // it through `park_start_if_recovery_needed` with no carried press time.
+    assert!(app.park_start_if_recovery_needed(
+      true,
+      Some("spotify:playlist:p".to_string()),
+      None,
+      None,
+      None,
+    ));
+
+    let pending = app
+      .pending_start_playback
+      .as_ref()
+      .expect("the new press is parked");
+    assert!(
+      !pending.expired_at(Instant::now(), Duration::ZERO),
+      "a fresh press must not inherit the expired request's deadline"
+    );
+  }
+
+  /// The re-park a replay takes through the real park path keeps its deadline:
+  /// `park_start_if_recovery_needed` is what `start_playback` calls for a start
+  /// that has to wait, and it must hand the carried press time to the park.
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn a_reacquired_backend_keeps_a_replays_deadline_when_it_parks() {
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    let (recovery_tx, _recovery_rx) = tokio::sync::mpsc::unbounded_channel();
+    app.streaming_recovery_tx = Some(recovery_tx);
+    app.native_parked = true;
+    let pressed_at = Instant::now() - max_parked_start_age() - Duration::from_secs(5);
+    app.park_start_playback(Some("spotify:playlist:p".to_string()), None, None, None);
+    app.pending_start_playback.as_mut().unwrap().pressed_at = pressed_at;
+    let carried = app.pending_start_playback.clone().unwrap();
+
+    // The start_playback park: the backend is parked, so this waits.
+    assert!(app.park_start_if_recovery_needed(
+      true,
+      Some("spotify:playlist:p".to_string()),
+      None,
+      None,
+      Some(&carried),
+    ));
+
+    let pending = app
+      .pending_start_playback
+      .as_ref()
+      .expect("the replay parked for the rebuild");
+    assert_eq!(pending.pressed_at, pressed_at);
+  }
+
+  /// A replay that expires mid-flight keeps its press time instead of renewing.
+  #[test]
+  fn a_replay_that_expires_before_it_parks_keeps_its_deadline() {
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.park_start_playback(Some("spotify:playlist:p".to_string()), None, None, None);
+    let pressed_at = Instant::now() - max_parked_start_age() - Duration::from_secs(5);
+    app.pending_start_playback.as_mut().unwrap().pressed_at = pressed_at;
+    let carried = app.pending_start_playback.clone().unwrap();
+
+    // The replay expired in flight (a rate-limit window deferred it) and the
+    // handler parks it again for another rebuild.
+    app.park_start_playback(
+      Some("spotify:playlist:p".to_string()),
+      None,
+      None,
+      Some(&carried),
+    );
+
+    let pending = app.pending_start_playback.as_ref().unwrap();
+    assert_eq!(pending.pressed_at, pressed_at);
+    assert!(pending.expired_at(Instant::now(), Duration::ZERO));
+  }
+
+  /// A replayed press re-parks itself after the limit: it must keep its window.
+  #[test]
+  fn a_load_success_refresh_keeps_the_expired_press_time() {
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.park_start_playback(Some("spotify:playlist:p".to_string()), None, None, None);
+    let pressed_at = Instant::now() - max_parked_start_age() - Duration::from_secs(5);
+    app.pending_start_playback.as_mut().unwrap().pressed_at = pressed_at;
+    let carried = app.pending_start_playback.clone().unwrap();
+
+    // The dispatched load succeeded, so the success path parks it for the replay.
+    app.park_start_playback(
+      Some("spotify:playlist:p".to_string()),
+      None,
+      None,
+      Some(&carried),
+    );
+
+    let pending = app.pending_start_playback.as_ref().unwrap();
+    assert_eq!(pending.pressed_at, pressed_at);
+    assert!(pending.expired_at(Instant::now(), Duration::ZERO));
+  }
+
+  /// A real press on the same target is not the request that expired.
+  #[test]
+  fn a_press_on_the_same_target_after_it_expired_gets_a_new_deadline() {
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.park_start_playback(Some("spotify:playlist:p".to_string()), None, None, None);
+    app.pending_start_playback.as_mut().unwrap().pressed_at =
+      Instant::now() - max_parked_start_age() - Duration::from_secs(5);
+
+    app.park_start_playback(Some("spotify:playlist:p".to_string()), None, None, None);
+
+    let pending = app.pending_start_playback.as_ref().unwrap();
+    assert!(!pending.expired_at(Instant::now(), Duration::ZERO));
   }
 
   #[test]
@@ -735,7 +1099,7 @@ mod tests {
   fn a_parked_start_is_not_replayed_over_a_decoded_source() {
     let (tx, rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
-    app.park_start_playback(Some("spotify:playlist:p".to_string()), None, None);
+    app.park_start_playback(Some("spotify:playlist:p".to_string()), None, None, None);
     app.claim_decoded_sink(Source::YouTube);
 
     app.replay_pending_start_playback();
@@ -748,9 +1112,9 @@ mod tests {
   fn a_refused_replay_still_expires_on_age() {
     let (tx, rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
-    app.park_start_playback(Some("spotify:playlist:p".to_string()), None, None);
+    app.park_start_playback(Some("spotify:playlist:p".to_string()), None, None, None);
     if let Some(pending) = app.pending_start_playback.as_mut() {
-      pending.parked_at = Instant::now() - max_parked_age() - Duration::from_secs(1);
+      pending.pressed_at = Instant::now() - max_parked_start_age() - Duration::from_secs(1);
     }
     app.claim_decoded_sink(Source::YouTube);
 
@@ -761,17 +1125,207 @@ mod tests {
   }
 
   #[test]
+  fn an_expired_playlist_does_not_swallow_a_fresh_resume() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.park_start_playback(Some("spotify:playlist:old".to_string()), None, None, None);
+    app.pending_start_playback.as_mut().unwrap().pressed_at =
+      Instant::now() - max_parked_start_age() - Duration::from_secs(1);
+
+    app.park_start_playback(None, None, None, None);
+    app.replay_pending_start_playback();
+
+    assert!(matches!(
+      rx.try_recv(),
+      Ok(IoEvent::ReplayStartPlayback(request))
+        if request.context_uri.is_none() && request.uris.is_none() && request.offset.is_none()
+    ));
+  }
+
+  #[test]
+  fn a_long_running_rebuild_keeps_a_parked_playlist_ahead_of_bare_resume() {
+    // Only the hard limit can expire the request.
+    if parked_start_window() >= max_parked_start_age() {
+      return;
+    }
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    let wait = parked_start_window() + (max_parked_start_age() - parked_start_window()) / 2;
+    app.park_start_playback(
+      Some("spotify:playlist:waiting".to_string()),
+      None,
+      None,
+      None,
+    );
+    app.pending_start_playback.as_mut().unwrap().pressed_at = Instant::now() - wait;
+    app.note_native_rebuild_started(Instant::now() - wait);
+
+    app.park_start_playback(None, None, None, None);
+    app.exclude_recovery_time_from_parked_start(wait);
+    app.replay_pending_start_playback();
+
+    assert!(matches!(
+      rx.try_recv(),
+      Ok(IoEvent::ReplayStartPlayback(request))
+        if request.context_uri.as_deref() == Some("spotify:playlist:waiting")
+    ));
+  }
+
+  #[test]
   fn a_start_parked_for_a_whole_rebuild_still_replays() {
     let (tx, rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
-    app.park_start_playback(Some("spotify:playlist:p".to_string()), None, None);
+    app.park_start_playback(Some("spotify:playlist:p".to_string()), None, None, None);
     if let Some(pending) = app.pending_start_playback.as_mut() {
-      pending.parked_at = Instant::now() - crate::infra::player::player_build_timeout();
+      pending.pressed_at = Instant::now() - crate::infra::player::player_build_timeout();
     }
 
     app.replay_pending_start_playback();
 
-    assert!(matches!(rx.try_recv(), Ok(IoEvent::StartPlayback(..))));
+    assert!(matches!(
+      rx.try_recv(),
+      Ok(IoEvent::ReplayStartPlayback(..))
+    ));
+  }
+
+  /// An outage outlives the limit whatever the chain credits back.
+  #[test]
+  fn a_retry_chain_longer_than_the_limit_expires_a_parked_start() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.park_start_playback(Some("spotify:playlist:p".to_string()), None, None, None);
+    let chain = max_parked_start_age() + Duration::from_secs(1);
+    app.pending_start_playback.as_mut().unwrap().pressed_at = Instant::now() - chain;
+
+    app.exclude_recovery_time_from_parked_start(chain);
+    app.replay_pending_start_playback();
+
+    assert!(rx.try_recv().is_err());
+    assert!(app.pending_start_playback.is_none());
+    assert_eq!(
+      app.status_message(),
+      Some(crate::core::i18n::EN.status.app.native_request_expired)
+    );
+  }
+
+  /// A credit never moves the press time.
+  #[test]
+  fn a_start_parked_mid_chain_credits_no_more_time_than_it_has_lived() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.park_start_playback(Some("spotify:playlist:p".to_string()), None, None, None);
+    let pressed_at = app.pending_start_playback.as_ref().unwrap().pressed_at;
+
+    app.exclude_recovery_time_from_parked_start(Duration::from_secs(3600));
+
+    let pending = app.pending_start_playback.as_ref().unwrap();
+    assert_eq!(pending.pressed_at, pressed_at);
+    assert!(
+      pending.recovery_credit <= Instant::now().saturating_duration_since(pending.pressed_at),
+      "the credit must never exceed the request's own age"
+    );
+    app.replay_pending_start_playback();
+    assert!(matches!(
+      rx.try_recv(),
+      Ok(IoEvent::ReplayStartPlayback(..))
+    ));
+  }
+
+  /// The handler-side check retires a replay the rate window delivered late.
+  #[test]
+  fn an_expired_replay_arriving_at_the_handler_is_retired() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.park_start_playback(Some("spotify:playlist:p".to_string()), None, None, None);
+    let pressed_at = Instant::now() - max_parked_start_age() - Duration::from_secs(1);
+    app.pending_start_playback.as_mut().unwrap().pressed_at = pressed_at;
+
+    let request = StartPlaybackRequest {
+      pressed_at,
+      ..StartPlaybackRequest::pressed(None, None, None)
+    };
+    assert!(app.retire_expired_replay(&request));
+    assert!(app.pending_start_playback.is_none());
+    assert_eq!(
+      app.status_message(),
+      Some(crate::core::i18n::EN.status.app.native_request_expired)
+    );
+    assert!(rx.try_recv().is_err());
+  }
+
+  #[test]
+  fn a_fresh_replay_arriving_at_the_handler_is_not_retired() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.park_start_playback(Some("spotify:playlist:p".to_string()), None, None, None);
+    let request = app.pending_start_playback.clone().unwrap();
+
+    assert!(!app.retire_expired_replay(&request));
+    assert!(app.pending_start_playback.is_some());
+    assert!(rx.try_recv().is_err());
+  }
+
+  /// Delivery credits a rebuild in flight exactly as parking does: the park
+  /// would have let the replay wait out that rebuild, so its age check must
+  /// too. Only the soft window can be credited — past the hard limit nothing
+  /// helps.
+  #[test]
+  fn a_rebuild_in_flight_covers_a_replay_delivered_past_the_soft_window() {
+    if parked_start_window() >= max_parked_start_age() {
+      return;
+    }
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.park_start_playback(Some("spotify:playlist:p".to_string()), None, None, None);
+    let age = parked_start_window() + Duration::from_secs(5);
+    app.pending_start_playback.as_mut().unwrap().pressed_at = Instant::now() - age;
+    app.note_native_rebuild_started(Instant::now() - Duration::from_secs(10));
+    let carried = app.pending_start_playback.clone().unwrap();
+
+    assert!(!app.retire_expired_replay(&carried));
+    assert!(app.pending_start_playback.is_some());
+    assert!(rx.try_recv().is_err());
+  }
+
+  /// The credit only covers an actually-running rebuild, never ages a replay
+  /// past its window on its own.
+  #[test]
+  fn a_replay_past_the_soft_window_without_a_rebuild_is_retired() {
+    if parked_start_window() >= max_parked_start_age() {
+      return;
+    }
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.park_start_playback(Some("spotify:playlist:p".to_string()), None, None, None);
+    let age = parked_start_window() + Duration::from_secs(5);
+    app.pending_start_playback.as_mut().unwrap().pressed_at = Instant::now() - age;
+    let carried = app.pending_start_playback.clone().unwrap();
+
+    assert!(app.retire_expired_replay(&carried));
+    assert!(app.pending_start_playback.is_none());
+  }
+
+  /// A replay whose parked request vanished (a pause cancelled it, a newer
+  /// press superseded it) is dead: only a live, matching request may replay.
+  #[test]
+  fn a_replay_with_no_matching_parked_request_is_rejected() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.park_start_playback(Some("spotify:playlist:live".to_string()), None, None, None);
+    let orphan = StartPlaybackRequest {
+      pressed_at: Instant::now(),
+      ..StartPlaybackRequest::pressed(None, None, None)
+    };
+
+    assert!(app.retire_expired_replay(&orphan));
+    assert!(
+      app
+        .pending_start_playback
+        .as_ref()
+        .is_some_and(|pending| pending.context_uri.as_deref() == Some("spotify:playlist:live")),
+      "the unrelated parked request survives"
+    );
+    assert!(rx.try_recv().is_err());
   }
 
   #[test]
@@ -792,6 +1346,38 @@ mod tests {
     assert!(app.native_backend_pending);
     assert!(rx.try_recv().is_err());
     assert_eq!(app.status_message(), Some("Reconnecting native streaming…"));
+  }
+
+  #[test]
+  fn a_bare_resume_arms_a_paused_snapshot_before_parking() {
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    let (recovery_tx, _recovery_rx) = tokio::sync::mpsc::unbounded_channel();
+    app.streaming_recovery_tx = Some(recovery_tx);
+    app.last_track_id = Some("spotify:track:old".to_string());
+    assert!(app
+      .prepare_native_playback_recovery(42_000, false)
+      .is_some());
+    assert!(
+      !app
+        .native_playback_recovery
+        .as_ref()
+        .unwrap()
+        .desired_playing
+    );
+    app.park_cancelled_native_recovery();
+
+    assert!(app.park_start_if_recovery_needed(true, None, None, None, None));
+
+    assert!(
+      app
+        .native_playback_recovery
+        .as_ref()
+        .unwrap()
+        .desired_playing,
+      "the play press must restore the paused snapshot as playing"
+    );
+    assert!(app.pending_start_playback.is_some());
   }
 
   #[test]

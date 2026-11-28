@@ -815,7 +815,7 @@ mod tests {
   fn a_refused_skip_keeps_the_start_waiting_for_the_parked_rebuild() {
     let (mut app, rx, _recovery_rx) = parked_native_app();
     app.native_backend_pending = true;
-    app.park_start_playback(Some("spotify:playlist:new".to_string()), None, None);
+    app.park_start_playback(Some("spotify:playlist:new".to_string()), None, None, None);
 
     app.next_track();
 
@@ -843,7 +843,7 @@ mod tests {
     let (tx, rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
     app.native_track_info = Some(NativeTrackInfo::default());
-    app.park_start_playback(Some("spotify:playlist:p".to_string()), None, None);
+    app.park_start_playback(Some("spotify:playlist:p".to_string()), None, None, None);
 
     app.release_native_for_decoded();
 

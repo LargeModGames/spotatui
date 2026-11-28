@@ -283,6 +283,7 @@ impl Network {
     context_id: &Option<PlayContextId<'static>>,
     uris: &Option<Vec<PlayableId<'static>>>,
     offset: Option<usize>,
+    carried: Option<&crate::core::app::StartPlaybackRequest>,
   ) -> bool {
     let target = {
       let app = self.app.lock().await;
@@ -355,6 +356,7 @@ impl Network {
           .as_ref()
           .map(|list| list.iter().map(|u| u.uri()).collect()),
         offset,
+        carried,
       );
       app.native_load_watchdog = Some(Instant::now());
       if let Some(ctx) = &mut app.current_playback_context {

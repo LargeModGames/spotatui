@@ -617,7 +617,7 @@ mod tests {
   fn a_decoded_owner_does_not_spend_a_native_load_watchdog_attempt() {
     let (tx, _rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), None);
-    app.park_start_playback(Some("spotify:playlist:p".to_string()), None, None);
+    app.park_start_playback(Some("spotify:playlist:p".to_string()), None, None, None);
     app.native_load_watchdog = Some(Instant::now() - Duration::from_secs(60));
     app.claim_decoded_sink(Source::YouTube);
 
