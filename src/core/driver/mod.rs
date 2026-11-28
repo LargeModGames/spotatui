@@ -53,6 +53,13 @@ pub type MprisHandle = Option<()>;
 /// across every source without depending on a source-specific id.
 type TrackIdentity = (String, Vec<String>, String, u32);
 
+/// How long the highlighted song must stay on the same cover before the
+/// browse-preview fetch starts. Scrolling a long list would otherwise dispatch
+/// one download per row, and the pump would be busy with art nobody waited long
+/// enough to look at.
+#[cfg(feature = "cover-art")]
+const BROWSE_PREVIEW_ART_SETTLE_DELAY: Duration = Duration::from_millis(200);
+
 fn track_identity(snapshot: &crate::infra::media_metadata::PlaybackSnapshot) -> TrackIdentity {
   (
     snapshot.metadata.title.clone(),
@@ -118,6 +125,134 @@ fn cover_art_request_for(
   crate::infra::media_metadata::cover_fetch_url(app, snapshot).map(CoverArtRequest::Url)
 }
 
+#[cfg(feature = "cover-art")]
+pub(crate) fn cover_art_request_for_track(
+  track: &crate::core::plugin_api::TrackInfo,
+) -> Option<crate::core::art::CoverArtRequest> {
+  use crate::core::art::CoverArtRequest;
+
+  #[cfg(feature = "local-files")]
+  if let Some(uri) = track.uri.as_deref() {
+    if uri.starts_with("file://") {
+      let path = crate::infra::local::file_uri_to_path(uri).ok()?;
+      return Some(CoverArtRequest::LocalFile {
+        key: uri.to_string(),
+        path,
+      });
+    }
+  }
+  track
+    .image_url
+    .as_ref()
+    .map(|url| CoverArtRequest::Url(url.clone()))
+}
+
+#[cfg(feature = "cover-art")]
+pub(crate) fn browse_preview_art_request_for(
+  app: &App,
+) -> Option<crate::core::art::CoverArtRequest> {
+  use crate::core::app::BrowsePreviewItem;
+
+  let item = app.preview_item()?;
+  if let BrowsePreviewItem::Track(track) = &item {
+    return cover_art_request_for_track(track);
+  }
+  item
+    .image_url()
+    .map(|url| crate::core::art::CoverArtRequest::Url(url.to_string()))
+}
+
+#[cfg(feature = "cover-art")]
+#[derive(Default)]
+struct BrowsePreviewArtReconcileState {
+  last_fetch: Option<(String, u64)>,
+  observed_key: Option<String>,
+  applied_key: Option<String>,
+  changed_at: Option<Instant>,
+}
+
+#[cfg(feature = "cover-art")]
+fn reconcile_browse_preview_art(
+  app: &mut App,
+  state: &mut BrowsePreviewArtReconcileState,
+  now: Instant,
+  full_image_support: bool,
+  browse_preview_area: Option<(u16, u16)>,
+) {
+  use crate::core::art::CoverArtTarget;
+
+  let enabled = app.user_config.behavior.show_song_selection_details
+    && app.user_config.do_draw_cover_art(full_image_support)
+    && browse_preview_area.is_some();
+  let desired = if enabled {
+    browse_preview_art_request_for(app)
+  } else {
+    None
+  };
+  let desired_key = desired.as_ref().map(|request| request.key());
+
+  if state.observed_key.as_deref() != desired_key {
+    state.observed_key = desired_key.map(str::to_string);
+    state.changed_at = Some(now);
+    state.applied_key = None;
+    app.note_browse_preview_art_key_changed(desired_key, now);
+  }
+  let settled = state
+    .changed_at
+    .is_some_and(|at| now.duration_since(at) >= BROWSE_PREVIEW_ART_SETTLE_DELAY);
+
+  if !settled {
+    return;
+  }
+
+  if state.applied_key.as_deref() != desired_key {
+    app.select_browse_preview_art(desired.as_ref());
+    state.applied_key = desired_key.map(str::to_string);
+  }
+  let preview_art = app.browse_preview_cover_art();
+  let requested_key = if preview_art.status == crate::core::art::CoverArtStatus::Loaded {
+    preview_art.key()
+  } else {
+    state
+      .last_fetch
+      .as_ref()
+      .filter(|(_, generation)| app.browse_preview_art_generation_is(*generation))
+      .map(|(key, _)| key.as_str())
+  };
+  let action = plan::cover_art_action(
+    desired_key,
+    requested_key,
+    app.browse_preview_cover_art_available(),
+    preview_art.status == crate::core::art::CoverArtStatus::Loading,
+    preview_art.status == crate::core::art::CoverArtStatus::Failed,
+    enabled,
+    false,
+  );
+
+  match action {
+    plan::CoverArtAction::Fetch => {
+      let request = desired.expect("Fetch is only planned with a desired request");
+      let generation = app.begin_browse_preview_art_fetch(&request);
+      state.last_fetch = Some((request.key().to_string(), generation));
+      app.dispatch(IoEvent::FetchCoverArt(
+        request,
+        CoverArtTarget::BrowsePreview,
+        generation,
+      ));
+    }
+    plan::CoverArtAction::Keep => {
+      app.keep_browse_preview_art_request(desired.map(|request| request.key().to_string()));
+    }
+    plan::CoverArtAction::Drop { status, .. } => {
+      state.last_fetch = None;
+      state.observed_key = None;
+      state.applied_key = None;
+      state.changed_at = None;
+      app.drop_browse_preview_art(status);
+    }
+  }
+}
+
 /// Per-tick inputs only the frontend can supply.
 pub struct TickEnv {
   /// Wall-clock instant of this tick; injected so the driver's throttling
@@ -132,6 +267,9 @@ pub struct TickEnv {
   /// fetched solely for the adaptive theme.
   #[cfg(feature = "art-decode")]
   pub cover_art_full_image_support: bool,
+  /// Size of the preview box the frontend will actually draw, when it fits.
+  #[cfg(feature = "cover-art")]
+  pub browse_preview_area: Option<(u16, u16)>,
 }
 
 #[cfg(any(feature = "audio-viz", feature = "audio-viz-cpal"))]
@@ -178,6 +316,8 @@ pub struct Driver {
   /// art changes.
   #[cfg(feature = "art-decode")]
   last_cover_art_key: Option<String>,
+  #[cfg(feature = "cover-art")]
+  browse_preview_art_reconcile: BrowsePreviewArtReconcileState,
   /// Throttle state for `last_session.yml` (see `plan::session_persist_action`):
   /// `last_session_save` spaces the periodic writes; `session_was_present`
   /// lets a Some -> None transition (queue ended, switched to Spotify) clear
@@ -263,6 +403,8 @@ impl Driver {
       play_counter: play_count::PlayCounter::default(),
       #[cfg(feature = "art-decode")]
       last_cover_art_key: None,
+      #[cfg(feature = "cover-art")]
+      browse_preview_art_reconcile: BrowsePreviewArtReconcileState::default(),
       last_session_save: None,
       session_was_present: false,
       #[cfg(feature = "internet-radio")]
@@ -401,6 +543,7 @@ impl Driver {
       #[cfg(feature = "art-decode")]
       {
         use crate::core::art::CoverArtStatus;
+
         let enabled = app
           .user_config
           .needs_cover_art(env.cover_art_full_image_support);
@@ -415,33 +558,39 @@ impl Driver {
           desired.as_ref().map(|request| request.key()),
           self.last_cover_art_key.as_deref(),
           app.cover_art.available(),
+          app.cover_art.status == CoverArtStatus::Loading,
+          app.cover_art.status == CoverArtStatus::Failed,
           enabled,
           snapshot.is_some(),
         ) {
           plan::CoverArtAction::Fetch => {
             let request = desired.expect("Fetch is only planned with a desired request");
-            app.desired_cover_art_key = Some(request.key().to_string());
+            let generation = app.begin_cover_art_fetch(&request);
             self.last_cover_art_key = Some(request.key().to_string());
-            // Keep the previous image on screen until the new one
-            // resolves (smooth swap); the fetch runs off-lock.
-            app.cover_art.status = CoverArtStatus::Loading;
-            app.dispatch(IoEvent::FetchCoverArt(request));
+            app.dispatch(IoEvent::FetchCoverArt(
+              request,
+              crate::core::art::CoverArtTarget::Playing,
+              generation,
+            ));
           }
           plan::CoverArtAction::Keep => {
-            app.desired_cover_art_key = desired.map(|request| request.key().to_string());
+            app.keep_cover_art_request(desired.map(|request| request.key().to_string()));
           }
           plan::CoverArtAction::Drop { clear, status } => {
-            app.desired_cover_art_key = None;
             self.last_cover_art_key = None;
-            // No art to show (radio, art disabled, nothing playing): drop
-            // any stale image once, so the pane shows the placeholder.
-            if clear {
-              app.clear_cover_art();
-            }
-            app.cover_art.status = status;
+            app.drop_cover_art_request(clear, status);
           }
         }
       }
+
+      #[cfg(feature = "cover-art")]
+      reconcile_browse_preview_art(
+        app,
+        &mut self.browse_preview_art_reconcile,
+        env.now,
+        env.cover_art_full_image_support,
+        env.browse_preview_area,
+      );
 
       let (is_track, item_id) = snapshot.as_ref().map_or((false, None), |snapshot| {
         (
@@ -1001,6 +1150,438 @@ mod tests {
     let mut app = App::new(tx, UserConfig::new(), connected.then(SystemTime::now));
     app.push_navigation_stack(route, block);
     (app, rx)
+  }
+
+  #[cfg(feature = "cover-art")]
+  mod browse_preview_tests {
+    use super::*;
+    use crate::core::app::{
+      AlbumTableContext, SearchResult, SearchResultBlock, SelectedFullAlbum, TrackTableContext,
+    };
+    use crate::core::pagination::Paged;
+    use crate::core::plugin_api::{AlbumInfo, TrackInfo};
+
+    fn track(name: &str, image_url: Option<&str>) -> TrackInfo {
+      TrackInfo {
+        generated_name: None,
+        uri: None,
+        name: name.to_string(),
+        artists: vec![],
+        album: String::new(),
+        duration_ms: 0,
+        id: None,
+        album_id: None,
+        artist_refs: vec![],
+        is_playable: true,
+        is_local: false,
+        track_number: 0,
+        explicit: false,
+        image_url: image_url.map(str::to_string),
+        release_date: None,
+      }
+    }
+
+    fn app_with_search_tracks() -> (App, Receiver<IoEvent>) {
+      let (mut app, rx) = app_on(RouteId::Search, ActiveBlock::SearchResultBlock, false);
+      app.set_search_results(SearchResult {
+        tracks: Some(Paged {
+          items: vec![
+            track("First", Some("https://example.test/first.jpg")),
+            track("Second", Some("https://example.test/second.jpg")),
+          ],
+          total: 2,
+          ..Default::default()
+        }),
+        ..Default::default()
+      });
+      app.select_search_result_row(SearchResultBlock::SongSearch, Some(1));
+      (app, rx)
+    }
+
+    #[test]
+    fn the_browse_preview_follows_the_highlighted_song_not_playback() {
+      let (app, _rx) = app_with_search_tracks();
+
+      let key = browse_preview_art_request_for(&app)
+        .map(|request| request.key().to_string())
+        .unwrap();
+
+      assert_eq!(key, "https://example.test/second.jpg");
+    }
+
+    #[test]
+    fn the_browse_preview_follows_the_highlighted_spotify_playlist() {
+      use crate::core::app::PlaylistFolderItem;
+      use crate::core::plugin_api::PlaylistInfo;
+      use crate::core::source::Source;
+
+      let (mut app, _rx) = app_on(RouteId::Search, ActiveBlock::MyPlaylists, false);
+      app.active_source = Source::Spotify;
+      *app.all_playlists_mut() = vec![PlaylistInfo {
+        generated_name: None,
+        uri: "spotify:playlist:road-trip".to_string(),
+        name: "Road Trip".to_string(),
+        owner: "Alice".to_string(),
+        track_count: 1,
+        id: Some("road-trip".to_string()),
+        owner_id: None,
+        collaborative: false,
+        public: None,
+        image_url: Some("https://example.test/playlist.jpg".to_string()),
+        description: Some("Songs for the road".to_string()),
+      }];
+      *app.playlist_folder_items_mut() = vec![PlaylistFolderItem::Playlist {
+        index: 0,
+        current_id: 0,
+      }];
+      app.open_playlist_folder(0);
+      // Row 0 is "add playlist"; the community pin occupies display row 0.
+      app = app.with_sidebar_playlist(2);
+
+      let key = browse_preview_art_request_for(&app)
+        .map(|request| request.key().to_string())
+        .unwrap();
+      assert_eq!(key, "https://example.test/playlist.jpg");
+    }
+
+    #[test]
+    fn only_a_song_row_with_art_gives_a_preview_request() {
+      let (mut app, _rx) = app_with_search_tracks();
+      for block in [
+        SearchResultBlock::AlbumSearch,
+        SearchResultBlock::ArtistSearch,
+        SearchResultBlock::PlaylistSearch,
+        SearchResultBlock::ShowSearch,
+        SearchResultBlock::Empty,
+      ] {
+        app.select_search_result_row(block, Some(1));
+        assert!(browse_preview_art_request_for(&app).is_none());
+      }
+      app.select_search_result_row(SearchResultBlock::SongSearch, None);
+      assert!(browse_preview_art_request_for(&app).is_none());
+
+      app.select_search_result_row(SearchResultBlock::SongSearch, Some(0));
+      app.set_search_results(SearchResult {
+        tracks: Some(Paged {
+          items: vec![track("No art", None)],
+          total: 1,
+          ..Default::default()
+        }),
+        ..Default::default()
+      });
+      assert!(browse_preview_art_request_for(&app).is_none());
+    }
+
+    #[test]
+    fn the_preview_follows_the_selected_song_in_the_shared_track_table() {
+      let (mut app, _rx) = app_on(RouteId::TrackTable, ActiveBlock::TrackTable, false);
+      app.set_track_table(
+        vec![
+          track("First", Some("https://example.test/first.jpg")),
+          track("Second", Some("https://example.test/second.jpg")),
+        ],
+        TrackTableContext::SavedTracks,
+      );
+      app.select_track_row(1);
+
+      let key = browse_preview_art_request_for(&app)
+        .map(|request| request.key().to_string())
+        .unwrap();
+      assert_eq!(key, "https://example.test/second.jpg");
+    }
+
+    #[test]
+    fn album_tracks_fall_back_to_the_album_art() {
+      let (mut app, _rx) = app_on(RouteId::AlbumTracks, ActiveBlock::AlbumTracks, false);
+      app.album_table_context = AlbumTableContext::Full;
+      app.selected_album_full = Some(SelectedFullAlbum {
+        album: AlbumInfo {
+          image_url: Some("https://example.test/album.jpg".to_string()),
+          tracks: vec![track("Song", None)],
+          ..Default::default()
+        },
+        selected_index: 0,
+      });
+
+      let key = browse_preview_art_request_for(&app)
+        .map(|request| request.key().to_string())
+        .unwrap();
+      assert_eq!(key, "https://example.test/album.jpg");
+    }
+
+    #[test]
+    fn the_preview_follows_the_selected_song_in_recently_played() {
+      let (mut app, _rx) = app_on(RouteId::RecentlyPlayed, ActiveBlock::RecentlyPlayed, false);
+      app.recently_played = Some(crate::core::pagination::CursorPaged {
+        items: vec![track("Recent", Some("https://example.test/recent.jpg"))],
+        total: Some(1),
+        ..Default::default()
+      });
+
+      let key = browse_preview_art_request_for(&app)
+        .map(|request| request.key().to_string())
+        .unwrap();
+      assert_eq!(key, "https://example.test/recent.jpg");
+    }
+
+    #[test]
+    fn the_browse_preview_fetches_into_its_own_slot() {
+      use crate::core::art::{CoverArtStatus, CoverArtTarget};
+
+      let (mut app, rx) = app_with_search_tracks();
+      app.user_config.behavior.draw_cover_art_forced = true;
+      let mut state = BrowsePreviewArtReconcileState::default();
+      let now = Instant::now();
+
+      reconcile_browse_preview_art(&mut app, &mut state, now, false, Some((90, 14)));
+      assert!(
+        !rx.try_iter().any(|event| matches!(
+          event,
+          IoEvent::FetchCoverArt(_, CoverArtTarget::BrowsePreview, _)
+        )),
+        "settle delay should hold the preview fetch"
+      );
+
+      reconcile_browse_preview_art(
+        &mut app,
+        &mut state,
+        now + BROWSE_PREVIEW_ART_SETTLE_DELAY,
+        false,
+        Some((90, 14)),
+      );
+
+      match rx.try_recv() {
+        Ok(IoEvent::FetchCoverArt(request, CoverArtTarget::BrowsePreview, _)) => {
+          assert_eq!(request.key(), "https://example.test/second.jpg");
+        }
+        Err(_) => panic!("no preview fetch was dispatched"),
+        Ok(_) => panic!("the preview used the wrong fetch target"),
+      }
+      assert_eq!(
+        app.browse_preview_cover_art().status,
+        CoverArtStatus::Loading
+      );
+      assert!(app.browse_preview_art_key_is_desired("https://example.test/second.jpg"));
+      assert_eq!(
+        state.last_fetch.as_ref().map(|(key, _)| key.as_str()),
+        Some("https://example.test/second.jpg")
+      );
+      assert!(app.cover_art.key().is_none());
+    }
+
+    #[test]
+    fn the_preview_transition_starts_while_the_fetch_waits_for_the_settle_delay() {
+      use crate::core::art::CoverArtTarget;
+
+      let (mut app, rx) = app_with_search_tracks();
+      app.user_config.behavior.draw_cover_art_forced = true;
+      let mut state = BrowsePreviewArtReconcileState::default();
+      let now = Instant::now();
+      let key = "https://example.test/second.jpg";
+
+      reconcile_browse_preview_art(&mut app, &mut state, now, false, Some((90, 14)));
+
+      assert_eq!(app.browse_preview_cover_art().transition().unwrap().0, key);
+      assert!(
+        !rx.try_iter().any(|event| matches!(
+          event,
+          IoEvent::FetchCoverArt(_, CoverArtTarget::BrowsePreview, _)
+        )),
+        "no preview fetch during the debounce"
+      );
+
+      reconcile_browse_preview_art(
+        &mut app,
+        &mut state,
+        now + BROWSE_PREVIEW_ART_SETTLE_DELAY,
+        false,
+        Some((90, 14)),
+      );
+
+      assert!(matches!(
+        rx.try_recv(),
+        Ok(IoEvent::FetchCoverArt(_, CoverArtTarget::BrowsePreview, _))
+      ));
+      assert_eq!(app.browse_preview_cover_art().transition().unwrap().0, key);
+    }
+
+    #[test]
+    fn hiding_song_selection_details_stops_and_clears_its_fetch() {
+      use crate::core::art::CoverArtTarget;
+
+      let (mut app, rx) = app_with_search_tracks();
+      app.user_config.behavior.draw_cover_art_forced = true;
+      let now = Instant::now();
+      let mut state = BrowsePreviewArtReconcileState {
+        observed_key: Some("https://example.test/second.jpg".to_string()),
+        changed_at: Some(now - BROWSE_PREVIEW_ART_SETTLE_DELAY),
+        ..Default::default()
+      };
+
+      reconcile_browse_preview_art(
+        &mut app,
+        &mut state,
+        now + BROWSE_PREVIEW_ART_SETTLE_DELAY,
+        false,
+        Some((90, 14)),
+      );
+      assert!(matches!(
+        rx.try_recv(),
+        Ok(IoEvent::FetchCoverArt(_, CoverArtTarget::BrowsePreview, _))
+      ));
+
+      app.user_config.behavior.show_song_selection_details = false;
+      reconcile_browse_preview_art(
+        &mut app,
+        &mut state,
+        now + 2 * BROWSE_PREVIEW_ART_SETTLE_DELAY,
+        false,
+        Some((90, 14)),
+      );
+      reconcile_browse_preview_art(
+        &mut app,
+        &mut state,
+        now + 3 * BROWSE_PREVIEW_ART_SETTLE_DELAY,
+        false,
+        Some((90, 14)),
+      );
+
+      assert!(rx.try_recv().is_err());
+      assert_eq!(
+        app.browse_preview_cover_art().status,
+        crate::core::art::CoverArtStatus::NotStarted
+      );
+      assert!(state.last_fetch.is_none());
+      assert!(!app.browse_preview_art_key_is_desired("https://example.test/second.jpg"));
+    }
+
+    #[test]
+    fn a_preview_that_will_not_be_drawn_fetches_nothing() {
+      let (mut app, rx) = app_with_search_tracks();
+      app.user_config.behavior.draw_cover_art_forced = true;
+      let mut state = BrowsePreviewArtReconcileState::default();
+
+      reconcile_browse_preview_art(&mut app, &mut state, Instant::now(), false, None);
+
+      assert!(rx.try_recv().is_err());
+      assert_eq!(
+        app.browse_preview_cover_art().status,
+        crate::core::art::CoverArtStatus::NotStarted
+      );
+      assert!(state.last_fetch.is_none());
+      assert!(!app.browse_preview_art_key_is_desired("https://example.test/second.jpg"));
+    }
+
+    #[test]
+    fn a_slow_preview_fetch_is_not_redispatched_while_loading() {
+      use crate::core::art::CoverArtTarget;
+
+      let (mut app, rx) = app_with_search_tracks();
+      app.user_config.behavior.draw_cover_art_forced = true;
+      let mut state = BrowsePreviewArtReconcileState::default();
+      let now = Instant::now();
+
+      reconcile_browse_preview_art(&mut app, &mut state, now, false, Some((90, 14)));
+      for tick in 1..4 {
+        reconcile_browse_preview_art(
+          &mut app,
+          &mut state,
+          now + tick * BROWSE_PREVIEW_ART_SETTLE_DELAY,
+          false,
+          Some((90, 14)),
+        );
+      }
+
+      assert!(matches!(
+        rx.try_recv(),
+        Ok(IoEvent::FetchCoverArt(_, CoverArtTarget::BrowsePreview, _))
+      ));
+      assert!(
+        !rx.try_iter().any(|event| matches!(
+          event,
+          IoEvent::FetchCoverArt(_, CoverArtTarget::BrowsePreview, _)
+        )),
+        "loading art should not be fetched again"
+      );
+    }
+
+    #[test]
+    fn returning_to_a_loading_preview_dispatches_a_current_generation() {
+      use crate::core::art::CoverArtTarget;
+
+      let (mut app, rx) = app_with_search_tracks();
+      app.user_config.behavior.draw_cover_art_forced = true;
+      let mut state = BrowsePreviewArtReconcileState::default();
+      let now = Instant::now();
+      let area = Some((90, 14));
+      let delay = BROWSE_PREVIEW_ART_SETTLE_DELAY;
+      let find_fetch = || {
+        rx.try_iter().find_map(|event| match event {
+          IoEvent::FetchCoverArt(request, CoverArtTarget::BrowsePreview, generation) => {
+            Some((request.key().to_string(), generation))
+          }
+          _ => None,
+        })
+      };
+
+      reconcile_browse_preview_art(&mut app, &mut state, now, false, area);
+      reconcile_browse_preview_art(&mut app, &mut state, now + delay, false, area);
+      let (original_key, original_generation) = find_fetch().expect("initial fetch");
+
+      for index in [0, 1] {
+        app.select_search_result_row(SearchResultBlock::SongSearch, Some(index));
+        let request = browse_preview_art_request_for(&app).unwrap();
+        app.note_browse_preview_art_selection(Some(&request));
+      }
+      assert!(!app.browse_preview_art_generation_is(original_generation));
+
+      reconcile_browse_preview_art(&mut app, &mut state, now + 2 * delay, false, area);
+      let (key, generation) = find_fetch().expect("replacement fetch");
+      assert_eq!(key, original_key);
+      assert!(app.browse_preview_art_generation_is(generation));
+    }
+
+    #[test]
+    fn a_fast_sweep_dispatches_only_the_last_preview_fetch() {
+      use crate::core::art::CoverArtTarget;
+
+      let (mut app, rx) = app_with_search_tracks();
+      app.user_config.behavior.draw_cover_art_forced = true;
+      let mut state = BrowsePreviewArtReconcileState::default();
+      let now = Instant::now();
+      let area = Some((90, 14));
+      let step = Duration::from_millis(50);
+
+      app.select_search_result_row(SearchResultBlock::SongSearch, Some(0));
+      for tick in 0..3 {
+        reconcile_browse_preview_art(&mut app, &mut state, now + tick * step, false, area);
+      }
+      app.select_search_result_row(SearchResultBlock::SongSearch, Some(1));
+      reconcile_browse_preview_art(&mut app, &mut state, now + 3 * step, false, area);
+      assert!(
+        !rx.try_iter().any(|event| matches!(
+          event,
+          IoEvent::FetchCoverArt(_, CoverArtTarget::BrowsePreview, _)
+        )),
+        "no row settled long enough to fetch the preview"
+      );
+
+      reconcile_browse_preview_art(
+        &mut app,
+        &mut state,
+        now + BROWSE_PREVIEW_ART_SETTLE_DELAY + 3 * step,
+        false,
+        area,
+      );
+      match rx.try_recv() {
+        Ok(IoEvent::FetchCoverArt(request, CoverArtTarget::BrowsePreview, _)) => {
+          assert_eq!(request.key(), "https://example.test/second.jpg");
+        }
+        Err(_) => panic!("the last row did not fetch its art"),
+        Ok(_) => panic!("the preview used the wrong fetch target"),
+      }
+      assert!(rx.try_recv().is_err());
+    }
   }
 
   #[test]

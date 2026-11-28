@@ -394,6 +394,8 @@ async fn serve_until_quit(
               .then_some(crate::core::driver::VizNeed::Samples),
             #[cfg(feature = "art-decode")]
             cover_art_full_image_support: true,
+            #[cfg(feature = "cover-art")]
+            browse_preview_area: None,
           },
         );
         // After the tick, which opens, polls or closes the capture.

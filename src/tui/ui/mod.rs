@@ -26,6 +26,8 @@ pub mod util;
 
 use crate::core::app::{App, RouteId};
 use crate::tui::layout::{compute_main_layout, is_wide_layout, main_hidden};
+#[cfg(feature = "cover-art")]
+use ratatui::layout::{Constraint, Layout};
 use ratatui::{layout::Rect, Frame};
 
 pub use self::artist::draw_artist_albums;
@@ -35,7 +37,6 @@ pub use self::friends::draw_friends;
 pub use self::home::draw_home;
 pub use self::library::draw_user_block;
 pub use self::lyrics::draw_lyrics_view;
-#[cfg(feature = "cover-art")]
 pub use self::player::draw_cover_art_view;
 pub use self::player::draw_miniplayer;
 pub use self::player::{draw_device_list, draw_playbar};
@@ -52,6 +53,38 @@ pub use self::tables::{
   draw_album_list, draw_album_table, draw_artist_table, draw_local_browser, draw_podcast_table,
   draw_recently_played_table, draw_recommendations_table, draw_show_episodes, draw_song_table,
 };
+
+#[cfg(feature = "cover-art")]
+pub(crate) fn split_browse_preview(app: &App, content: Rect) -> (Rect, Option<Rect>) {
+  let height = search::browse_preview_height(app, content);
+  let has_preview_item = app.preview_item().is_some();
+  if height > 0 && has_preview_item {
+    let [content, preview] = content.layout(&Layout::vertical([
+      Constraint::Min(1),
+      Constraint::Length(height),
+    ]));
+    (content, Some(preview))
+  } else {
+    (content, None)
+  }
+}
+
+#[cfg(not(feature = "cover-art"))]
+pub(crate) fn split_browse_preview(_app: &App, content: Rect) -> (Rect, Option<Rect>) {
+  (content, None)
+}
+
+#[cfg(feature = "cover-art")]
+pub(crate) fn browse_preview_area(app: &App) -> Option<(u16, u16)> {
+  if crate::tui::layout::main_hidden(app) {
+    return None;
+  }
+  let areas = compute_main_layout(app)?;
+  split_browse_preview(app, areas.content)
+    .1
+    .map(|area| (area.width, area.height))
+}
+
 pub fn draw_main_layout(f: &mut Frame<'_>, app: &App) {
   if let Some(areas) = compute_main_layout(app) {
     // In wide layout the input row lives inside the sidebar and is drawn by
@@ -65,7 +98,14 @@ pub fn draw_main_layout(f: &mut Frame<'_>, app: &App) {
     }
     if !main_hidden(app) {
       draw_user_block(f, app, areas.sidebar);
-      draw_route_content(f, app, areas.content);
+      let (content, preview) = split_browse_preview(app, areas.content);
+      draw_route_content(f, app, content);
+      #[cfg(feature = "cover-art")]
+      if let Some(preview) = preview {
+        search::draw_browse_preview(f, app, preview);
+      }
+      #[cfg(not(feature = "cover-art"))]
+      let _ = preview;
       if let Some(now_playing_area) = areas.now_playing {
         now_playing::draw_now_playing(f, app, now_playing_area);
       }
@@ -302,6 +342,73 @@ mod tests {
       "missing selected period label"
     );
     assert!(all_text.contains("Top Tracks"), "missing Top Tracks panel");
+  }
+
+  #[cfg(feature = "cover-art")]
+  #[test]
+  fn preview_area_follows_the_drawn_preview_box() {
+    use crate::core::app::TrackTableContext;
+    use crate::core::plugin_api::TrackInfo;
+    use crate::core::test_helpers::full_track;
+
+    let mut app = App::default();
+    app.view.size = Viewport {
+      width: 160,
+      height: 50,
+    };
+    app.push_navigation_stack(RouteId::TrackTable, ActiveBlock::TrackTable);
+    app.set_track_table(
+      vec![TrackInfo::from(&full_track(
+        "0000000000000000000001",
+        "Track",
+      ))],
+      TrackTableContext::RecommendedTracks,
+    );
+
+    let area = browse_preview_area(&app).expect("preview area");
+    let content = compute_main_layout(&app).unwrap().content;
+    assert_eq!(area.1, search::browse_preview_height(&app, content));
+
+    app.view.size = Viewport {
+      width: 40,
+      height: 50,
+    };
+    assert!(browse_preview_area(&app).is_none());
+  }
+
+  #[cfg(feature = "cover-art")]
+  #[test]
+  fn preview_area_opens_for_a_hovered_item_without_a_keyboard_selection() {
+    use crate::core::app::{BrowsePreviewItem, SearchResult, SearchResultBlock};
+    use crate::core::pagination::Paged;
+    use crate::core::plugin_api::TrackInfo;
+    use crate::core::test_helpers::full_track;
+
+    let mut app = App::default();
+    app.view.size = Viewport {
+      width: 160,
+      height: 50,
+    };
+    app.push_navigation_stack(RouteId::Search, ActiveBlock::SearchResultBlock);
+    let track = TrackInfo::from(&full_track("0000000000000000000001", "Hovered Song"));
+    app.set_search_results(SearchResult {
+      tracks: Some(Paged {
+        items: vec![track.clone()],
+        total: 1,
+        ..Default::default()
+      }),
+      ..Default::default()
+    });
+    app.select_search_result_row(SearchResultBlock::Empty, None);
+    app.note_mouse_input();
+    app.set_hovered_preview_item(
+      RouteId::Search,
+      ActiveBlock::SearchResultBlock,
+      BrowsePreviewItem::Track(track),
+    );
+
+    assert!(app.selected_preview_item().is_none());
+    assert!(browse_preview_area(&app).is_some());
   }
 }
 

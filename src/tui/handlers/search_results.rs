@@ -311,7 +311,7 @@ fn selected_search_show_id(app: &App) -> Option<String> {
   selected_search_show_row(app)?.id.clone()
 }
 
-fn handle_enter_event_on_selected_block(app: &mut App) {
+pub(crate) fn handle_enter_event_on_selected_block(app: &mut App) {
   match &app.view.search_selected_block {
     SearchResultBlock::AlbumSearch => {
       if let Some(id) = selected_search_album_id(app) {

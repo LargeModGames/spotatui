@@ -107,6 +107,12 @@ pub const ZH_HANT: SettingsStrings = SettingsStrings {
   behavior_draw_cover_art_forced_description: "無論終端機是否支援，均強制顯示封面",
   behavior_playbar_cover_art_size_percent_name: "封面大小",
   behavior_playbar_cover_art_size_percent_description: "播放列封面大小百分比（25–200）",
+  behavior_show_song_selection_details_name: "顯示所選歌曲詳情",
+  behavior_show_song_selection_details_description:
+    "在歌曲清單下方顯示所選歌曲的封面和詳情，並顯示側邊欄所選播放清單的封面",
+  behavior_fade_song_selection_cover_art_name: "淡入淡出所選歌曲封面",
+  behavior_fade_song_selection_cover_art_description:
+    "在歌曲清單預覽中切換所選歌曲封面時使用淡入淡出效果",
   behavior_cover_art_dither_name: "封面抖色",
   behavior_cover_art_dither_description: "使用與佈景主題匹配的兩種顏色為所有尺寸的封面抖色",
   behavior_cover_art_dither_algorithm_name: "封面抖色演算法",

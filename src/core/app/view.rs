@@ -84,6 +84,12 @@ pub struct ViewState {
   pub search_selected_shows_index: Option<usize>,
   pub search_hovered_block: SearchResultBlock,
   pub search_selected_block: SearchResultBlock,
+  #[cfg(feature = "cover-art")]
+  pub preview_input_source: PreviewInputSource,
+  #[cfg(feature = "cover-art")]
+  pub hovered_playlist_index: Option<usize>,
+  #[cfg(feature = "cover-art")]
+  pub hovered_preview_item: Option<HoveredPreviewItem>,
 
   // The `d` device/source picker
   pub selected_device_index: Option<usize>,

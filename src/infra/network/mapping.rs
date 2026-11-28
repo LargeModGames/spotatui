@@ -49,26 +49,10 @@ pub(crate) fn playlist_info_with_description(item: &PlaylistWithDescription) -> 
   PlaylistInfo::from_simplified_with_description(&item.simplified, item.description.clone())
 }
 
-/// First image URL of an `images` list, if any.
+/// First image URL of an `images` list, if any. Spotify lists largest first, so
+/// this is also the URL playing art uses for the same item.
 fn first_image(images: &[rspotify::model::image::Image]) -> Option<String> {
   images.first().map(|img| img.url.clone())
-}
-
-/// A track's cover: the smallest image at least 300 px wide, which stays sharp on a
-/// card, else the largest; with no widths known, the first (Spotify lists largest first).
-fn track_cover(images: &[rspotify::model::image::Image]) -> Option<String> {
-  images
-    .iter()
-    .filter(|img| img.width.is_some_and(|width| width >= 300))
-    .min_by_key(|img| img.width)
-    .or_else(|| {
-      images
-        .iter()
-        .filter(|img| img.width.is_some())
-        .max_by_key(|img| img.width)
-    })
-    .or_else(|| images.first())
-    .map(|img| img.url.clone())
 }
 
 /// Convert a chrono `Duration` to non-negative milliseconds.
@@ -130,7 +114,7 @@ impl From<&FullTrack> for TrackInfo {
       is_local: t.is_local,
       track_number: t.track_number,
       explicit: t.explicit,
-      image_url: track_cover(&t.album.images),
+      image_url: first_image(&t.album.images),
       release_date: t.album.release_date.clone(),
     }
   }
@@ -510,6 +494,7 @@ mod tests {
       ..Default::default()
     }
   }
+
   #[test]
   fn playlist_description_from_internal_json_is_kept_and_blank_is_dropped() {
     let item: PlaylistWithDescription = serde_json::from_value(serde_json::json!({
@@ -606,7 +591,6 @@ mod tests {
     );
   }
 
-
   #[test]
   fn full_track_maps_core_and_extended_fields() {
     let ft = full_track("4uLU6hMCjMI75M1A2tKUQC", "Never Gonna Give You Up");
@@ -647,7 +631,7 @@ mod tests {
   }
 
   #[test]
-  fn full_track_takes_the_album_cover_sized_for_a_card() {
+  fn full_track_uses_the_first_album_cover_for_browse_previews() {
     let image = |url: &str, width: Option<u32>| rspotify::model::image::Image {
       url: url.to_string(),
       width,
@@ -661,10 +645,10 @@ mod tests {
       image("64", Some(64)),
       image("300", Some(300)),
     ];
-    assert_eq!(cover(&ft).as_deref(), Some("300"));
+    assert_eq!(cover(&ft).as_deref(), Some("640"));
 
     ft.album.images = vec![image("64", Some(64)), image("120", Some(120))];
-    assert_eq!(cover(&ft).as_deref(), Some("120"));
+    assert_eq!(cover(&ft).as_deref(), Some("64"));
 
     ft.album.images = vec![image("first", None), image("second", None)];
     assert_eq!(cover(&ft).as_deref(), Some("first"));

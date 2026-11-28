@@ -43,12 +43,13 @@ pub enum Event {
   Snapshot(crate::tui::dev_inspect::Snapshot),
 }
 
-/// Whether the reader thread hands a mouse event to the UI loop. Every
-/// forwarded event locks the `App` and redraws, so pointer motion (`Moved`)
-/// and most button releases are dropped. A left drag is kept: it scrubs the
-/// playbar progress line and moves a pane border, and the left release ends
-/// the border drag.
+/// Forward pointer motion when it can update the preview. Most button
+/// releases are dropped; the left release ends playbar and pane-border drags.
 fn forwards_mouse(kind: MouseEventKind) -> bool {
+  #[cfg(feature = "cover-art")]
+  if matches!(kind, MouseEventKind::Moved) {
+    return true;
+  }
   matches!(
     kind,
     MouseEventKind::Down(_)
@@ -162,29 +163,45 @@ impl Events {
   }
 }
 
-/// The next event, with the ticks queued behind a tick merged into it, so a
-/// frame slower than the tick rate does not queue ticks in front of the keys.
+/// Fold adjacent ticks or pointer moves into one event without crossing
+/// presses, scrolls, or any other event that must keep its place.
 fn next_coalesced(
   rx: &mpsc::Receiver<Event>,
   held: &mut Option<Event>,
 ) -> Result<Event, mpsc::RecvError> {
-  let event = match held.take() {
+  let mut event = match held.take() {
     Some(event) => event,
     None => rx.recv()?,
   };
-  let Event::Tick(mut elapsed) = event else {
+  if !matches!(
+    event,
+    Event::Tick(_)
+      | Event::Mouse(MouseEvent {
+        kind: MouseEventKind::Moved,
+        ..
+      })
+  ) {
     return Ok(event);
-  };
+  }
   while let Ok(next) = rx.try_recv() {
-    match next {
-      Event::Tick(more) => elapsed += more,
-      other => {
+    match (&mut event, next) {
+      (Event::Tick(elapsed), Event::Tick(more)) => *elapsed += more,
+      (
+        Event::Mouse(mouse),
+        Event::Mouse(
+          next @ MouseEvent {
+            kind: MouseEventKind::Moved,
+            ..
+          },
+        ),
+      ) => *mouse = next,
+      (_, other) => {
         *held = Some(other);
         break;
       }
     }
   }
-  Ok(Event::Tick(elapsed))
+  Ok(event)
 }
 
 #[cfg(test)]
@@ -212,6 +229,51 @@ mod tests {
   }
 
   #[test]
+  fn queued_pointer_moves_keep_the_latest_position_without_crossing_a_click() {
+    let (tx, rx) = mpsc::channel();
+    let mut held = None;
+    for (column, kind) in [
+      (1, MouseEventKind::Moved),
+      (2, MouseEventKind::Moved),
+      (2, MouseEventKind::Down(MouseButton::Left)),
+      (4, MouseEventKind::Moved),
+    ] {
+      tx.send(Event::Mouse(MouseEvent {
+        column,
+        kind,
+        row: 0,
+        modifiers: event::KeyModifiers::NONE,
+      }))
+      .unwrap();
+    }
+    let mut next = || next_coalesced(&rx, &mut held).unwrap();
+    assert!(matches!(
+      next(),
+      Event::Mouse(MouseEvent {
+        column: 2,
+        kind: MouseEventKind::Moved,
+        ..
+      })
+    ));
+    assert!(matches!(
+      next(),
+      Event::Mouse(MouseEvent {
+        column: 2,
+        kind: MouseEventKind::Down(MouseButton::Left),
+        ..
+      })
+    ));
+    assert!(matches!(
+      next(),
+      Event::Mouse(MouseEvent {
+        column: 4,
+        kind: MouseEventKind::Moved,
+        ..
+      })
+    ));
+  }
+
+  #[test]
   fn left_drag_and_its_release_are_forwarded_to_the_mouse_handler() {
     assert!(forwards_mouse(MouseEventKind::Drag(MouseButton::Left)));
     assert!(forwards_mouse(MouseEventKind::Up(MouseButton::Left)));
@@ -219,7 +281,10 @@ mod tests {
   }
 
   #[test]
-  fn pointer_moves_are_not_forwarded() {
+  fn pointer_moves_follow_the_cover_art_preview_feature() {
+    #[cfg(feature = "cover-art")]
+    assert!(forwards_mouse(MouseEventKind::Moved));
+    #[cfg(not(feature = "cover-art"))]
     assert!(!forwards_mouse(MouseEventKind::Moved));
     assert!(forwards_mouse(MouseEventKind::Down(MouseButton::Left)));
     assert!(forwards_mouse(MouseEventKind::ScrollUp));

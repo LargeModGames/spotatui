@@ -127,6 +127,10 @@ pub struct SettingsStrings {
   pub behavior_draw_cover_art_forced_description: &'static str,
   pub behavior_playbar_cover_art_size_percent_name: &'static str,
   pub behavior_playbar_cover_art_size_percent_description: &'static str,
+  pub behavior_show_song_selection_details_name: &'static str,
+  pub behavior_show_song_selection_details_description: &'static str,
+  pub behavior_fade_song_selection_cover_art_name: &'static str,
+  pub behavior_fade_song_selection_cover_art_description: &'static str,
   pub behavior_cover_art_dither_name: &'static str,
   pub behavior_cover_art_dither_description: &'static str,
   pub behavior_cover_art_dither_algorithm_name: &'static str,
@@ -625,6 +629,14 @@ impl SettingsStrings {
       "behavior.playbar_cover_art_size_percent" => (
         self.behavior_playbar_cover_art_size_percent_name,
         self.behavior_playbar_cover_art_size_percent_description,
+      ),
+      "behavior.show_song_selection_details" => (
+        self.behavior_show_song_selection_details_name,
+        self.behavior_show_song_selection_details_description,
+      ),
+      "behavior.fade_song_selection_cover_art" => (
+        self.behavior_fade_song_selection_cover_art_name,
+        self.behavior_fade_song_selection_cover_art_description,
       ),
       "behavior.cover_art_dither" => (
         self.behavior_cover_art_dither_name,

@@ -819,6 +819,22 @@ pub fn draw_cover_art_view(f: &mut Frame<'_>, app: &App) {
   }
 }
 
+#[cfg(not(feature = "cover-art"))]
+pub fn draw_cover_art_view(f: &mut Frame<'_>, app: &App) {
+  let message = app.strings().screens.cover_art_not_built;
+  let y = f.area().y + f.area().height / 2;
+  f.render_widget(
+    Paragraph::new(message)
+      .style(Style::default().fg(app.user_config.theme.inactive.into()))
+      .alignment(ratatui::layout::Alignment::Center),
+    Rect {
+      y,
+      height: 1,
+      ..f.area()
+    },
+  );
+}
+
 pub fn draw_miniplayer(f: &mut Frame<'_>, app: &App) {
   let area = miniplayer_playbar_area(f.area());
   draw_playbar(f, app, area);
@@ -2808,5 +2824,28 @@ mod tests {
       .join("\n");
     // The pre-localization text listed the down key first.
     assert!(text.contains("Use `d`/`u` or arrow keys to move"), "{text}");
+  }
+
+  #[cfg(not(feature = "cover-art"))]
+  #[test]
+  fn a_build_without_cover_art_says_so_on_the_fullscreen_view() {
+    use ratatui::{backend::TestBackend, Terminal};
+
+    let app = App::default();
+    let mut terminal = Terminal::new(TestBackend::new(40, 3)).unwrap();
+    terminal
+      .draw(|frame| draw_cover_art_view(frame, &app))
+      .unwrap();
+    let text: String = terminal
+      .backend()
+      .buffer()
+      .content()
+      .iter()
+      .map(|cell| cell.symbol())
+      .collect();
+    assert!(
+      text.contains(app.strings().screens.cover_art_not_built),
+      "{text}"
+    );
   }
 }

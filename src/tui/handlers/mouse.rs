@@ -1,6 +1,8 @@
 use super::{common_key_events, library, lyrics_view, playbar, playlist, settings};
 use crate::core::action::{Action, NavTarget};
-use crate::core::app::{ActiveBlock, App, RouteId, SettingValue, SettingsCategory};
+use crate::core::app::{
+  ActiveBlock, App, RouteId, SearchResultBlock, SettingValue, SettingsCategory,
+};
 use crate::core::pane::Pane;
 use crate::tui::event::Key;
 use crate::tui::layout::{
@@ -71,6 +73,12 @@ pub fn handler(mouse: MouseEvent, app: &mut App) {
   }
 
   if !is_main_layout_mouse_interactive(current_active_block) {
+    return;
+  }
+
+  #[cfg(feature = "cover-art")]
+  if mouse.kind == MouseEventKind::Moved {
+    handle_hover_mouse(mouse, &current_route_id, app);
     return;
   }
 
@@ -176,6 +184,11 @@ fn handle_content_table_mouse(
     return;
   }
 
+  if route_id == RouteId::Search {
+    handle_search_results_mouse(mouse, table_area, app);
+    return;
+  }
+
   let item_count = content_table_item_count(active_block, app);
   if item_count == 0 {
     return;
@@ -193,6 +206,310 @@ fn handle_content_table_mouse(
     MouseEventKind::Down(MouseButton::Left) => {
       focus_content_table(active_block, app);
       select_clicked_content_table_item(active_block, mouse.row, table_area, item_count, app);
+    }
+    _ => {}
+  }
+}
+
+#[cfg(feature = "cover-art")]
+fn handle_hover_mouse(mouse: MouseEvent, route_id: &RouteId, app: &mut App) {
+  use crate::core::app::BrowsePreviewItem;
+
+  let Some(areas) = main_layout_areas(app) else {
+    app.clear_hovered_preview_item();
+    return;
+  };
+  app.clear_hovered_preview_item();
+
+  if rect_contains(areas.library, mouse.column, mouse.row) {
+    app.set_current_route_state(None, Some(ActiveBlock::Library));
+    let item_count = app.library_rows().len();
+    let selected_index = app.library_cursor();
+    let Some(index) = list_item_index_from_click(
+      areas.library,
+      mouse.row,
+      selected_index,
+      Some(app.view.library_scroll_offset.get()),
+      item_count,
+    ) else {
+      return;
+    };
+    library::select_row(app, index);
+    return;
+  }
+
+  if rect_contains(areas.playlists, mouse.column, mouse.row) {
+    app.set_current_route_state(None, Some(ActiveBlock::MyPlaylists));
+    let item_count = playlist::total_display_count(app);
+    let selected_index = app
+      .view
+      .selected_playlist_index
+      .unwrap_or(0)
+      .min(item_count.saturating_sub(1));
+    let Some(index) = list_item_index_from_click(
+      areas.playlists,
+      mouse.row,
+      selected_index,
+      Some(app.view.playlist_scroll_offset.get()),
+      item_count,
+    ) else {
+      return;
+    };
+    app.set_hovered_playlist_index(index);
+    if let Some(playlist) = app.preview_playlist_at_index(index) {
+      app.set_hovered_preview_item(
+        route_id.clone(),
+        ActiveBlock::MyPlaylists,
+        BrowsePreviewItem::Playlist(playlist),
+      );
+    }
+    return;
+  }
+
+  if !rect_contains(areas.content, mouse.column, mouse.row) {
+    return;
+  }
+
+  if route_id == &RouteId::Search {
+    app.set_current_route_state(None, Some(ActiveBlock::SearchResultBlock));
+    if app.active_source == crate::core::source::Source::Radio {
+      let block = SearchResultBlock::SongSearch;
+      let item_count = search_result_row_count(&block, app);
+      let selected_index = search_result_row_index(&block, app).min(item_count.saturating_sub(1));
+      let Some(index) = list_item_index_from_click(
+        areas.content,
+        mouse.row,
+        selected_index,
+        Some(search_result_scroll_offset(&block, app)),
+        item_count,
+      ) else {
+        return;
+      };
+      app.view.search_hovered_block = block;
+      app.select_search_result_row(block, Some(index));
+      if let Some(item) = app.search_preview_item_at_index(block, index) {
+        app.set_hovered_preview_item(route_id.clone(), ActiveBlock::SearchResultBlock, item);
+      }
+      return;
+    }
+    for (block, panel_area) in crate::tui::ui::search::search_result_panel_areas(areas.content) {
+      if !rect_contains(panel_area, mouse.column, mouse.row) {
+        continue;
+      }
+      let item_count = search_result_row_count(&block, app);
+      let selected_index = search_result_row_index(&block, app).min(item_count.saturating_sub(1));
+      let Some(index) = list_item_index_from_click(
+        panel_area,
+        mouse.row,
+        selected_index,
+        Some(search_result_scroll_offset(&block, app)),
+        item_count,
+      ) else {
+        return;
+      };
+      app.view.search_hovered_block = block;
+      app.select_search_result_row(block, Some(index));
+      if let Some(item) = app.search_preview_item_at_index(block, index) {
+        app.set_hovered_preview_item(route_id.clone(), ActiveBlock::SearchResultBlock, item);
+      }
+      return;
+    }
+    return;
+  }
+
+  let Some(active_block) = common_key_events::content_active_block_for_route(route_id) else {
+    return;
+  };
+  app.set_current_route_state(None, Some(active_block));
+  let item_count = content_table_item_count(active_block, app);
+  if item_count == 0 {
+    return;
+  }
+  let selected_index =
+    content_table_selected_index(active_block, app).min(item_count.saturating_sub(1));
+  let anchored_offset = match active_block {
+    ActiveBlock::TrackTable => Some(app.view.track_table_scroll_offset.get()),
+    _ => None,
+  };
+  let Some(index) = table_item_index_from_click(
+    areas.content,
+    mouse.row,
+    selected_index,
+    anchored_offset,
+    item_count,
+  ) else {
+    return;
+  };
+  set_content_table_selected_index(active_block, index, app);
+  if let Some(track) = app.hover_preview_track_at_index(index) {
+    app.set_hovered_preview_item(
+      route_id.clone(),
+      active_block,
+      BrowsePreviewItem::Track(track),
+    );
+  }
+}
+
+fn search_result_row_count(block: &SearchResultBlock, app: &App) -> usize {
+  let results = app.search_results();
+  match block {
+    SearchResultBlock::AlbumSearch => results
+      .albums
+      .as_ref()
+      .map(|page| page.items.len())
+      .unwrap_or(0),
+    SearchResultBlock::SongSearch => results
+      .tracks
+      .as_ref()
+      .map(|page| page.items.len())
+      .unwrap_or(0),
+    SearchResultBlock::ArtistSearch => results
+      .artists
+      .as_ref()
+      .map(|page| page.items.len())
+      .unwrap_or(0),
+    SearchResultBlock::PlaylistSearch => results
+      .playlists
+      .as_ref()
+      .map(|page| page.items.len())
+      .unwrap_or(0),
+    SearchResultBlock::ShowSearch => results
+      .shows
+      .as_ref()
+      .map(|page| page.items.len())
+      .unwrap_or(0),
+    SearchResultBlock::Empty => 0,
+  }
+}
+
+fn search_result_row_index(block: &SearchResultBlock, app: &App) -> usize {
+  match block {
+    SearchResultBlock::AlbumSearch => app.view.search_selected_album_index.unwrap_or(0),
+    SearchResultBlock::SongSearch => app.view.search_selected_tracks_index.unwrap_or(0),
+    SearchResultBlock::ArtistSearch => app.view.search_selected_artists_index.unwrap_or(0),
+    SearchResultBlock::PlaylistSearch => app.view.search_selected_playlists_index.unwrap_or(0),
+    SearchResultBlock::ShowSearch => app.view.search_selected_shows_index.unwrap_or(0),
+    SearchResultBlock::Empty => 0,
+  }
+}
+
+fn search_result_scroll_offset(block: &SearchResultBlock, app: &App) -> usize {
+  match block {
+    SearchResultBlock::AlbumSearch => app.view.search_albums_scroll_offset.get(),
+    SearchResultBlock::SongSearch => app.view.search_tracks_scroll_offset.get(),
+    SearchResultBlock::ArtistSearch => app.view.search_artists_scroll_offset.get(),
+    SearchResultBlock::PlaylistSearch => app.view.search_playlists_scroll_offset.get(),
+    SearchResultBlock::ShowSearch => app.view.search_shows_scroll_offset.get(),
+    SearchResultBlock::Empty => 0,
+  }
+}
+
+fn search_panel_at_point(
+  content_area: Rect,
+  column: u16,
+  row: u16,
+) -> Option<(SearchResultBlock, Rect)> {
+  crate::tui::ui::search::search_result_panel_areas(content_area)
+    .into_iter()
+    .find(|(_, panel)| rect_contains(*panel, column, row))
+}
+
+fn next_search_result_index(current: usize, count: usize, down: bool) -> usize {
+  if count == 0 {
+    return 0;
+  }
+  if down {
+    (current + 1) % count
+  } else if current == 0 {
+    count - 1
+  } else {
+    current - 1
+  }
+}
+
+fn handle_search_results_mouse(mouse: MouseEvent, content_area: Rect, app: &mut App) {
+  if !matches!(
+    mouse.kind,
+    MouseEventKind::ScrollDown | MouseEventKind::ScrollUp | MouseEventKind::Down(MouseButton::Left)
+  ) {
+    return;
+  }
+  focus_content_table(ActiveBlock::SearchResultBlock, app);
+
+  if app.active_source == crate::core::source::Source::Radio {
+    let block = SearchResultBlock::SongSearch;
+    let item_count = search_result_row_count(&block, app);
+    match mouse.kind {
+      MouseEventKind::ScrollDown | MouseEventKind::ScrollUp => {
+        let current = search_result_row_index(&block, app);
+        let index = next_search_result_index(
+          current,
+          item_count,
+          mouse.kind == MouseEventKind::ScrollDown,
+        );
+        app.select_search_result_row(block, (item_count > 0).then_some(index));
+      }
+      MouseEventKind::Down(MouseButton::Left) => {
+        if item_count == 0 {
+          return;
+        }
+        let current = search_result_row_index(&block, app).min(item_count - 1);
+        let Some(index) = list_item_index_from_click(
+          content_area,
+          mouse.row,
+          current,
+          Some(search_result_scroll_offset(&block, app)),
+          item_count,
+        ) else {
+          return;
+        };
+        let was_selected =
+          app.view.search_selected_block == block && search_result_row_index(&block, app) == index;
+        app.select_search_result_row(block, Some(index));
+        if was_selected {
+          super::search_results::handle_enter_event_on_selected_block(app);
+        }
+      }
+      _ => {}
+    }
+    return;
+  }
+
+  let Some((block, panel_area)) = search_panel_at_point(content_area, mouse.column, mouse.row)
+  else {
+    return;
+  };
+  let item_count = search_result_row_count(&block, app);
+  match mouse.kind {
+    MouseEventKind::ScrollDown | MouseEventKind::ScrollUp => {
+      let current = search_result_row_index(&block, app);
+      let index = next_search_result_index(
+        current,
+        item_count,
+        mouse.kind == MouseEventKind::ScrollDown,
+      );
+      app.select_search_result_row(block, (item_count > 0).then_some(index));
+    }
+    MouseEventKind::Down(MouseButton::Left) => {
+      if item_count == 0 {
+        return;
+      }
+      let current = search_result_row_index(&block, app).min(item_count - 1);
+      let Some(index) = list_item_index_from_click(
+        panel_area,
+        mouse.row,
+        current,
+        Some(search_result_scroll_offset(&block, app)),
+        item_count,
+      ) else {
+        return;
+      };
+      let was_selected =
+        app.view.search_selected_block == block && search_result_row_index(&block, app) == index;
+      app.select_search_result_row(block, Some(index));
+      if was_selected {
+        super::search_results::handle_enter_event_on_selected_block(app);
+      }
     }
     _ => {}
   }
@@ -702,6 +1019,16 @@ fn content_table_item_count(active_block: ActiveBlock, app: &App) -> usize {
       .get_results(None)
       .map(|episodes| episodes.items.len())
       .unwrap_or(0),
+    ActiveBlock::SearchResultBlock
+      if app.view.search_selected_block == SearchResultBlock::SongSearch =>
+    {
+      app
+        .search_results()
+        .tracks
+        .as_ref()
+        .map(|tracks| tracks.items.len())
+        .unwrap_or(0)
+    }
     _ => 0,
   }
 }
@@ -722,6 +1049,11 @@ fn content_table_selected_index(active_block: ActiveBlock, app: &App) -> usize {
     ActiveBlock::Artists => app.view.artists_list_index,
     ActiveBlock::Podcasts => app.view.shows_list_index,
     ActiveBlock::EpisodeTable => app.view.episode_list_index,
+    ActiveBlock::SearchResultBlock
+      if app.view.search_selected_block == SearchResultBlock::SongSearch =>
+    {
+      app.view.search_selected_tracks_index.unwrap_or(0)
+    }
     _ => 0,
   }
 }
@@ -748,6 +1080,11 @@ fn set_content_table_selected_index(active_block: ActiveBlock, index: usize, app
     }
     ActiveBlock::Podcasts => app.view.shows_list_index = index,
     ActiveBlock::EpisodeTable => app.view.episode_list_index = index,
+    ActiveBlock::SearchResultBlock
+      if app.view.search_selected_block == SearchResultBlock::SongSearch =>
+    {
+      app.view.search_selected_tracks_index = Some(index);
+    }
     _ => {}
   }
 }
@@ -976,7 +1313,9 @@ fn miniplayer_view_playbar_area(app: &App) -> Option<Rect> {
 }
 
 fn main_layout_areas(app: &App) -> Option<MainLayoutAreas> {
-  compute_main_layout(app)
+  let mut areas = compute_main_layout(app)?;
+  areas.content = crate::tui::ui::split_browse_preview(app, areas.content).0;
+  Some(areas)
 }
 
 fn rect_contains(rect: Rect, x: u16, y: u16) -> bool {
@@ -2179,6 +2518,455 @@ mod tests {
     assert!(app.is_loading);
   }
 
+  #[cfg(feature = "cover-art")]
+  #[test]
+  fn clicks_over_browse_preview_do_not_select_hidden_track_rows() {
+    let mut app = App::default();
+    app.view.size = Viewport {
+      width: 160,
+      height: 50,
+    };
+    app.push_navigation_stack(RouteId::TrackTable, ActiveBlock::TrackTable);
+    app.set_track_table(
+      vec![
+        crate::core::plugin_api::TrackInfo::from(&full_track("0000000000000000000001", "Track 1")),
+        crate::core::plugin_api::TrackInfo::from(&full_track("0000000000000000000002", "Track 2")),
+      ],
+      TrackTableContext::RecommendedTracks,
+    );
+
+    let full = compute_main_layout(&app).expect("layout areas");
+    assert!(
+      crate::tui::ui::search::browse_preview_height(&app, full.content) > 0,
+      "the test viewport should reserve a preview"
+    );
+    handler(
+      mouse_event(
+        MouseEventKind::Down(MouseButton::Left),
+        full.content.x + 1,
+        full.content.y + full.content.height - 1,
+      ),
+      &mut app,
+    );
+    assert_eq!(app.view.track_table_index, 0);
+
+    let visible = main_layout_areas(&app).expect("layout areas");
+    handler(
+      mouse_event(
+        MouseEventKind::Down(MouseButton::Left),
+        visible.content.x + 1,
+        visible.content.y + 3,
+      ),
+      &mut app,
+    );
+    assert_eq!(app.view.track_table_index, 1);
+  }
+
+  #[cfg(feature = "cover-art")]
+  #[test]
+  fn moving_over_a_song_moves_selection_and_shows_it_in_the_preview() {
+    let mut app = App::default();
+    app.view.size = Viewport {
+      width: 160,
+      height: 50,
+    };
+    app.push_navigation_stack(RouteId::TrackTable, ActiveBlock::TrackTable);
+    app.set_track_table(
+      vec![
+        crate::core::plugin_api::TrackInfo::from(&full_track("0000000000000000000001", "Track 1")),
+        crate::core::plugin_api::TrackInfo::from(&full_track("0000000000000000000002", "Track 2")),
+      ],
+      TrackTableContext::RecommendedTracks,
+    );
+    app.note_mouse_input();
+
+    let areas = main_layout_areas(&app).expect("layout areas");
+    handler(
+      mouse_event(
+        MouseEventKind::Moved,
+        areas.content.x + 1,
+        areas.content.y + 3,
+      ),
+      &mut app,
+    );
+
+    assert_eq!(app.view.track_table_index, 1);
+    assert_eq!(app.preview_track_name(), Some("Track 2".to_string()));
+  }
+
+  #[cfg(feature = "cover-art")]
+  #[test]
+  fn hovering_a_song_works_while_the_sidebar_has_keyboard_focus() {
+    let mut app = App::default();
+    app.view.size = Viewport {
+      width: 160,
+      height: 50,
+    };
+    app.push_navigation_stack(RouteId::TrackTable, ActiveBlock::TrackTable);
+    app.set_track_table(
+      vec![
+        crate::core::plugin_api::TrackInfo::from(&full_track("0000000000000000000001", "Track 1")),
+        crate::core::plugin_api::TrackInfo::from(&full_track("0000000000000000000002", "Track 2")),
+      ],
+      TrackTableContext::RecommendedTracks,
+    );
+    app.set_current_route_state(Some(ActiveBlock::MyPlaylists), None);
+    app.note_mouse_input();
+
+    let areas = main_layout_areas(&app).expect("layout areas");
+    handler(
+      mouse_event(
+        MouseEventKind::Moved,
+        areas.content.x + 1,
+        areas.content.y + 3,
+      ),
+      &mut app,
+    );
+
+    assert_eq!(
+      app.get_current_route().active_block,
+      ActiveBlock::MyPlaylists
+    );
+    assert_eq!(app.view.track_table_index, 1);
+    assert_eq!(app.preview_track_name(), Some("Track 2".to_string()));
+  }
+
+  #[cfg(feature = "cover-art")]
+  fn app_with_all_search_results() -> App {
+    use crate::core::plugin_api::{AlbumInfo, ArtistInfo, ShowInfo};
+    use crate::core::test_helpers::playlist_info;
+
+    let mut app = App::default();
+    app.view.size = Viewport {
+      width: 160,
+      height: 50,
+    };
+    app.set_search_results(crate::core::app::SearchResult {
+      albums: Some(crate::core::pagination::Paged {
+        items: vec![AlbumInfo {
+          name: "Search Album".to_string(),
+          ..Default::default()
+        }],
+        total: 1,
+        ..Default::default()
+      }),
+      artists: Some(crate::core::pagination::Paged {
+        items: vec![ArtistInfo {
+          name: "Search Artist".to_string(),
+          ..Default::default()
+        }],
+        total: 1,
+        ..Default::default()
+      }),
+      playlists: Some(crate::core::pagination::Paged {
+        items: vec![playlist_info(
+          "search-playlist",
+          "Search Playlist",
+          "Owner",
+          false,
+        )],
+        total: 1,
+        ..Default::default()
+      }),
+      shows: Some(crate::core::pagination::Paged {
+        items: vec![ShowInfo {
+          name: "Search Show".to_string(),
+          ..Default::default()
+        }],
+        total: 1,
+        ..Default::default()
+      }),
+      tracks: Some(crate::core::pagination::Paged {
+        items: vec![crate::core::plugin_api::TrackInfo::from(&full_track(
+          "0000000000000000000001",
+          "Search Song",
+        ))],
+        total: 1,
+        ..Default::default()
+      }),
+      ..Default::default()
+    });
+    app.select_search_result_row(SearchResultBlock::Empty, None);
+    app.push_navigation_stack(RouteId::Search, ActiveBlock::SearchResultBlock);
+    app
+  }
+
+  #[cfg(feature = "cover-art")]
+  fn app_with_search_songs(selected_block: SearchResultBlock) -> App {
+    let mut app = App::default();
+    app.view.size = Viewport {
+      width: 160,
+      height: 50,
+    };
+    app.set_search_results(crate::core::app::SearchResult {
+      tracks: Some(crate::core::pagination::Paged {
+        items: vec![
+          crate::core::plugin_api::TrackInfo::from(&full_track(
+            "0000000000000000000001",
+            "Search Song 1",
+          )),
+          crate::core::plugin_api::TrackInfo::from(&full_track(
+            "0000000000000000000002",
+            "Search Song 2",
+          )),
+        ],
+        total: 2,
+        ..Default::default()
+      }),
+      ..Default::default()
+    });
+    app.select_search_result_row(selected_block, Some(0));
+    app.push_navigation_stack(RouteId::Search, ActiveBlock::SearchResultBlock);
+    app
+  }
+
+  #[cfg(feature = "cover-art")]
+  #[test]
+  fn hovering_a_search_song_row_shows_it_in_the_preview() {
+    let mut app = app_with_search_songs(SearchResultBlock::SongSearch);
+    app.note_mouse_input();
+
+    let areas = main_layout_areas(&app).expect("layout areas");
+    let panel = crate::tui::ui::search::search_result_panel_areas(areas.content)
+      .into_iter()
+      .find(|(block, _)| *block == SearchResultBlock::SongSearch)
+      .map(|(_, area)| area)
+      .expect("song panel");
+    handler(
+      mouse_event(MouseEventKind::Moved, panel.x + 1, panel.y + 2),
+      &mut app,
+    );
+
+    assert_eq!(app.view.search_selected_tracks_index, Some(1));
+    assert_eq!(
+      app.view.search_selected_block,
+      SearchResultBlock::SongSearch
+    );
+    assert_eq!(app.view.search_hovered_block, SearchResultBlock::SongSearch);
+    assert_eq!(app.preview_track_name(), Some("Search Song 2".to_string()));
+  }
+
+  #[cfg(feature = "cover-art")]
+  #[test]
+  fn hovering_any_search_result_block_shows_that_item_in_the_preview() {
+    let mut app = app_with_all_search_results();
+    app.note_mouse_input();
+
+    for (block, expected) in [
+      (SearchResultBlock::SongSearch, "Search Song"),
+      (SearchResultBlock::ArtistSearch, "Search Artist"),
+      (SearchResultBlock::AlbumSearch, "Search Album"),
+      (SearchResultBlock::PlaylistSearch, "Search Playlist"),
+      (SearchResultBlock::ShowSearch, "Search Show"),
+    ] {
+      let areas = main_layout_areas(&app).expect("layout areas");
+      let panel = crate::tui::ui::search::search_result_panel_areas(areas.content)
+        .into_iter()
+        .find(|(panel_block, _)| *panel_block == block)
+        .map(|(_, area)| area)
+        .expect("search panel");
+      handler(
+        mouse_event(MouseEventKind::Moved, panel.x + 1, panel.y + 1),
+        &mut app,
+      );
+      assert_eq!(app.view.search_selected_block, block);
+      assert_eq!(app.view.search_hovered_block, block);
+      assert_eq!(
+        app.preview_item().map(|item| item.title(app.strings())),
+        Some(expected.to_string()),
+        "hovering {block:?} should preview its row"
+      );
+    }
+  }
+
+  #[cfg(feature = "cover-art")]
+  #[test]
+  fn clicking_a_search_panel_selects_that_panels_row() {
+    let mut app = app_with_all_search_results();
+    let areas = main_layout_areas(&app).expect("layout areas");
+    let panel = crate::tui::ui::search::search_result_panel_areas(areas.content)
+      .into_iter()
+      .find(|(block, _)| *block == SearchResultBlock::AlbumSearch)
+      .map(|(_, area)| area)
+      .expect("album panel");
+
+    handler(
+      mouse_event(
+        MouseEventKind::Down(MouseButton::Left),
+        panel.x + 1,
+        panel.y + 1,
+      ),
+      &mut app,
+    );
+
+    assert_eq!(
+      app.view.search_selected_block,
+      SearchResultBlock::AlbumSearch
+    );
+    assert_eq!(app.view.search_selected_album_index, Some(0));
+  }
+
+  #[test]
+  fn scrolling_and_clicking_radio_results_use_the_full_list() {
+    let mut app = App::default();
+    app.view.size = Viewport {
+      width: 160,
+      height: 50,
+    };
+    app.set_active_source(crate::core::source::Source::Radio);
+    app.set_search_results(crate::core::app::SearchResult {
+      tracks: Some(crate::core::pagination::Paged {
+        items: vec![
+          crate::core::plugin_api::TrackInfo::from(&full_track(
+            "0000000000000000000001",
+            "Station 1",
+          )),
+          crate::core::plugin_api::TrackInfo::from(&full_track(
+            "0000000000000000000002",
+            "Station 2",
+          )),
+        ],
+        total: 2,
+        ..Default::default()
+      }),
+      ..Default::default()
+    });
+    app.push_navigation_stack(RouteId::Search, ActiveBlock::SearchResultBlock);
+    app.view.search_selected_tracks_index = Some(0);
+
+    let areas = main_layout_areas(&app).expect("layout areas");
+    handler(
+      mouse_event(
+        MouseEventKind::ScrollDown,
+        areas.content.x + 1,
+        areas.content.y + 3,
+      ),
+      &mut app,
+    );
+    assert_eq!(app.view.search_selected_tracks_index, Some(1));
+
+    handler(
+      mouse_event(
+        MouseEventKind::Down(MouseButton::Left),
+        areas.content.x + 1,
+        areas.content.y + 1,
+      ),
+      &mut app,
+    );
+    assert_eq!(app.view.search_selected_tracks_index, Some(0));
+  }
+
+  #[cfg(feature = "cover-art")]
+  #[test]
+  fn playlist_preview_follows_the_pointer_until_it_leaves_for_the_playbar() {
+    use crate::core::test_helpers::playlist_info;
+
+    let mut app = App::default();
+    app.view.size = Viewport {
+      width: 160,
+      height: 50,
+    };
+    app.push_navigation_stack(RouteId::Home, ActiveBlock::Library);
+    app.set_current_route_state(Some(ActiveBlock::Library), None);
+    let mut playlist = playlist_info("road-trip", "Road Trip", "Alice", false);
+    playlist.description = Some("Songs for the road".to_string());
+    *app.all_playlists_mut() = vec![playlist];
+    *app.playlist_folder_items_mut() = vec![PlaylistFolderItem::Playlist {
+      index: 0,
+      current_id: 0,
+    }];
+    app.note_mouse_input();
+
+    let areas = main_layout_areas(&app).expect("layout areas");
+    handler(
+      mouse_event(
+        MouseEventKind::Moved,
+        areas.playlists.x + 1,
+        areas.playlists.y + 3,
+      ),
+      &mut app,
+    );
+
+    assert_eq!(app.view.selected_playlist_index, None);
+    assert_eq!(app.view.hovered_playlist_index, Some(2));
+    assert_eq!(app.highlighted_playlist_index(), Some(2));
+    assert_eq!(
+      app.preview_item().map(|item| item.title(app.strings())),
+      Some("Road Trip".to_string())
+    );
+
+    app.view.selected_playlist_index = Some(2);
+    handler(
+      mouse_event(
+        MouseEventKind::Moved,
+        areas.playbar.x + 1,
+        areas.playbar.y + 1,
+      ),
+      &mut app,
+    );
+
+    assert_eq!(app.view.hovered_playlist_index, None);
+    assert_eq!(app.highlighted_playlist_index(), Some(2));
+    assert_eq!(app.get_current_route().active_block, ActiveBlock::Library);
+    assert!(app.preview_playlist().is_none());
+  }
+
+  #[cfg(feature = "cover-art")]
+  #[test]
+  fn hovering_a_library_row_moves_the_selection() {
+    let mut app = App::default();
+    app.view.size = Viewport {
+      width: 160,
+      height: 50,
+    };
+    app.push_navigation_stack(RouteId::Home, ActiveBlock::Library);
+    app.note_mouse_input();
+
+    let rows = app.library_rows();
+    assert!(rows.len() > 1);
+    let target_index = 1;
+    let target = rows[target_index];
+
+    let areas = main_layout_areas(&app).expect("layout areas");
+    handler(
+      mouse_event(
+        MouseEventKind::Moved,
+        areas.library.x + 1,
+        areas.library.y + 1 + target_index as u16,
+      ),
+      &mut app,
+    );
+
+    assert_eq!(app.view.library_selected, target);
+    assert_eq!(app.library_cursor(), target_index);
+  }
+
+  #[cfg(feature = "cover-art")]
+  #[test]
+  fn hovering_a_non_song_search_block_does_not_preview_a_song() {
+    let mut app = app_with_search_songs(SearchResultBlock::AlbumSearch);
+    app.note_mouse_input();
+
+    assert_eq!(
+      content_table_item_count(ActiveBlock::SearchResultBlock, &app),
+      0
+    );
+
+    let areas = main_layout_areas(&app).expect("layout areas");
+    let panel = crate::tui::ui::search::search_result_panel_areas(areas.content)
+      .into_iter()
+      .find(|(block, _)| *block == SearchResultBlock::AlbumSearch)
+      .map(|(_, area)| area)
+      .expect("album panel");
+    handler(
+      mouse_event(MouseEventKind::Moved, panel.x + 1, panel.y + 2),
+      &mut app,
+    );
+
+    assert_eq!(app.view.search_selected_album_index, Some(0));
+    assert!(app.preview_track_name().is_none());
+  }
+
   #[test]
   fn scroll_over_saved_albums_changes_selection() {
     let mut app = App::default();
@@ -2518,6 +3306,7 @@ mod tests {
         public: None,
         image_url: None,
         generated_name: None,
+        description: None,
       })
       .collect();
 
@@ -2642,4 +3431,3 @@ mod tests {
     assert_eq!(app.view.dragged_pane_split, None);
   }
 }
-        description: None,

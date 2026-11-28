@@ -16,9 +16,19 @@ use ratatui_image::{
 };
 use std::cell::Cell;
 use std::sync::{mpsc, Arc, Mutex, MutexGuard, OnceLock, PoisonError};
+use std::time::{Duration, Instant};
 
 mod dither;
 use dither::{Algorithm, Mask};
+
+const DEFAULT_FADE: Duration = Duration::from_millis(40);
+const MAX_FADE: Duration = Duration::from_millis(40);
+const FADE_LEVELS: u8 = u8::MAX;
+const HOLD_OPACITY: f32 = 0.125;
+
+fn fade_level(opacity: f32) -> u8 {
+  (opacity.clamp(0.0, 1.0) * f32::from(FADE_LEVELS)).round() as u8
+}
 
 impl PluginCoverArtFit {
   /// The `ratatui-image` resize strategy for this fit mode. Kept private so
@@ -189,27 +199,35 @@ pub fn cell_ratio() -> Option<f32> {
   RENDERER.get().and_then(|renderer| renderer.cell_ratio)
 }
 
+pub fn fade_active() -> bool {
+  RENDERER.get().is_some_and(CoverArtRenderer::fade_active)
+}
+
 /// Drop cached protocols that no longer match the store, so cleared art
 /// releases its memory even while no cover surface is being drawn. Called once
 /// per frame by the runner; rebuilds happen lazily at the next render.
-pub fn sync(store: &CoverArtStore) {
+pub fn sync(
+  playing: &CoverArtStore,
+  browse_preview: &CoverArtStore,
+  now: Instant,
+  fade_browse_preview: bool,
+) {
   let Some(renderer) = RENDERER.get() else {
     return;
   };
-  for surface in [
-    &renderer.playbar,
-    &renderer.pane_playbar,
-    &renderer.fullscreen,
-    &renderer.now_playing,
-    &renderer.plugin,
+  for (surface, store, allow_fade) in [
+    (&renderer.playbar, playing, false),
+    (&renderer.pane_playbar, playing, false),
+    (&renderer.fullscreen, playing, false),
+    (&renderer.now_playing, playing, false),
+    (&renderer.plugin, playing, false),
+    (
+      &renderer.browse_preview,
+      browse_preview,
+      fade_browse_preview,
+    ),
   ] {
-    let mut lock = lock_surface(surface);
-    let stale = lock
-      .as_ref()
-      .is_some_and(|surface| store.key() != Some(surface.key.as_str()));
-    if stale {
-      *lock = None;
-    }
+    renderer.sync_surface(surface, store, now, allow_fade);
   }
 }
 
@@ -327,6 +345,46 @@ pub fn plugin_size_for(area: Rect, fit: PluginCoverArtFit, store: &CoverArtStore
   renderer.surface_size_for(&renderer.plugin, area, fit.resize(), store)
 }
 
+fn browse_preview_resize() -> Resize {
+  Resize::Scale(Some(image::imageops::FilterType::Lanczos3))
+}
+
+fn browse_preview_render_style(config: &UserConfig) -> RenderStyle {
+  RenderStyle {
+    resize: browse_preview_resize(),
+    background: config.theme.background,
+    fill: true,
+  }
+}
+
+pub fn render_browse_preview(
+  f: &mut Frame,
+  area: Rect,
+  store: &CoverArtStore,
+  config: &UserConfig,
+) {
+  if let Some(renderer) = RENDERER.get() {
+    renderer.render_surface(
+      &renderer.browse_preview,
+      f,
+      area,
+      store,
+      config,
+      browse_preview_render_style(config),
+    );
+  }
+}
+
+pub fn browse_preview_size_for(area: Rect, store: &CoverArtStore) -> Option<Rect> {
+  let renderer = RENDERER.get()?;
+  renderer.surface_size_for(
+    &renderer.browse_preview,
+    area,
+    browse_preview_resize(),
+    store,
+  )
+}
+
 struct CoverArtRenderer {
   picker: Picker,
   terminal_background: Option<[u8; 3]>,
@@ -347,13 +405,24 @@ struct CoverArtRenderer {
   /// same reason: a plugin can size its image differently from the playbar, and
   /// a shared protocol would re-encode on every switch between them.
   plugin: Mutex<Option<Surface>>,
+  browse_preview: Mutex<Option<Surface>>,
 }
 
 /// A surface's cached protocol together with the store key it was built from.
 struct Surface {
   key: String,
   protocol: StatefulProtocol,
+  source: Arc<image::DynamicImage>,
+  fade: Option<FadeState>,
+  snap_generation: u64,
   dither: Option<DitherSurface>,
+}
+
+struct FadeState {
+  target: String,
+  started: Instant,
+  duration: Duration,
+  step: u8,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -382,6 +451,24 @@ struct DitherSurface {
 struct PreparedMask {
   mask: Mask,
   initial_color: Option<(ColorPair, image::DynamicImage)>,
+}
+
+fn faded_image(
+  source: &image::DynamicImage,
+  opacity: f32,
+  background: [u8; 3],
+) -> image::DynamicImage {
+  let mut rgba = source.to_rgba8();
+  for pixel in rgba.pixels_mut() {
+    let alpha = f32::from(pixel[3]) / 255.0 * opacity;
+    for channel in 0..3 {
+      let value =
+        f32::from(background[channel]) * (1.0 - alpha) + f32::from(pixel[channel]) * alpha;
+      pixel[channel] = value.round().clamp(0.0, 255.0) as u8;
+    }
+    pixel[3] = 255;
+  }
+  image::DynamicImage::ImageRgba8(rgba)
 }
 
 fn spawn_mask_worker(
@@ -433,6 +520,11 @@ struct RenderStyle {
   resize: Resize,
   background: Color,
   fill: bool,
+}
+
+struct RenderMoment {
+  style: RenderStyle,
+  now: Instant,
 }
 
 /// Lock a surface's protocol cache, recovering a poisoned guard: the caches
@@ -507,6 +599,7 @@ impl CoverArtRenderer {
       fullscreen: Mutex::new(None),
       now_playing: Mutex::new(None),
       plugin: Mutex::new(None),
+      browse_preview: Mutex::new(None),
     }
   }
 
@@ -533,6 +626,15 @@ impl CoverArtRenderer {
       ProtocolType::Kitty | ProtocolType::Iterm2 | ProtocolType::Sixel => true,
       ProtocolType::Halfblocks => false,
     }
+  }
+
+  fn fade_active(&self) -> bool {
+    lock_surface(&self.browse_preview)
+      .as_ref()
+      .and_then(|surface| surface.fade.as_ref())
+      .is_some_and(|fade| {
+        fade.step > fade_level(HOLD_OPACITY) && fade.started.elapsed() < fade.duration
+      })
   }
 
   fn dither_grid(&self, area: Rect, scale: u8) -> (u32, u32, u8) {
@@ -565,32 +667,229 @@ impl CoverArtRenderer {
     (accent, background)
   }
 
-  /// Reconcile a surface's cached protocol with the store: rebuild it when the
-  /// store holds art under a different key, drop it when the store is empty.
-  /// This is the per-key cache that keeps a protocol from being rebuilt for a
-  /// frame that renders the same art.
+  fn sync_surface(
+    &self,
+    surface: &Mutex<Option<Surface>>,
+    store: &CoverArtStore,
+    now: Instant,
+    allow_fade: bool,
+  ) {
+    let mut lock = lock_surface(surface);
+    let snap_generation = store.snap_generation();
+    if lock
+      .as_ref()
+      .is_some_and(|surface| surface.snap_generation != snap_generation)
+    {
+      let clear = {
+        let current = lock.as_mut().expect("surface");
+        current.fade = None;
+        let clear = self.install_current(current, store);
+        current.snap_generation = snap_generation;
+        clear
+      };
+      if clear {
+        *lock = None;
+        return;
+      }
+    }
+    if !allow_fade && lock.as_ref().is_some_and(|surface| surface.fade.is_some()) {
+      let clear = {
+        let current = lock.as_mut().expect("surface");
+        current.fade = None;
+        self.install_current(current, store)
+      };
+      if clear {
+        *lock = None;
+        return;
+      }
+    }
+    let transition = if allow_fade { store.transition() } else { None }
+      .or_else(|| store.key().map(|key| (key, now)));
+    if let (Some((key, started)), Some(current)) = (transition, lock.as_mut()) {
+      let needs_fade = match current.fade.as_ref() {
+        Some(fade) => fade.target != key,
+        None => current.key != key,
+      };
+      if needs_fade {
+        if allow_fade {
+          self.begin_fade(current, store, key, started);
+        } else {
+          let clear = self.install_current(current, store);
+          if clear {
+            *lock = None;
+            return;
+          }
+        }
+      }
+    }
+    let target_ready = lock.as_ref().is_some_and(|surface| {
+      surface
+        .fade
+        .as_ref()
+        .is_some_and(|fade| fade.target.is_empty() || store.key() == Some(fade.target.as_str()))
+    });
+    if target_ready {
+      let clear = {
+        let current = lock.as_mut().expect("surface");
+        current.fade = None;
+        self.install_current(current, store)
+      };
+      if clear {
+        *lock = None;
+        return;
+      }
+    }
+    let stale = lock
+      .as_ref()
+      .is_some_and(|surface| surface.fade.is_none() && store.key() != Some(surface.key.as_str()));
+    if stale {
+      *lock = None;
+    }
+  }
+
+  fn begin_fade(&self, surface: &mut Surface, store: &CoverArtStore, key: &str, started: Instant) {
+    let duration = store
+      .average_load_duration()
+      .unwrap_or(DEFAULT_FADE)
+      .min(MAX_FADE)
+      .max(Duration::from_millis(1));
+    surface.fade = Some(FadeState {
+      target: key.to_string(),
+      started,
+      duration,
+      step: FADE_LEVELS,
+    });
+    surface.dither = None;
+  }
+
   fn ensure<'a>(
     &self,
     surface: &'a Mutex<Option<Surface>>,
     store: &CoverArtStore,
   ) -> MutexGuard<'a, Option<Surface>> {
+    self.ensure_at(surface, store, Instant::now(), false)
+  }
+
+  fn ensure_at<'a>(
+    &self,
+    surface: &'a Mutex<Option<Surface>>,
+    store: &CoverArtStore,
+    now: Instant,
+    allow_fade: bool,
+  ) -> MutexGuard<'a, Option<Surface>> {
     let mut lock = lock_surface(surface);
     match store.key() {
-      None => *lock = None,
+      None => {
+        if !lock.as_ref().is_some_and(|surface| surface.fade.is_some()) {
+          *lock = None;
+        }
+      }
       Some(key) => {
-        let cached = lock.as_ref().is_some_and(|surface| surface.key == key);
+        let cached = lock
+          .as_ref()
+          .is_some_and(|surface| surface.fade.is_some() || surface.key == key);
         if !cached {
-          if let Some(image) = store.image() {
+          if let Some(current) = lock.as_mut() {
+            if allow_fade {
+              self.begin_fade(current, store, key, now);
+            } else {
+              let clear = self.install_current(current, store);
+              if clear {
+                *lock = None;
+                return lock;
+              }
+            }
+          } else if let Some(image) = store.image_shared() {
             *lock = Some(Surface {
               key: key.to_string(),
-              protocol: self.picker.new_resize_protocol(image.clone()),
+              protocol: self.picker.new_resize_protocol((*image).clone()),
+              source: image,
+              fade: None,
+              snap_generation: store.snap_generation(),
               dither: None,
             });
+          }
+        } else if let Some(current) = lock.as_mut() {
+          if current.fade.is_none() && current.key != key {
+            if allow_fade {
+              self.begin_fade(current, store, key, now);
+            } else {
+              let clear = self.install_current(current, store);
+              if clear {
+                *lock = None;
+                return lock;
+              }
+            }
           }
         }
       }
     }
     lock
+  }
+
+  fn background_rgb(&self, color: Color) -> [u8; 3] {
+    let palette = Palette {
+      reset: self.terminal_background.unwrap_or([0, 0, 0]),
+      ..Palette::default()
+    };
+    resolve(color, &palette)
+  }
+
+  fn install_current(&self, surface: &mut Surface, store: &CoverArtStore) -> bool {
+    let Some(key) = store.key() else {
+      return true;
+    };
+    if let Some(image) = store.image_shared() {
+      surface.key = key.to_string();
+      surface.source = Arc::clone(&image);
+      surface.protocol = self.picker.new_resize_protocol((*image).clone());
+      surface.dither = None;
+      false
+    } else {
+      true
+    }
+  }
+
+  fn step_fade(
+    &self,
+    surface: &mut Surface,
+    store: &CoverArtStore,
+    now: Instant,
+    background: [u8; 3],
+  ) -> bool {
+    let (target_ready, started, duration, step) = {
+      let fade = surface.fade.as_ref().expect("fade state");
+      (
+        fade.target.is_empty() || store.key() == Some(fade.target.as_str()),
+        fade.started,
+        fade.duration,
+        fade.step,
+      )
+    };
+    let elapsed = now.saturating_duration_since(started);
+    if target_ready {
+      surface.fade = None;
+      return self.install_current(surface, store);
+    }
+    let hold_level = fade_level(HOLD_OPACITY);
+    if elapsed >= duration {
+      if step != hold_level {
+        let opacity = f32::from(hold_level) / f32::from(FADE_LEVELS);
+        let image = faded_image(&surface.source, opacity, background);
+        surface.protocol = self.picker.new_resize_protocol(image);
+        surface.fade.as_mut().expect("fade state").step = hold_level;
+      }
+      return false;
+    }
+    let progress = (elapsed.as_secs_f32() / duration.as_secs_f32()).clamp(0.0, 1.0);
+    let next_step = fade_level(1.0 - progress).max(hold_level);
+    if next_step != step {
+      let opacity = f32::from(next_step) / f32::from(FADE_LEVELS);
+      let image = faded_image(&surface.source, opacity, background);
+      surface.protocol = self.picker.new_resize_protocol(image);
+      surface.fade.as_mut().expect("fade state").step = next_step;
+    }
+    false
   }
 
   fn render_surface(
@@ -602,7 +901,61 @@ impl CoverArtRenderer {
     config: &UserConfig,
     style: RenderStyle,
   ) {
-    let mut lock = self.ensure(surface, store);
+    self.render_surface_at(
+      surface,
+      f,
+      area,
+      store,
+      config,
+      RenderMoment {
+        style,
+        now: Instant::now(),
+      },
+    );
+  }
+
+  fn render_surface_at(
+    &self,
+    surface: &Mutex<Option<Surface>>,
+    f: &mut Frame,
+    area: Rect,
+    store: &CoverArtStore,
+    config: &UserConfig,
+    moment: RenderMoment,
+  ) {
+    let RenderMoment { style, now } = moment;
+    let allow_fade =
+      std::ptr::eq(surface, &self.browse_preview) && config.behavior.fade_song_selection_cover_art;
+    let mut lock = self.ensure_at(surface, store, now, allow_fade);
+    if !allow_fade && lock.as_ref().is_some_and(|surface| surface.fade.is_some()) {
+      let clear = {
+        let current = lock.as_mut().expect("surface");
+        current.fade = None;
+        self.install_current(current, store)
+      };
+      if clear {
+        *lock = None;
+        return;
+      }
+    }
+    if lock.as_ref().is_some_and(|surface| surface.fade.is_some()) {
+      let background = self.background_rgb(style.background);
+      let clear = {
+        let current = lock.as_mut().expect("surface");
+        self.step_fade(current, store, now, background)
+      };
+      if clear {
+        *lock = None;
+        return;
+      }
+      let current = lock.as_mut().expect("surface");
+      f.render_stateful_widget(
+        StatefulImage::new().resize(style.resize),
+        area,
+        &mut current.protocol,
+      );
+      return;
+    }
     if let Some(surface) = lock.as_mut() {
       if config.behavior.cover_art_dither && area.width > 0 && area.height > 0 {
         let graphics = self.full_image_support();
@@ -742,6 +1095,10 @@ mod tests {
   use super::*;
   use image::{DynamicImage, Rgb, RgbImage};
   use ratatui::{backend::TestBackend, Terminal};
+
+  fn is_reddish(color: ratatui::style::Color) -> bool {
+    matches!(color, ratatui::style::Color::Rgb(r, g, b) if r > 150 && g < 50 && b < 50)
+  }
 
   #[test]
   fn iterm2_is_found_by_term_program_or_by_lc_terminal_inside_tmux() {
@@ -1227,49 +1584,66 @@ mod tests {
                 terminal: &mut Terminal<TestBackend>,
                 store: &CoverArtStore,
                 config: &UserConfig,
-                width| {
+                width,
+                now: Instant| {
       terminal
         .draw(|frame| {
-          renderer.render_surface(
+          renderer.render_surface_at(
             &renderer.playbar,
             frame,
             Rect::new(0, 0, width, 8),
             store,
             config,
-            RenderStyle {
-              resize: Resize::Fit(None),
-              background: config.theme.playbar_background,
-              fill: false,
+            RenderMoment {
+              style: RenderStyle {
+                resize: Resize::Fit(None),
+                background: config.theme.playbar_background,
+                fill: false,
+              },
+              now,
             },
           );
-          renderer.render_surface(
+          renderer.render_surface_at(
             &renderer.fullscreen,
             frame,
             Rect::new(18, 0, 16, 8),
             store,
             config,
-            RenderStyle {
-              resize: Resize::Fit(None),
-              background: config.theme.background,
-              fill: false,
+            RenderMoment {
+              style: RenderStyle {
+                resize: Resize::Fit(None),
+                background: config.theme.background,
+                fill: false,
+              },
+              now,
             },
           );
-          renderer.render_surface(
+          renderer.render_surface_at(
             &renderer.plugin,
             frame,
             Rect::new(36, 0, 16, 8),
             store,
             config,
-            RenderStyle {
-              resize: Resize::Scale(None),
-              background: config.theme.background,
-              fill: true,
+            RenderMoment {
+              style: RenderStyle {
+                resize: Resize::Scale(None),
+                background: config.theme.background,
+                fill: true,
+              },
+              now,
             },
           );
         })
         .unwrap();
     };
-    draw(&renderer, &mut terminal, &store, &config, 16);
+    draw(
+      &renderer,
+      &mut terminal,
+      &store,
+      &config,
+      16,
+      Instant::now(),
+    );
     for surface in [&renderer.playbar, &renderer.fullscreen, &renderer.plugin] {
       assert_eq!(
         lock_surface(surface)
@@ -1284,7 +1658,14 @@ mod tests {
       );
     }
     for _ in 0..100 {
-      draw(&renderer, &mut terminal, &store, &config, 16);
+      draw(
+        &renderer,
+        &mut terminal,
+        &store,
+        &config,
+        16,
+        Instant::now(),
+      );
       if [&renderer.playbar, &renderer.fullscreen, &renderer.plugin]
         .iter()
         .all(|surface| {
@@ -1314,7 +1695,14 @@ mod tests {
         .unwrap(),
     );
     config.theme.playbar_progress = Color::Rgb(30, 40, 50);
-    draw(&renderer, &mut terminal, &store, &config, 16);
+    draw(
+      &renderer,
+      &mut terminal,
+      &store,
+      &config,
+      16,
+      Instant::now(),
+    );
     let guard = lock_surface(&renderer.playbar);
     let dither = guard.as_ref().unwrap().dither.as_ref().unwrap();
     assert_eq!(Arc::as_ptr(dither.mask.as_ref().unwrap()), before);
@@ -1338,7 +1726,14 @@ mod tests {
         assert!(matches!(cell.bg, color if color == accent || color == background));
       }
     }
-    draw(&renderer, &mut terminal, &store, &config, 17);
+    draw(
+      &renderer,
+      &mut terminal,
+      &store,
+      &config,
+      17,
+      Instant::now(),
+    );
     {
       let guard = lock_surface(&renderer.playbar);
       let dither = guard.as_ref().unwrap().dither.as_ref().unwrap();
@@ -1348,7 +1743,14 @@ mod tests {
       );
     }
     config.behavior.cover_art_dither_algorithm = "atkinson".into();
-    draw(&renderer, &mut terminal, &store, &config, 17);
+    draw(
+      &renderer,
+      &mut terminal,
+      &store,
+      &config,
+      17,
+      Instant::now(),
+    );
     {
       let guard = lock_surface(&renderer.playbar);
       let dither = guard.as_ref().unwrap().dither.as_ref().unwrap();
@@ -1362,7 +1764,14 @@ mod tests {
       );
     }
     config.behavior.cover_art_dither_pixel_scale = 4;
-    draw(&renderer, &mut terminal, &store, &config, 17);
+    draw(
+      &renderer,
+      &mut terminal,
+      &store,
+      &config,
+      17,
+      Instant::now(),
+    );
     {
       let guard = lock_surface(&renderer.playbar);
       let dither = guard.as_ref().unwrap().dither.as_ref().unwrap();
@@ -1372,7 +1781,24 @@ mod tests {
       );
     }
     store.store_decoded("second".into(), DynamicImage::new_rgb8(16, 16));
-    draw(&renderer, &mut terminal, &store, &config, 17);
+    let fade_start = Instant::now();
+    draw(&renderer, &mut terminal, &store, &config, 17, fade_start);
+    draw(
+      &renderer,
+      &mut terminal,
+      &store,
+      &config,
+      17,
+      fade_start + DEFAULT_FADE + Duration::from_secs(1),
+    );
+    draw(
+      &renderer,
+      &mut terminal,
+      &store,
+      &config,
+      17,
+      Instant::now(),
+    );
     for surface in [&renderer.playbar, &renderer.fullscreen, &renderer.plugin] {
       assert_eq!(
         lock_surface(surface)
@@ -1386,5 +1812,334 @@ mod tests {
         "second"
       );
     }
+  }
+
+  #[test]
+  fn changing_art_fades_out_for_the_average_load_time_then_pops_in_the_new_image() {
+    let mut store = CoverArtStore::default();
+    store.store_decoded(
+      "old".into(),
+      DynamicImage::ImageRgb8(RgbImage::from_pixel(16, 16, Rgb([200, 0, 0]))),
+    );
+    store.note_fetch_started();
+    std::thread::sleep(Duration::from_millis(30));
+    store.note_fetch_finished(true);
+    let fade_duration = store.average_load_duration().unwrap();
+    let renderer = CoverArtRenderer::new(Picker::halfblocks());
+    let config = UserConfig::new();
+    let style = RenderStyle {
+      resize: Resize::Fit(None),
+      background: Color::Rgb(0, 0, 0),
+      fill: false,
+    };
+    let mut terminal = Terminal::new(TestBackend::new(8, 4)).unwrap();
+    let start = Instant::now();
+    let draw = |terminal: &mut Terminal<TestBackend>, store: &CoverArtStore, now: Instant| {
+      terminal
+        .draw(|frame| {
+          renderer.render_surface_at(
+            &renderer.browse_preview,
+            frame,
+            Rect::new(0, 0, 8, 4),
+            store,
+            &config,
+            RenderMoment {
+              style: RenderStyle {
+                resize: style.resize.clone(),
+                background: style.background,
+                fill: style.fill,
+              },
+              now,
+            },
+          )
+        })
+        .unwrap();
+    };
+
+    draw(&mut terminal, &store, start);
+    assert!(!renderer.fade_active());
+    store.begin_fetch("new");
+    let (_, requested) = store.transition().unwrap();
+    renderer.sync_surface(&renderer.browse_preview, &store, requested, true);
+    draw(&mut terminal, &store, requested + Duration::from_millis(1));
+    assert_eq!(
+      lock_surface(&renderer.browse_preview)
+        .as_ref()
+        .unwrap()
+        .fade
+        .as_ref()
+        .unwrap()
+        .duration,
+      fade_duration
+    );
+    assert!(terminal
+      .backend()
+      .buffer()
+      .content()
+      .iter()
+      .any(|cell| is_reddish(cell.fg) || is_reddish(cell.bg)));
+
+    store.store_decoded(
+      "new".into(),
+      DynamicImage::ImageRgb8(RgbImage::from_pixel(16, 16, Rgb([0, 0, 200]))),
+    );
+    renderer.sync_surface(
+      &renderer.browse_preview,
+      &store,
+      requested + Duration::from_millis(1),
+      true,
+    );
+    draw(&mut terminal, &store, requested + Duration::from_millis(1));
+    assert!(!renderer.fade_active());
+    assert!(terminal
+      .backend()
+      .buffer()
+      .content()
+      .iter()
+      .any(|cell| cell.fg == ratatui::style::Color::Rgb(0, 0, 200)
+        || cell.bg == ratatui::style::Color::Rgb(0, 0, 200)));
+  }
+
+  #[test]
+  fn fade_uses_fine_grained_opacity_levels() {
+    let mut store = CoverArtStore::default();
+    store.store_decoded(
+      "old".into(),
+      DynamicImage::ImageRgb8(RgbImage::from_pixel(16, 16, Rgb([200, 0, 0]))),
+    );
+    let renderer = CoverArtRenderer::new(Picker::halfblocks());
+    let config = UserConfig::new();
+    let mut terminal = Terminal::new(TestBackend::new(8, 4)).unwrap();
+    let start = Instant::now();
+    let draw = |terminal: &mut Terminal<TestBackend>, store: &CoverArtStore, now: Instant| {
+      terminal
+        .draw(|frame| {
+          renderer.render_surface_at(
+            &renderer.browse_preview,
+            frame,
+            Rect::new(0, 0, 8, 4),
+            store,
+            &config,
+            RenderMoment {
+              style: RenderStyle {
+                resize: Resize::Fit(None),
+                background: Color::Rgb(0, 0, 0),
+                fill: false,
+              },
+              now,
+            },
+          )
+        })
+        .unwrap();
+    };
+
+    draw(&mut terminal, &store, start);
+    store.begin_fetch("new");
+    let (_, requested) = store.transition().unwrap();
+    renderer.sync_surface(&renderer.browse_preview, &store, requested, true);
+
+    let mut levels = Vec::new();
+    for index in 0u32..16 {
+      let at = requested + DEFAULT_FADE * index / 16;
+      draw(&mut terminal, &store, at);
+      let level = lock_surface(&renderer.browse_preview)
+        .as_ref()
+        .and_then(|surface| surface.fade.as_ref())
+        .expect("fade still running")
+        .step;
+      levels.push(level);
+    }
+
+    assert!(levels.windows(2).all(|pair| pair[0] >= pair[1]));
+    assert!(
+      levels
+        .iter()
+        .collect::<std::collections::HashSet<_>>()
+        .len()
+        >= 14
+    );
+  }
+
+  #[test]
+  fn fade_starts_when_the_fetch_starts_not_when_the_image_arrives() {
+    let mut store = CoverArtStore::default();
+    store.store_decoded(
+      "old".into(),
+      DynamicImage::ImageRgb8(RgbImage::from_pixel(16, 16, Rgb([200, 0, 0]))),
+    );
+    store.note_fetch_started();
+    std::thread::sleep(Duration::from_millis(30));
+    store.note_fetch_finished(true);
+    let renderer = CoverArtRenderer::new(Picker::halfblocks());
+    let config = UserConfig::new();
+    let mut terminal = Terminal::new(TestBackend::new(8, 4)).unwrap();
+    let start = Instant::now();
+    let draw = |terminal: &mut Terminal<TestBackend>, store: &CoverArtStore, now: Instant| {
+      terminal
+        .draw(|frame| {
+          renderer.render_surface_at(
+            &renderer.browse_preview,
+            frame,
+            Rect::new(0, 0, 8, 4),
+            store,
+            &config,
+            RenderMoment {
+              style: RenderStyle {
+                resize: Resize::Fit(None),
+                background: Color::Rgb(0, 0, 0),
+                fill: false,
+              },
+              now,
+            },
+          )
+        })
+        .unwrap();
+    };
+
+    draw(&mut terminal, &store, start);
+    store.begin_fetch("new");
+    let (_, requested) = store.transition().unwrap();
+    renderer.sync_surface(&renderer.browse_preview, &store, requested, true);
+    assert!(renderer.fade_active());
+    assert_eq!(store.key(), Some("old"));
+    draw(&mut terminal, &store, requested + Duration::from_millis(1));
+    assert!(terminal
+      .backend()
+      .buffer()
+      .content()
+      .iter()
+      .any(|cell| is_reddish(cell.fg) || is_reddish(cell.bg)));
+
+    store.store_decoded(
+      "new".into(),
+      DynamicImage::ImageRgb8(RgbImage::from_pixel(16, 16, Rgb([0, 0, 200]))),
+    );
+    renderer.sync_surface(
+      &renderer.browse_preview,
+      &store,
+      requested + Duration::from_millis(2),
+      true,
+    );
+    draw(&mut terminal, &store, requested + Duration::from_millis(2));
+    assert!(!renderer.fade_active());
+    assert!(terminal
+      .backend()
+      .buffer()
+      .content()
+      .iter()
+      .any(|cell| cell.fg == ratatui::style::Color::Rgb(0, 0, 200)
+        || cell.bg == ratatui::style::Color::Rgb(0, 0, 200)));
+  }
+
+  #[test]
+  fn fade_holds_while_the_new_image_is_still_loading() {
+    let mut store = CoverArtStore::default();
+    store.store_decoded(
+      "old".into(),
+      DynamicImage::ImageRgb8(RgbImage::from_pixel(16, 16, Rgb([200, 0, 0]))),
+    );
+    store.note_fetch_started();
+    std::thread::sleep(Duration::from_millis(30));
+    store.note_fetch_finished(true);
+    let fade_duration = store.average_load_duration().unwrap();
+    let renderer = CoverArtRenderer::new(Picker::halfblocks());
+    let config = UserConfig::new();
+    let mut terminal = Terminal::new(TestBackend::new(8, 4)).unwrap();
+    let now = Instant::now();
+    let draw = |terminal: &mut Terminal<TestBackend>, store: &CoverArtStore, now: Instant| {
+      terminal
+        .draw(|frame| {
+          renderer.render_surface_at(
+            &renderer.browse_preview,
+            frame,
+            Rect::new(0, 0, 8, 4),
+            store,
+            &config,
+            RenderMoment {
+              style: RenderStyle {
+                resize: Resize::Fit(None),
+                background: Color::Rgb(0, 0, 0),
+                fill: false,
+              },
+              now,
+            },
+          )
+        })
+        .unwrap();
+    };
+
+    draw(&mut terminal, &store, now);
+    store.begin_fetch("new");
+    let (_, requested) = store.transition().unwrap();
+    renderer.sync_surface(&renderer.browse_preview, &store, requested, true);
+    renderer.sync_surface(
+      &renderer.browse_preview,
+      &store,
+      requested + fade_duration,
+      true,
+    );
+    draw(
+      &mut terminal,
+      &store,
+      requested + fade_duration + Duration::from_millis(1),
+    );
+    assert!(!renderer.fade_active(), "the hold frame does not animate");
+    let held = terminal.backend().buffer().clone();
+    let next = requested + fade_duration + Duration::from_millis(2);
+    store.begin_transition_at("third", next);
+    renderer.sync_surface(&renderer.browse_preview, &store, next, true);
+    draw(&mut terminal, &store, next + fade_duration);
+    assert_eq!(
+      terminal.backend().buffer(),
+      &held,
+      "another transition must hold at the same brightness as the first"
+    );
+    assert!(!renderer.fade_active());
+    assert!(!terminal
+      .backend()
+      .buffer()
+      .content()
+      .iter()
+      .any(|cell| is_reddish(cell.fg) || is_reddish(cell.bg)));
+
+    store.store_decoded(
+      "third".into(),
+      DynamicImage::ImageRgb8(RgbImage::from_pixel(16, 16, Rgb([0, 0, 200]))),
+    );
+    renderer.sync_surface(&renderer.browse_preview, &store, next + fade_duration, true);
+    draw(&mut terminal, &store, next + fade_duration);
+    assert!(!renderer.fade_active());
+    assert!(terminal
+      .backend()
+      .buffer()
+      .content()
+      .iter()
+      .any(|cell| cell.fg == ratatui::style::Color::Rgb(0, 0, 200)
+        || cell.bg == ratatui::style::Color::Rgb(0, 0, 200)));
+  }
+
+  #[test]
+  fn browse_preview_scales_small_art_to_fill_the_slot() {
+    let mut store = CoverArtStore::default();
+    store.store_decoded("small".into(), DynamicImage::new_rgb8(8, 8));
+    let renderer = CoverArtRenderer::new(Picker::halfblocks());
+    let area = Rect::new(0, 0, 20, 10);
+
+    let fitted = renderer
+      .surface_size_for(
+        &renderer.browse_preview,
+        area,
+        browse_preview_resize(),
+        &store,
+      )
+      .unwrap();
+
+    assert_eq!(fitted.width, area.width);
+    assert_eq!(fitted.height, area.height);
+  }
+
+  #[test]
+  fn browse_preview_render_style_fills_the_dither_mask() {
+    assert!(browse_preview_render_style(&UserConfig::new()).fill);
   }
 }
