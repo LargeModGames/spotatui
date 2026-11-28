@@ -115,8 +115,9 @@ pub async fn build_index(net: &Network, owner_id: &str) -> anyhow::Result<DjLibr
       // crawled again: fail the crawl so the next ask retries it.
       Err(e) if crate::infra::network::requests::is_rate_limited_error(&e) => return Err(e),
       Err(e) => {
-        // Keep going, but stop claiming the index is complete: the tracks in
-        // this playlist will not be filtered, and only `truncated` says so.
+        // Keep going, but stop claiming the index is complete: the tracks on
+        // the pages that failed will not be filtered, and only `truncated`
+        // says so.
         library.truncated = true;
         log::debug!("DJ: skipping playlist {id} while indexing: {e}");
       }
@@ -361,7 +362,8 @@ mod tests {
     };
     let summary = partial.summary_with(&crate::core::i18n::EN);
 
-    assert!(summary.contains("not filtered"), "{summary}");
+    assert!(summary.contains("could not be read"), "{summary}");
+    assert!(summary.contains("may not be filtered"), "{summary}");
     assert!(
       !summary.contains(&MAX_LIBRARY_TRACKS.to_string()),
       "{summary}"
