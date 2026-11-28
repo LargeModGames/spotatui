@@ -90,7 +90,13 @@ pub async fn route_local_event(app: &Arc<Mutex<App>>, event: &IoEvent) -> bool {
       false
     }
     #[cfg(feature = "streaming")]
-    IoEvent::ReplayStartPlayback(..) => {
+    IoEvent::ReplayStartPlayback(_, _, _, pressed_at) => {
+      // A dead replay (expired, or its request cancelled or superseded in
+      // flight) must not stop the local session; the network handler applies
+      // the same rule.
+      if app.lock().await.retire_expired_replay(*pressed_at) {
+        return true;
+      }
       teardown_local(app).await;
       false
     }
