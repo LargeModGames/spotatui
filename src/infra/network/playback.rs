@@ -1525,6 +1525,15 @@ impl PlaybackNetwork for Network {
     // Only the streaming park reads the carried press time.
     #[cfg(not(feature = "streaming"))]
     let _ = pressed_at;
+    // A rate-limit window can hold the replay past its press's window; check
+    // the age before any playback effect.
+    #[cfg(feature = "streaming")]
+    if let Some(pressed_at) = pressed_at {
+      let mut app = self.app.lock().await;
+      if app.retire_expired_replay(pressed_at) {
+        return;
+      }
+    }
     // An explicit Spotify start that reached this handler passed every source
     // router and the pump's prelude: Spotify takes the sink, so the decoded
     // claim ends here. A bare resume never releases it.

@@ -496,6 +496,34 @@ impl App {
     ));
   }
 
+  /// Retire a replay whose press aged past its window: clear the matching
+  /// parked request, report the expiry, and tell the caller to drop it.
+  ///
+  /// The rate-limit window can hold a `ReplayStartPlayback` between dispatch
+  /// and delivery, so this re-applies the dispatch's expiry rule before any
+  /// playback effect.
+  #[cfg(feature = "streaming")]
+  pub(crate) fn retire_expired_replay(&mut self, pressed_at: Instant) -> bool {
+    let now = Instant::now();
+    let matched = self
+      .pending_start_playback
+      .as_ref()
+      .filter(|pending| pending.pressed_at == pressed_at);
+    let expired = match matched {
+      Some(pending) => pending.expired_at(now, Duration::ZERO),
+      // The parked request is gone; only the hard limit can still expire it.
+      None => now.saturating_duration_since(pressed_at) > max_parked_start_age(),
+    };
+    if !expired {
+      return false;
+    }
+    if matched.is_some() {
+      self.pending_start_playback = None;
+    }
+    self.set_status_message(self.strings().status.app.native_request_expired, 6);
+    true
+  }
+
   #[cfg(feature = "streaming")]
   pub fn mark_native_streaming_device_available(
     &mut self,
@@ -1170,6 +1198,54 @@ mod tests {
       rx.try_recv(),
       Ok(IoEvent::ReplayStartPlayback(..))
     ));
+  }
+
+  /// The handler-side check retires a replay the rate window delivered late.
+  #[test]
+  fn an_expired_replay_arriving_at_the_handler_is_retired() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.park_start_playback(Some("spotify:playlist:p".to_string()), None, None, None);
+    let pressed_at = Instant::now() - max_parked_start_age() - Duration::from_secs(1);
+    app.pending_start_playback.as_mut().unwrap().pressed_at = pressed_at;
+
+    assert!(app.retire_expired_replay(pressed_at));
+    assert!(app.pending_start_playback.is_none());
+    assert_eq!(
+      app.status_message(),
+      Some(crate::core::i18n::EN.status.app.native_request_expired)
+    );
+    assert!(rx.try_recv().is_err());
+  }
+
+  #[test]
+  fn a_fresh_replay_arriving_at_the_handler_is_not_retired() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.park_start_playback(Some("spotify:playlist:p".to_string()), None, None, None);
+    let pressed_at = app.pending_start_playback.as_ref().unwrap().pressed_at;
+
+    assert!(!app.retire_expired_replay(pressed_at));
+    assert!(app.pending_start_playback.is_some());
+  }
+
+  /// A replay whose parked request vanished (e.g. a pause retired it) is held
+  /// only to the hard limit, never the soft window.
+  #[test]
+  fn a_replay_with_no_parked_request_expires_only_on_the_hard_limit() {
+    let (tx, _rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    let age = parked_start_window() + Duration::from_secs(1);
+    if age >= max_parked_start_age() {
+      return;
+    }
+
+    assert!(!app.retire_expired_replay(Instant::now() - age));
+    assert!(app.retire_expired_replay(Instant::now() - max_parked_start_age()));
+    assert_eq!(
+      app.status_message(),
+      Some(crate::core::i18n::EN.status.app.native_request_expired)
+    );
   }
 
   #[test]
