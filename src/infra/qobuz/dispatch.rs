@@ -356,6 +356,20 @@ fn finish_login_error(app: &mut App, search_rev: Option<u64>, err: &anyhow::Erro
   }
 }
 
+fn finish_login_success(
+  app: &mut App,
+  search_rev: Option<u64>,
+  io_tx: Option<&std::sync::mpsc::Sender<IoEvent>>,
+) {
+  if is_search_login_current(app, search_rev) {
+    let message = app.strings().status.infra.qobuz_logged_in;
+    app.set_status_message(message, 4);
+    if let Some(tx) = io_tx {
+      let _ = tx.send(IoEvent::GetQobuzPlaylists);
+    }
+  }
+}
+
 /// Start the in-TUI browser login on a detached task so the pump keeps running.
 async fn begin_login(app: &Arc<Mutex<App>>, search_rev: Option<u64>) {
   {
@@ -413,14 +427,8 @@ async fn begin_login(app: &Arc<Mutex<App>>, search_rev: Option<u64>) {
         if let Err(e) = auth::save_login(&credentials) {
           log::warn!("[qobuz] cannot save credentials: {e:#}");
         }
-        {
-          let mut guard = app.lock().await;
-          let message = guard.strings().status.infra.qobuz_logged_in;
-          guard.set_status_message(message, 4);
-        };
-        if let Some(tx) = io_tx {
-          let _ = tx.send(IoEvent::GetQobuzPlaylists);
-        }
+        let mut guard = app.lock().await;
+        finish_login_success(&mut guard, search_rev, io_tx.as_ref());
       }
       Err(e) => {
         log::warn!("[qobuz] login failed: {e:#}");
@@ -1335,6 +1343,29 @@ mod tests {
       .infra
       .qobuz_login_failed("timed out");
     assert_eq!(app.status_message(), Some(expected.as_str()));
+  }
+
+  #[test]
+  fn stale_search_login_callback_success_does_not_overwrite_status_or_fetch_playlists() {
+    use crate::core::user_config::UserConfig;
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut app = App::new(tx.clone(), UserConfig::new(), None);
+    app.set_active_source(Source::Qobuz);
+    let stale_rev = app.source_revision();
+    app.set_active_source(Source::Spotify);
+    app.set_status_message("Current status", 6);
+
+    finish_login_success(&mut app, Some(stale_rev), Some(&tx));
+    assert_eq!(app.status_message(), Some("Current status"));
+    assert!(rx.try_recv().is_err());
+
+    // Explicit login completions (`None`) still publish status and fetch playlists.
+    finish_login_success(&mut app, None, Some(&tx));
+    assert_eq!(
+      app.status_message(),
+      Some(crate::core::i18n::EN.status.infra.qobuz_logged_in)
+    );
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::GetQobuzPlaylists)));
   }
 }
 
