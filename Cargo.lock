@@ -6771,6 +6771,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e5b5b5ebf7bee80e317efd03f1f822c1f1a186d3b0d4452e4442e6f342aa2cab"
 dependencies = [
  "bytemuck",
+ "image",
  "pollster",
  "realfft",
  "wgpu",

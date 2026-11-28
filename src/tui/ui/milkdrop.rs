@@ -16,7 +16,9 @@ use ratatui::{
   layout::Rect,
   style::Color,
 };
-use tidewarp::{presets, presets::BuiltinPreset, Config, Engine, PresetId, Transition};
+use tidewarp::{
+  presets, presets::BuiltinPreset, Config, Engine, PresetId, TextureFolder, Transition,
+};
 use tidewarp_term::{fit, kitty, sixel, Protocol};
 
 use crate::core::paths;
@@ -69,6 +71,8 @@ struct State {
   sixel: sixel::Encoder,
   /// A Kitty image is on the screen; it stays above the text until it is deleted.
   kitty_shown: bool,
+  /// The images in the preset folder that presets sample by name.
+  textures: TextureFolder,
 }
 
 /// The `.milk` files under the user's preset folder, sorted by path. The folder is
@@ -116,7 +120,7 @@ impl State {
       ..Config::default()
     };
     // Shader presets need the GPU; without one the CPU engine plays the others.
-    let engine = Engine::with_gpu(config.clone()).unwrap_or_else(|_| Engine::new(config));
+    let mut engine = Engine::with_gpu(config.clone()).unwrap_or_else(|_| Engine::new(config));
     let mut entries: Vec<Entry> = presets::ALL
       .iter()
       .map(|p| Entry {
@@ -124,10 +128,15 @@ impl State {
         source: Source::Builtin(p),
       })
       .collect();
+    let mut textures = TextureFolder::default();
     // Tests never read the user's real preset folder.
     if !cfg!(test) {
       entries.extend(user_presets());
+      if let Some(dir) = paths::milkdrop_presets_dir() {
+        textures = TextureFolder::scan([dir]);
+      }
     }
+    engine.set_texture_names(textures.names());
     let mut state = State {
       engine,
       entries,
@@ -142,6 +151,7 @@ impl State {
       pending: None,
       sixel: sixel::Encoder::default(),
       kitty_shown: false,
+      textures,
     };
     state.show(0, 1, Transition::Cut);
     state
@@ -159,7 +169,13 @@ impl State {
       let Ok(id) = self.engine.load_preset(&text) else {
         continue;
       };
-      if self.engine.switch_to(id, transition).is_err() {
+      let added = self.textures.add_needed(&mut self.engine, id);
+      let switched = self.engine.switch_to(id, transition);
+      // The running preset keeps its textures; the engine's copies are freed.
+      for name in &added {
+        self.engine.remove_texture(name);
+      }
+      if switched.is_err() {
         let _ = self.engine.unload_preset(id);
         continue;
       }
