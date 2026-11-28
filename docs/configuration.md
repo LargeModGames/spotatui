@@ -280,7 +280,7 @@ While a Spotify track plays, `v` opens **Spotify Pitch**, the visualizer of the 
 
 Builds with the `milkdrop` cargo feature (`cargo run --features milkdrop`) play MilkDrop presets on the visualizer screen, through the [tidewarp](https://github.com/LargeModGames/tidewarp) engine. Press `m` to show MilkDrop and `v` to go back to the other styles. `[` and `]` step to the previous and the next preset, and every preset blends into the next after 30 seconds.
 
-spotatui ships six presets of its own. It also plays every `.milk` preset and `.milk2` double preset in the `milkdrop` folder of the config directory (`~/.config/spotatui/milkdrop`, created at start), subfolders included. Presets with pixel shaders (most MilkDrop 2 presets) render on the GPU; without a usable GPU, only the presets without shaders play.
+spotatui ships six presets of its own. It also plays every `.milk` preset and `.milk2` double preset in the `milkdrop` folder of the config directory (`~/.config/spotatui/milkdrop`, created at start), subfolders included. A shader preset that samples an image by file name gets the JPEG, PNG or TGA file with that name from this folder or its subfolders, except subfolders whose name starts with `_`. Presets with pixel shaders (most MilkDrop 2 presets) render on the GPU; without a usable GPU, only the presets without shaders play.
 
 In a terminal with the Kitty graphics protocol or Sixel (for example kitty, Ghostty, WezTerm, foot or Windows Terminal), MilkDrop draws real pixels; other terminals get colored half-blocks. The protocol is detected in builds with the `cover-art` feature, which every release build has.
 
