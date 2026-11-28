@@ -7,7 +7,7 @@
 
 use std::cell::RefCell;
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use crossterm::{cursor::MoveTo, queue, terminal};
@@ -75,7 +75,14 @@ struct State {
   textures: TextureFolder,
 }
 
-/// The `.milk` files under the user's preset folder, sorted by path. The folder is
+/// A `.milk` preset or a `.milk2` double preset.
+fn is_preset_file(path: &Path) -> bool {
+  path
+    .extension()
+    .is_some_and(|e| e.eq_ignore_ascii_case("milk") || e.eq_ignore_ascii_case("milk2"))
+}
+
+/// The preset files under the user's preset folder, sorted by path. The folder is
 /// created when it is missing, so the user can find it.
 fn user_presets() -> Vec<Entry> {
   let Some(dir) = paths::milkdrop_presets_dir() else {
@@ -92,10 +99,7 @@ fn user_presets() -> Vec<Entry> {
       let path = entry.path();
       if path.is_dir() {
         pending.push(path);
-      } else if path
-        .extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("milk"))
-      {
+      } else if is_preset_file(&path) {
         files.push(path);
       }
     }
@@ -477,6 +481,14 @@ mod tests {
     assert_ne!(current_name(), first);
     handle_key(Key::Char('['), true);
     assert_eq!(current_name(), first);
+  }
+
+  #[test]
+  fn milk_and_milk2_files_are_presets() {
+    assert!(is_preset_file(Path::new("a/Geiss.milk")));
+    assert!(is_preset_file(Path::new("a/Double.MILK2")));
+    assert!(!is_preset_file(Path::new("a/texture.jpg")));
+    assert!(!is_preset_file(Path::new("a/milk")));
   }
 
   #[test]
