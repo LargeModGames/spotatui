@@ -269,7 +269,7 @@ fn is_ignorable_title_suffix(suffix: &str) -> bool {
     return false;
   }
   match words.next() {
-    Some("feat" | "ft" | "featuring") => return words.next().is_some(),
+    Some("feat" | "ft" | "featuring" | "with") => return words.next().is_some(),
     Some("from") => return suffix.contains(['"', '“']) && words.next().is_some(),
     _ => {}
   }
@@ -983,6 +983,23 @@ mod tests {
       "Sooraj Dooba Hain"
     );
     assert_eq!(strip_title_suffix("(Untitled)"), "(Untitled)");
+  }
+
+  #[test]
+  fn a_with_collaborator_suffix_normalizes_to_the_base_title() {
+    let base_key = normalize_text("I Don't Care");
+    for title in [
+      "I Don't Care (with Justin Bieber)",
+      "I Don't Care [WiTh Justin Bieber]",
+    ] {
+      assert_eq!(normalize_text(&strip_title_suffix(title)), base_key);
+    }
+  }
+
+  #[test]
+  fn a_withered_mix_suffix_stays_in_the_title() {
+    let title = "I Don't Care (Withered Mix)";
+    assert_eq!(strip_title_suffix(title), title);
   }
 
   #[test]

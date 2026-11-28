@@ -74,6 +74,8 @@ mirror or successfully adds it. On the first YouTube run, sync shells out to
 An upgrade from version 1 of `playlist_sync.yml` treats saved matches as
 candidates. A cached pair can follow a later master removal after a sync sees
 its track on the mirror while the master still has it, or adds it successfully.
+A track you removed from the master before upgrading stays on the mirror because
+the first sync drops its migrated pair. Remove it from the mirror by hand.
 
 ## Unmatched tracks
 
