@@ -1,0 +1,1 @@
+- **YouTube search and playback now skip automatic yt-dlp config loading**. This prevents download settings from skipping a video or changing its audio output. If your yt-dlp config sets `--cookies-from-browser` or `--proxy`, pass each option and its value in `SPOTATUI_YTDLP_ARGS`. A missing or empty audio file now reports a download error even if yt-dlp exits successfully.

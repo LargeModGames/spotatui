@@ -698,7 +698,9 @@ async fn publish_pending_decoded(
 
 /// Says why a queued item could not be fetched. A Qobuz track the account
 /// may not stream in full gets the subscription message as an error, so the
-/// advance that follows does not replace it with the next item's status.
+/// advance that follows does not replace it with the next item's status. A
+/// yt-dlp failure is an error for the same reason: it carries the
+/// `SPOTATUI_YTDLP_ARGS` hint the user needs to act on.
 #[cfg(feature = "queue-download")]
 fn report_fetch_failure(app: &mut App, track_name: &str, err: &anyhow::Error) {
   let strings = app.strings();
@@ -708,6 +710,14 @@ fn report_fetch_failure(app: &mut App, track_name: &str, err: &anyhow::Error) {
     .is_some()
   {
     app.set_error_status_message(strings.status.infra.qobuz_no_full_stream, 8);
+    return;
+  }
+  #[cfg(feature = "youtube")]
+  if let Some(detail) = crate::infra::youtube::ytdlp_error_detail(&strings.status.infra, err) {
+    app.set_error_status_message(
+      strings.status.infra.queue_play_failed(track_name, &detail),
+      8,
+    );
     return;
   }
   app.set_status_message(
@@ -1466,6 +1476,41 @@ mod tests {
     let message = app.status_message().unwrap_or_default().to_string();
     assert!(message.contains("Song"), "{message}");
     assert!(!app.status_message_is_error());
+  }
+
+  #[cfg(feature = "youtube")]
+  #[test]
+  fn a_queued_youtube_track_without_audio_uses_the_current_language() {
+    use crate::core::i18n::Language;
+    for language in [Language::En, Language::ZhHans, Language::ZhHant] {
+      let mut app = App::default();
+      app.user_config.behavior.language = language;
+      app.refresh_language();
+      let error = anyhow::Error::new(crate::infra::youtube::YtdlpError::NoAudioFile);
+      report_fetch_failure(&mut app, "Song", &error);
+      let strings = &language.strings().status.infra;
+      assert_eq!(
+        app.status_message(),
+        Some(
+          strings
+            .queue_play_failed("Song", strings.youtube_no_audio_file)
+            .as_str()
+        )
+      );
+    }
+  }
+
+  #[cfg(feature = "youtube")]
+  #[test]
+  fn a_queued_youtube_failure_outlasts_the_next_items_status() {
+    let mut app = App::default();
+    let error = anyhow::Error::new(crate::infra::youtube::YtdlpError::NoAudioFile);
+    report_fetch_failure(&mut app, "Song", &error);
+    let reported = app.status_message().unwrap_or_default().to_string();
+    assert!(app.status_message_is_error());
+    // The advance that follows announces the next item.
+    app.set_status_message("Fetching Next Song", 4);
+    assert_eq!(app.status_message(), Some(reported.as_str()));
   }
 
   fn test_app() -> Arc<Mutex<App>> {

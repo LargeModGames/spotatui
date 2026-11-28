@@ -18,6 +18,8 @@
 //! charset-validated before being passed to `yt-dlp` (defense against argument
 //! injection; they are embedded in a full watch URL, never passed bare).
 
+use std::ffi::OsString;
+use std::fmt;
 use std::path::Path;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -27,6 +29,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
+use crate::core::i18n::status_infra::{self, InfraStatusStrings};
 use crate::core::playlist_sync::SyncTrack;
 use crate::core::plugin_api::{SearchResults, TrackInfo};
 use crate::core::source::Searcher;
@@ -47,6 +50,7 @@ const YOUTUBE_PREFIX: &str = "youtube:";
 /// The `yt-dlp` binary to invoke when the user has not configured
 /// `behavior.ytdlp_path` — resolved through `$PATH`.
 const DEFAULT_YTDLP: &str = "yt-dlp";
+const YTDLP_ARGS_ENV: &str = "SPOTATUI_YTDLP_ARGS";
 
 /// Result page size for searches. Each flat-search page is one remote request
 /// for yt-dlp, so this is also the dominant term in search latency (~3-6 s).
@@ -174,10 +178,50 @@ pub fn uri_for_video_id(id: &str) -> String {
 // YouTubeSource — yt-dlp wrapper
 // ---------------------------------------------------------------------------
 
+#[derive(Debug)]
+pub(super) enum YtdlpError {
+  InvalidArgs,
+  NoAudioFile,
+  WithConfigHint(String),
+}
+
+impl YtdlpError {
+  fn message(&self, strings: &InfraStatusStrings) -> String {
+    match self {
+      Self::InvalidArgs => strings.youtube_invalid_ytdlp_args.to_string(),
+      Self::NoAudioFile => strings.youtube_no_audio_file.to_string(),
+      Self::WithConfigHint(error) => strings.youtube_config_ignored(error),
+    }
+  }
+}
+
+impl fmt::Display for YtdlpError {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    f.write_str(&self.message(&status_infra::EN))
+  }
+}
+
+impl std::error::Error for YtdlpError {}
+
+pub(super) fn error_detail(strings: &InfraStatusStrings, error: &anyhow::Error) -> String {
+  ytdlp_error_detail(strings, error).unwrap_or_else(|| error.to_string())
+}
+
+/// The localized message for a yt-dlp failure, or `None` for any other error.
+pub(super) fn ytdlp_error_detail(
+  strings: &InfraStatusStrings,
+  error: &anyhow::Error,
+) -> Option<String> {
+  error
+    .downcast_ref::<YtdlpError>()
+    .map(|error| error.message(strings))
+}
+
 /// Client for YouTube backed by an external `yt-dlp` binary.
 pub struct YouTubeSource {
   /// Path or name of the `yt-dlp` binary (name is resolved via `$PATH`).
   ytdlp: String,
+  extra_args: Option<OsString>,
 }
 
 impl YouTubeSource {
@@ -185,6 +229,7 @@ impl YouTubeSource {
   pub fn new(ytdlp_path: Option<String>) -> Self {
     YouTubeSource {
       ytdlp: ytdlp_path.unwrap_or_else(|| DEFAULT_YTDLP.to_string()),
+      extra_args: std::env::var_os(YTDLP_ARGS_ENV),
     }
   }
 
@@ -254,20 +299,58 @@ impl YouTubeSource {
 
     let stdout = run_with_embedded_fallback(|embedded| {
       let args = download_args(dest, &url, embedded);
-      async move { self.run(&args, DOWNLOAD_TIMEOUT).await }
+      async move {
+        // `--no-part` writes into `dest` directly, so a failed attempt can
+        // leave a fragment there. Start every attempt from an empty file, so
+        // only the attempt that succeeds can supply the audio.
+        discard_partial_download(dest).await?;
+        let stdout = self.run(&args, DOWNLOAD_TIMEOUT).await?;
+        // yt-dlp can exit successfully without writing the requested audio.
+        let has_audio = match tokio::fs::metadata(dest).await {
+          Ok(metadata) => metadata.is_file() && metadata.len() > 0,
+          Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+          Err(error) => return Err(error.into()),
+        };
+        if !has_audio {
+          return Err(YtdlpError::NoAudioFile.into());
+        }
+        Ok(stdout)
+      }
     })
     .await?;
     Ok(track_from_download_output(&stdout, video_id))
   }
 
+  async fn run(&self, args: &[&str], timeout: Duration) -> Result<String> {
+    let extra_args = if let Some(value) = &self.extra_args {
+      let json = value.to_str().ok_or(YtdlpError::InvalidArgs)?;
+      let args: Vec<String> = serde_json::from_str(json).map_err(|_| YtdlpError::InvalidArgs)?;
+      if args.iter().any(|arg| arg == "--" || arg.contains('\0')) {
+        return Err(YtdlpError::InvalidArgs.into());
+      }
+      args
+    } else {
+      Vec::new()
+    };
+    self.run_command(args, &extra_args, timeout).await
+  }
+
   /// Run `yt-dlp` with `args`, returning stdout. Fails with the tail of
   /// stderr on a non-zero exit, a clear hint when the binary is missing, and
   /// kills the process on timeout (so a wedged extractor can't leak).
-  async fn run(&self, args: &[&str], timeout: Duration) -> Result<String> {
+  async fn run_command(
+    &self,
+    args: &[&str],
+    extra_args: &[String],
+    timeout: Duration,
+  ) -> Result<String> {
     let mut command = Command::new(&self.ytdlp);
     #[cfg(windows)]
     command.creation_flags(CREATE_NO_WINDOW);
     let mut child = command
+      .arg("--ignore-config")
+      .args(extra_args)
+      .arg("--no-download-archive")
       .args(args)
       .stdin(Stdio::null())
       .stdout(Stdio::piped())
@@ -315,7 +398,7 @@ impl YouTubeSource {
         .rev()
         .collect::<Vec<_>>()
         .join(" | ");
-      bail!(
+      let error = anyhow!(
         "yt-dlp failed ({}): {}",
         status,
         if tail.is_empty() {
@@ -324,6 +407,11 @@ impl YouTubeSource {
           tail.as_str()
         }
       );
+      if status.code().is_some() {
+        let hint = YtdlpError::WithConfigHint(error.to_string());
+        return Err(error.context(hint));
+      }
+      return Err(error);
     }
     Ok(stdout)
   }
@@ -348,6 +436,21 @@ where
         Err(primary)
       }
     },
+  }
+}
+
+/// Empty `dest` before a download attempt. A missing file is fine: yt-dlp
+/// creates it, and the size check after the download catches it otherwise.
+async fn discard_partial_download(dest: &str) -> Result<()> {
+  match tokio::fs::OpenOptions::new()
+    .write(true)
+    .truncate(true)
+    .open(dest)
+    .await
+  {
+    Ok(_) => Ok(()),
+    Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+    Err(error) => Err(error.into()),
   }
 }
 
@@ -719,17 +822,206 @@ mod tests {
     assert!(err.to_string().contains("403"), "got: {err}");
   }
 
-  #[test]
-  fn missing_binary_yields_actionable_error() {
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    let source = YouTubeSource::new(Some("definitely-not-a-real-binary".into()));
-    let err = rt
-      .block_on(source.search_videos("test"))
+  #[tokio::test]
+  async fn missing_binary_shows_install_advice_without_the_configuration_hint() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = YouTubeSource {
+      ytdlp: dir.path().join("yt-dlp").to_str().unwrap().into(),
+      extra_args: None,
+    };
+    let err = source
+      .search_videos("test")
+      .await
       .expect_err("missing binary must error");
-    assert!(
-      err.to_string().contains("install yt-dlp"),
-      "error should tell the user what to do, got: {err}"
-    );
+    let message = error_detail(&status_infra::EN, &err);
+    assert!(message.contains("install yt-dlp"), "{message}");
+    assert!(!message.contains(YTDLP_ARGS_ENV), "{message}");
+  }
+
+  #[cfg(unix)]
+  mod config_isolation {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn fake_ytdlp(body: &str) -> (tempfile::TempDir, YouTubeSource) {
+      let dir = tempfile::tempdir().unwrap();
+      let script = dir.path().join("yt-dlp");
+      std::fs::write(
+        &script,
+        format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$0.args\"\n{body}\n"),
+      )
+      .unwrap();
+      std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+      let source = YouTubeSource {
+        ytdlp: script.to_str().unwrap().into(),
+        extra_args: None,
+      };
+      (dir, source)
+    }
+
+    const WRITE_AUDIO: &str = r#"
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-o" ]; then
+    shift
+    printf audio > "$1"
+  fi
+  shift
+done
+printf '%s\n' '{"id":"5NV6Rdv1a3I","title":"Song","duration":1}'
+"#;
+
+    #[tokio::test]
+    async fn a_timeout_does_not_include_the_configuration_hint() {
+      let (_dir, source) = fake_ytdlp("exec sleep 60");
+      let error = source
+        .run(&[], Duration::from_millis(10))
+        .await
+        .unwrap_err();
+      let message = error_detail(&status_infra::EN, &error);
+      assert!(message.starts_with("yt-dlp timed out after"), "{message}");
+      assert!(!message.contains(YTDLP_ARGS_ENV), "{message}");
+    }
+
+    #[tokio::test]
+    async fn a_nonzero_exit_puts_the_configuration_hint_before_the_diagnostic() {
+      // The terminal playbar shows a status on one line and cuts off the rest.
+      let diagnostic = format!("ERROR: {}", "x".repeat(400));
+      let (_dir, source) = fake_ytdlp(&format!("printf '%s\\n' '{diagnostic}' >&2\nexit 1"));
+      let error = source.search_videos("song").await.unwrap_err();
+
+      for strings in [
+        &crate::core::i18n::EN,
+        &crate::core::i18n::ZH_HANS,
+        &crate::core::i18n::ZH_HANT,
+      ] {
+        let message = error_detail(&strings.status.infra, &error);
+        assert!(!message.contains('\n'), "{message}");
+        let hint = message.find(YTDLP_ARGS_ENV).expect("hint");
+        let detail = message.find(&diagnostic).expect("diagnostic");
+        assert!(hint < detail, "{message}");
+      }
+    }
+
+    #[tokio::test]
+    async fn a_successful_exit_without_audio_retries_with_embedded_clients() {
+      let script = format!(
+        "case \" $* \" in\n  *\" {EMBEDDED_PLAYER_CLIENTS} \"*) ;;\n  *) exit 0 ;;\nesac\n{WRITE_AUDIO}"
+      );
+      let (dir, source) = fake_ytdlp(&script);
+      let dest = dir.path().join("audio.m4a");
+
+      let track = source.download_audio("5NV6Rdv1a3I", &dest).await.unwrap();
+
+      assert_eq!(track.unwrap().name, "Song");
+      assert_eq!(std::fs::read(dest).unwrap(), b"audio");
+    }
+
+    #[tokio::test]
+    async fn search_and_download_ignore_automatic_configuration() {
+      let (dir, source) = fake_ytdlp(WRITE_AUDIO);
+      let args_path = dir.path().join("yt-dlp.args");
+      assert_eq!(source.search_videos("song").await.unwrap().len(), 1);
+      let search_args = std::fs::read_to_string(&args_path).unwrap();
+
+      let dest = dir.path().join("audio.m4a");
+      std::fs::write(&dest, b"").unwrap();
+      let track = source.download_audio("5NV6Rdv1a3I", &dest).await.unwrap();
+      assert_eq!(track.unwrap().name, "Song");
+      assert_eq!(std::fs::read(&dest).unwrap(), b"audio");
+      let download_args = std::fs::read_to_string(args_path).unwrap();
+
+      for args in [&search_args, &download_args] {
+        assert_eq!(args.lines().next(), Some("--ignore-config"));
+        assert!(args.lines().any(|arg| arg == "--no-download-archive"));
+      }
+    }
+
+    #[tokio::test]
+    async fn a_successful_exit_without_audio_is_a_download_error() {
+      let (dir, source) = fake_ytdlp("exit 0");
+      let dest = dir.path().join("audio.m4a");
+      assert!(source.download_audio("5NV6Rdv1a3I", &dest).await.is_err());
+
+      std::fs::write(&dest, b"").unwrap();
+      assert!(source.download_audio("5NV6Rdv1a3I", &dest).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn a_retry_that_writes_nothing_does_not_deliver_the_failed_attempts_fragment() {
+      // The first attempt writes part of the audio and fails; the
+      // embedded-client retry exits 0 without writing anything.
+      let (dir, source) = fake_ytdlp(
+        r#"
+case " $* " in
+  *" --extractor-args "*) exit 0 ;;
+esac
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-o" ]; then
+    shift
+    printf fragment > "$1"
+  fi
+  shift
+done
+printf '%s\n' 'ERROR: primary download failed' >&2
+exit 1
+"#,
+      );
+      let dest = dir.path().join("audio.m4a");
+      std::fs::write(&dest, b"").unwrap();
+      let error = source
+        .download_audio("5NV6Rdv1a3I", &dest)
+        .await
+        .expect_err("a fragment must not count as audio");
+      assert!(error.to_string().contains("ERROR: primary download failed"));
+      let args = std::fs::read_to_string(dir.path().join("yt-dlp.args")).unwrap();
+      assert!(args.lines().any(|arg| arg == EMBEDDED_PLAYER_CLIENTS));
+      assert_eq!(std::fs::metadata(dest).unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn extra_ytdlp_options_are_passed_as_separate_arguments() {
+      let (dir, mut source) = fake_ytdlp(WRITE_AUDIO);
+      let options = [
+        "--cookies-from-browser",
+        "firefox",
+        "--ffmpeg-location",
+        "/a folder/ffmpeg & tools",
+        "--download-archive",
+        "unused-archive",
+      ];
+      source.extra_args = Some(serde_json::to_string(&options).unwrap().into());
+      let query = "song & \"quoted\"";
+      assert_eq!(source.search_videos(query).await.unwrap().len(), 1);
+      let args_path = dir.path().join("yt-dlp.args");
+      let search_args = std::fs::read_to_string(&args_path).unwrap();
+      assert!(search_args
+        .lines()
+        .any(|arg| arg == format!("ytsearch{SEARCH_LIMIT}:{query}")));
+
+      let dest = dir.path().join("audio.m4a");
+      source.download_audio("5NV6Rdv1a3I", &dest).await.unwrap();
+      let download_args = std::fs::read_to_string(args_path).unwrap();
+      for args in [search_args, download_args] {
+        let args: Vec<_> = args.lines().collect();
+        assert_eq!(args[0], "--ignore-config");
+        assert_eq!(&args[1..=options.len()], &options);
+        assert_eq!(args[options.len() + 1], "--no-download-archive");
+      }
+    }
+
+    #[tokio::test]
+    async fn invalid_extra_ytdlp_options_fail_before_spawning() {
+      let (dir, mut source) = fake_ytdlp(WRITE_AUDIO);
+      for value in ["--proxy", r#"[1]"#, r#"["--"]"#, r#"["\u0000"]"#] {
+        source.extra_args = Some(value.into());
+        let error = source.search_videos("song").await.unwrap_err();
+        assert!(matches!(
+          error.downcast_ref::<YtdlpError>(),
+          Some(YtdlpError::InvalidArgs)
+        ));
+        assert!(!dir.path().join("yt-dlp.args").exists());
+      }
+    }
   }
 
   /// Live search against real YouTube through yt-dlp. Ignored by default

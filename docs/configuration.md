@@ -188,6 +188,29 @@ behavior:
   ytdlp_path: "/opt/yt-dlp/yt-dlp"
 ```
 
+Search and playback use `--ignore-config` and `--no-download-archive`.
+This prevents personal download settings from skipping a video or changing its audio output.
+
+Set `SPOTATUI_YTDLP_ARGS` to pass required yt-dlp options such as cookies, a proxy, a JS runtime or an ffmpeg path.
+Use a JSON array with each option and value as a separate string. On macOS or Linux, run
+
+```sh
+export SPOTATUI_YTDLP_ARGS='["--cookies-from-browser","firefox","--js-runtimes","node"]'
+spotatui
+```
+
+For a native `yt-dlp.exe` on Windows, run the following in PowerShell.
+
+```powershell
+$env:SPOTATUI_YTDLP_ARGS = ConvertTo-Json -Compress -InputObject @('--cookies-from-browser', 'firefox')
+spotatui.exe
+```
+
+Set the variable in the environment that launches spotatui.
+An executable configured through `ytdlp_path` can also supply options before forwarding spotatui's arguments.
+Both methods accept an explicit `--config-locations PATH`.
+Keep these settings limited to authentication, networking and extraction. Spotatui supplies its own audio format and output arguments.
+
 Local YouTube playlists are stored in `youtube_playlists.yml` in the app config directory. Set `SPOTATUI_YOUTUBE_PLAYLISTS_PATH` to replace that location; its value must be the full path to the `.yml` file, not a directory.
 
 The `youtube` cargo feature is required. It is included in the release binaries.

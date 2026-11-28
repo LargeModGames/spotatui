@@ -1237,6 +1237,14 @@ fn every_typed_message_fills_its_placeholders_and_preserves_all_arguments() {
       ["SENTINEL_ERROR_中"]
     );
     check!(
+      "status_infra.youtube_config_ignored",
+      strings
+        .status
+        .infra
+        .youtube_config_ignored("SENTINEL_ERROR_中"),
+      ["SENTINEL_ERROR_中"]
+    );
+    check!(
       "status_infra.youtube_task_failed",
       strings
         .status

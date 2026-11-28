@@ -172,13 +172,10 @@ async fn run_youtube_search(app: &Arc<Mutex<App>>, query: &str) {
       .await
       .show_source_search_tracks(query, results.tracks),
     Err(e) => {
+      let strings = &crate::infra::app_strings(app).await.status.infra;
       set_error(
         app,
-        crate::infra::app_strings(app)
-          .await
-          .status
-          .infra
-          .youtube_search_failed(&e.to_string()),
+        strings.youtube_search_failed(&super::error_detail(strings, &e)),
       )
       .await
     }
@@ -574,6 +571,13 @@ async fn download_audio(
   Ok((tmp, resolved))
 }
 
+fn download_error_message(
+  strings: &crate::core::i18n::status_infra::InfraStatusStrings,
+  error: &anyhow::Error,
+) -> String {
+  strings.youtube_download_failed(&super::error_detail(strings, error))
+}
+
 /// Download the audio for `uri` into a tempfile, for the native queue engine's
 /// off-pump fetch (playing is the queue's job — it re-checks that the queue
 /// slot is still current before touching the shared player).
@@ -681,11 +685,7 @@ async fn start_youtube_queue(app: &Arc<Mutex<App>>, uris: &[String], start_idx: 
     Err(e) => {
       set_error(
         app,
-        crate::infra::app_strings(app)
-          .await
-          .status
-          .infra
-          .youtube_download_failed(&e.to_string()),
+        download_error_message(&crate::infra::app_strings(app).await.status.infra, &e),
       )
       .await;
       return;
@@ -902,11 +902,7 @@ pub(crate) async fn play_index(app: &Arc<Mutex<App>>, target: usize) {
       teardown_youtube(app).await;
       set_error(
         app,
-        crate::infra::app_strings(app)
-          .await
-          .status
-          .infra
-          .youtube_download_failed(&e.to_string()),
+        download_error_message(&crate::infra::app_strings(app).await.status.infra, &e),
       )
       .await;
       return;
@@ -1005,6 +1001,28 @@ mod tests {
   use crate::core::user_config::UserConfig;
   use std::sync::mpsc::channel;
   use std::time::SystemTime;
+
+  #[test]
+  fn a_missing_audio_file_reports_the_download_failure_in_each_language() {
+    for strings in [
+      &crate::core::i18n::EN,
+      &crate::core::i18n::ZH_HANS,
+      &crate::core::i18n::ZH_HANT,
+    ] {
+      let strings = &strings.status.infra;
+      let message = download_error_message(strings, &super::super::YtdlpError::NoAudioFile.into());
+      assert_eq!(
+        message,
+        strings.youtube_download_failed(strings.youtube_no_audio_file)
+      );
+      assert!(message.contains("SPOTATUI_YTDLP_ARGS"));
+      let other = anyhow::anyhow!("HTTP Error 403");
+      assert_eq!(
+        download_error_message(strings, &other),
+        strings.youtube_download_failed("HTTP Error 403")
+      );
+    }
+  }
 
   fn test_app() -> App {
     let (tx, _rx) = channel();
