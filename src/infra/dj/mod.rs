@@ -49,7 +49,7 @@ pub mod setup;
 /// verbatim, and the in-TUI DJ's agent loop drives the same table.
 pub mod tools;
 
-pub use brief::dedupe_key;
+pub use brief::{dedupe_key, library_key};
 
 /// Cap on the avoid-library crawl. A listener with more saved tracks than this
 /// gets a partial index rather than an unbounded startup cost, and is told so —
@@ -64,7 +64,7 @@ pub const MAX_LIBRARY_TRACKS: usize = 20_000;
 /// would add staleness for nothing. See [`library`].
 #[derive(Clone, Debug, Default)]
 pub struct DjLibrary {
-  /// [`dedupe_key`] per track, so a suggestion can be rejected before it costs a
+  /// [`library_key`] per track, so a suggestion can be rejected before it costs a
   /// catalogue search.
   pub keys: std::collections::HashSet<String>,
   /// Spotify track IDs, for the exact gate after a suggestion resolves. Catches

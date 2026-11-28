@@ -13,7 +13,7 @@
 //! [`super::resolve`] does: they take `&Network` and *return* an answer instead of
 //! writing into `App`.
 
-use super::{dedupe_key, DjLibrary, MAX_LIBRARY_TRACKS};
+use super::{library_key, DjLibrary, MAX_LIBRARY_TRACKS};
 use crate::infra::network::Network;
 use serde::Deserialize;
 use std::collections::HashSet;
@@ -74,6 +74,21 @@ struct TrackRef {
 #[derive(Deserialize)]
 struct ArtistRef {
   name: Option<String>,
+}
+
+/// The avoid-library key for a playlist track, or `None` for a track without a
+/// title.
+///
+/// Keyed on the first artist's full name: joining the list and splitting it
+/// again at commas would turn `Tyler, The Creator` into `Tyler`.
+fn track_library_key(track: &TrackRef) -> Option<String> {
+  let name = track.name.as_deref().filter(|name| !name.is_empty())?;
+  let artist = track
+    .artists
+    .iter()
+    .find_map(|artist| artist.name.as_deref())
+    .unwrap_or_default();
+  Some(library_key(name, artist))
 }
 
 /// Whether this playlist counts as one of the listener's own.
@@ -205,16 +220,10 @@ async fn collect_playlist(
       let Some(track) = item.track.as_ref() else {
         continue;
       };
-      let Some(name) = track.name.as_deref().filter(|name| !name.is_empty()) else {
+      let Some(key) = track_library_key(track) else {
         continue;
       };
-      let artists = track
-        .artists
-        .iter()
-        .filter_map(|artist| artist.name.clone())
-        .collect::<Vec<_>>()
-        .join(", ");
-      library.keys.insert(dedupe_key(name, &artists));
+      library.keys.insert(key);
       if let Some(id) = track.id.clone() {
         library.ids.insert(id);
       }
@@ -303,6 +312,34 @@ mod tests {
     assert!(page.items[0].track.is_some());
     assert!(page.items[1].track.is_some(), "the `item` alias must parse");
     assert!(page.items[2].track.is_none(), "a null track is skipped");
+  }
+
+  #[test]
+  fn playlist_tracks_are_keyed_on_the_first_artists_full_name() {
+    let page: TrackPage = serde_json::from_str(
+      r#"{"items":[
+        {"track":{"id":"t1","name":"Same Title","artists":[{"name":"Tyler, The Creator"}]}},
+        {"track":{"id":"t2","name":"Weird Fishes / Arpeggi",
+          "artists":[{"name":"Radiohead"},{"name":"Thom Yorke"}]}},
+        {"track":{"id":"t3","name":"","artists":[{"name":"Radiohead"}]}}
+      ],"next":null}"#,
+    )
+    .unwrap();
+    let keys: HashSet<String> = page
+      .items
+      .iter()
+      .filter_map(|item| item.track.as_ref())
+      .filter_map(track_library_key)
+      .collect();
+
+    assert_eq!(keys.len(), 2, "a track without a title is not keyed");
+    // A suggestion for a same-titled song by `Tyler` is not skipped before the
+    // search.
+    assert!(!keys.contains(&library_key("Same Title", "Tyler")));
+    assert!(keys.contains(&library_key("Same Title", "Tyler, The Creator")));
+    // A multi-artist credit still matches a suggestion naming its first artist.
+    assert!(keys.contains(&library_key("weird fishes arpeggi", "Radiohead")));
+    assert!(!keys.contains(&library_key("Weird Fishes / Arpeggi", "Thom Yorke")));
   }
 
   #[test]
