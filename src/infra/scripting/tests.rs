@@ -2908,6 +2908,252 @@ mod storage_tests {
   }
 
   #[test]
+  fn similarly_named_plugins_keep_separate_storage() {
+    let cfg = tempfile::tempdir().unwrap();
+    write_file(
+      &cfg.path().join("plugins/mix.notes.lua"),
+      r#"
+        pre_dotted = spotatui.storage_get("name") or "missing"
+        if spotatui.storage_get("name") == nil then
+          spotatui.storage_set("name", "dotted")
+        end
+        spotatui.on("start", function() dotted = spotatui.storage_get("name") end)
+      "#,
+    );
+    write_file(
+      &cfg.path().join("plugins/mix_notes.lua"),
+      r#"
+        pre_underscored = spotatui.storage_get("name") or "missing"
+        if spotatui.storage_get("name") == nil then
+          spotatui.storage_set("name", "underscored")
+        end
+        spotatui.on("start", function() underscored = spotatui.storage_get("name") end)
+      "#,
+    );
+
+    {
+      let mut engine = ScriptEngine::new().unwrap();
+      assert_eq!(engine.load_user_scripts(cfg.path()), 2);
+      engine.emit(ScriptEvent::Start);
+      let globals = engine.lua.globals();
+      assert_eq!(globals.get::<String>("pre_dotted").unwrap(), "missing");
+      assert_eq!(globals.get::<String>("pre_underscored").unwrap(), "missing");
+      assert_eq!(globals.get::<String>("underscored").unwrap(), "underscored");
+      assert_eq!(globals.get::<String>("dotted").unwrap(), "dotted");
+      engine.flush_storage(true);
+    }
+
+    assert!(cfg
+      .path()
+      .join("plugin-data")
+      .join("mix_notes.json")
+      .is_file());
+    let mut engine = ScriptEngine::new().unwrap();
+    assert_eq!(engine.load_user_scripts(cfg.path()), 2);
+    let globals = engine.lua.globals();
+    assert_eq!(globals.get::<String>("pre_dotted").unwrap(), "dotted");
+    assert_eq!(
+      globals.get::<String>("pre_underscored").unwrap(),
+      "underscored"
+    );
+  }
+
+  #[test]
+  fn hashed_namespaces_stay_distinct_from_clean_names() {
+    use super::super::shared::storage_namespace_id;
+
+    let dotted_ns = storage_namespace_id("..lua");
+    let clean_ns = storage_namespace_id("__af63a34c86018bb1.lua");
+    assert_ne!(dotted_ns, clean_ns);
+    assert!(dotted_ns.contains('.'));
+    assert_eq!(clean_ns, "__af63a34c86018bb1");
+
+    let cfg = temp_config_dir();
+    {
+      let mut engine = engine_with_dir(&cfg);
+      engine
+        .load_source("..lua", r#"spotatui.storage_set("v", "dot")"#)
+        .unwrap();
+      engine
+        .load_source(
+          "__af63a34c86018bb1.lua",
+          r#"spotatui.storage_set("v", "clean")"#,
+        )
+        .unwrap();
+      engine.flush_storage(true);
+    }
+
+    let mut reload = engine_with_dir(&cfg);
+    reload
+      .load_source("..lua", r#"pre_dot = spotatui.storage_get("v")"#)
+      .unwrap();
+    reload
+      .load_source(
+        "__af63a34c86018bb1.lua",
+        r#"pre_clean = spotatui.storage_get("v")"#,
+      )
+      .unwrap();
+    let globals = reload.lua.globals();
+    assert_eq!(globals.get::<String>("pre_dot").unwrap(), "dot");
+    assert_eq!(globals.get::<String>("pre_clean").unwrap(), "clean");
+    std::fs::remove_dir_all(&cfg).unwrap();
+  }
+
+  #[test]
+  fn legacy_save_migrates_for_renamed_plugin() {
+    use super::super::shared::storage_namespace_id;
+
+    let cfg = temp_config_dir();
+    write_file(
+      &cfg.join("plugin-data").join("my_plugin.json"),
+      r#"{"theme":"nord","count":3}"#,
+    );
+
+    let ns = storage_namespace_id("my plugin.lua");
+    assert!(ns.starts_with("my_plugin."));
+
+    {
+      let mut engine = engine_with_dir(&cfg);
+      engine
+        .load_source(
+          "my plugin.lua",
+          r#"
+            migrated_theme = spotatui.storage_get("theme")
+            migrated_count = spotatui.storage_get("count")
+            spotatui.storage_set("count", 4)
+          "#,
+        )
+        .unwrap();
+      let globals = engine.lua.globals();
+      assert_eq!(globals.get::<String>("migrated_theme").unwrap(), "nord");
+      assert_eq!(globals.get::<i64>("migrated_count").unwrap(), 3);
+      engine.flush_storage(true);
+    }
+
+    assert!(cfg.join("plugin-data").join(format!("{ns}.json")).is_file());
+    // Subsequent runs read the new hashed file instead of the untouched legacy file.
+    let mut reload = engine_with_dir(&cfg);
+    reload
+      .load_source(
+        "my plugin.lua",
+        r#"reloaded_count = spotatui.storage_get("count")"#,
+      )
+      .unwrap();
+    let globals = reload.lua.globals();
+    assert_eq!(globals.get::<i64>("reloaded_count").unwrap(), 4);
+    std::fs::remove_dir_all(&cfg).unwrap();
+  }
+
+  #[test]
+  fn legacy_save_skipped_when_clean_plugin_loaded() {
+    let cfg = tempfile::tempdir().unwrap();
+    write_file(
+      &cfg.path().join("plugins/mix_notes.lua"),
+      r#"
+        existing = spotatui.storage_get("token")
+        if existing == nil then
+          spotatui.storage_set("token", "clean-secret")
+        end
+      "#,
+    );
+
+    {
+      let mut engine = ScriptEngine::new().unwrap();
+      assert_eq!(engine.load_user_scripts(cfg.path()), 1);
+      engine.flush_storage(true);
+    }
+
+    // Adding `mix.notes.lua` alongside `mix_notes.lua` (and loading it first
+    // alphabetically in a fresh engine without a hashed save) must not seed it
+    // from `mix_notes.json`.
+    write_file(
+      &cfg.path().join("plugins/mix.notes.lua"),
+      r#"dotted_seen = spotatui.storage_get("token") or "missing""#,
+    );
+
+    let mut fresh = ScriptEngine::new().unwrap();
+    assert_eq!(fresh.load_user_scripts(cfg.path()), 2);
+    let globals = fresh.lua.globals();
+    assert_eq!(globals.get::<String>("dotted_seen").unwrap(), "missing");
+    assert_eq!(globals.get::<String>("existing").unwrap(), "clean-secret");
+  }
+
+  #[test]
+  fn legacy_save_skipped_when_case_alias_clean_plugin_loaded() {
+    let cfg = tempfile::tempdir().unwrap();
+    write_file(
+      &cfg.path().join("plugins/Mix_Notes.lua"),
+      r#"
+        existing = spotatui.storage_get("token")
+        if existing == nil then
+          spotatui.storage_set("token", "upper-secret")
+        end
+      "#,
+    );
+
+    {
+      let mut engine = ScriptEngine::new().unwrap();
+      assert_eq!(engine.load_user_scripts(cfg.path()), 1);
+      engine.flush_storage(true);
+    }
+
+    // On case-insensitive volumes `mix_notes.json` aliases `Mix_Notes.json`;
+    // `mix.notes.lua` must not treat it as its own legacy save while
+    // `Mix_Notes.lua` is installed.
+    write_file(
+      &cfg.path().join("plugins/mix.notes.lua"),
+      r#"dotted_seen = spotatui.storage_get("token") or "missing""#,
+    );
+
+    let mut fresh = ScriptEngine::new().unwrap();
+    assert_eq!(fresh.load_user_scripts(cfg.path()), 2);
+    let globals = fresh.lua.globals();
+    assert_eq!(globals.get::<String>("dotted_seen").unwrap(), "missing");
+    assert_eq!(globals.get::<String>("existing").unwrap(), "upper-secret");
+  }
+
+  #[test]
+  fn legacy_save_migrates_distinct_case_save_on_case_sensitive_volume() {
+    let cfg = tempfile::tempdir().unwrap();
+    write_file(
+      &cfg.path().join("plugins/Mix_Notes.lua"),
+      r#"
+        existing = spotatui.storage_get("token")
+        if existing == nil then
+          spotatui.storage_set("token", "upper-secret")
+        end
+      "#,
+    );
+
+    {
+      let mut engine = ScriptEngine::new().unwrap();
+      assert_eq!(engine.load_user_scripts(cfg.path()), 1);
+      engine.flush_storage(true);
+    }
+
+    let lower_legacy = cfg.path().join("plugin-data/mix_notes.json");
+    if lower_legacy.exists() {
+      // Case-insensitive volumes cannot store two distinct case-variant saves side by side.
+      return;
+    }
+
+    write_file(&lower_legacy, r#"{"token":"lower-secret"}"#);
+    write_file(
+      &cfg.path().join("plugins/mix.notes.lua"),
+      r#"dotted_seen = spotatui.storage_get("token") or "missing""#,
+    );
+
+    let mut fresh = ScriptEngine::new().unwrap();
+    assert_eq!(fresh.load_user_scripts(cfg.path()), 2);
+    let globals = fresh.lua.globals();
+    assert_eq!(
+      globals.get::<String>("dotted_seen").unwrap(),
+      "lower-secret"
+    );
+    assert_eq!(globals.get::<String>("existing").unwrap(), "upper-secret");
+  }
+
+  #[test]
   fn corrupt_storage_file_starts_empty() {
     let cfg = temp_config_dir();
     write_file(&cfg.join("plugin-data").join("a.json"), "{not json");
