@@ -203,6 +203,7 @@ mod tests {
       mirrors: vec![Mirror {
         endpoint: endpoint(Source::Qobuz, "Road Trip"),
         matches,
+        pending_matches: BTreeMap::new(),
         unmatched: vec![Unmatched {
           master_key: "master-2".to_string(),
           title: "Rare Take".to_string(),

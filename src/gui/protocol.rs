@@ -3814,6 +3814,7 @@ mod tests {
       mirrors: vec![Mirror {
         endpoint: endpoint(Source::Qobuz, "Road Trip"),
         matches: [("a".to_string(), "b".to_string())].into_iter().collect(),
+        pending_matches: [("p".to_string(), "q".to_string())].into_iter().collect(),
         unmatched: vec![Unmatched {
           master_key: "c".to_string(),
           title: "Levels".to_string(),
@@ -3831,6 +3832,7 @@ mod tests {
     assert_eq!(mirror["matched"], 1);
     assert_eq!(mirror["unmatched"][0]["reason"], "NoCandidate");
     assert!(mirror.get("matches").is_none());
+    assert!(mirror.get("pending_matches").is_none());
   }
 
   #[test]

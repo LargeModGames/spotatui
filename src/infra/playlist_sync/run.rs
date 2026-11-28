@@ -1,7 +1,7 @@
 //! One sync run: load the store, walk the links, and bring every mirror up to
 //! date through the engine's plan.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -64,13 +64,19 @@ pub(crate) async fn run_all<C: SyncClients>(
   app.lock().await.set_playlist_sync_links(file.links.clone());
 
   let selected: Vec<usize> = match filter {
-    Some(filter) => file
-      .links
-      .iter()
-      .enumerate()
-      .filter(|(_, link)| link.matches_filter(filter))
-      .map(|(index, _)| index)
-      .collect(),
+    Some(filter) => {
+      let filter = filter.trim();
+      match file.links.iter().position(|link| link.id == filter) {
+        Some(index) => vec![index],
+        None => file
+          .links
+          .iter()
+          .enumerate()
+          .filter(|(_, link)| link.matches_filter(filter))
+          .map(|(index, _)| index)
+          .collect(),
+      }
+    }
     None => (0..file.links.len()).collect(),
   };
   if selected.is_empty() {
@@ -287,9 +293,14 @@ async fn sync_mirror<C: SyncClient>(
     }
   };
   let mut on_mirror = read.keys();
-  let mut updated = link.mirrors[index].matches.clone();
+  let mirror = &link.mirrors[index];
+  let master_keys: BTreeSet<_> = master.iter().map(|track| track.key.as_str()).collect();
+  // Forget pending pairs whose master track left before the mirror acquired it.
+  let mut pending = mirror.pending_matches.clone();
+  pending.retain(|key, _| master_keys.contains(key.as_str()) && !mirror.matches.contains_key(key));
+  let mut updated = mirror.matches.clone();
+  updated.extend(pending.clone());
   let mut first = plan(master, &on_mirror, &updated);
-  let mut pending: Vec<(String, String)> = Vec::new();
   let mut resolved: BTreeMap<String, SyncTrack> = BTreeMap::new();
 
   // Pair what the mirror already holds before any search is paid for.
@@ -298,7 +309,7 @@ async fn sync_mirror<C: SyncClient>(
     match pick_candidate(&track, &read.tracks) {
       Some(found) => {
         let found = read.tracks[found].clone();
-        pending.push((track.key.clone(), found.key.clone()));
+        pending.insert(track.key.clone(), found.key.clone());
         updated.insert(track.key.clone(), found.key.clone());
         resolved.insert(found.key.clone(), found);
       }
@@ -334,7 +345,7 @@ async fn sync_mirror<C: SyncClient>(
 
   // Cached matches the mirror lost come back before any search is paid for.
   if !state.dry_run {
-    if let Err(e) = flush_adds(
+    let result = flush_adds(
       client,
       uri,
       master,
@@ -343,8 +354,9 @@ async fn sync_mirror<C: SyncClient>(
       &resolved,
       &mut added,
     )
-    .await
-    {
+    .await;
+    record_resolutions(&mut link.mirrors[index], &mut pending, &on_mirror);
+    if let Err(e) = result {
       return MirrorRun {
         added,
         unmatched: unmatched.len(),
@@ -358,7 +370,7 @@ async fn sync_mirror<C: SyncClient>(
   for (done, track) in (1..).zip(first.to_resolve.iter()) {
     match client.resolve(track).await {
       Ok(Some(found)) => {
-        pending.push((track.key.clone(), found.key.clone()));
+        pending.insert(track.key.clone(), found.key.clone());
         updated.insert(track.key.clone(), found.key.clone());
         resolved.insert(found.key.clone(), found);
       }
@@ -367,7 +379,7 @@ async fn sync_mirror<C: SyncClient>(
         if requests::is_rate_limited_error(&e) {
           // Keep the searches this run paid for, so the next run resumes past them.
           if !state.dry_run {
-            commit(&mut link.mirrors[index], &mut pending);
+            record_resolutions(&mut link.mirrors[index], &mut pending, &on_mirror);
           }
           return MirrorRun {
             added,
@@ -397,8 +409,7 @@ async fn sync_mirror<C: SyncClient>(
     if state.dry_run {
       continue;
     }
-    commit(&mut link.mirrors[index], &mut pending);
-    if let Err(e) = flush_adds(
+    let result = flush_adds(
       client,
       uri,
       master,
@@ -407,8 +418,9 @@ async fn sync_mirror<C: SyncClient>(
       &resolved,
       &mut added,
     )
-    .await
-    {
+    .await;
+    record_resolutions(&mut link.mirrors[index], &mut pending, &on_mirror);
+    if let Err(e) = result {
       return MirrorRun {
         added,
         unmatched: unmatched.len(),
@@ -430,8 +442,7 @@ async fn sync_mirror<C: SyncClient>(
     };
   }
 
-  commit(&mut link.mirrors[index], &mut pending);
-  if let Err(e) = flush_adds(
+  let result = flush_adds(
     client,
     uri,
     master,
@@ -440,8 +451,9 @@ async fn sync_mirror<C: SyncClient>(
     &resolved,
     &mut added,
   )
-  .await
-  {
+  .await;
+  record_resolutions(&mut link.mirrors[index], &mut pending, &on_mirror);
+  if let Err(e) = result {
     return MirrorRun {
       added,
       unmatched: unmatched.len(),
@@ -449,7 +461,8 @@ async fn sync_mirror<C: SyncClient>(
       ..Default::default()
     };
   }
-  let writes = plan(master, &on_mirror, &updated);
+  let mirror = &mut link.mirrors[index];
+  let writes = plan(master, &on_mirror, &mirror.matches);
   if !writes.to_remove.is_empty() {
     if let Err(e) = client.remove(uri, &writes.to_remove).await {
       return MirrorRun {
@@ -461,7 +474,6 @@ async fn sync_mirror<C: SyncClient>(
     }
   }
 
-  let mirror = &mut link.mirrors[index];
   mirror.drop_stale(&writes.stale);
   let count = unmatched.len();
   mirror.finish_run(unmatched, state.now.clone());
@@ -494,11 +506,22 @@ async fn flush_adds<C: SyncClient>(
   Ok(())
 }
 
-/// Record the resolutions since the last commit on the mirror's match cache.
-fn commit(mirror: &mut Mirror, pending: &mut Vec<(String, String)>) {
-  for (master_key, mirror_key) in pending.drain(..) {
-    mirror.record_match(&master_key, &mirror_key);
-  }
+/// Claim pairs observed on the mirror or sent in a successful add batch.
+/// Keep the other resolutions for retry even if a later batch failed.
+fn record_resolutions(
+  mirror: &mut Mirror,
+  pending: &mut BTreeMap<String, String>,
+  on_mirror: &[String],
+) {
+  pending.retain(|master_key, mirror_key| {
+    if on_mirror.contains(mirror_key) {
+      mirror.record_match(master_key, mirror_key);
+      false
+    } else {
+      true
+    }
+  });
+  mirror.pending_matches.clone_from(pending);
 }
 
 /// Save the link as it stands and publish the links; a failure here is logged,
@@ -703,13 +726,11 @@ mod tests {
 
   fn mirror_at(uri: &str, matches: &[(&str, &str)]) -> Mirror {
     Mirror {
-      endpoint: endpoint(Source::Qobuz, uri, "Mirror"),
       matches: matches
         .iter()
         .map(|(master, mirror)| (master.to_string(), mirror.to_string()))
         .collect(),
-      unmatched: Vec::new(),
-      last_run: None,
+      ..Mirror::new(endpoint(Source::Qobuz, uri, "Mirror"))
     }
   }
 
@@ -756,6 +777,62 @@ mod tests {
 
   fn saved_mirror(path: &Path, link: usize, mirror: usize) -> Mirror {
     store::load(path).unwrap().links[link].mirrors[mirror].clone()
+  }
+
+  #[tokio::test]
+  async fn a_legacy_cache_requires_reconfirmation_before_removing_mirror_tracks() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _rx) = test_app();
+    let master = "spotify:playlist:1";
+    let mirror = "qobuz:playlist:1";
+    let path = dir.path().join("playlist_sync.yml");
+    let file = store::PlaylistSyncFile {
+      version: 1,
+      links: vec![link_at(
+        "aaa",
+        "Master",
+        master,
+        vec![mirror_at(
+          mirror,
+          &[("old", "manual"), ("m1", "observed"), ("m2", "added")],
+        )],
+      )],
+    };
+    store::save(&path, &file).unwrap();
+    let clients = fake_clients(vec![
+      (master, fake(vec![track("m1", "One"), track("m2", "Two")])),
+      (
+        mirror,
+        fake(vec![track("observed", "One"), track("manual", "Manual")]),
+      ),
+    ]);
+
+    let dry_run = run_all(&clients, &app, &path, None, true, true).await;
+    let report = run_all(&clients, &app, &path, None, false, true).await;
+    assert!(!report.failed());
+    assert!(clients.by_uri[mirror].removed_keys().is_empty());
+    assert_eq!(dry_run.links[0].removed, 0);
+    assert_eq!(clients.by_uri[mirror].added_keys(), vec![vec!["added"]]);
+    assert!(clients.by_uri[mirror].searched_keys().is_empty());
+    assert!(saved_mirror(&path, 0, 0).pending_matches.is_empty());
+
+    let clients = fake_clients(vec![
+      (master, fake(Vec::new())),
+      (
+        mirror,
+        fake(vec![
+          track("observed", "One"),
+          track("added", "Two"),
+          track("manual", "Manual"),
+        ]),
+      ),
+    ]);
+    let report = run_all(&clients, &app, &path, None, false, true).await;
+    assert!(!report.failed());
+    assert_eq!(
+      clients.by_uri[mirror].removed_keys(),
+      vec![vec!["observed", "added"]]
+    );
   }
 
   #[tokio::test]
@@ -1106,8 +1183,10 @@ mod tests {
       .is_some_and(|text| text.contains("429")));
     assert!(report.failed());
     assert!(clients.by_uri["qobuz:playlist:2"].added_keys().is_empty());
+    let mirror = saved_mirror(&path, 0, 0);
+    assert!(mirror.matches.is_empty());
     assert_eq!(
-      saved_mirror(&path, 0, 0).matches,
+      mirror.pending_matches,
       BTreeMap::from([("m0".to_string(), "x0".to_string())])
     );
   }
@@ -1197,7 +1276,84 @@ mod tests {
     assert_eq!(mirror.added_keys().len(), 1);
     assert_eq!(report.links[0].added, 10);
     assert!(report.failed());
-    assert_eq!(saved_mirror(&path, 0, 0).matches.len(), 20);
+    let saved = saved_mirror(&path, 0, 0);
+    let expected = |range: std::ops::RangeInclusive<usize>| {
+      range
+        .map(|n| (format!("m{n}"), format!("x{n}")))
+        .collect::<BTreeMap<_, _>>()
+    };
+    assert_eq!(saved.matches, expected(1..=10));
+    assert_eq!(saved.pending_matches, expected(11..=20));
+  }
+
+  #[tokio::test]
+  async fn a_failed_add_does_not_claim_a_later_manual_mirror_row() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _rx) = test_app();
+    let master = "spotify:playlist:1";
+    let mirror = "qobuz:playlist:1";
+    let path = seeded_store(
+      &dir,
+      vec![link_at(
+        "aaa",
+        "Master",
+        master,
+        vec![mirror_at(mirror, &[])],
+      )],
+    );
+    let first = fake_clients(vec![
+      (master, fake(vec![track("m1", "Song")])),
+      (
+        mirror,
+        FakeClient {
+          hits: hits(vec![("m1", track("x1", "Song"))]),
+          fail_add_from: Some(1),
+          ..Default::default()
+        },
+      ),
+    ]);
+    let failed = run_all(&first, &app, &path, None, false, true).await;
+    assert!(failed.failed());
+    assert_eq!(failed.added(), 0);
+
+    let retry = fake_clients(vec![
+      (master, fake(Vec::new())),
+      (mirror, fake(vec![track("x1", "Song")])),
+    ]);
+    let report = run_all(&retry, &app, &path, None, false, true).await;
+    assert!(!report.failed());
+    let removals = retry.by_uri[mirror].removed_keys();
+    assert!(removals.is_empty(), "removed manual rows: {removals:?}");
+    let saved = saved_mirror(&path, 0, 0);
+    assert!(saved.matches.is_empty());
+    assert!(saved.pending_matches.is_empty());
+  }
+
+  #[tokio::test]
+  async fn a_retry_adds_a_pending_match_without_searching_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _rx) = test_app();
+    let master_uri = "spotify:playlist:1";
+    let mirror_uri = "qobuz:playlist:1";
+    let mut mirror = mirror_at(mirror_uri, &[]);
+    mirror.pending_matches.insert("m1".into(), "x1".into());
+    let path = seeded_store(
+      &dir,
+      vec![link_at("aaa", "Master", master_uri, vec![mirror])],
+    );
+    let clients = fake_clients(vec![
+      (master_uri, fake(vec![track("m1", "Song")])),
+      (mirror_uri, fake(Vec::new())),
+    ]);
+
+    let report = run_all(&clients, &app, &path, None, false, true).await;
+
+    assert!(!report.failed());
+    assert!(clients.by_uri[mirror_uri].searched_keys().is_empty());
+    assert_eq!(clients.by_uri[mirror_uri].added_keys(), vec![vec!["x1"]]);
+    let saved = saved_mirror(&path, 0, 0);
+    assert_eq!(saved.matches, BTreeMap::from([("m1".into(), "x1".into())]));
+    assert!(saved.pending_matches.is_empty());
   }
 
   #[tokio::test]
@@ -1292,7 +1448,12 @@ mod tests {
     assert_eq!(mirror.added_keys()[1][0], "x11");
     assert_eq!(report.links[0].added, 20);
     assert!(report.failed());
-    assert_eq!(saved_mirror(&path, 0, 0).matches.len(), 21);
+    let saved = saved_mirror(&path, 0, 0);
+    assert_eq!(saved.matches.len(), 20);
+    assert_eq!(
+      saved.pending_matches,
+      BTreeMap::from([("m21".into(), "x21".into())])
+    );
   }
 
   #[test]
@@ -1438,6 +1599,34 @@ mod tests {
     let missing = run_all(&clients, &app, &path, Some("nope"), false, true).await;
     assert!(missing.links.is_empty());
     assert_eq!(missing.error.as_deref(), Some("no link matches \"nope\""));
+  }
+
+  #[tokio::test]
+  async fn an_exact_link_id_takes_precedence_over_another_links_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _rx) = test_app();
+    let id = "abc123def456";
+    let path = seeded_store(
+      &dir,
+      vec![
+        link_at("xyz123def456", id, "spotify:playlist:1", Vec::new()),
+        link_at(id, "Road Trip", "spotify:playlist:2", Vec::new()),
+      ],
+    );
+    let filter = format!(" {id} ");
+
+    let report = run_all(
+      &fake_clients(Vec::new()),
+      &app,
+      &path,
+      Some(&filter),
+      true,
+      true,
+    )
+    .await;
+
+    let ids: Vec<_> = report.links.iter().map(|link| link.id.as_str()).collect();
+    assert_eq!(ids, [id]);
   }
 
   #[tokio::test]

@@ -12,20 +12,21 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 const FILE_NAME: &str = "playlist_sync.yml";
+/// The schema this build writes, and the highest it can read.
+const FILE_VERSION: u32 = 2;
 
 /// Environment override for users who keep their state elsewhere.
 /// Ignored in tests, which pass temporary paths directly.
 pub const PATH_ENV: &str = "SPOTATUI_PLAYLIST_SYNC_PATH";
 
-/// The schema this build writes, and the highest it can read.
-fn file_version() -> u32 {
+fn legacy_file_version() -> u32 {
   1
 }
 
 /// The whole on-disk file.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlaylistSyncFile {
-  #[serde(default = "file_version")]
+  #[serde(default = "legacy_file_version")]
   pub version: u32,
   #[serde(default)]
   pub links: Vec<Link>,
@@ -34,7 +35,7 @@ pub struct PlaylistSyncFile {
 impl Default for PlaylistSyncFile {
   fn default() -> Self {
     PlaylistSyncFile {
-      version: file_version(),
+      version: FILE_VERSION,
       links: Vec::new(),
     }
   }
@@ -47,7 +48,11 @@ impl PlaylistSyncFile {
     if let Some(existing) = self.links.iter_mut().find(|link| {
       link.master.source == master.source && link.master.playlist_uri == master.playlist_uri
     }) {
-      existing.mirrors.push(Mirror::new(mirror));
+      if !existing.mirrors.iter().any(|known| {
+        known.endpoint.source == mirror.source && known.endpoint.playlist_uri == mirror.playlist_uri
+      }) {
+        existing.mirrors.push(Mirror::new(mirror));
+      }
       return existing.id.clone();
     }
     let id = self.new_link_id();
@@ -110,14 +115,27 @@ pub fn load(path: &Path) -> Result<PlaylistSyncFile> {
   if contents.trim().is_empty() {
     return Ok(PlaylistSyncFile::default());
   }
-  let file: PlaylistSyncFile = serde_yaml::from_str(&contents)
+  let mut file: PlaylistSyncFile = serde_yaml::from_str(&contents)
     .with_context(|| format!("malformed playlist sync file: {}", path.display()))?;
-  if file.version > file_version() {
+  if file.version > FILE_VERSION {
     return Err(anyhow!(
       "{} was written by a newer spotatui (file version {})",
       path.display(),
       file.version
     ));
+  }
+  if file.version < FILE_VERSION {
+    // Older builds could cache a match before its add succeeded. Reuse those
+    // candidates, but let a new run confirm them before they can cause a removal.
+    for mirror in file.links.iter_mut().flat_map(|link| &mut link.mirrors) {
+      for (master_key, mirror_key) in std::mem::take(&mut mirror.matches) {
+        mirror
+          .pending_matches
+          .entry(master_key)
+          .or_insert(mirror_key);
+      }
+    }
+    file.version = FILE_VERSION;
   }
   Ok(file)
 }
@@ -137,7 +155,6 @@ mod tests {
   use super::*;
   use crate::core::playlist_sync::{Endpoint, Mirror, UnmatchReason, Unmatched};
   use crate::core::source::Source;
-  use std::collections::BTreeMap;
 
   fn endpoint(source: Source, uri: &str) -> Endpoint {
     Endpoint {
@@ -148,17 +165,11 @@ mod tests {
   }
 
   fn sample_link() -> Link {
-    let mut mirror = Mirror {
-      endpoint: Endpoint {
-        source: Source::Qobuz,
-        playlist_uri: "qobuz:playlist:99".to_string(),
-        name: "Road Trip".to_string(),
-      },
-      matches: BTreeMap::new(),
-      unmatched: Vec::new(),
-      last_run: None,
-    };
+    let mut mirror = Mirror::new(endpoint(Source::Qobuz, "qobuz:playlist:99"));
     mirror.record_match("spotify:track:a", "1234");
+    mirror
+      .pending_matches
+      .insert("spotify:track:d".into(), "5678".into());
     mirror.finish_run(
       vec![
         Unmatched {
@@ -208,7 +219,7 @@ mod tests {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("state").join(FILE_NAME);
     let file = PlaylistSyncFile {
-      version: file_version(),
+      version: FILE_VERSION,
       links: vec![sample_link()],
     };
 
@@ -240,8 +251,7 @@ mod tests {
   }
 
   #[test]
-  fn a_hand_written_file_without_a_version_loads_as_version_one() {
-    // A hand-edited file omits the version and every field a run fills in.
+  fn a_file_without_a_version_treats_saved_matches_as_unconfirmed() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join(FILE_NAME);
     let yaml = r#"
@@ -256,6 +266,8 @@ links:
           source: Qobuz
           playlist_uri: "qobuz:playlist:9"
           name: Mine
+        matches:
+          old: candidate
   - id: def
     master:
       source: Subsonic
@@ -265,9 +277,13 @@ links:
     std::fs::write(&path, yaml).unwrap();
 
     let file = load(&path).unwrap();
-    assert_eq!(file.version, file_version());
+    assert_eq!(file.version, FILE_VERSION);
     let mirror = &file.links[0].mirrors[0];
     assert!(mirror.matches.is_empty());
+    assert_eq!(
+      mirror.pending_matches.get("old").map(String::as_str),
+      Some("candidate")
+    );
     assert!(mirror.unmatched.is_empty());
     assert_eq!(mirror.last_run, None);
     assert!(file.links[1].mirrors.is_empty());
@@ -297,9 +313,22 @@ links:
   }
 
   #[test]
+  fn registering_the_same_mirror_again_keeps_its_existing_cache() {
+    let mut file = PlaylistSyncFile::default();
+    let master = endpoint(Source::Spotify, "spotify:playlist:1");
+    let mirror = endpoint(Source::Qobuz, "qobuz:playlist:9");
+    let id = file.link(master.clone(), mirror.clone());
+    file.links[0].mirrors[0].record_match("master-track", "mirror-track");
+    let saved = file.links[0].mirrors[0].clone();
+
+    assert_eq!(file.link(master, mirror), id);
+    assert_eq!(file.links[0].mirrors, [saved]);
+  }
+
+  #[test]
   fn remove_link_drops_only_the_named_link() {
     let mut file = PlaylistSyncFile {
-      version: file_version(),
+      version: FILE_VERSION,
       links: vec![sample_link()],
     };
 
