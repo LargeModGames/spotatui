@@ -61,15 +61,10 @@ pub enum IoEvent {
   GetCurrentSavedTracks(Option<u32>),
   /// Context URI (album/artist/playlist), specific playable URIs, start offset.
   StartPlayback(Option<String>, Option<Vec<String>>, Option<usize>),
-  /// A parked start being replayed, carrying the press time it belongs to so
-  /// the park keeps that deadline instead of treating it as a new press.
+  /// A parked start being replayed, carrying the whole request so every path
+  /// keeps its press time, credited rebuild time and retry budget.
   #[cfg(feature = "streaming")]
-  ReplayStartPlayback(
-    Option<String>,
-    Option<Vec<String>>,
-    Option<usize>,
-    std::time::Instant,
-  ),
+  ReplayStartPlayback(crate::core::app::StartPlaybackRequest),
   /// Restore a generation-guarded native playback snapshot after rebuilding
   /// the librespot backend. This is a direct Spirc load and does not use the Web API.
   #[cfg(feature = "streaming")]
@@ -809,11 +804,15 @@ impl Network {
         self.start_playback(context, uris, offset, None).await;
       }
       #[cfg(feature = "streaming")]
-      IoEvent::ReplayStartPlayback(context_uri, uris, offset, pressed_at) => {
-        let context = context_uri.as_deref().and_then(ids::play_context_id);
-        let uris = uris.map(|v| ids::playable_ids(&v));
+      IoEvent::ReplayStartPlayback(request) => {
+        let context = request
+          .context_uri
+          .as_deref()
+          .and_then(ids::play_context_id);
+        let uris = request.uris.as_ref().map(|v| ids::playable_ids(v));
+        let offset = request.offset;
         self
-          .start_playback(context, uris, offset, Some(pressed_at))
+          .start_playback(context, uris, offset, Some(request))
           .await;
       }
       #[cfg(feature = "streaming")]

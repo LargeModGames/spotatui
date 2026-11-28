@@ -652,7 +652,7 @@ pub struct App {
   /// session recovering, or startup init still materializing one). Replayed
   /// once the backend is ready so the user's press isn't silently dropped.
   #[cfg(feature = "streaming")]
-  pub pending_start_playback: Option<PendingStartPlayback>,
+  pub pending_start_playback: Option<StartPlaybackRequest>,
   /// True while a native backend may materialize soon (recovery in flight, or
   /// the deferred startup init still running). While set, a playback request
   /// that finds no active device parks itself for replay instead of routing

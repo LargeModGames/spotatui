@@ -23,9 +23,13 @@ fn start_playback_uri(event: &IoEvent) -> Option<&str> {
     IoEvent::StartPlayback(Some(uri), _, _) => Some(uri),
     IoEvent::StartPlayback(None, Some(uris), _) => uris.first().map(String::as_str),
     #[cfg(feature = "streaming")]
-    IoEvent::ReplayStartPlayback(Some(uri), _, _, _) => Some(uri),
-    #[cfg(feature = "streaming")]
-    IoEvent::ReplayStartPlayback(None, Some(uris), _, _) => uris.first().map(String::as_str),
+    IoEvent::ReplayStartPlayback(request) => request.context_uri.as_deref().or_else(|| {
+      request
+        .uris
+        .as_ref()
+        .and_then(|uris| uris.first())
+        .map(String::as_str)
+    }),
     _ => None,
   }
 }
@@ -301,12 +305,11 @@ mod tests {
   #[cfg(feature = "streaming")]
   #[test]
   fn a_replayed_start_is_gated_like_the_press_it_replays() {
-    let replay = IoEvent::ReplayStartPlayback(
+    let replay = IoEvent::ReplayStartPlayback(crate::core::app::StartPlaybackRequest::pressed(
       None,
       Some(vec!["spotify:track:x".to_string()]),
       Some(0),
-      std::time::Instant::now(),
-    );
+    ));
 
     assert_eq!(start_playback_uri(&replay), Some("spotify:track:x"));
     assert!(start_playback_has_taker(&replay, true));

@@ -116,6 +116,21 @@ pub async fn route_queue_event(app: &Arc<Mutex<App>>, event: &IoEvent) -> bool {
     return handled;
   }
 
+  // A replay is the press it replays: a live explicit replay relinquishes the
+  // queue slot exactly like a `StartPlayback`, so a slot published before it
+  // cannot reload the queued track over the playlist. A dead replay leaves the
+  // slot playing; the source routers apply the same rule.
+  #[cfg(feature = "streaming")]
+  if let IoEvent::ReplayStartPlayback(request) = event {
+    if request.context_uri.is_some() || request.uris.is_some() {
+      if app.lock().await.retire_expired_replay(request) {
+        return true;
+      }
+      clear_queue_playback(app).await;
+      return false;
+    }
+  }
+
   // An explicit new-playback start relinquishes the queue slot (keeping the
   // queued items) so the per-source teardowns/starts run against a clean state.
   if matches!(
@@ -144,6 +159,15 @@ async fn route_queue_transport(app: &Arc<Mutex<App>>, event: &IoEvent) -> Option
     }
     // Bare "resume current" while the queue owns playback resumes the queue slot.
     IoEvent::StartPlayback(None, None, None) => {
+      player.resume();
+      app.lock().await.queue_slot_desired_playing = true;
+      Some(true)
+    }
+    // A replay of a bare resume is the same press: it resumes the slot too.
+    #[cfg(feature = "streaming")]
+    IoEvent::ReplayStartPlayback(request)
+      if request.context_uri.is_none() && request.uris.is_none() && request.offset.is_none() =>
+    {
       player.resume();
       app.lock().await.queue_slot_desired_playing = true;
       Some(true)
@@ -209,6 +233,21 @@ async fn route_spotify_queue_transport(app: &Arc<Mutex<App>>, event: &IoEvent) -
       guard.queue_slot_desired_playing = true;
       guard.set_native_playback_intent(true);
       // After a failed reacquire the parked slot has no player: Space retries.
+      guard.reacquire_parked_backend_for_queue_slot();
+      Some(true)
+    }
+    // A replay of a bare resume is the same press: it resumes the slot too.
+    #[cfg(feature = "streaming")]
+    IoEvent::ReplayStartPlayback(request)
+      if request.context_uri.is_none() && request.uris.is_none() && request.offset.is_none() =>
+    {
+      if let Some(player) = app.lock().await.streaming_player.clone() {
+        player.play();
+      }
+      let mut guard = app.lock().await;
+      guard.native_is_playing = Some(true);
+      guard.queue_slot_desired_playing = true;
+      guard.set_native_playback_intent(true);
       guard.reacquire_parked_backend_for_queue_slot();
       Some(true)
     }
@@ -1730,6 +1769,88 @@ mod tests {
       route_queue_event(&app, &IoEvent::ReplayPublishedSpotifyQueueSlot).await,
       "the queue router must consume replay even when there is no slot left"
     );
+  }
+
+  /// A replay is the press it replays: a live one must relinquish the queue
+  /// slot exactly like a fresh start, so a slot published before it cannot
+  /// reload the queued track over the replayed playlist.
+  #[cfg(feature = "streaming")]
+  #[tokio::test]
+  async fn a_live_replay_clears_the_spotify_queue_slot() {
+    use crate::core::queue::SuspendedContext;
+    use crate::infra::queue::QueueNowPlaying;
+    let app = test_app();
+    let request = {
+      let mut guard = app.lock().await;
+      guard.queue_now = Some(QueueNowPlaying::Spotify {
+        track: track("spotify:track:queued", "Queued"),
+      });
+      guard.queue_suspended = Some(SuspendedContext::Spotify {
+        context_uri: Some("spotify:playlist:ctx".to_string()),
+        resume_track_uri: Some("spotify:track:resume".to_string()),
+      });
+      guard.park_start_playback(Some("spotify:playlist:new".to_string()), None, None, None);
+      guard.pending_start_playback.clone().unwrap()
+    };
+
+    assert!(
+      !route_queue_event(&app, &IoEvent::ReplayStartPlayback(request)).await,
+      "the replay goes on to the network handler"
+    );
+
+    let guard = app.lock().await;
+    assert!(!guard.queue_owns_playback());
+    assert!(guard.queue_suspended.is_none());
+  }
+
+  /// A dead replay (expired in a rate-limit window, or superseded in flight)
+  /// is swallowed before any router acts on it: the queued track keeps playing.
+  #[cfg(feature = "streaming")]
+  #[tokio::test]
+  async fn a_dead_replay_leaves_the_spotify_queue_slot_playing() {
+    use crate::infra::queue::QueueNowPlaying;
+    let app = test_app();
+    let request = {
+      let mut guard = app.lock().await;
+      guard.queue_now = Some(QueueNowPlaying::Spotify {
+        track: track("spotify:track:queued", "Queued"),
+      });
+      guard.park_start_playback(Some("spotify:playlist:new".to_string()), None, None, None);
+      let mut request = guard.pending_start_playback.clone().unwrap();
+      request.pressed_at = std::time::Instant::now()
+        - crate::core::app::max_parked_start_age()
+        - std::time::Duration::from_secs(5);
+      guard.pending_start_playback = Some(request.clone());
+      request
+    };
+
+    assert!(route_queue_event(&app, &IoEvent::ReplayStartPlayback(request)).await);
+
+    let guard = app.lock().await;
+    assert!(guard.queue_now_is_spotify(), "the slot keeps playing");
+  }
+
+  /// A replayed bare resume is the same press: on a Spotify queue slot it
+  /// resumes the slot instead of falling through to the suspended context.
+  #[cfg(feature = "streaming")]
+  #[tokio::test]
+  async fn a_replayed_bare_resume_resumes_the_spotify_queue_slot() {
+    use crate::infra::queue::QueueNowPlaying;
+    let app = test_app();
+    {
+      let mut guard = app.lock().await;
+      guard.queue_now = Some(QueueNowPlaying::Spotify {
+        track: track("spotify:track:queued", "Queued"),
+      });
+      guard.queue_slot_desired_playing = false;
+    }
+    let request = crate::core::app::StartPlaybackRequest::pressed(None, None, None);
+
+    assert!(route_queue_event(&app, &IoEvent::ReplayStartPlayback(request)).await);
+
+    let guard = app.lock().await;
+    assert!(guard.queue_slot_desired_playing);
+    assert_eq!(guard.native_is_playing, Some(true));
   }
 
   /// When the queue drains over a suspended shuffle session, the resume forwards

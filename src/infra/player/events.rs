@@ -3050,8 +3050,8 @@ mod tests {
     ));
     assert!(matches!(
       io_rx.try_recv(),
-      Ok(IoEvent::ReplayStartPlayback(Some(ref context), None, None, _))
-        if context == "spotify:playlist:parked"
+      Ok(IoEvent::ReplayStartPlayback(ref request))
+        if request.context_uri.as_deref() == Some("spotify:playlist:parked")
     ));
     // Once only: nothing was replayed over the superseded build.
     assert!(matches!(io_rx.try_recv(), Err(TryRecvError::Empty)));
@@ -3138,8 +3138,8 @@ mod tests {
     assert!(
       matches!(
         io_rx.try_recv(),
-        Ok(IoEvent::ReplayStartPlayback(Some(ref context), None, None, _))
-          if context == "spotify:playlist:parked"
+        Ok(IoEvent::ReplayStartPlayback(ref request))
+          if request.context_uri.as_deref() == Some("spotify:playlist:parked")
       ),
       "the parked start outlives the superseded chain's wait"
     );
@@ -3203,8 +3203,8 @@ mod tests {
     ));
     assert!(matches!(
       io_rx.try_recv(),
-      Ok(IoEvent::ReplayStartPlayback(Some(ref context), None, None, _))
-        if context == "spotify:playlist:parked"
+      Ok(IoEvent::ReplayStartPlayback(ref request))
+        if request.context_uri.as_deref() == Some("spotify:playlist:parked")
     ));
     assert!(matches!(io_rx.try_recv(), Err(TryRecvError::Empty)));
 
@@ -3283,8 +3283,8 @@ mod tests {
     ));
     assert!(matches!(
       io_rx.try_recv(),
-      Ok(IoEvent::ReplayStartPlayback(Some(ref context), None, None, _))
-        if context == "spotify:playlist:parked"
+      Ok(IoEvent::ReplayStartPlayback(ref request))
+        if request.context_uri.as_deref() == Some("spotify:playlist:parked")
     ));
     assert!(matches!(io_rx.try_recv(), Err(TryRecvError::Empty)));
   }
@@ -3341,8 +3341,8 @@ mod tests {
     ));
     assert!(matches!(
       io_rx.try_recv(),
-      Ok(IoEvent::ReplayStartPlayback(Some(ref context), None, None, _))
-        if context == "spotify:playlist:parked"
+      Ok(IoEvent::ReplayStartPlayback(ref request))
+        if request.context_uri.as_deref() == Some("spotify:playlist:parked")
     ));
     assert!(matches!(io_rx.try_recv(), Err(TryRecvError::Empty)));
   }
@@ -3397,8 +3397,8 @@ mod tests {
     // The current request replayed the parked start over the live player once.
     assert!(matches!(
       io_rx.try_recv(),
-      Ok(IoEvent::ReplayStartPlayback(Some(ref context), None, None, _))
-        if context == "spotify:playlist:parked"
+      Ok(IoEvent::ReplayStartPlayback(ref request))
+        if request.context_uri.as_deref() == Some("spotify:playlist:parked")
     ));
     // The stale duplicate replayed nothing.
     assert!(matches!(io_rx.try_recv(), Err(TryRecvError::Empty)));
@@ -3485,8 +3485,8 @@ mod tests {
     ));
     assert!(matches!(
       io_rx.try_recv(),
-      Ok(IoEvent::ReplayStartPlayback(Some(ref context), None, None, _))
-        if context == "spotify:playlist:parked"
+      Ok(IoEvent::ReplayStartPlayback(ref request))
+        if request.context_uri.as_deref() == Some("spotify:playlist:parked")
     ));
     assert!(matches!(io_rx.try_recv(), Err(TryRecvError::Empty)));
   }

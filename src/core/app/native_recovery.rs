@@ -122,7 +122,7 @@ impl NativePlaybackRecoverySnapshot {
   pub(super) fn next_raw_list_request(
     &self,
     previous_track_uri: &str,
-  ) -> Option<PendingStartPlayback> {
+  ) -> Option<StartPlaybackRequest> {
     if self.context_uri.is_some() {
       return None;
     }
@@ -144,7 +144,7 @@ impl NativePlaybackRecoverySnapshot {
       _ => return None,
     };
 
-    Some(PendingStartPlayback {
+    Some(StartPlaybackRequest {
       context_uri: None,
       uris: Some(uris.clone()),
       offset: Some(next_index),
@@ -502,7 +502,7 @@ impl App {
   pub(crate) fn native_raw_list_next_request(
     &self,
     previous_track_uri: &str,
-  ) -> Option<PendingStartPlayback> {
+  ) -> Option<StartPlaybackRequest> {
     let snapshot = self.native_playback_recovery.as_ref()?;
     if snapshot
       .loading_track_uri
