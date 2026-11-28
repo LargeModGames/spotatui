@@ -345,18 +345,29 @@ async fn report_login_error_if_current(
   }
 }
 
+fn finish_login_error(app: &mut App, search_rev: Option<u64>, err: &anyhow::Error) {
+  if is_search_login_current(app, search_rev) {
+    let message = app
+      .strings()
+      .status
+      .infra
+      .qobuz_login_failed(&format!("{err:#}"));
+    app.set_status_message(message, 8);
+  }
+}
+
 /// Start the in-TUI browser login on a detached task so the pump keeps running.
 async fn begin_login(app: &Arc<Mutex<App>>, search_rev: Option<u64>) {
-  if search_rev.is_some() && !is_search_login_current(&*app.lock().await, search_rev) {
-    return;
-  }
-  if LOGIN_IN_PROGRESS.swap(true, Ordering::SeqCst) {
+  {
     let mut guard = app.lock().await;
-    if is_search_login_current(&guard, search_rev) {
+    if !is_search_login_current(&guard, search_rev) {
+      return;
+    }
+    if LOGIN_IN_PROGRESS.swap(true, Ordering::SeqCst) {
       let message = guard.strings().status.infra.qobuz_login_busy.to_string();
       guard.set_status_message(message, 6);
+      return;
     }
-    return;
   }
   let constants = match constants(app).await {
     Ok(c) => c,
@@ -414,12 +425,7 @@ async fn begin_login(app: &Arc<Mutex<App>>, search_rev: Option<u64>) {
       Err(e) => {
         log::warn!("[qobuz] login failed: {e:#}");
         let mut guard = app.lock().await;
-        let message = guard
-          .strings()
-          .status
-          .infra
-          .qobuz_login_failed(&format!("{e:#}"));
-        guard.set_status_message(message, 8);
+        finish_login_error(&mut guard, search_rev, &e);
       }
     }
     LOGIN_IN_PROGRESS.store(false, Ordering::SeqCst);
@@ -1307,6 +1313,28 @@ mod tests {
       assert_eq!(app.status_message(), Some(expected_status.as_str()));
       assert_eq!(app.status_message_is_error(), !stale);
     }
+  }
+
+  #[test]
+  fn stale_search_login_callback_error_does_not_overwrite_status() {
+    use crate::core::user_config::UserConfig;
+    let (tx, _rx) = std::sync::mpsc::channel();
+    let mut app = App::new(tx, UserConfig::new(), None);
+    app.set_active_source(Source::Qobuz);
+    let stale_rev = app.source_revision();
+    app.set_active_source(Source::Spotify);
+    app.set_status_message("Current status", 6);
+
+    finish_login_error(&mut app, Some(stale_rev), &anyhow!("timed out"));
+    assert_eq!(app.status_message(), Some("Current status"));
+
+    // Explicit login failures (`None`) remain visible regardless of source switches.
+    finish_login_error(&mut app, None, &anyhow!("timed out"));
+    let expected = crate::core::i18n::EN
+      .status
+      .infra
+      .qobuz_login_failed("timed out");
+    assert_eq!(app.status_message(), Some(expected.as_str()));
   }
 }
 
