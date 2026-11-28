@@ -283,6 +283,7 @@ impl Network {
     context_id: &Option<PlayContextId<'static>>,
     uris: &Option<Vec<PlayableId<'static>>>,
     offset: Option<usize>,
+    pressed_at: Option<Instant>,
   ) -> bool {
     let target = {
       let app = self.app.lock().await;
@@ -355,7 +356,7 @@ impl Network {
           .as_ref()
           .map(|list| list.iter().map(|u| u.uri()).collect()),
         offset,
-        None,
+        pressed_at,
       );
       app.native_load_watchdog = Some(Instant::now());
       if let Some(ctx) = &mut app.current_playback_context {

@@ -1712,7 +1712,7 @@ impl PlaybackNetwork for Network {
       // Spirc/Spotify — see `native_shuffle`.
       if desired_shuffle_state
         && self
-          .try_start_native_shuffled_playback(&player, &context_id, &uris, offset)
+          .try_start_native_shuffled_playback(&player, &context_id, &uris, offset, pressed_at)
           .await
       {
         return;
