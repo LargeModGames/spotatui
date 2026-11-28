@@ -458,6 +458,16 @@ async fn load_qobuz_tracks(app: &Arc<Mutex<App>>, playlist_uri: &str, epoch: u64
   finish_qobuz_tracks(&mut app, playlist_uri, epoch, source.token(), result);
 }
 
+fn report_unauthorized_locked(app: &mut App, step: QobuzStep, still_logged_in: bool) {
+  let strings = &app.strings().status.infra;
+  let message = if still_logged_in {
+    strings.qobuz_operation_failed(step.label(strings), "HTTP 401")
+  } else {
+    strings.qobuz_login_expired.to_string()
+  };
+  app.set_error_status_message(message, 8);
+}
+
 /// Apply a finished listing under the App lock. A stale 401 still forgets the
 /// token it was sent with, so the list opened since then logs in again instead
 /// of failing on the same token.
@@ -478,15 +488,35 @@ fn finish_qobuz_tracks(
       app.set_source_track_table(playlist_uri, tracks, TrackTableContext::QobuzPlaylist);
     }
     Err(_) if unauthorized => {
-      let strings = &app.strings().status.infra;
-      let message = if still_logged_in {
-        strings.qobuz_operation_failed(strings.qobuz_step_tracks, "HTTP 401")
-      } else {
-        strings.qobuz_login_expired.to_string()
-      };
-      app.set_error_status_message(message, 8);
+      report_unauthorized_locked(app, QobuzStep::Tracks, still_logged_in);
     }
     Err(e) => report_locked(app, QobuzStep::Tracks, e),
+  }
+}
+
+/// Apply a finished search under the App lock. A stale 401 still forgets the
+/// token it was sent with, so the next Qobuz search logs in again instead of
+/// failing on the same expired token, without suppressing a replacement token.
+fn finish_qobuz_search(
+  app: &mut App,
+  source_rev: u64,
+  query: &str,
+  sent_token: &str,
+  result: Result<Vec<crate::core::plugin_api::TrackInfo>>,
+) {
+  let unauthorized = result.as_ref().is_err_and(|err| err.is::<Unauthorized>());
+  let still_logged_in = unauthorized && auth::forget_token(sent_token);
+  if app.source_revision() != source_rev {
+    return;
+  }
+  match result {
+    Ok(tracks) => {
+      app.show_source_search_tracks(query, tracks);
+    }
+    Err(_) if unauthorized => {
+      report_unauthorized_locked(app, QobuzStep::Search, still_logged_in);
+    }
+    Err(e) => report_locked(app, QobuzStep::Search, e),
   }
 }
 
@@ -501,20 +531,9 @@ async fn run_qobuz_search(app: &Arc<Mutex<App>>, query: &str, source_rev: u64) {
   if app.lock().await.source_revision() != source_rev {
     return;
   }
-  match source.search(query).await {
-    Ok(results) => {
-      app
-        .lock()
-        .await
-        .show_source_search_tracks_if_current(source_rev, query, results.tracks);
-    }
-    Err(e) => {
-      let mut guard = app.lock().await;
-      if guard.source_revision() == source_rev {
-        report_locked(&mut guard, QobuzStep::Search, e);
-      }
-    }
-  }
+  let result = source.search(query).await.map(|results| results.tracks);
+  let mut guard = app.lock().await;
+  finish_qobuz_search(&mut guard, source_rev, query, source.token(), result);
 }
 
 // ---------------------------------------------------------------------------
@@ -1249,6 +1268,45 @@ mod tests {
     assert!(route_qobuz_event(&app, &IoEvent::QobuzLogin(Some(stale_rev))).await);
     assert!(!LOGIN_IN_PROGRESS.load(Ordering::SeqCst));
     assert!(app.lock().await.status_message().is_none());
+  }
+
+  #[test]
+  fn a_qobuz_search_401_only_forgets_the_token_it_sent() {
+    use crate::core::user_config::UserConfig;
+    let _token_lock = TOKEN_TEST_LOCK.blocking_lock();
+    let _saved = SavedToken::capture();
+    const SENT: &str = "search-401-token";
+    const NEW: &str = "new-login-token";
+    for (stale, replaced) in [(true, false), (true, true), (false, false), (false, true)] {
+      let (tx, _rx) = std::sync::mpsc::channel();
+      let mut app = App::new(tx, UserConfig::new(), None);
+      app.set_active_source(Source::Qobuz);
+      let source_rev = app.source_revision();
+      if stale {
+        app.set_active_source(Source::Spotify);
+      }
+      app.set_status_message("Current status", 6);
+
+      auth::set_token(Some(if replaced { NEW } else { SENT }.into()));
+      finish_qobuz_search(
+        &mut app,
+        source_rev,
+        "miles",
+        SENT,
+        Err(Unauthorized.into()),
+      );
+      let left = auth::current_token();
+
+      assert_eq!(left.as_deref(), replaced.then_some(NEW), "stale={stale}");
+      let strings = &crate::core::i18n::EN.status.infra;
+      let expected_status = match (stale, replaced) {
+        (true, _) => "Current status".to_string(),
+        (false, true) => strings.qobuz_operation_failed(strings.qobuz_step_search, "HTTP 401"),
+        (false, false) => strings.qobuz_login_expired.to_string(),
+      };
+      assert_eq!(app.status_message(), Some(expected_status.as_str()));
+      assert_eq!(app.status_message_is_error(), !stale);
+    }
   }
 }
 
