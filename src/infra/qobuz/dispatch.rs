@@ -364,6 +364,8 @@ fn finish_login_success(
   if is_search_login_current(app, search_rev) {
     let message = app.strings().status.infra.qobuz_logged_in;
     app.set_status_message(message, 4);
+  }
+  if search_rev.is_none() || app.active_source == Source::Qobuz {
     if let Some(tx) = io_tx {
       let _ = tx.send(IoEvent::GetQobuzPlaylists);
     }
@@ -1359,7 +1361,14 @@ mod tests {
     assert_eq!(app.status_message(), Some("Current status"));
     assert!(rx.try_recv().is_err());
 
+    // Switching back to Qobuz while sign-in is still in flight still refreshes the sidebar.
+    app.set_active_source(Source::Qobuz);
+    finish_login_success(&mut app, Some(stale_rev), Some(&tx));
+    assert_eq!(app.status_message(), Some("Current status"));
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::GetQobuzPlaylists)));
+
     // Explicit login completions (`None`) still publish status and fetch playlists.
+    app.set_active_source(Source::Spotify);
     finish_login_success(&mut app, None, Some(&tx));
     assert_eq!(
       app.status_message(),
