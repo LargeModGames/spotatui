@@ -29,6 +29,14 @@ pub struct SpotifySession {
 }
 
 impl SpotifySession {
+  #[cfg(test)]
+  pub(super) fn disconnected_for_test() -> Self {
+    Self {
+      session: Session::new(SessionConfig::default(), None),
+      observer: tokio::sync::OnceCell::new(),
+    }
+  }
+
   pub fn session(&self) -> &Session {
     &self.session
   }
@@ -108,6 +116,10 @@ fn slot() -> &'static Mutex<Slot> {
 
 /// The live session, connected from the cached login when there is none yet.
 pub async fn current() -> Result<Arc<SpotifySession>, Unavailable> {
+  #[cfg(test)]
+  if let Some(session) = super::paging_tests::session() {
+    return Ok(session);
+  }
   if !allowed() {
     return Err(Unavailable::NoLogin);
   }
