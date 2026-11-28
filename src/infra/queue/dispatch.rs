@@ -164,10 +164,14 @@ async fn route_queue_transport(app: &Arc<Mutex<App>>, event: &IoEvent) -> Option
       Some(true)
     }
     // A replay of a bare resume is the same press: it resumes the slot too.
+    // A dead replay leaves the slot as it is, like the Spotify arm below.
     #[cfg(feature = "streaming")]
     IoEvent::ReplayStartPlayback(request)
       if request.context_uri.is_none() && request.uris.is_none() && request.offset.is_none() =>
     {
+      if app.lock().await.retire_expired_replay(request) {
+        return Some(true);
+      }
       player.resume();
       app.lock().await.queue_slot_desired_playing = true;
       Some(true)
@@ -237,10 +241,15 @@ async fn route_spotify_queue_transport(app: &Arc<Mutex<App>>, event: &IoEvent) -
       Some(true)
     }
     // A replay of a bare resume is the same press: it resumes the slot too.
+    // A dead replay (expired, cancelled or superseded in flight) leaves the
+    // slot as it is, exactly like the explicit-replay arm below.
     #[cfg(feature = "streaming")]
     IoEvent::ReplayStartPlayback(request)
       if request.context_uri.is_none() && request.uris.is_none() && request.offset.is_none() =>
     {
+      if app.lock().await.retire_expired_replay(request) {
+        return Some(true);
+      }
       if let Some(player) = app.lock().await.streaming_player.clone() {
         player.play();
       }
@@ -1837,20 +1846,51 @@ mod tests {
   async fn a_replayed_bare_resume_resumes_the_spotify_queue_slot() {
     use crate::infra::queue::QueueNowPlaying;
     let app = test_app();
-    {
+    let request = {
       let mut guard = app.lock().await;
       guard.queue_now = Some(QueueNowPlaying::Spotify {
         track: track("spotify:track:queued", "Queued"),
       });
       guard.queue_slot_desired_playing = false;
-    }
-    let request = crate::core::app::StartPlaybackRequest::pressed(None, None, None);
+      guard.park_start_playback(None, None, None, None);
+      guard.pending_start_playback.clone().unwrap()
+    };
 
     assert!(route_queue_event(&app, &IoEvent::ReplayStartPlayback(request)).await);
 
     let guard = app.lock().await;
     assert!(guard.queue_slot_desired_playing);
     assert_eq!(guard.native_is_playing, Some(true));
+  }
+
+  /// A bare replay that died in flight (a rate window held it past its
+  /// window, or a pause cancelled the request) is consumed and leaves the
+  /// paused slot paused.
+  #[cfg(feature = "streaming")]
+  #[tokio::test]
+  async fn an_expired_bare_replay_leaves_the_spotify_queue_slot_paused() {
+    use crate::infra::queue::QueueNowPlaying;
+    let app = test_app();
+    let request = {
+      let mut guard = app.lock().await;
+      guard.queue_now = Some(QueueNowPlaying::Spotify {
+        track: track("spotify:track:queued", "Queued"),
+      });
+      guard.queue_slot_desired_playing = false;
+      guard.park_start_playback(None, None, None, None);
+      let mut request = guard.pending_start_playback.clone().unwrap();
+      request.pressed_at = std::time::Instant::now()
+        - crate::core::app::max_parked_start_age()
+        - std::time::Duration::from_secs(5);
+      guard.pending_start_playback = Some(request.clone());
+      request
+    };
+
+    assert!(route_queue_event(&app, &IoEvent::ReplayStartPlayback(request)).await);
+
+    let guard = app.lock().await;
+    assert!(!guard.queue_slot_desired_playing, "the slot stays paused");
+    assert_eq!(guard.native_is_playing, None);
   }
 
   /// When the queue drains over a suspended shuffle session, the resume forwards
