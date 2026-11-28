@@ -511,8 +511,10 @@ impl App {
       .filter(|pending| pending.pressed_at == pressed_at);
     let expired = match matched {
       Some(pending) => pending.expired_at(now, Duration::ZERO),
-      // The parked request is gone; only the hard limit can still expire it.
-      None => now.saturating_duration_since(pressed_at) > max_parked_start_age(),
+      // No matching parked request: it was cancelled (a pause) or superseded
+      // (a newer press) in flight, and the dispatch only sent a live request,
+      // so the replay is dead either way.
+      None => true,
     };
     if !expired {
       return false;
@@ -1229,23 +1231,24 @@ mod tests {
     assert!(app.pending_start_playback.is_some());
   }
 
-  /// A replay whose parked request vanished (e.g. a pause retired it) is held
-  /// only to the hard limit, never the soft window.
+  /// A replay whose parked request vanished (a pause cancelled it, a newer
+  /// press superseded it) is dead: only a live, matching request may replay.
   #[test]
-  fn a_replay_with_no_parked_request_expires_only_on_the_hard_limit() {
-    let (tx, _rx) = channel();
+  fn a_replay_with_no_matching_parked_request_is_rejected() {
+    let (tx, rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
-    let age = parked_start_window() + Duration::from_secs(1);
-    if age >= max_parked_start_age() {
-      return;
-    }
+    app.park_start_playback(Some("spotify:playlist:live".to_string()), None, None, None);
+    let orphan = Instant::now();
 
-    assert!(!app.retire_expired_replay(Instant::now() - age));
-    assert!(app.retire_expired_replay(Instant::now() - max_parked_start_age()));
-    assert_eq!(
-      app.status_message(),
-      Some(crate::core::i18n::EN.status.app.native_request_expired)
+    assert!(app.retire_expired_replay(orphan));
+    assert!(
+      app
+        .pending_start_playback
+        .as_ref()
+        .is_some_and(|pending| pending.context_uri.as_deref() == Some("spotify:playlist:live")),
+      "the unrelated parked request survives"
     );
+    assert!(rx.try_recv().is_err());
   }
 
   #[test]
