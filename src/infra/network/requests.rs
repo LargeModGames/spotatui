@@ -754,6 +754,9 @@ fn classifiable_text(e: &anyhow::Error) -> String {
 }
 
 pub fn is_rate_limited_error(e: &anyhow::Error) -> bool {
+  if let Some(error) = e.downcast_ref::<SpotifyApiError>() {
+    return error.status == reqwest::StatusCode::TOO_MANY_REQUESTS;
+  }
   let text = classifiable_text(e);
   text.contains("429") || text.contains("Too Many Requests") || text.contains("Too many requests")
 }
@@ -1250,6 +1253,18 @@ mod tests {
     });
 
     assert!(is_rate_limited_error(&error), "{error}");
+  }
+
+  #[test]
+  fn a_number_in_a_failed_speakers_name_does_not_make_it_rate_limited() {
+    let error = anyhow::Error::new(SpotifyApiError {
+      status: StatusCode::BAD_GATEWAY,
+      body: "Studio 429: speaker did not respond".into(),
+      localized_body: None,
+      detail: None,
+      endpoint: None,
+    });
+    assert!(!is_rate_limited_error(&error), "misclassified {error}");
   }
 
   #[test]
