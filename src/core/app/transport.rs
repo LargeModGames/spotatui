@@ -244,6 +244,8 @@ impl App {
     // backend plays nothing, whatever a stale poll says.
     let is_playing = if self.native_parked_here() {
       false
+    } else if let Some(playing) = self.spotify_control_state(SpotifyControl::Playing) {
+      playing
     } else if self.is_streaming_active {
       self
         .native_is_playing
@@ -323,7 +325,7 @@ impl App {
       }
 
       // Fallback for external devices
-      self.dispatch_spotify_fallback(IoEvent::Seek(0));
+      self.restart_spotify_track();
     } else {
       // If less than 3 seconds in, go to previous track
       #[cfg(feature = "streaming")]
@@ -716,7 +718,8 @@ mod tests {
 
     app.toggle_playback();
 
-    assert!(matches!(rx.try_recv(), Ok(IoEvent::PausePlayback)));
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::SpotifyControl(request))
+      if request.control == SpotifyControl::Playing && !request.enabled));
   }
 
   /// When the native queue slot owns playback, `next_track` advances the queue

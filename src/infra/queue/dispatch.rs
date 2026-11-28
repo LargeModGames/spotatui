@@ -218,6 +218,20 @@ async fn route_spotify_queue_transport(app: &Arc<Mutex<App>>, event: &IoEvent) -
       advance_native_queue(app).await;
       Some(true)
     }
+    IoEvent::Seek(position_ms) => {
+      let mut guard = app.lock().await;
+      if guard.queue_now_is_spotify() {
+        if let Some(player) = &guard.streaming_player {
+          player.seek(*position_ms);
+          guard.record_native_seek(*position_ms);
+          #[cfg(all(feature = "mpris", target_os = "linux"))]
+          if let Some(manager) = &guard.mpris_manager {
+            manager.emit_seeked(u64::from(*position_ms));
+          }
+        }
+      }
+      Some(true)
+    }
     IoEvent::PreviousTrack | IoEvent::ForcePreviousTrack => {
       if let Some(player) = app.lock().await.streaming_player.clone() {
         player.seek(0);
@@ -1602,6 +1616,7 @@ mod tests {
 
     assert!(route_queue_event(&app, &IoEvent::PausePlayback).await);
     assert!(route_queue_event(&app, &IoEvent::StartPlayback(None, None, None)).await);
+    assert!(route_queue_event(&app, &IoEvent::Seek(500)).await);
 
     let guard = app.lock().await;
     assert!(guard.queue_now_is_spotify());

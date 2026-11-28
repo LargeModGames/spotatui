@@ -182,9 +182,13 @@ impl App {
     }
 
     if let Some(shuffle_state) = self
-      .current_playback_context
-      .as_ref()
-      .map(|context| context.shuffle_state)
+      .spotify_control_state(SpotifyControl::Shuffle)
+      .or_else(|| {
+        self
+          .current_playback_context
+          .as_ref()
+          .map(|context| context.shuffle_state)
+      })
     {
       let new_shuffle_state = !shuffle_state;
       info!("toggling shuffle: {}", new_shuffle_state);

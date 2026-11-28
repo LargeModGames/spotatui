@@ -1,0 +1,1 @@
+- **Spotify playback controls follow the current track and device.** Likes target the new item after a native skip. Delayed remote seeks and end-of-track skips are dropped when their track or device changes, and restarting a track cancels an older drag. Remote progress catches up on slow refreshes, and play, pause, and shuffle stay on the device the user was controlling.

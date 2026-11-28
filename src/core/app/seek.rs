@@ -4,6 +4,16 @@ use super::*;
 /// This prevents the UI from jumping back to old positions while the seek completes
 pub const SEEK_POSITION_IGNORE_MS: u128 = 500;
 
+const API_SEEK_THROTTLE: Duration = Duration::from_millis(200);
+#[cfg(feature = "streaming")]
+const NATIVE_SEEK_THROTTLE: Duration = Duration::from_millis(50);
+
+pub(super) struct ApiSeek {
+  request: Arc<SpotifySeekRequest>,
+  at: Instant,
+  pending: bool,
+}
+
 impl App {
   pub(super) fn apply_seek(&mut self, seek_ms: u32) {
     // The audible track's duration decides between a seek and a skip; a
@@ -12,13 +22,19 @@ impl App {
       return;
     };
 
-    let event = if seek_ms < duration_ms {
-      IoEvent::Seek(seek_ms)
+    let command = if seek_ms < duration_ms {
+      SpotifySeekCommand::Position(seek_ms)
     } else {
-      IoEvent::NextTrack
+      SpotifySeekCommand::NextTrack
     };
-
-    self.dispatch(event);
+    if let Some(target) = self.spotify_seek_target() {
+      self.queue_api_seek(target, command, seek_ms, false);
+    } else {
+      self.try_dispatch(match command {
+        SpotifySeekCommand::Position(position_ms) => IoEvent::Seek(position_ms),
+        SpotifySeekCommand::NextTrack => IoEvent::NextTrack,
+      });
+    }
   }
 
   /// The length of the Spotify item that plays, or `None` under another owner.
@@ -65,52 +81,13 @@ impl App {
       }
       return;
     }
-    if let Some(CurrentPlaybackContext {
-      item: Some(item), ..
-    }) = &self.current_playback_context
-    {
-      let duration_ms = match item {
-        PlayableItem::Track(track) => track.duration.num_milliseconds() as u32,
-        PlayableItem::Episode(episode) => episode.duration.num_milliseconds() as u32,
-        _ => return,
-      };
-
-      let old_progress = match self.seek_ms {
-        Some(seek_ms) => seek_ms,
-        None => self.song_progress_ms,
-      };
-
+    if let Some(duration_ms) = self.playing_duration_ms() {
+      let old_progress = self.seek_ms.unwrap_or(self.song_progress_ms);
       let new_progress = min(
         (old_progress as u32).saturating_add(self.user_config.behavior.seek_milliseconds),
         duration_ms,
       );
-
-      self.seek_ms = Some(new_progress as u128);
-
-      // Use native streaming player for instant control (bypasses event channel latency)
-      #[cfg(feature = "streaming")]
-      if self.is_native_streaming_active_for_playback() && self.streaming_player.is_some() {
-        // Always update UI immediately
-        self.song_progress_ms = new_progress as u128;
-        self.seek_ms = None;
-
-        // Throttle actual seeks to avoid overwhelming librespot (max ~20/sec)
-        const SEEK_THROTTLE_MS: u128 = 50;
-        let should_seek_now = self
-          .last_native_seek
-          .is_none_or(|t| t.elapsed().as_millis() >= SEEK_THROTTLE_MS);
-
-        if should_seek_now {
-          self.execute_native_seek(new_progress);
-        } else {
-          // Queue the seek - will be flushed by tick loop or next seek
-          self.pending_native_seek = Some(new_progress);
-        }
-        return;
-      }
-
-      // Fallback: API-based seek for external devices (with throttling)
-      self.queue_api_seek(new_progress);
+      self.seek_spotify(new_progress);
     }
   }
 
@@ -140,38 +117,10 @@ impl App {
       }
       return;
     }
-    let old_progress = match self.seek_ms {
-      Some(seek_ms) => seek_ms,
-      None => self.song_progress_ms,
-    };
+    let old_progress = self.seek_ms.unwrap_or(self.song_progress_ms);
     let new_progress =
       (old_progress as u32).saturating_sub(self.user_config.behavior.seek_milliseconds);
-    self.seek_ms = Some(new_progress as u128);
-
-    // Use native streaming player for instant control (bypasses event channel latency)
-    #[cfg(feature = "streaming")]
-    if self.is_native_streaming_active_for_playback() && self.streaming_player.is_some() {
-      // Always update UI immediately
-      self.song_progress_ms = new_progress as u128;
-      self.seek_ms = None;
-
-      // Throttle actual seeks to avoid overwhelming librespot (max ~20/sec)
-      const SEEK_THROTTLE_MS: u128 = 50;
-      let should_seek_now = self
-        .last_native_seek
-        .is_none_or(|t| t.elapsed().as_millis() >= SEEK_THROTTLE_MS);
-
-      if should_seek_now {
-        self.execute_native_seek(new_progress);
-      } else {
-        // Queue the seek - will be flushed by tick loop or next seek
-        self.pending_native_seek = Some(new_progress);
-      }
-      return;
-    }
-
-    // Fallback: API-based seek for external devices (with throttling)
-    self.queue_api_seek(new_progress);
+    self.seek_spotify(new_progress);
   }
 
   /// Seek to an absolute position within the current track (e.g. from clicking or
@@ -196,44 +145,31 @@ impl App {
       }
       return;
     }
-    if let Some(CurrentPlaybackContext {
-      item: Some(item), ..
-    }) = &self.current_playback_context
-    {
-      let duration_ms = match item {
-        PlayableItem::Track(track) => track.duration.num_milliseconds() as u32,
-        PlayableItem::Episode(episode) => episode.duration.num_milliseconds() as u32,
-        _ => return,
-      };
-
-      let new_progress = position_ms.min(duration_ms);
-      self.seek_ms = Some(new_progress as u128);
-
-      // Use native streaming player for instant control (bypasses event channel latency)
-      #[cfg(feature = "streaming")]
-      if self.is_native_streaming_active_for_playback() && self.streaming_player.is_some() {
-        // Always update UI immediately
-        self.song_progress_ms = new_progress as u128;
-        self.seek_ms = None;
-
-        // Throttle actual seeks to avoid overwhelming librespot (max ~20/sec)
-        const SEEK_THROTTLE_MS: u128 = 50;
-        let should_seek_now = self
-          .last_native_seek
-          .is_none_or(|t| t.elapsed().as_millis() >= SEEK_THROTTLE_MS);
-
-        if should_seek_now {
-          self.execute_native_seek(new_progress);
-        } else {
-          // Queue the seek - will be flushed by tick loop or next seek
-          self.pending_native_seek = Some(new_progress);
-        }
-        return;
-      }
-
-      // Fallback: API-based seek for external devices (with throttling)
-      self.queue_api_seek(new_progress);
+    if let Some(duration_ms) = self.playing_duration_ms() {
+      self.seek_spotify(position_ms.min(duration_ms));
     }
+  }
+
+  fn seek_spotify(&mut self, position_ms: u32) {
+    self.seek_ms = None;
+    #[cfg(feature = "streaming")]
+    if self.queue_now_is_spotify() || self.is_native_streaming_active_for_playback() {
+      self.song_progress_ms = position_ms as u128;
+      if self
+        .last_native_seek
+        .is_none_or(|at| at.elapsed() >= NATIVE_SEEK_THROTTLE)
+      {
+        self.execute_native_seek(position_ms);
+      } else {
+        self.pending_native_seek = Some(position_ms);
+      }
+      return;
+    }
+    if self.native_parked_here() {
+      self.refuse_parked_gesture();
+      return;
+    }
+    self.apply_seek(position_ms);
   }
 
   /// Queue a decoded-source (local/Subsonic/YouTube) seek with throttling
@@ -286,74 +222,105 @@ impl App {
     }
   }
 
-  /// Queue an API-based seek with throttling (for external device control)
-  fn queue_api_seek(&mut self, position_ms: u32) {
-    if self.native_parked_here() {
-      self.seek_ms = None;
-      self.refuse_parked_gesture();
-      return;
-    }
-    // Always update UI immediately
-    self.song_progress_ms = position_ms as u128;
-    self.seek_ms = None;
-
-    // Start the ignore window immediately when the user requests a seek
-    // This prevents position updates from overwriting our target while waiting
-    let now = Instant::now();
-
-    // Mark poll data as stale so resync won't happen after ignore window
-    self.instant_since_last_current_playback_poll = now;
-
-    // Throttle API calls (max ~5/sec to respect rate limits)
-    const API_SEEK_THROTTLE_MS: u128 = 200;
-    let should_seek_now = self
-      .last_api_seek
-      .is_none_or(|t| t.elapsed().as_millis() >= API_SEEK_THROTTLE_MS);
-
-    // Update last_api_seek for BOTH the ignore window AND throttling
-    // This ensures the ignore window starts immediately on any seek request
-    self.last_api_seek = Some(now);
-
-    if should_seek_now {
-      self.execute_api_seek(position_ms);
+  /// Explicitly restarting a track supersedes any drag and sends at once.
+  pub(super) fn restart_spotify_track(&mut self) {
+    self.api_seek = None;
+    if let Some(target) = self.spotify_seek_target() {
+      self.queue_api_seek(target, SpotifySeekCommand::Position(0), 0, true);
     } else {
-      // Queue the seek - will be flushed by tick loop
-      self.pending_api_seek = Some(position_ms);
+      self.dispatch_spotify_fallback(IoEvent::Seek(0));
     }
   }
 
-  /// Execute an API-based seek
-  fn execute_api_seek(&mut self, position_ms: u32) {
-    self.pending_api_seek = None;
-    self.apply_seek(position_ms);
+  /// The request's identity travels with it even after it leaves the App.
+  fn queue_api_seek(
+    &mut self,
+    target: SpotifySeekTarget,
+    command: SpotifySeekCommand,
+    position_ms: u32,
+    immediate: bool,
+  ) {
+    self.discard_stale_api_seek();
+    self.seek_ms = None;
+    self.song_progress_ms = position_ms as u128;
+    let now = Instant::now();
+    let should_seek_now = immediate
+      || self
+        .api_seek
+        .as_ref()
+        .is_none_or(|seek| now.duration_since(seek.at) >= API_SEEK_THROTTLE);
+    let request = Arc::new(SpotifySeekRequest { target, command });
+    // Start the position guard at input time, even if dispatch has to wait.
+    self.api_seek = Some(ApiSeek {
+      request: Arc::clone(&request),
+      at: now,
+      pending: !should_seek_now,
+    });
+    if should_seek_now {
+      self.try_dispatch(IoEvent::SpotifySeek(request));
+    }
   }
 
-  /// Flush any pending API seek (called from tick loop)
+  pub(crate) fn spotify_seek_request_is_current(&self, request: &Arc<SpotifySeekRequest>) -> bool {
+    self
+      .api_seek
+      .as_ref()
+      .is_some_and(|seek| Arc::ptr_eq(&seek.request, request))
+      && self.spotify_seek_is_current(&request.target)
+  }
+
+  pub(super) fn discard_stale_api_seek(&mut self) {
+    if self
+      .api_seek
+      .as_ref()
+      .is_some_and(|seek| !self.spotify_seek_is_current(&seek.request.target))
+    {
+      self.api_seek = None;
+    }
+  }
+
+  pub(super) fn api_seek_settles_at(&self) -> Option<Instant> {
+    self
+      .api_seek
+      .as_ref()
+      .map(|seek| seek.at + Duration::from_millis(SEEK_POSITION_IGNORE_MS as u64))
+  }
+
+  #[cfg(feature = "soloist")]
+  pub(super) fn settling_api_seek_at(&self) -> Option<Instant> {
+    self
+      .api_seek
+      .as_ref()
+      .filter(|seek| seek.at.elapsed().as_millis() < SEEK_POSITION_IGNORE_MS)
+      .map(|seek| seek.at)
+  }
+
+  /// Flush a debounced seek only while its original item and device are current.
   pub fn flush_pending_api_seek(&mut self) {
-    // Queued for an external Connect device; under any other owner the Web
-    // API seek would land on a device that is not the audible one.
-    if self.pending_api_seek.is_some() && self.playback_owner() != PlaybackOwner::Spotify {
-      self.pending_api_seek = None;
-      return;
-    }
-    if let Some(position) = self.pending_api_seek {
-      const API_SEEK_THROTTLE_MS: u128 = 200;
-      let should_flush = self
-        .last_api_seek
-        .is_none_or(|t| t.elapsed().as_millis() >= API_SEEK_THROTTLE_MS);
-
-      if should_flush {
-        self.execute_api_seek(position);
-      }
+    self.discard_stale_api_seek();
+    if let Some(seek) = self
+      .api_seek
+      .as_mut()
+      .filter(|seek| seek.pending && seek.at.elapsed() >= API_SEEK_THROTTLE)
+    {
+      seek.pending = false;
+      seek.at = Instant::now();
+      let request = Arc::clone(&seek.request);
+      self.try_dispatch(IoEvent::SpotifySeek(request));
     }
   }
 
   /// Execute a native seek and update tracking state
   #[cfg(feature = "streaming")]
   fn execute_native_seek(&mut self, position_ms: u32) {
+    if self.queue_now_is_spotify() {
+      self.last_native_seek = Some(Instant::now());
+      self.pending_native_seek = None;
+      self.dispatch(IoEvent::Seek(position_ms));
+      return;
+    }
     if let Some(player) = self.streaming_player.clone() {
       player.seek(position_ms);
-      self.last_native_seek = Some(Instant::now());
       self.pending_native_seek = None;
       self.record_native_seek(position_ms);
 
@@ -376,15 +343,175 @@ impl App {
     }
     if let Some(position) = self.pending_native_seek {
       // Only flush if enough time has passed since last seek
-      const SEEK_THROTTLE_MS: u128 = 50;
       let should_flush = self
         .last_native_seek
-        .is_none_or(|t| t.elapsed().as_millis() >= SEEK_THROTTLE_MS);
+        .is_none_or(|t| t.elapsed() >= NATIVE_SEEK_THROTTLE);
 
       if should_flush {
         self.execute_native_seek(position);
       }
     }
+  }
+}
+
+#[cfg(test)]
+mod remote_seek_tests {
+  use super::*;
+  use crate::core::test_helpers::playing_with_art;
+
+  const TRACK_ID: &str = "0000000000000000000001";
+
+  fn context(track_id: &str) -> CurrentPlaybackContext {
+    playing_with_art(track_id, "https://example.com/cover")
+  }
+
+  fn app_with_debounced_seek(position_ms: u32) -> (App, std::sync::mpsc::Receiver<IoEvent>) {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.current_playback_context = Some(context(TRACK_ID));
+    app.seek_to(5_000);
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::SpotifySeek(request))
+      if matches!(request.command, SpotifySeekCommand::Position(5_000))));
+    app.seek_to(position_ms);
+    assert!(rx.try_recv().is_err());
+    app.api_seek.as_mut().unwrap().at -= API_SEEK_THROTTLE;
+    (app, rx)
+  }
+
+  #[test]
+  fn a_debounced_remote_seek_does_not_move_the_next_track() {
+    // A seek to the old track's end would have dispatched a skip on flush.
+    for position in [45_000, 180_000] {
+      let (mut app, rx) = app_with_debounced_seek(position);
+      app.current_playback_context = Some(context("0000000000000000000002"));
+
+      app.flush_pending_api_seek();
+
+      assert!(rx.try_recv().is_err());
+      assert!(app.api_seek.is_none());
+    }
+  }
+
+  #[test]
+  fn a_debounced_remote_seek_does_not_follow_playback_to_another_device() {
+    let (mut app, rx) = app_with_debounced_seek(45_000);
+    let mut context = context(TRACK_ID);
+    context.device.id = Some("another-device".to_string());
+    app.set_polled_playback(context, Instant::now());
+
+    app.flush_pending_api_seek();
+
+    assert!(rx.try_recv().is_err());
+    assert!(app.api_seek.is_none());
+  }
+
+  #[test]
+  fn a_debounced_remote_seek_survives_a_fresh_poll_of_the_same_track() {
+    let (mut app, rx) = app_with_debounced_seek(45_000);
+    app.set_polled_playback(context(TRACK_ID), Instant::now());
+
+    app.flush_pending_api_seek();
+
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::SpotifySeek(request))
+      if matches!(request.command, SpotifySeekCommand::Position(45_000))));
+  }
+
+  #[test]
+  fn a_skip_cancels_a_debounced_remote_seek_before_the_next_poll() {
+    let (mut app, rx) = app_with_debounced_seek(45_000);
+
+    app.next_track();
+    app.flush_pending_api_seek();
+
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::NextTrack)));
+    assert!(rx.try_recv().is_err());
+  }
+
+  #[test]
+  fn restarting_a_remote_track_discards_the_waiting_drag_position() {
+    let (mut app, rx) = app_with_debounced_seek(45_000);
+
+    app.previous_track();
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::SpotifySeek(request))
+      if matches!(request.command, SpotifySeekCommand::Position(0))));
+    app.flush_pending_api_seek();
+
+    assert!(rx.try_recv().is_err(), "the drag overwrote the restart");
+  }
+
+  #[test]
+  fn a_new_drag_supersedes_a_sent_seek_even_before_the_new_seek_flushes() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.current_playback_context = Some(context(TRACK_ID));
+    app.seek_to(5_000);
+    let Ok(IoEvent::SpotifySeek(first)) = rx.try_recv() else {
+      panic!("expected the first seek");
+    };
+    assert!(app.spotify_seek_request_is_current(&first));
+
+    app.seek_to(45_000);
+
+    assert!(rx.try_recv().is_err());
+    assert!(!app.spotify_seek_request_is_current(&first));
+    app.api_seek.as_mut().unwrap().at -= API_SEEK_THROTTLE;
+    app.flush_pending_api_seek();
+    let Ok(IoEvent::SpotifySeek(latest)) = rx.try_recv() else {
+      panic!("expected the last seek");
+    };
+    assert!(app.spotify_seek_request_is_current(&latest));
+    assert!(matches!(
+      latest.command,
+      SpotifySeekCommand::Position(45_000)
+    ));
+  }
+
+  #[test]
+  fn a_remote_seek_to_the_end_still_throttles_followup_input() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.current_playback_context = Some(context(TRACK_ID));
+
+    app.seek_to(180_000);
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::SpotifySeek(request))
+      if matches!(request.command, SpotifySeekCommand::NextTrack)));
+    app.seek_to(180_000);
+
+    assert!(rx.try_recv().is_err());
+  }
+
+  #[test]
+  fn a_progress_sample_received_during_a_seek_does_not_rewind_after_it_settles() {
+    let (mut app, rx) = app_with_debounced_seek(60_000);
+    app.flush_pending_api_seek();
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::SpotifySeek(request))
+      if matches!(request.command, SpotifySeekCommand::Position(60_000))));
+    app.user_config.behavior.keepawake_enabled = false;
+    let now = Instant::now();
+    app.api_seek.as_mut().unwrap().at = now - Duration::from_millis(550);
+    let received_at = now - Duration::from_millis(100);
+    let mut context = context(TRACK_ID);
+    context.progress = Some(chrono::TimeDelta::milliseconds(10_000));
+    app.instant_since_last_current_playback_poll = received_at;
+    app.set_polled_playback(context, received_at);
+
+    app.update_on_tick(Duration::from_millis(250));
+
+    assert_eq!(app.song_progress_ms, 60_250);
+  }
+
+  #[cfg(feature = "streaming")]
+  #[test]
+  fn an_api_seek_queued_under_spotify_is_dropped_once_the_queue_slot_owns_playback() {
+    let (mut app, rx) = app_with_debounced_seek(5_000);
+    app.queue_now = Some(crate::infra::queue::QueueNowPlaying::Spotify {
+      track: crate::core::app::test_support::queue_track(Some("spotify:track:queued"), "Queued"),
+    });
+
+    app.flush_pending_api_seek();
+
+    assert!(app.api_seek.is_none());
+    assert!(rx.try_recv().is_err());
   }
 }
 
@@ -415,14 +542,16 @@ mod tests {
   }
 
   #[test]
-  fn an_api_seek_queued_under_spotify_is_dropped_once_the_queue_slot_owns_playback() {
+  fn seek_to_uses_the_spotify_queue_slots_duration_without_a_cached_item() {
     let (mut app, rx) = app_with_spotify_queue_slot();
-    app.pending_api_seek = Some(5_000);
 
-    app.flush_pending_api_seek();
+    app.seek_to(500);
 
-    assert!(app.pending_api_seek.is_none());
-    assert!(rx.try_recv().is_err());
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::Seek(500))));
+
+    app.last_native_seek = Some(Instant::now() - NATIVE_SEEK_THROTTLE);
+    app.seek_to(2_000);
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::Seek(1_000))));
   }
 
   #[test]
@@ -437,14 +566,17 @@ mod tests {
   }
 
   #[test]
-  fn a_native_seek_survives_under_a_spotify_queue_slot() {
-    let (mut app, _rx) = app_with_spotify_queue_slot();
-    app.pending_native_seek = Some(5_000);
+  fn a_throttled_seek_reaches_the_spotify_queue_slot() {
+    let (mut app, rx) = app_with_spotify_queue_slot();
+    app.seek_to(100);
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::Seek(100))));
+    app.seek_to(500);
+    assert!(rx.try_recv().is_err());
 
+    app.last_native_seek = Some(Instant::now() - NATIVE_SEEK_THROTTLE);
     app.flush_pending_native_seek();
 
-    // No player is attached, so the value waits; the point is that it is kept.
-    assert_eq!(app.pending_native_seek, Some(5_000));
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::Seek(500))));
   }
 
   #[test]

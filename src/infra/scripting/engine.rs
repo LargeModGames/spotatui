@@ -88,6 +88,10 @@ coroutine.resume = function(...) return pass(pack(resume(...))) end
 impl ScriptEngine {
   /// Build the Lua state and install the `spotatui` global table.
   pub fn new() -> mlua::Result<Self> {
+    Self::with_http_client_builder(reqwest::Client::builder())
+  }
+
+  pub(super) fn with_http_client_builder(http: reqwest::ClientBuilder) -> mlua::Result<Self> {
     let lua = Lua::new();
     let shared = Rc::new(ScriptShared::new());
     // A loop in a plugin would otherwise freeze the frontend.
@@ -109,7 +113,7 @@ impl ScriptEngine {
       .set_name("spotatui")
       .call::<()>(expired)?;
     let (http_tx, http_rx) = unbounded_channel();
-    let http_client = reqwest::Client::builder()
+    let http_client = http
       .timeout(std::time::Duration::from_secs(30))
       .user_agent(format!("spotatui/{}", env!("CARGO_PKG_VERSION")))
       .build()

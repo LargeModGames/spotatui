@@ -293,7 +293,7 @@ impl App {
     self.apple_music.quit_seen = None;
     self.cancel_volume_change();
     self.cancel_apple_music_volume();
-    self.pending_api_seek = None;
+    self.api_seek = None;
     self.pending_source_seek = None;
     self.seek_ms = None;
     #[cfg(feature = "streaming")]

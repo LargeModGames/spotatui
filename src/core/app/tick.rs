@@ -259,9 +259,15 @@ impl App {
     #[cfg(not(target_os = "android"))]
     self.keepawake.request(playing_now);
 
+    let polled_at = self.polled_progress_at.take();
+    self.discard_stale_api_seek();
+
     // Music's last reported position, advanced while it plays.
     if self.apple_music_owns_playback() {
       self.song_progress_ms = self.apple_music_position_ms() as u128;
+      return;
+    }
+    if self.queue_owns_playback() || self.active_decoded_source() {
       return;
     }
 
@@ -285,18 +291,9 @@ impl App {
         // No recent native update - fall through to API-based calculation as fallback
       }
 
-      let ms_since_poll = self
-        .instant_since_last_current_playback_poll
-        .elapsed()
-        .as_millis();
-
-      // Skip position updates if we recently seeked (let UI show our target position)
-      let recently_seeked = self
-        .last_api_seek
-        .is_some_and(|t| t.elapsed().as_millis() < SEEK_POSITION_IGNORE_MS);
-
-      if recently_seeked {
-        return; // Don't overwrite our seek target
+      let seek_settles_at = self.api_seek_settles_at();
+      if seek_settles_at.is_some_and(|until| Instant::now() < until) {
+        return;
       }
 
       let duration_ms = match item {
@@ -305,14 +302,17 @@ impl App {
         _ => return,
       };
 
-      // Resync from fresh API data (within 300ms of poll) to correct drift
-      if ms_since_poll < 300 {
+      // Take each successful remote sample once. Even a slow tick can use it,
+      // unless the sample was received before the latest seek settled.
+      if let Some(polled_at) = polled_at
+        .filter(|at| !self.is_streaming_active && seek_settles_at.is_none_or(|until| *at >= until))
+      {
         let polled_ms = progress
           .as_ref()
           .map(|p| p.num_milliseconds() as u128)
           .unwrap_or(0);
         self.song_progress_ms = if *is_playing {
-          (polled_ms + ms_since_poll).min(duration_ms)
+          (polled_ms + polled_at.elapsed().as_millis()).min(duration_ms)
         } else {
           polled_ms
         };
@@ -348,9 +348,10 @@ mod tests {
   ) -> (App, std::sync::mpsc::Receiver<IoEvent>) {
     let (tx, rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), Some(std::time::SystemTime::now()));
-    app.current_playback_context = Some(elsewhere_context(progress_ms));
+    let polled_at = Instant::now() - polled_ago;
+    app.set_polled_playback(elsewhere_context(progress_ms), polled_at);
     app.is_streaming_active = false;
-    app.instant_since_last_current_playback_poll = Instant::now() - polled_ago;
+    app.instant_since_last_current_playback_poll = polled_at;
     (app, rx)
   }
 
@@ -610,6 +611,26 @@ mod tests {
       "{}",
       app.song_progress_ms
     );
+  }
+
+  #[test]
+  fn a_slow_first_tick_consumes_a_new_remote_progress_snapshot() {
+    let tick_elapsed = Duration::from_millis(500);
+    let (mut app, _rx) = app_playing_elsewhere(10_000, Duration::from_millis(400));
+    app.user_config.behavior.keepawake_enabled = false;
+    app.song_progress_ms = 170_000;
+
+    let polled_at = app.instant_since_last_current_playback_poll;
+    let expected_min = 10_000 + polled_at.elapsed().as_millis();
+    app.update_on_tick(tick_elapsed);
+    let expected_max = 10_000 + polled_at.elapsed().as_millis();
+    assert!((expected_min..=expected_max).contains(&app.song_progress_ms));
+
+    // A retry can reset the poll timer without publishing another position.
+    let progress = app.song_progress_ms;
+    app.instant_since_last_current_playback_poll = Instant::now();
+    app.update_on_tick(tick_elapsed);
+    assert_eq!(app.song_progress_ms, progress + 500);
   }
 
   #[cfg(feature = "streaming")]

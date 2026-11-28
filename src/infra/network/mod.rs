@@ -16,7 +16,7 @@ pub mod utils;
 
 #[cfg(test)]
 use crate::core::app::SPOTIFY_NOT_CONNECTED_STATUS;
-use crate::core::app::{App, PlaybackOwner};
+use crate::core::app::{App, PlaybackOwner, SpotifyControlRequest, SpotifySeekRequest};
 use crate::core::auth::{SpotifyLogin, LOGIN_TIMEOUT};
 use crate::core::plugin_api::{ShowInfo, TrackInfo};
 use crate::core::source::Source;
@@ -71,12 +71,16 @@ pub enum IoEvent {
   ReplayPublishedSpotifyQueueSlot,
   UpdateSearchLimits(u32, u32),
   Seek(u32),
+  /// A seek or end-of-track skip for the device and item the user saw.
+  SpotifySeek(Arc<SpotifySeekRequest>),
   NextTrack,
   PreviousTrack,
   ForcePreviousTrack,
   Shuffle(bool), // desired shuffle state
   Repeat(RepeatState),
   PausePlayback,
+  /// A user gesture bound to the external Spotify device it was made on.
+  SpotifyControl(Arc<SpotifyControlRequest>),
   ChangeVolume(u8),
   /// Artist id/URI, display name, market.
   GetArtist(String, String, Option<Country>),
@@ -467,6 +471,7 @@ fn soloist_ws_transport(io_event: &IoEvent) -> bool {
       | IoEvent::PreviousTrack
       | IoEvent::ForcePreviousTrack
       | IoEvent::Seek(_)
+      | IoEvent::SpotifySeek(_)
       | IoEvent::ChangeVolume(_)
       | IoEvent::Shuffle(_)
       | IoEvent::Repeat(_)
@@ -687,7 +692,9 @@ impl Network {
         | IoEvent::PreviousTrack
         | IoEvent::ForcePreviousTrack
         | IoEvent::Seek(_)
+        | IoEvent::SpotifySeek(_)
         | IoEvent::Shuffle(_)
+        | IoEvent::SpotifyControl(_)
         | IoEvent::Repeat(_)
         | IoEvent::ChangeVolume(_)
         | IoEvent::EnsurePlaybackContinues(_)
@@ -751,6 +758,9 @@ impl Network {
         app.is_volume_change_in_flight = false;
         if is_playback_poll {
           app.is_fetching_current_playback = false;
+        }
+        if let IoEvent::SpotifyControl(request) = &io_event {
+          app.finish_spotify_control(request);
         }
         if matches!(io_event, IoEvent::GetMadeForYou) {
           app.end_discover_fetch(None);
@@ -835,6 +845,9 @@ impl Network {
       IoEvent::Seek(position_ms) => {
         self.seek(position_ms).await;
       }
+      IoEvent::SpotifySeek(request) => {
+        playback::apply_spotify_seek(self, &request).await;
+      }
       IoEvent::NextTrack => {
         self.next_track().await;
       }
@@ -849,6 +862,10 @@ impl Network {
       }
       IoEvent::PausePlayback => {
         self.pause_playback().await;
+      }
+      IoEvent::SpotifyControl(request) => {
+        playback::apply_spotify_control(self, &request).await;
+        self.app.lock().await.finish_spotify_control(&request);
       }
       IoEvent::ChangeVolume(volume) => {
         self.change_volume(volume).await;
@@ -1308,20 +1325,26 @@ impl Network {
   /// is still open holds them back again. A transport event whose owner
   /// changed since it was queued is dropped instead.
   pub(crate) async fn flush_deferred(&mut self) {
-    let (io_tx, owner_now) = {
-      let app = self.app.lock().await;
-      (app.io_tx_clone(), app.playback_owner())
-    };
-    let Some(io_tx) = io_tx else {
+    let mut app = self.app.lock().await;
+    let Some(io_tx) = app.io_tx_clone() else {
       return;
     };
+    let owner_now = app.playback_owner();
     for Deferred { event, owner } in std::mem::take(&mut self.deferred) {
-      if Self::event_is_transport(&event) && !owner_still_owns(owner, owner_now) {
-        log::debug!("deferred transport event dropped: the sink changed hands");
-        let mut app = self.app.lock().await;
+      let stale_request = match &event {
+        IoEvent::SpotifySeek(request) => !app.spotify_seek_request_is_current(request),
+        IoEvent::SpotifyControl(request) => !app.spotify_control_is_current(request),
+        _ => false,
+      };
+      if stale_request || (Self::event_is_transport(&event) && !owner_still_owns(owner, owner_now))
+      {
+        log::debug!("deferred transport event dropped: playback target or intent changed");
         app.is_loading = false;
         if matches!(event, IoEvent::ChangeVolume(_)) {
           app.cancel_volume_change();
+        }
+        if let IoEvent::SpotifyControl(request) = &event {
+          app.finish_spotify_control(request);
         }
         continue;
       }
@@ -2486,6 +2509,132 @@ mod tests {
       };
       network.begin_spotify_login().await;
       assert_eq!(app.lock().await.status_message(), Some(expected.as_str()));
+    }
+  }
+
+  #[tokio::test]
+  async fn a_deferred_remote_seek_does_not_follow_the_active_device() {
+    assert_seek_is_not_replayed(30_000, "speaker", "0000000000000000000001").await;
+  }
+
+  #[tokio::test]
+  async fn a_deferred_skip_from_a_seek_does_not_skip_the_next_item() {
+    assert_seek_is_not_replayed(180_000, "phone", "0000000000000000000002").await;
+  }
+
+  async fn assert_seek_is_not_replayed(position_ms: u32, device_id: &str, item_id: &str) {
+    use crate::core::test_helpers::playing_with_art;
+
+    let (app, rx) = app_with_a_session_and_channel();
+    let mut network = rate_limited_pump_network(&app).await;
+    {
+      let mut app = app.lock().await;
+      let mut context = playing_with_art("0000000000000000000001", "");
+      context.device.id = Some("phone".into());
+      app.set_polled_playback(context, std::time::Instant::now());
+      app.seek_to(position_ms);
+    }
+    network.handle_network_event(rx.try_recv().unwrap()).await;
+    assert_eq!(network.deferred.len(), 1);
+    {
+      let mut app = app.lock().await;
+      let mut context = playing_with_art(item_id, "");
+      context.device.id = Some(device_id.into());
+      app.set_polled_playback(context, std::time::Instant::now());
+    }
+    network.rate_gate = requests::RateLimitGate::default();
+    network.flush_deferred().await;
+
+    assert!(rx.try_recv().is_err(), "the old gesture was replayed");
+    assert!(!app.lock().await.is_loading);
+  }
+
+  #[tokio::test]
+  async fn a_current_deferred_seek_or_skip_is_sent_to_its_original_item() {
+    use crate::core::test_helpers::playing_with_art;
+    use reqwest::Method;
+
+    let item_id = "0000000000000000000001";
+    for (position_ms, method, path) in [
+      (30_000, Method::PUT, "me/player/seek"),
+      (180_000, Method::POST, "me/player/next"),
+    ] {
+      let (app, rx) = app_with_a_session_and_channel();
+      let mut network = rate_limited_pump_network(&app).await;
+      {
+        let mut app = app.lock().await;
+        app.set_polled_playback(playing_with_art(item_id, ""), std::time::Instant::now());
+        app.seek_to(position_ms);
+      }
+      network.handle_network_event(rx.try_recv().unwrap()).await;
+      network.rate_gate = requests::RateLimitGate::default();
+      network.flush_deferred().await;
+      let _fake =
+        requests::fake::use_scripted_spotify(move |actual_method, actual_path, query, _| {
+          assert_eq!(actual_method, &method);
+          assert_eq!(actual_path, path);
+          assert!(query.contains(&("device_id", "external".to_string())));
+          assert!(query.contains(&("require_active_device", "true".to_string())));
+          assert!(query.contains(&("expected_item_uri", format!("spotify:track:{item_id}"))));
+          Ok(serde_json::Value::Null)
+        });
+      network.handle_network_event(rx.try_recv().unwrap()).await;
+      assert!(app.lock().await.command_poll_at().is_some());
+    }
+  }
+
+  #[tokio::test]
+  async fn a_remote_gesture_carries_its_device_and_does_not_retry_on_the_saved_one() {
+    use crate::core::{action::Action, test_helpers::playing_with_art};
+    use std::{cell::RefCell, rc::Rc};
+
+    for (action, path) in [
+      (Action::Play, "me/player/play"),
+      (Action::Pause, "me/player/pause"),
+      (Action::SetShuffle(true), "me/player/shuffle"),
+    ] {
+      let (app, rx) = app_with_a_session_and_channel();
+      {
+        let mut app = app.lock().await;
+        let mut context = playing_with_art("0000000000000000000001", "");
+        context.is_playing = matches!(action, Action::Pause);
+        context.device.id = Some("phone".into());
+        app.set_polled_playback(context, std::time::Instant::now());
+        app.runtime_state.spotify_device_id = Some("saved".into());
+        app.apply(action);
+      }
+
+      let calls = Rc::new(RefCell::new(Vec::new()));
+      let captured = Rc::clone(&calls);
+      let _fake = requests::fake::use_scripted_spotify(move |_, path, query, _| {
+        let get = |name| {
+          query
+            .iter()
+            .find(|(k, _)| *k == name)
+            .map(|(_, v)| v.clone())
+        };
+        captured.borrow_mut().push((
+          path.to_owned(),
+          get("device_id"),
+          get("require_active_device"),
+        ));
+        Err(
+          requests::SpotifyApiError {
+            localized_body: None,
+            status: reqwest::StatusCode::NOT_FOUND,
+            body: "NO_ACTIVE_DEVICE".into(),
+            detail: None,
+            endpoint: None,
+          }
+          .into(),
+        )
+      });
+      let mut network = Network::new(Some(SpotifyLogin::new()), &app);
+      network.handle_network_event(rx.try_recv().unwrap()).await;
+      assert_eq!(
+        *calls.borrow(),
+        [(path.to_owned(), Some("phone".into()), Some("true".into()))]
+      );
     }
   }
 

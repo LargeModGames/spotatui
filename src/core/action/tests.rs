@@ -7,11 +7,17 @@
 //! arms are spelled `_other` because this directory's gate counts bare
 //! wildcard arms.
 
-use std::sync::mpsc::{channel, Receiver};
+use std::sync::{
+  mpsc::{channel, Receiver},
+  Arc,
+};
 use std::time::SystemTime;
 
 use super::{Action, NavTarget, RepeatSetting};
-use crate::core::app::{App, DisplayDomain, RouteId, UserInfo, NOTHING_PLAYING_STATUS};
+use crate::core::app::{
+  App, DisplayDomain, RouteId, SpotifyControl, SpotifyControlRequest, UserInfo,
+  NOTHING_PLAYING_STATUS,
+};
 use crate::core::theme::{Color, Theme, ThemeField};
 use crate::core::user_config::UserConfig;
 use crate::infra::network::IoEvent;
@@ -81,6 +87,19 @@ fn playback_context_with_track(is_playing: bool) -> rspotify::model::CurrentPlay
 
 // --- transport ---
 
+fn expect_spotify_control(
+  rx: &Receiver<IoEvent>,
+  control: SpotifyControl,
+  enabled: bool,
+) -> Arc<SpotifyControlRequest> {
+  let Ok(IoEvent::SpotifyControl(request)) = rx.try_recv() else {
+    panic!("expected a Spotify {control:?} request");
+  };
+  assert_eq!(request.control, control);
+  assert_eq!(request.enabled, enabled);
+  request
+}
+
 #[test]
 fn play_when_paused_dispatches_start_playback() {
   let (mut app, rx) = app_with_channel();
@@ -88,10 +107,7 @@ fn play_when_paused_dispatches_start_playback() {
 
   app.apply(Action::Play);
 
-  assert!(matches!(
-    rx.try_recv(),
-    Ok(IoEvent::StartPlayback(None, None, None))
-  ));
+  expect_spotify_control(&rx, SpotifyControl::Playing, true);
 }
 
 #[test]
@@ -111,7 +127,7 @@ fn pause_when_playing_dispatches_pause_playback() {
 
   app.apply(Action::Pause);
 
-  assert!(matches!(rx.try_recv(), Ok(IoEvent::PausePlayback)));
+  expect_spotify_control(&rx, SpotifyControl::Playing, false);
 }
 
 #[test]
@@ -122,6 +138,61 @@ fn pause_when_already_paused_is_a_noop() {
   app.apply(Action::Pause);
 
   assert!(rx.try_recv().is_err(), "expected no IoEvent dispatched");
+}
+
+#[test]
+fn pause_supersedes_a_remote_play_before_the_playback_poll() {
+  let (mut app, rx) = app_with_channel();
+  app.current_playback_context = Some(playback_context_with_track(false));
+
+  app.apply(Action::Play);
+  let play = expect_spotify_control(&rx, SpotifyControl::Playing, true);
+  assert!(app.spotify_control_is_current(&play));
+  app.apply(Action::Play);
+  assert!(rx.try_recv().is_err(), "the same pending intent is a no-op");
+
+  app.apply(Action::Pause);
+  let pause = expect_spotify_control(&rx, SpotifyControl::Playing, false);
+  assert!(!app.spotify_control_is_current(&play));
+  app.finish_spotify_control(&play);
+  assert!(app.spotify_control_is_current(&pause));
+}
+
+#[test]
+fn remote_controls_use_normal_transport_without_a_device_id() {
+  for id in [None, Some(String::new())] {
+    let (mut app, rx) = app_with_channel();
+    let mut context = playback_context_with_track(false);
+    context.device.id = id;
+    app.current_playback_context = Some(context.clone());
+
+    app.apply(Action::Play);
+    assert!(matches!(
+      rx.try_recv(),
+      Ok(IoEvent::StartPlayback(None, None, None))
+    ));
+
+    context.is_playing = true;
+    app.current_playback_context = Some(context);
+    app.apply(Action::Pause);
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::PausePlayback)));
+
+    app.apply(Action::SetShuffle(true));
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::Shuffle(true))));
+  }
+}
+
+#[test]
+fn a_finished_remote_play_can_be_retried_if_playback_did_not_change() {
+  let (mut app, rx) = app_with_channel();
+  app.current_playback_context = Some(playback_context_with_track(false));
+  app.apply(Action::Play);
+  let play = expect_spotify_control(&rx, SpotifyControl::Playing, true);
+
+  app.finish_spotify_control(&play);
+  app.apply(Action::Play);
+
+  expect_spotify_control(&rx, SpotifyControl::Playing, true);
 }
 
 #[test]
@@ -143,16 +214,17 @@ fn previous_track_routes_through_the_transport_method() {
 }
 
 #[test]
-fn seek_to_with_a_track_context_dispatches_seek() {
+fn seek_to_with_a_track_context_dispatches_a_bound_seek() {
   let (mut app, rx) = app_with_channel();
   app.current_playback_context = Some(playback_context_with_track(true));
 
   app.apply(Action::SeekTo(30_000));
 
-  match rx.try_recv() {
-    Ok(IoEvent::Seek(ms)) => assert_eq!(ms, 30_000),
-    _other => panic!("expected Seek(30000) (IoEvent is not Debug)"),
-  }
+  assert!(matches!(
+    rx.try_recv(),
+    Ok(IoEvent::SpotifySeek(request))
+      if matches!(request.command, crate::core::app::SpotifySeekCommand::Position(30_000))
+  ));
 }
 
 #[test]
@@ -169,11 +241,53 @@ fn set_shuffle_dispatches_only_when_state_differs() {
   let (mut app, rx) = app_with_channel();
   app.current_playback_context = Some(playback_context(false, false));
 
-  app.apply(Action::SetShuffle(true));
-  assert!(matches!(rx.try_recv(), Ok(IoEvent::Shuffle(true))));
-
   app.apply(Action::SetShuffle(false));
   assert!(rx.try_recv().is_err(), "same state must not dispatch");
+
+  app.apply(Action::SetShuffle(true));
+  expect_spotify_control(&rx, SpotifyControl::Shuffle, true);
+  app.apply(Action::SetShuffle(true));
+  assert!(rx.try_recv().is_err(), "the same pending intent is a no-op");
+}
+
+#[test]
+fn shuffle_off_supersedes_an_unconfirmed_remote_shuffle_on() {
+  let (mut app, rx) = app_with_channel();
+  app.current_playback_context = Some(playback_context_with_track(true));
+
+  app.apply(Action::SetShuffle(true));
+  let on = expect_spotify_control(&rx, SpotifyControl::Shuffle, true);
+
+  app.apply(Action::SetShuffle(false));
+  let off = expect_spotify_control(&rx, SpotifyControl::Shuffle, false);
+  assert!(!app.spotify_control_is_current(&on));
+  assert!(app.spotify_control_is_current(&off));
+
+  // An older completion of "on" must not retire a newer "on" request.
+  app.apply(Action::SetShuffle(true));
+  let latest = expect_spotify_control(&rx, SpotifyControl::Shuffle, true);
+  app.finish_spotify_control(&on);
+  assert!(app.spotify_control_is_current(&latest));
+}
+
+#[test]
+fn remote_controls_do_not_follow_a_playback_transfer() {
+  let (mut app, rx) = app_with_channel();
+  app.current_playback_context = Some(playback_context_with_track(false));
+  app.apply(Action::Play);
+  let play = expect_spotify_control(&rx, SpotifyControl::Playing, true);
+  app.apply(Action::SetShuffle(true));
+  let shuffle = expect_spotify_control(&rx, SpotifyControl::Shuffle, true);
+
+  let mut context = playback_context_with_track(false);
+  context.device.id = Some("another-device".into());
+  app.set_polled_playback(context, std::time::Instant::now());
+
+  assert!(!app.spotify_control_is_current(&play));
+  assert!(!app.spotify_control_is_current(&shuffle));
+  app.apply(Action::Pause);
+  app.apply(Action::SetShuffle(false));
+  assert!(rx.try_recv().is_err());
 }
 
 #[test]
@@ -208,14 +322,11 @@ fn toggle_playback_pauses_when_playing_and_starts_when_paused() {
   app.current_playback_context = Some(playback_context(true, false));
 
   app.apply(Action::TogglePlayback);
-  assert!(matches!(rx.try_recv(), Ok(IoEvent::PausePlayback)));
+  expect_spotify_control(&rx, SpotifyControl::Playing, false);
 
-  app.current_playback_context = Some(playback_context(false, false));
+  // A second press arrives before the command or poll writes the new state.
   app.apply(Action::TogglePlayback);
-  assert!(matches!(
-    rx.try_recv(),
-    Ok(IoEvent::StartPlayback(None, None, None))
-  ));
+  expect_spotify_control(&rx, SpotifyControl::Playing, true);
 }
 
 #[test]
@@ -270,7 +381,7 @@ fn toggle_shuffle_flips_the_spotify_shuffle_state() {
 
   app.apply(Action::ToggleShuffle);
 
-  assert!(matches!(rx.try_recv(), Ok(IoEvent::Shuffle(true))));
+  expect_spotify_control(&rx, SpotifyControl::Shuffle, true);
 }
 
 #[test]
@@ -2446,6 +2557,42 @@ fn toggle_save_current_item_saves_the_playing_track() {
       assert_eq!(uri, "spotify:track:4uLU6hMCjMI75M1A2tKUQC")
     }
     _other => panic!("expected ToggleSaveTrack for the playing track"),
+  }
+}
+
+#[cfg(feature = "streaming")]
+#[test]
+fn liking_a_new_native_track_ignores_the_previous_polled_track() {
+  use crate::core::app::{NativeTrackInfo, NativeTrackKind};
+  use crate::infra::media_metadata::tracking_playback_snapshot;
+
+  for (kind, uri) in [
+    (
+      NativeTrackKind::Track,
+      "spotify:track:0000000000000000000002",
+    ),
+    (
+      NativeTrackKind::Episode,
+      "spotify:episode:0000000000000000000002",
+    ),
+  ] {
+    let (mut app, rx) = app_with_channel();
+    app.current_playback_context = Some(playback_context_with_track(true));
+    app.is_streaming_active = true;
+    app.native_is_playing = Some(true);
+    app.last_track_id = Some("0000000000000000000002".into());
+    app.native_track_info = Some(NativeTrackInfo {
+      name: "New item".into(),
+      duration_ms: 180_000,
+      kind,
+      ..Default::default()
+    });
+    let playing_uri = tracking_playback_snapshot(&app).unwrap().item_uri;
+    assert_eq!(playing_uri.as_deref(), Some(uri));
+
+    app.apply(Action::ToggleSaveCurrentItem);
+
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::ToggleSaveTrack(saved)) if saved == uri));
   }
 }
 

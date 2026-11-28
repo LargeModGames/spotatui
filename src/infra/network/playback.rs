@@ -1,8 +1,11 @@
 use super::requests::is_transient_network_error;
 use super::{IoEvent, Network};
-use crate::core::app::PlaybackOwner;
+use crate::core::app::{
+  App, PlaybackOwner, SpotifyControl, SpotifyControlRequest, SpotifySeekCommand, SpotifySeekItem,
+  SpotifySeekRequest,
+};
 #[cfg(feature = "streaming")]
-use crate::core::app::{App, NativePlaybackOrigin, NativePlaybackRecoverySnapshot};
+use crate::core::app::{NativePlaybackOrigin, NativePlaybackRecoverySnapshot};
 #[cfg(feature = "streaming")]
 use crate::infra::player::{select_native, PlaybackBackend};
 use anyhow::anyhow;
@@ -505,6 +508,118 @@ fn saved_device_retry(
     return None;
   }
   saved_device_id.map(str::to_string)
+}
+
+pub(crate) const PLAYBACK_TARGET_CHANGED: &str = "Spotify playback target changed";
+
+fn active_device_query(device_id: &str) -> Vec<(&'static str, String)> {
+  vec![
+    ("device_id", device_id.to_string()),
+    ("require_active_device", "true".to_string()),
+  ]
+}
+
+fn report_bound_player_error(app: &mut App, error: anyhow::Error) {
+  if error
+    .downcast_ref::<super::requests::SpotifyApiError>()
+    .is_some_and(|error| {
+      error.status == reqwest::StatusCode::CONFLICT && error.body == PLAYBACK_TARGET_CHANGED
+    })
+  {
+    app.poll_playback_soon();
+  } else {
+    super::report_request_error(app, error);
+  }
+}
+
+pub(super) async fn apply_spotify_control(network: &Network, request: &Arc<SpotifyControlRequest>) {
+  let Some(device_id) = request.device_id() else {
+    return;
+  };
+  let mut query = active_device_query(device_id);
+  let path = match request.control {
+    SpotifyControl::Playing if request.enabled => "me/player/play",
+    SpotifyControl::Playing => "me/player/pause",
+    SpotifyControl::Shuffle => {
+      query.push(("state", request.enabled.to_string()));
+      "me/player/shuffle"
+    }
+  };
+  if !network.app.lock().await.spotify_control_is_current(request) {
+    return;
+  }
+  // The internal adapter checks the active device again. A bound gesture
+  // never retries against the saved device and a resume keeps Spotify's shuffle.
+  let result = network
+    .spotify_api_request_json(Method::PUT, path, &query, None)
+    .await;
+  let mut app = network.app.lock().await;
+  if app.spotify_control_is_current(request) {
+    match result {
+      Ok(_) => app.apply_spotify_control_result(request),
+      Err(error) if path == "me/player/pause" && is_no_active_device_error(&error) => {
+        app.poll_playback_soon();
+      }
+      Err(error) => report_bound_player_error(&mut app, error),
+    }
+  }
+}
+
+pub(super) async fn apply_spotify_seek(network: &Network, request: &Arc<SpotifySeekRequest>) {
+  {
+    let app = network.app.lock().await;
+    if !app.spotify_seek_request_is_current(request) {
+      return;
+    }
+    #[cfg(feature = "soloist")]
+    if let Some(link) = app.soloist_link().filter(|_| app.soloist_is_target()) {
+      use crate::infra::soloist::protocol::Command;
+      let command = match request.command {
+        SpotifySeekCommand::Position(position_ms) => Command::Seek(position_ms.into()),
+        SpotifySeekCommand::NextTrack => Command::SkipNext,
+      };
+      link.send(command);
+      return;
+    }
+  }
+  let Some(device_id) = request.device_id() else {
+    return;
+  };
+  let mut query = active_device_query(device_id);
+  match request.expected_item() {
+    SpotifySeekItem::Track(id) => query.push(("expected_item_uri", id.uri())),
+    SpotifySeekItem::Episode(id) => query.push(("expected_item_uri", id.uri())),
+    SpotifySeekItem::Unidentified(timestamp) => {
+      query.push((
+        "expected_item_timestamp",
+        timestamp.timestamp_millis().to_string(),
+      ));
+    }
+  }
+  let (method, path) = match request.command {
+    SpotifySeekCommand::Position(position_ms) => {
+      query.push(("position_ms", position_ms.to_string()));
+      (Method::PUT, "me/player/seek")
+    }
+    SpotifySeekCommand::NextTrack => (Method::POST, "me/player/next"),
+  };
+  let result = network
+    .spotify_api_request_json(method, path, &query, None)
+    .await;
+  let mut app = network.app.lock().await;
+  if app.spotify_seek_request_is_current(request) {
+    match result {
+      Ok(_) => {
+        #[cfg(feature = "streaming")]
+        if matches!(request.command, SpotifySeekCommand::NextTrack) {
+          app.pending_start_playback = None;
+          app.native_load_watchdog = None;
+        }
+        app.poll_playback_soon();
+      }
+      Err(error) => report_bound_player_error(&mut app, error),
+    }
+  }
 }
 
 /// Run a player command against the Web API, retrying once on the saved
@@ -1313,7 +1428,8 @@ impl PlaybackNetwork for Network {
         if !stale_api_item_for_native {
           // Cover art (Spotify album/episode image) is fetched by the shared
           // track-change detector in `core/driver/`, from the snapshot's image URL.
-          app.current_playback_context = Some(c);
+          let received_at = app.instant_since_last_current_playback_poll;
+          app.set_polled_playback(c, received_at);
           app.set_spotify_context_name(context_name);
           // Soloist's WebSocket is newer than the cluster the poll read.
           #[cfg(feature = "soloist")]
