@@ -144,8 +144,9 @@ pub async fn build_index(net: &Network, owner_id: &str) -> anyhow::Result<DjLibr
       // crawled again: fail the crawl so the next ask retries it.
       Err(e) if crate::infra::network::requests::is_rate_limited_error(&e) => return Err(e),
       Err(e) => {
-        // Keep going, but stop claiming the index is complete: the tracks in
-        // this playlist will not be filtered, and only `truncated` says so.
+        // Keep going, but stop claiming the index is complete: the tracks on
+        // the pages that failed will not be filtered, and only `truncated`
+        // says so.
         library.truncated = true;
         log::debug!("DJ: skipping playlist {id} while indexing: {e}");
       }
@@ -419,14 +420,36 @@ mod tests {
       .contains("stopped at"));
 
     let capped = DjLibrary {
+      tracks: MAX_LIBRARY_TRACKS,
       truncated: true,
       ..full
     };
+    let summary = capped.summary_with(&crate::core::i18n::EN);
     assert!(
-      capped
-        .summary_with(&crate::core::i18n::EN)
-        .contains("not filtered"),
+      summary.contains("not filtered"),
       "a partial index has to say so, or the filter looks broken"
+    );
+    assert!(
+      summary.contains(&format!("stopped at {MAX_LIBRARY_TRACKS}")),
+      "{summary}"
+    );
+  }
+
+  #[test]
+  fn an_unreadable_playlist_does_not_look_like_the_track_cap_was_reached() {
+    let partial = DjLibrary {
+      tracks: 12,
+      playlists: 2,
+      truncated: true,
+      ..DjLibrary::default()
+    };
+    let summary = partial.summary_with(&crate::core::i18n::EN);
+
+    assert!(summary.contains("could not be read"), "{summary}");
+    assert!(summary.contains("may not be filtered"), "{summary}");
+    assert!(
+      !summary.contains(&MAX_LIBRARY_TRACKS.to_string()),
+      "{summary}"
     );
   }
 }
