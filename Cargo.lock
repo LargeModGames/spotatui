@@ -6766,9 +6766,9 @@ dependencies = [
 
 [[package]]
 name = "tidewarp"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "624e4d02f7af40c917b3805fa8dfdfebc1caa2891a4955967b9cc57b52076c60"
+checksum = "e5b5b5ebf7bee80e317efd03f1f822c1f1a186d3b0d4452e4442e6f342aa2cab"
 dependencies = [
  "bytemuck",
  "pollster",
@@ -6779,9 +6779,9 @@ dependencies = [
 
 [[package]]
 name = "tidewarp-term"
-version = "0.2.1"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dd364aeabbc2f8689e5fc9900d56b10ab7fff9fe83e6ced04a3bb4a2ae58fbcf"
+checksum = "18943153afc0bf13d1772eca5ace494644e8cafd52be1bd14ddaefae94103532"
 
 [[package]]
 name = "tiff"
@@ -7937,18 +7937,18 @@ dependencies = [
 
 [[package]]
 name = "wgslift"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3c7b016185cd4e57ab8d8053242444df0d47f8eb3271a49c3fbbd0fdc1b4a500"
+checksum = "2eaf58c912ace8ad3ec753e83654ede934f7227a0d386f6fa77f54e73ace30a0"
 dependencies = [
  "wgslift-syntax",
 ]
 
 [[package]]
 name = "wgslift-syntax"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e5f885f7e7970122a6714448e45dbb5b059d80ce5cdce664ed2ca024ada851f"
+checksum = "a3d3495311e4a6148298c5d797cc2b4a660345904627ae32a76cbbb27efb731d"
 
 [[package]]
 name = "which"
