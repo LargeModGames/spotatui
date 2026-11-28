@@ -43,6 +43,10 @@ pub async fn get_many<T: Kind>(
   session: &SpotifySession,
   uris: &[String],
 ) -> anyhow::Result<Vec<Option<Arc<T>>>> {
+  #[cfg(test)]
+  if let Some(items) = super::paging_tests::metadata(uris) {
+    return Ok(items);
+  }
   let mut found: HashMap<String, Arc<T>> = HashMap::new();
   let mut missing = Vec::new();
   {

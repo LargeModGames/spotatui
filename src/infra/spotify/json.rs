@@ -1,6 +1,7 @@
 //! Web API JSON shapes built from internal metadata, kept to what rspotify's
 //! models require and what the app reads.
 
+use super::router::Paging;
 use librespot_core::SpotifyUri;
 use librespot_metadata::album::AlbumType;
 use librespot_metadata::artist::Artists;
@@ -244,13 +245,25 @@ pub fn show_full(show: &Show, episodes: Value) -> Value {
 
 /// A Web API page. `next` is set while items remain, as callers loop on it.
 pub fn page(items: Vec<Value>, offset: usize, limit: usize, total: usize) -> Value {
-  let next = (offset + items.len() < total && !items.is_empty())
-    .then(|| format!("internal://page?offset={}", offset + items.len()));
+  let window_len = items.len();
+  page_from_window(items, Paging { offset, limit }, window_len, total)
+}
+
+/// Count the raw slots consumed even if some metadata could not be resolved.
+pub fn page_from_window(
+  items: Vec<Value>,
+  paging: Paging,
+  window_len: usize,
+  total: usize,
+) -> Value {
+  let next_offset = paging.offset.saturating_add(window_len);
+  let next = (window_len > 0 && next_offset < total)
+    .then(|| format!("internal://page?offset={next_offset}"));
   json!({
     "href": "",
     "items": items,
-    "limit": limit,
-    "offset": offset,
+    "limit": paging.limit,
+    "offset": paging.offset,
     "total": total,
     "next": next,
     "previous": null,
@@ -269,6 +282,30 @@ mod tests {
     assert!(last["next"].is_null());
     let empty = page(vec![], 4, 2, 9);
     assert!(empty["next"].is_null(), "an empty page must end the loop");
+  }
+
+  #[test]
+  fn a_filtered_out_window_does_not_hide_the_next_page() {
+    // Offsets 20..30 exist, but none of their entries resolved to metadata.
+    let paging = Paging {
+      offset: 20,
+      limit: 10,
+    };
+    let filtered = page_from_window(Vec::new(), paging, 10, 40);
+
+    assert_eq!(filtered["items"], json!([]));
+    assert_eq!(filtered["next"], "internal://page?offset=30");
+  }
+
+  #[test]
+  fn a_partially_filtered_window_advances_past_all_its_slots() {
+    let paging = Paging {
+      offset: 20,
+      limit: 10,
+    };
+    let filtered = page_from_window(vec![json!("album")], paging, 10, 40);
+
+    assert_eq!(filtered["next"], "internal://page?offset=30");
   }
 
   #[test]

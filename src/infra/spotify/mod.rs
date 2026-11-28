@@ -12,6 +12,8 @@ mod listening;
 mod live_tests;
 pub mod lyrics;
 mod metadata;
+#[cfg(test)]
+pub(crate) mod paging_tests;
 mod player;
 mod playlists;
 mod router;

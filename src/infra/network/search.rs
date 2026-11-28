@@ -245,7 +245,7 @@ impl Network {
   async fn handle_search_error_if_current(&mut self, source_rev: u64, err: anyhow::Error) {
     let mut app = self.app.lock().await;
     if app.source_revision() == source_rev {
-      self.report_error_locked(&mut app, err);
+      self.handle_error_with_app(&mut app, err);
     }
   }
 }

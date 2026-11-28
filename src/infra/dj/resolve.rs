@@ -12,7 +12,7 @@
 //! users register their own client ID, so it returns 403 for them. The model is
 //! the recommender; this module is only the lookup.
 
-use super::brief::{dedupe_key, normalize};
+use super::brief::{dedupe_key, library_key, normalize};
 use super::DjSuggestion;
 use crate::core::plugin_api::TrackInfo;
 use crate::infra::network::search::TrackSearchResponse;
@@ -81,7 +81,8 @@ pub struct ResolveReport {
 /// The two reasons a suggestion can be rejected before it is even searched for.
 ///
 /// Kept apart rather than merged into one set so [`ResolveReport`] can say which
-/// happened. Both hold [`dedupe_key`] values.
+/// happened. `session` holds [`dedupe_key`] values and `library` holds
+/// [`library_key`] values.
 pub struct SkipSets<'a> {
   /// Already queued, playing, or recently played. Always applied.
   pub session: &'a HashSet<String>,
@@ -112,7 +113,7 @@ impl ResolveReport {
 
 /// Resolve suggestions to tracks, skipping duplicates and stopping at `cap`.
 ///
-/// `skips` holds [`dedupe_key`] values for everything to reject unheard, split by
+/// `skips` holds the keys of everything to reject unheard, split by
 /// reason. `cap` bounds the batch — on an external Connect device each queued
 /// Spotify track becomes its own Web API call
 /// (`App::add_track_to_native_queue`), so an unbounded batch is an unbounded
@@ -137,11 +138,14 @@ pub async fn resolve_suggestions(
       break;
     }
     let label = suggestion.label();
-    let key = dedupe_key(&suggestion.title, &suggestion.artist);
-    if skips.library.contains(&key) {
+    if skips
+      .library
+      .contains(&library_key(&suggestion.title, &suggestion.artist))
+    {
       report.in_library.push(label);
       continue;
     }
+    let key = dedupe_key(&suggestion.title, &suggestion.artist);
     if skips.session.contains(&key) || !claimed.insert(key) {
       report.duplicates.push(label);
       continue;

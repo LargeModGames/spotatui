@@ -959,6 +959,24 @@
       "contributions": [
         "code"
       ]
+    },
+    {
+      "login": "pranavarya007",
+      "name": "Pranav Arya",
+      "avatar_url": "https://avatars.githubusercontent.com/u/48155465?v=4",
+      "profile": "https://www.aimbytes.com/",
+      "contributions": [
+        "test"
+      ]
+    },
+    {
+      "login": "maxwarren929-png",
+      "name": "Ko",
+      "avatar_url": "https://avatars.githubusercontent.com/u/264936309?v=4",
+      "profile": "https://github.com/maxwarren929-png",
+      "contributions": [
+        "code"
+      ]
     }
   ],
   "contributorsPerLine": 7,

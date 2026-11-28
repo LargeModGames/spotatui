@@ -1,0 +1,1 @@
+- **Text Emphasis off now covers plugin screens and popups**: with bold/italic text styling turned off, a Lua plugin screen's title, its selected list row and plugin lines that ask for bold or italic were still drawn bold or italic. They now follow the setting, and their colors are unchanged ([#1018](https://github.com/LargeModGames/spotatui/issues/1018)).

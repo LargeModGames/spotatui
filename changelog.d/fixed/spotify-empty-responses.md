@@ -1,0 +1,1 @@
+- **Spotify handles empty playback and paginated responses.** The player clears the previous remote track when Spotify reports no active playback. Liked Songs, saved albums, saved shows, podcast episodes, album tracks, and artist albums can continue past windows of unavailable items. Liked Songs also refreshes a prefetched page if a like or unlike completes while it is loading.

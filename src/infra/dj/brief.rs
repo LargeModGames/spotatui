@@ -65,6 +65,19 @@ pub fn dedupe_key(title: &str, artist: &str) -> String {
   format!("{}\u{1}{}", normalize(title), normalize(primary))
 }
 
+/// Normalise a title and a single artist's full name into a key for the
+/// avoid-library filter.
+///
+/// Unlike [`dedupe_key`], the artist is never cut at a comma: `Tyler, The
+/// Creator` is one name, and keying it as `Tyler` would make a playlist entry
+/// hide another artist's song of the same title. The library side passes the
+/// first artist from Spotify's list. A suggestion's artist text that names
+/// several artists therefore misses here and is checked by track ID after the
+/// search instead.
+pub fn library_key(title: &str, artist: &str) -> String {
+  format!("{}\u{1}{}", normalize(title), normalize(artist))
+}
+
 /// Lowercase, drop non-alphanumerics, collapse the resulting gaps to single
 /// spaces. Shared by [`dedupe_key`] and the resolver's match scoring so the two
 /// agree on what "the same track" means.
@@ -337,5 +350,24 @@ pub(crate) mod tests {
       dedupe_key("Nude", "Radiohead"),
       dedupe_key("Nude", "Prince")
     );
+  }
+
+  #[test]
+  fn an_artist_with_a_comma_does_not_share_a_library_key_with_its_prefix() {
+    // Spotify lists one artist named `Tyler, The Creator`; the library is keyed
+    // on that full name.
+    let library: std::collections::HashSet<_> =
+      [library_key("Same Title", "Tyler, The Creator")].into();
+    assert!(
+      !library.contains(&library_key("Same Title", "Tyler")),
+      "a same-titled song by Tyler must stay eligible for search"
+    );
+    assert!(library.contains(&library_key("same title", "Tyler, The Creator")));
+
+    // An ordinary credit is keyed on its first artist, so a suggestion naming
+    // that artist is still recognised as owned.
+    let library: std::collections::HashSet<_> =
+      [library_key("Weird Fishes / Arpeggi", "Radiohead")].into();
+    assert!(library.contains(&library_key("weird fishes arpeggi", "Radiohead")));
   }
 }

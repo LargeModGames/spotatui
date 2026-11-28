@@ -1,0 +1,1 @@
+- **Recap and announcement popups take their own keys**: `d` on the monthly recap popup now turns the popup off instead of opening Devices, `o` opens the recap instead of jumping to the playing context, and Space dismisses the announcement popup instead of toggling playback ([#1040](https://github.com/LargeModGames/spotatui/issues/1040)).

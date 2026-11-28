@@ -1,0 +1,1 @@
+- **The AI DJ's index summary says when a playlist could not be read**: it no longer claims it stopped at the 20,000-track limit when it only skipped an unreadable playlist ([#1189](https://github.com/LargeModGames/spotatui/issues/1189)).

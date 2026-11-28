@@ -3,6 +3,7 @@ use crate::core::app::{
 };
 use crate::core::plugin_api::PlayableInfo;
 use crate::core::plugin_api::PopupLine;
+use crate::core::user_config::BehaviorConfig;
 use crate::infra::network::sync::PartyStatus;
 use ratatui::{
   layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -2046,7 +2047,11 @@ pub fn draw_plugin_popup(f: &mut Frame<'_>, app: &App) {
   f.render_widget(Clear, rect);
 
   // Build styled lines.
-  let mut ratatui_lines: Vec<Line> = popup.lines.iter().map(|pl| build_popup_line(pl)).collect();
+  let mut ratatui_lines: Vec<Line> = popup
+    .lines
+    .iter()
+    .map(|pl| build_popup_line(pl, &app.user_config.behavior))
+    .collect();
 
   // Footer hint.
   ratatui_lines.push(Line::from(Span::styled(
@@ -2072,18 +2077,58 @@ pub fn draw_plugin_popup(f: &mut Frame<'_>, app: &App) {
   f.render_widget(paragraph, rect);
 }
 
-fn build_popup_line<'a>(pl: &'a PopupLine) -> Line<'a> {
+fn build_popup_line<'a>(pl: &'a PopupLine, behavior: &BehaviorConfig) -> Line<'a> {
   let mut style = Style::default();
   if let Some(fg) = pl.fg {
     style = style.fg(fg.into());
   }
   if pl.bold {
-    style = style.add_modifier(Modifier::BOLD);
+    style = style.add_modifier(behavior.emphasis(Modifier::BOLD));
   }
   if pl.italic {
-    style = style.add_modifier(Modifier::ITALIC);
+    style = style.add_modifier(behavior.emphasis(Modifier::ITALIC));
   }
   Line::from(Span::styled(pl.text.clone(), style))
+}
+
+#[cfg(test)]
+mod plugin_popup_tests {
+  use super::*;
+
+  fn emphasized_line() -> PopupLine {
+    PopupLine {
+      text: "loud".to_string(),
+      fg: None,
+      bold: true,
+      italic: true,
+    }
+  }
+
+  #[test]
+  fn plugin_popup_line_is_not_bold_when_text_emphasis_is_off() {
+    let mut behavior = App::default().user_config.behavior;
+    behavior.enable_text_emphasis = false;
+    let pl = emphasized_line();
+
+    let line = build_popup_line(&pl, &behavior);
+
+    let modifier = line.spans[0].style.add_modifier;
+    assert!(!modifier.contains(Modifier::BOLD));
+    assert!(!modifier.contains(Modifier::ITALIC));
+  }
+
+  #[test]
+  fn plugin_popup_line_stays_bold_when_text_emphasis_is_on() {
+    let behavior = App::default().user_config.behavior;
+    assert!(behavior.enable_text_emphasis);
+    let pl = emphasized_line();
+
+    let line = build_popup_line(&pl, &behavior);
+
+    let modifier = line.spans[0].style.add_modifier;
+    assert!(modifier.contains(Modifier::BOLD));
+    assert!(modifier.contains(Modifier::ITALIC));
+  }
 }
 
 #[cfg(test)]

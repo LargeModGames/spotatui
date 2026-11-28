@@ -85,6 +85,7 @@ behavior:
   streaming_device_name: spotatui  # the name in the Connect device list
   streaming_bitrate: 320           # 96, 160, or 320 kbps
   streaming_audio_cache: false     # keep played audio in the streaming cache
+  streaming_audio_cache_limit: 1G  # cap the audio cache; empty or 0 = unlimited
   streaming_autoplay: true         # enable Spotify's related-songs autoplay
   playback_engine: librespot       # or soloist: Spotify's own player (feature `soloist`)
   soloist_path: /path/to/soloist   # the Soloist program; Settings can download it

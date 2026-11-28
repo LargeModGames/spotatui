@@ -195,6 +195,16 @@ pub fn handle_app(key: Key, app: &mut App) {
     return;
   }
 
+  // The recap and announcement popups map keys ('d', 'o', space) that are also
+  // global bindings, so they need the keys before the globals claim them.
+  if matches!(
+    app.get_current_route().active_block,
+    ActiveBlock::RecapPrompt | ActiveBlock::AnnouncementPrompt
+  ) {
+    handle_block_events(key, app);
+    return;
+  }
+
   // Friends has a few local keys that conflict with globals, plus inline input modes
   // that need first chance to consume typed characters.
   if should_route_friends_before_globals(key, app) {
@@ -1545,6 +1555,76 @@ mod tests {
     assert_ne!(
       app.status_message(),
       Some("Copy URL isn't available for Local Files")
+    );
+  }
+
+  fn app_with_recap_prompt() -> App {
+    let mut app = App::default();
+    app.show_recap_prompt(crate::core::app::RecapPromptState {
+      path: std::path::PathBuf::from("recap.html"),
+      listens: 42,
+      year: None,
+    });
+    app
+  }
+
+  #[test]
+  fn d_on_the_recap_prompt_disables_it_instead_of_opening_devices() {
+    let mut app = app_with_recap_prompt();
+
+    handle_app(Key::Char('d'), &mut app);
+
+    assert!(!app.user_config.behavior.enable_monthly_recap_prompt);
+    assert!(app.recap_prompt().is_none());
+    assert_ne!(
+      app.get_current_route().active_block,
+      ActiveBlock::RecapPrompt
+    );
+  }
+
+  #[test]
+  fn esc_on_the_recap_prompt_dismisses_it() {
+    let mut app = app_with_recap_prompt();
+
+    handle_app(Key::Esc, &mut app);
+
+    assert!(app.recap_prompt().is_none());
+    assert!(app.user_config.behavior.enable_monthly_recap_prompt);
+    assert_ne!(
+      app.get_current_route().active_block,
+      ActiveBlock::RecapPrompt
+    );
+  }
+
+  #[test]
+  fn space_on_the_announcement_prompt_dismisses_it() {
+    use crate::core::app::{Announcement, AnnouncementLevel};
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = App::new_with_state(
+      std::sync::mpsc::channel().0,
+      crate::core::user_config::UserConfig::new(),
+      crate::core::state::RuntimeState::default(),
+      Some(dir.path().join("state.yml")),
+      false,
+      crate::core::i18n::Language::En,
+    );
+    app.enqueue_announcements(vec![Announcement {
+      id: "only".to_string(),
+      title: "only".to_string(),
+      body: "only body".to_string(),
+      level: AnnouncementLevel::Info,
+      url: None,
+      received_at: std::time::Instant::now(),
+    }]);
+    app.push_navigation_stack(RouteId::AnnouncementPrompt, ActiveBlock::AnnouncementPrompt);
+
+    handle_app(Key::Char(' '), &mut app);
+
+    assert!(app.active_announcement.is_none());
+    assert_ne!(
+      app.get_current_route().active_block,
+      ActiveBlock::AnnouncementPrompt
     );
   }
 

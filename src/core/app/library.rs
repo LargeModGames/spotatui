@@ -942,19 +942,13 @@ impl App {
   }
 
   pub fn get_current_user_saved_shows_next(&mut self) {
-    match self
-      .library
-      .saved_shows
-      .get_results(Some(self.library.saved_shows.index + 1))
-      .cloned()
-    {
-      Some(_) => self.library_mut().saved_shows.index += 1,
-      None => {
-        if let Some(saved_shows) = &self.library.saved_shows.get_results(None) {
-          let offset = Some(saved_shows.offset + saved_shows.limit);
-          self.dispatch(IoEvent::GetCurrentUserSavedShows(offset));
-        }
-      }
+    let shows = &self.library.saved_shows;
+    if shows.get_results(Some(shows.index + 1)).is_some() {
+      self.library_mut().saved_shows.index += 1;
+    } else if let Some(page) = shows.get_results(None).filter(|page| page.has_next()) {
+      self.dispatch(IoEvent::GetCurrentUserSavedShows(Some(
+        page.offset + page.limit,
+      )));
     }
   }
 
@@ -969,19 +963,14 @@ impl App {
     let Some(show_id) = self.selected_episode_show_id() else {
       return;
     };
-    match self
-      .library
-      .show_episodes
-      .get_results(Some(self.library.show_episodes.index + 1))
-      .cloned()
-    {
-      Some(_) => self.library_mut().show_episodes.index += 1,
-      None => {
-        if let Some(show_episodes) = &self.library.show_episodes.get_results(None) {
-          let offset = Some(show_episodes.offset + show_episodes.limit);
-          self.dispatch(IoEvent::GetCurrentShowEpisodes(show_id, offset));
-        }
-      }
+    let episodes = &self.library.show_episodes;
+    if episodes.get_results(Some(episodes.index + 1)).is_some() {
+      self.library_mut().show_episodes.index += 1;
+    } else if let Some(page) = episodes.get_results(None).filter(|page| page.has_next()) {
+      self.dispatch(IoEvent::GetCurrentShowEpisodes(
+        show_id,
+        Some(page.offset + page.limit),
+      ));
     }
   }
 

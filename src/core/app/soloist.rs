@@ -14,9 +14,30 @@ impl App {
       .is_some_and(|current| Arc::ptr_eq(current, link))
   }
 
+  pub(crate) fn begin_soloist_start(
+    &mut self,
+    startup_behavior: Option<crate::core::user_config::StartupBehavior>,
+    startup_shuffle: bool,
+  ) -> crate::infra::soloist::startup::SoloistStart {
+    self.soloist_generation = self.soloist_generation.wrapping_add(1);
+    self.soloist_starting();
+    crate::infra::soloist::startup::SoloistStart::from_behavior(
+      &self.user_config.behavior,
+      self.soloist_generation,
+      self.runtime_state.volume_percent,
+      startup_behavior,
+      startup_shuffle,
+    )
+  }
+
+  pub(crate) fn is_current_soloist_start(&self, generation: u64) -> bool {
+    self.soloist_generation == generation
+  }
+
   /// Starts wait for the engine, as they wait for librespot's deferred start.
   pub(crate) fn soloist_starting(&mut self) {
     self.native_backend_pending = true;
+    self.set_soloist_pairing(false);
   }
 
   /// The engine gave up: starts stop waiting, and a parked one goes out now.
@@ -188,14 +209,7 @@ impl App {
     {
       return None;
     }
-    let start = crate::infra::soloist::startup::SoloistStart::from_behavior(
-      behavior,
-      self.runtime_state.volume_percent,
-      None,
-      false,
-    );
-    self.soloist_starting();
-    Some(start)
+    Some(self.begin_soloist_start(None, false))
   }
 
   pub(crate) fn stand_by_librespot(
@@ -223,7 +237,19 @@ impl App {
       strings.engine_switching_librespot
     };
     self.set_status_message(message, 4);
-    self.dispatch_without_spinner(IoEvent::ApplyPlaybackEngine);
+    self.request_playback_engine_change();
+  }
+
+  fn request_playback_engine_change(&mut self) {
+    self.soloist_generation = self.soloist_generation.wrapping_add(1);
+    self.soloist_engine_request = self.soloist_engine_request.wrapping_add(1);
+    self.set_soloist_pairing(false);
+    self.dispatch_without_spinner(IoEvent::ApplyPlaybackEngine(self.soloist_engine_request));
+  }
+
+  /// No later Playback Engine change superseded `request`.
+  pub(crate) fn is_current_engine_request(&self, request: u64) -> bool {
+    self.soloist_engine_request == request
   }
 
   /// After Soloist stopped: give the device to the engine the settings name; the Soloist start, if any.
@@ -333,7 +359,7 @@ impl App {
       return false;
     }
     self.set_status_message(strings.soloist_key_restarting, 4);
-    self.dispatch_without_spinner(IoEvent::ApplyPlaybackEngine);
+    self.request_playback_engine_change();
     true
   }
 
@@ -560,7 +586,7 @@ mod tests {
       Some("new-key")
     );
     assert_eq!(app.saved_soloist_key(), "new-key");
-    assert!(matches!(rx.try_recv(), Ok(IoEvent::ApplyPlaybackEngine)));
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::ApplyPlaybackEngine(_))));
   }
 
   #[test]
@@ -632,7 +658,7 @@ mod tests {
 
     app.apply_settings_changes();
 
-    assert!(matches!(rx.try_recv(), Ok(IoEvent::ApplyPlaybackEngine)));
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::ApplyPlaybackEngine(_))));
     assert_eq!(
       app.status_message(),
       Some(app.strings().status.infra.engine_switching_soloist)
@@ -656,6 +682,30 @@ mod tests {
     assert_eq!(app.native_device_id, None);
     assert!(app.native_backend_pending);
     assert!(!app.accept_rebuilt_native_backend());
+  }
+
+  #[tokio::test]
+  async fn an_older_engine_request_arriving_late_leaves_the_engine_alone() {
+    let (mut app, rx) = session_free_app();
+    let (tx, mut recovery_rx) = tokio::sync::mpsc::unbounded_channel();
+    app.stand_by_librespot(tx);
+    app.user_config.behavior.enable_streaming = true;
+    app.playback_engine_changed();
+    app.playback_engine_changed();
+    let mut requests = rx.try_iter().filter_map(|event| match event {
+      IoEvent::ApplyPlaybackEngine(request) => Some(request),
+      _ => None,
+    });
+    let (older, newer) = (requests.next().unwrap(), requests.next().unwrap());
+    let app = std::sync::Arc::new(tokio::sync::Mutex::new(app));
+
+    crate::infra::soloist::startup::apply_engine(app.clone(), newer).await;
+    assert!(recovery_rx.try_recv().is_ok());
+    crate::infra::soloist::startup::apply_engine(app, older).await;
+    assert!(
+      recovery_rx.try_recv().is_err(),
+      "the older request switched the engine again"
+    );
   }
 
   #[test]

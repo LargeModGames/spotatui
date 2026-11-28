@@ -2962,7 +2962,7 @@ fn shows_page(offset: u32, limit: u32, names: &[&str]) -> Paged<ShowInfo> {
     offset,
     limit,
     total: 40,
-    next: None,
+    next: (offset + limit < 40).then(|| format!("internal://page?offset={}", offset + limit)),
     previous: None,
   }
 }
@@ -2987,7 +2987,7 @@ fn episodes_page(offset: u32, limit: u32, names: &[&str]) -> Paged<EpisodeInfo> 
     offset,
     limit,
     total: 40,
-    next: None,
+    next: (offset + limit < 40).then(|| format!("internal://page?offset={}", offset + limit)),
     previous: None,
   }
 }
@@ -3403,6 +3403,39 @@ fn set_setting_refuses_a_value_of_the_wrong_kind_and_an_unknown_id() {
   assert_eq!(unknown_id, ActionOutcome::SettingsSaved { saved: false });
   assert_eq!(app.user_config.behavior.seek_milliseconds, seek);
   assert!(app.api_error().is_empty());
+}
+
+#[cfg(feature = "streaming")]
+#[test]
+fn set_setting_refuses_invalid_audio_cache_limits_without_writing() {
+  use crate::core::action::SettingInput;
+  use crate::core::user_config::UserConfigPaths;
+
+  let dir = tempfile::tempdir().unwrap();
+  let path = dir.path().join("config.yml");
+  let mut config = UserConfig::new();
+  config.path_to_config = Some(UserConfigPaths {
+    config_file_path: path.clone(),
+  });
+  let (tx, _rx) = channel();
+  let mut app = App::new(tx, config, Some(SystemTime::now()));
+  let limit = |text: &str| Action::SetSetting {
+    id: "behavior.streaming_audio_cache_limit".to_string(),
+    value: SettingInput::Text(text.to_string()),
+  };
+
+  let good = app.apply(limit("1G"));
+  assert_eq!(good, ActionOutcome::SettingsSaved { saved: true });
+  assert_eq!(app.user_config.behavior.streaming_audio_cache_limit, "1G");
+  let written = std::fs::read(&path).unwrap();
+  assert!(std::str::from_utf8(&written)
+    .unwrap()
+    .contains("streaming_audio_cache_limit: 1G"));
+
+  let bad = app.apply(limit("abc"));
+  assert_eq!(bad, ActionOutcome::SettingsSaved { saved: false });
+  assert_eq!(app.user_config.behavior.streaming_audio_cache_limit, "1G");
+  assert_eq!(std::fs::read(path).unwrap(), written);
 }
 
 #[cfg(feature = "self-update")]

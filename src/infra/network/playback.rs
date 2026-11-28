@@ -1348,8 +1348,7 @@ impl PlaybackNetwork for Network {
         }
       }
       Ok(None) => {
-        #[cfg(feature = "streaming")]
-        app.forget_handed_off_playback();
+        app.clear_idle_spotify_playback();
         #[cfg(feature = "streaming")]
         if let Some(player) = streaming_player.as_ref() {
           reconcile_native_idle_device_if_preferred(
@@ -3192,6 +3191,29 @@ mod tests {
     assert_eq!(saved_device_retry(true, Some("dev1"), true), None);
     assert_eq!(saved_device_retry(true, None, false), None);
     assert_eq!(saved_device_retry(false, Some("dev1"), false), None);
+  }
+
+  #[tokio::test]
+  async fn an_idle_playback_response_clears_the_previous_remote_track() {
+    use crate::core::app::App;
+    use crate::core::test_helpers::playing_with_art;
+    use crate::infra::media_metadata::current_playback_snapshot;
+    use crate::infra::network::requests::fake::use_in_memory_spotify;
+    use tokio::sync::Mutex;
+
+    let mut app = App::default();
+    app.current_playback_context = Some(playing_with_art("a", "https://example.invalid/art"));
+    assert!(current_playback_snapshot(&app).is_some());
+    let app = Arc::new(Mutex::new(app));
+    let mut network = Network::new(Some(crate::core::auth::SpotifyLogin::new()), &app);
+    let _spotify = use_in_memory_spotify(vec![("me/player", None, Value::Null)]);
+
+    network.get_current_playback().await;
+
+    let app = app.lock().await;
+    assert!(app.api_error().is_empty());
+    assert!(current_playback_snapshot(&app).is_none());
+    assert!(!app.spotify_external_device_active());
   }
 
   #[tokio::test]

@@ -75,7 +75,12 @@ pub async fn album_tracks(
   let uris: Vec<String> = album.tracks().map(|track| track.to_uri()).collect();
   let window = paging.window(&uris);
   let items = simplified_tracks(session, window).await?;
-  Ok(json::page(items, paging.offset, paging.limit, uris.len()))
+  Ok(json::page_from_window(
+    items,
+    paging,
+    window.len(),
+    uris.len(),
+  ))
 }
 
 pub async fn artist(session: &SpotifySession, id: &str) -> anyhow::Result<Value> {
@@ -162,10 +167,10 @@ pub async fn artist_albums(
       Some(value)
     })
     .collect();
-  Ok(json::page(
+  Ok(json::page_from_window(
     items,
-    paging.offset,
-    paging.limit,
+    paging,
+    window.len(),
     entries.len(),
   ))
 }
@@ -194,7 +199,12 @@ pub async fn show_episodes(
     .flatten()
     .map(|episode| json::episode_simplified(&episode))
     .collect();
-  Ok(json::page(items, paging.offset, paging.limit, uris.len()))
+  Ok(json::page_from_window(
+    items,
+    paging,
+    window.len(),
+    uris.len(),
+  ))
 }
 
 /// The station seed: the first seed track, or else the first seed artist.

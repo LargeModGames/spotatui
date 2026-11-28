@@ -1407,8 +1407,8 @@ mod tests {
     let guard = app.lock().await;
     assert_eq!(guard.active_source, Source::Spotify);
     assert!(
-      !guard.status_message_is_error(),
-      "superseded search must exit before spawning yt-dlp or setting an error"
+      guard.status_message().is_none(),
+      "superseded search must exit before spawning yt-dlp or setting status"
     );
     assert!(guard.search_results().tracks.is_none());
   }
