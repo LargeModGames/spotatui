@@ -63,10 +63,24 @@ struct TrackItem {
   track: Option<TrackRef>,
 }
 
+impl TrackItem {
+  /// The row's song, if it is one. Podcast episodes share the row shape, so a
+  /// row is skipped when Spotify says its `type` is anything but `track`. Rows
+  /// without a type are kept.
+  fn music_track(&self) -> Option<&TrackRef> {
+    self
+      .track
+      .as_ref()
+      .filter(|track| track.kind.as_deref().is_none_or(|kind| kind == "track"))
+  }
+}
+
 #[derive(Deserialize)]
 struct TrackRef {
   id: Option<String>,
   name: Option<String>,
+  #[serde(default, rename = "type")]
+  kind: Option<String>,
   #[serde(default)]
   artists: Vec<ArtistRef>,
 }
@@ -206,7 +220,7 @@ async fn collect_playlist(
           // size, and the crawl pays that per 100 tracks.
           (
             "fields",
-            "items(item(id,name,artists(name))),next".to_string(),
+            "items(item(id,name,type,artists(name))),next".to_string(),
           ),
           ("limit", TRACK_PAGE.to_string()),
           ("offset", offset.to_string()),
@@ -216,8 +230,8 @@ async fn collect_playlist(
 
     let count = page.items.len();
     for item in &page.items {
-      // Episodes and removed tracks arrive as a null `track`.
-      let Some(track) = item.track.as_ref() else {
+      // Removed tracks arrive as a null `track`; episodes are skipped by type.
+      let Some(track) = item.music_track() else {
         continue;
       };
       let Some(key) = track_library_key(track) else {
@@ -312,6 +326,38 @@ mod tests {
     assert!(page.items[0].track.is_some());
     assert!(page.items[1].track.is_some(), "the `item` alias must parse");
     assert!(page.items[2].track.is_none(), "a null track is skipped");
+    assert!(
+      page.items[..2]
+        .iter()
+        .all(|row| row.music_track().is_some()),
+      "a row without a type is still a song"
+    );
+  }
+
+  #[test]
+  fn a_playlist_episode_is_not_counted_as_a_music_track() {
+    let page: TrackPage = serde_json::from_str(
+      r#"{
+        "items": [
+          {"item": {
+            "type": "track", "id": "song", "name": "Song",
+            "artists": [{"name": "Band"}]
+          }},
+          {"item": {"type": "episode", "id": "episode", "name": "Interview"}}
+        ],
+        "next": null
+      }"#,
+    )
+    .unwrap();
+    let ids: Vec<_> = page
+      .items
+      .iter()
+      .filter_map(|row| row.music_track()?.id.as_deref())
+      .collect();
+
+    assert_eq!(ids, ["song"]);
+    // The episode is still a row, so it still counts toward the next page.
+    assert_eq!(page.items.len(), 2);
   }
 
   #[test]

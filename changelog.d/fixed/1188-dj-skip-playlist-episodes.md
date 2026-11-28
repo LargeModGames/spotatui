@@ -1,0 +1,1 @@
+- **The AI DJ no longer counts podcast episodes in your playlists toward its track limit**: only songs take a place in the list it uses to skip music you already have ([#1188](https://github.com/LargeModGames/spotatui/issues/1188)).
