@@ -1,0 +1,1 @@
+- **Slow radio stations and simple playlist URLs tune in more reliably**. Format detection starts as bytes arrive, playback waits for an audio cushion, and one PLS or M3U playlist can be resolved within the tune-in deadline. Unsupported playlists and legacy ICY status lines get a direct-stream hint.

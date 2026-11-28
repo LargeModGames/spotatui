@@ -12,7 +12,7 @@
 mod player;
 #[cfg(feature = "audio-decode")]
 pub use player::LocalPlayer;
-#[cfg(feature = "qobuz")]
+#[cfg(any(feature = "internet-radio", feature = "qobuz"))]
 pub use player::PreparedStream;
 #[cfg(feature = "audio-decode-queue")]
 pub use player::Reopen;

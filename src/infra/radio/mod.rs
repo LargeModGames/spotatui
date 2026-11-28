@@ -28,7 +28,9 @@ use crate::core::plugin_api::{SearchResults, TrackInfo};
 use crate::core::source::Searcher;
 use crate::infra::audio::LocalPlayer;
 
+mod buffer;
 pub mod dispatch;
+mod playlist;
 mod stream;
 mod types;
 

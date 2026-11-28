@@ -344,6 +344,8 @@ pub struct App {
   track_table_epoch: u64,
   /// The epoch of the last radio request; its rows land only while no other list opened.
   radio_epoch: Option<u64>,
+  /// The epoch of the decoded-source list load in flight, cleared when the pump finishes it.
+  source_track_table_load_epoch: Option<u64>,
   pub recommendations_context: Option<RecommendationsContext>,
   search_results: SearchResult,
   pub selected_album_simplified: Option<SelectedAlbum>,
@@ -640,6 +642,15 @@ pub struct App {
   /// a station is one infinite stream.
   #[cfg(feature = "internet-radio")]
   pub radio_playback: Option<crate::infra::radio::RadioPlaybackState>,
+  /// Set while the pump replaces the station in `radio_playback` on the same
+  /// player: the sink is briefly empty, and the session must neither read as
+  /// ended nor drop out of `last_session.yml` before the new station is live.
+  #[cfg(feature = "internet-radio")]
+  radio_retuning: bool,
+  /// A startup radio restore snapshots this and gives up if a newer playback
+  /// request or play/pause action moved it.
+  #[cfg(feature = "internet-radio")]
+  playback_requests: u64,
   /// The active YouTube playback session (multi-source, yt-dlp backed), or
   /// `None` when another backend owns playback. Same decoupling contract as
   /// [`subsonic_playback`](Self::subsonic_playback).
@@ -760,6 +771,10 @@ impl App {
   fn try_dispatch(&mut self, action: IoEvent) -> bool {
     // `is_loading` will be set to false again after the async action has finished in network.rs
     self.is_loading = true;
+    #[cfg(feature = "internet-radio")]
+    if action.supersedes_radio_restore() {
+      self.invalidate_radio_restore();
+    }
     let Some(io_tx) = &self.io_tx else {
       return false;
     };

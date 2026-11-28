@@ -39,7 +39,8 @@ pub fn draw_input_and_help_box(
     current_route.hovered_block == ActiveBlock::Input,
   );
 
-  let show_loading = app.is_loading && app.user_config.behavior.show_loading_indicator;
+  let show_loading = (app.is_loading || app.is_source_track_table_loading())
+    && app.user_config.behavior.show_loading_indicator;
   let border_type = if show_loading {
     BorderType::Double
   } else {
@@ -1189,6 +1190,24 @@ mod tests {
       .flat_map(|y| (0..area.width).map(move |x| (x, y)))
       .filter_map(|(x, y)| buffer.cell((x, y)).map(|c| c.symbol().to_string()))
       .collect()
+  }
+
+  /// A decoded-source list keeps the global spinner off, so its own pending
+  /// flag must still draw the search box's double-line loading border.
+  #[test]
+  fn a_pending_source_playlist_draws_the_loading_border() {
+    let (tx, _rx) = std::sync::mpsc::channel();
+    let mut app = App::new(tx, crate::core::user_config::UserConfig::new(), None);
+    app.user_config.behavior.show_loading_indicator = true;
+    let area = Rect::new(0, 0, 40, 3);
+    assert!(!rendered_input(&app, area).contains('═'));
+
+    app.open_source_playlist_tracks("subsonic:playlist:1".into());
+    assert!(!app.is_loading);
+    assert!(
+      rendered_input(&app, area).contains('═'),
+      "the open playlist should show the loading border"
+    );
   }
 
   /// The input box title names the search it feeds, so a saved-track search is

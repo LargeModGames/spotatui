@@ -403,28 +403,33 @@ pub(crate) fn apply_legacy_client_config_migration(
   }
 
   if !copied.is_empty() {
-    write_behavior_keys(config_path, config, copied)?;
+    // Leave unanswered settings unset for onboarding.
+    let mut config = config.unwrap_or(Value::Null);
+    if config.is_null() {
+      config = Value::Mapping(Mapping::new());
+    }
+    let map = config
+      .as_mapping_mut()
+      .ok_or_else(|| anyhow!("{} is not a YAML mapping", config_path.display()))?;
+    let behavior = map.entry(yaml_key("behavior")).or_insert(Value::Null);
+    if behavior.is_null() {
+      *behavior = Value::Mapping(Mapping::new());
+    }
+    let behavior = behavior.as_mapping_mut().ok_or_else(|| {
+      anyhow!(
+        "`behavior` in {} is not a YAML mapping",
+        config_path.display()
+      )
+    })?;
+    behavior.extend(copied);
+    if let Some(dir) = config_path.parent() {
+      fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    }
+    let updated = serde_yaml::to_string(&config)?;
+    crate::core::auth::write_private_file_atomic(config_path, updated.as_bytes())
+      .with_context(|| format!("writing {}", config_path.display()))?;
   }
   Ok(patch)
-}
-
-/// Adds keys under `behavior:` and leaves the rest of the file as it was.
-fn write_behavior_keys(path: &Path, config: Option<Value>, keys: Mapping) -> Result<()> {
-  let mut config = config.unwrap_or_else(|| Value::Mapping(Mapping::new()));
-  let map = config
-    .as_mapping_mut()
-    .ok_or_else(|| anyhow!("{} is not a YAML mapping", path.display()))?;
-  let behavior = map
-    .entry(yaml_key("behavior"))
-    .or_insert_with(|| Value::Mapping(Mapping::new()))
-    .as_mapping_mut()
-    .ok_or_else(|| anyhow!("`behavior` in {} is not a YAML mapping", path.display()))?;
-  behavior.extend(keys);
-  if let Some(dir) = path.parent() {
-    fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-  }
-  crate::core::auth::write_private_file_atomic(path, serde_yaml::to_string(&config)?.as_bytes())
-    .with_context(|| format!("writing {}", path.display()))
 }
 
 fn path_exists(path: &Path) -> Result<bool> {
@@ -484,7 +489,7 @@ mod tests {
   use super::*;
   use crate::core::source::Source;
   use crate::core::state::RadioStationConfig;
-  use crate::core::user_config::UserConfig;
+  use crate::core::user_config::{UserConfig, UserConfigPaths};
 
   #[test]
   fn legacy_file_rename_moves_file_when_state_path_is_empty() {
@@ -794,20 +799,44 @@ behavior:
     let dir = tempfile::tempdir().unwrap();
     let client = dir.path().join("client.yml");
     std::fs::write(&client, client_yml).unwrap();
-    let config = dir.path().join("config.yml");
+    let config_file_path = dir.path().join("config.yml");
     if let Some(config_yml) = config_yml {
-      std::fs::write(&config, config_yml).unwrap();
+      std::fs::write(&config_file_path, config_yml).unwrap();
     }
-    let mut behavior = crate::core::user_config::UserConfig::new().behavior;
+    let mut config = UserConfig::new();
+    config.path_to_config = Some(UserConfigPaths {
+      config_file_path: config_file_path.clone(),
+    });
+    config.load_config().unwrap();
     let mut runtime = RuntimeState::default();
     let result = apply_legacy_client_config_migration(
       &client,
-      &config,
-      &mut behavior,
+      &config_file_path,
+      &mut config.behavior,
       &mut runtime,
       persisted,
     );
-    (dir, result, behavior, runtime)
+    (dir, result, config.behavior, runtime)
+  }
+
+  #[test]
+  fn legacy_client_settings_fill_a_null_behavior_mapping() {
+    let (dir, result, behavior, _) = client_migration(
+      "streaming_device_name: Desk\ndevice_id: saved-device\n",
+      Some("behavior:\n  # streaming_bitrate: 320\ntheme:\n  preset: Dracula\n"),
+      &PersistedRuntimeState::default(),
+    );
+    let patch = result.unwrap();
+    assert_eq!(patch.spotify_device_id.as_deref(), Some("saved-device"));
+    assert_eq!(behavior.streaming_device_name, "Desk");
+    let config: Value =
+      serde_yaml::from_str(&std::fs::read_to_string(dir.path().join("config.yml")).unwrap())
+        .unwrap();
+    assert_eq!(
+      config["behavior"]["streaming_device_name"].as_str(),
+      Some("Desk")
+    );
+    assert_eq!(config["theme"]["preset"].as_str(), Some("Dracula"));
   }
 
   #[test]
@@ -815,21 +844,22 @@ behavior:
     let default_streaming = cfg!(feature = "streaming");
     let (dir, result, behavior, _) = client_migration(
       &format!(
-        "client_id: abc\nstreaming_device_name: Desk\nstreaming_bitrate: 160\nenable_streaming: {default_streaming}\n"
+        "client_id: abc\nstreaming_device_name: 'Desk: #1'\nstreaming_bitrate: 160\nstreaming_audio_cache: true\nenable_streaming: {default_streaming}\n"
       ),
-      Some("theme:\n  active: \"#ffffff\"\n"),
+      Some("theme:\n  active: \"#ffffff\"\nplugin_commands:\n  example: x\n"),
       &PersistedRuntimeState::default(),
     );
     result.unwrap();
-    assert_eq!(behavior.streaming_device_name, "Desk");
+    assert_eq!(behavior.streaming_device_name, "Desk: #1");
     assert_eq!(behavior.streaming_bitrate, 160);
+    assert!(behavior.streaming_audio_cache);
 
     let written = std::fs::read_to_string(dir.path().join("config.yml")).unwrap();
     let config: Value = serde_yaml::from_str(&written).unwrap();
     let behavior = behavior_mapping(&config).unwrap();
     assert_eq!(
       behavior.get(yaml_key("streaming_device_name")),
-      Some(&yaml_key("Desk"))
+      Some(&yaml_key("Desk: #1"))
     );
     assert_eq!(
       behavior.get(yaml_key("streaming_bitrate")),
@@ -839,7 +869,10 @@ behavior:
       !behavior.contains_key(yaml_key("enable_streaming")),
       "a default value is not written"
     );
-    assert!(written.contains("theme"), "the rest of the config stays");
+    assert_eq!(behavior["streaming_audio_cache"].as_bool(), Some(true));
+    assert!(!behavior.contains_key(yaml_key("enable_global_song_count")));
+    assert_eq!(config["theme"]["active"].as_str(), Some("#ffffff"));
+    assert_eq!(config["plugin_commands"]["example"].as_str(), Some("x"));
   }
 
   #[test]
@@ -850,10 +883,7 @@ behavior:
       &PersistedRuntimeState::default(),
     );
     result.unwrap();
-    assert_eq!(
-      behavior.streaming_device_name, "spotatui",
-      "the config load sets New later"
-    );
+    assert_eq!(behavior.streaming_device_name, "New");
     let written = std::fs::read_to_string(dir.path().join("config.yml")).unwrap();
     assert!(written.contains("New") && !written.contains("Old"));
   }

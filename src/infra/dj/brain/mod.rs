@@ -38,6 +38,15 @@ use serde_json::{json, Value};
 use std::sync::OnceLock;
 use std::time::Duration;
 
+/// Default completion token budget for the HTTP DJ backends (`anthropic` and
+/// `openai_compat`). Large enough for reasoning models that spend thousands of
+/// tokens thinking before emitting the JSON step.
+pub const DEFAULT_MAX_TOKENS: u32 = 8192;
+/// Minimum accepted `behavior.dj_max_tokens`.
+pub const MAX_TOKENS_MIN: u32 = 256;
+/// Maximum accepted `behavior.dj_max_tokens`.
+pub const MAX_TOKENS_MAX: u32 = 131_072;
+
 /// Shared HTTP client for the DJ's API backends.
 ///
 /// A blanket timeout is mandatory, not optional — the same reasoning as
@@ -353,6 +362,31 @@ pub fn parse_step(raw: &str) -> Result<DjStep> {
     ));
   }
   Ok(DjStep { say, calls })
+}
+
+/// Parse a completion reply, turning empty or truncated outputs into a
+/// clear token-limit diagnostic when the server stopped for length.
+pub fn parse_step_or_token_limit(
+  text: Option<&str>,
+  hit_limit: bool,
+  max_tokens: u32,
+  missing_text_err: &str,
+) -> Result<DjStep> {
+  if hit_limit && text.is_none_or(|t| t.trim().is_empty()) {
+    return Err(anyhow!(
+      "model hit the {max_tokens} token limit before producing a reply \
+       (increase behavior.dj_max_tokens in config.yml)"
+    ));
+  }
+  let raw = text.ok_or_else(|| anyhow!("{missing_text_err}"))?;
+  match parse_step(raw) {
+    Ok(step) => Ok(step),
+    Err(err) if hit_limit => Err(anyhow!(
+      "model reply was cut off at the {max_tokens} token limit \
+       (increase behavior.dj_max_tokens in config.yml): {err}"
+    )),
+    Err(err) => Err(err),
+  }
 }
 
 /// Find the JSON object in a blob of text.
@@ -791,5 +825,14 @@ mod tests {
     assert!(call_required.contains(&json!("arguments")));
     // The prompt's example must be parseable by our own parser.
     assert!(parse_step(&step_shape_hint()).is_ok());
+  }
+
+  #[test]
+  fn truncated_empty_reply_reports_token_limit() {
+    let err = parse_step_or_token_limit(Some(""), true, 4096, "missing")
+      .unwrap_err()
+      .to_string();
+    assert!(err.contains("4096 token limit"), "{err}");
+    assert!(err.contains("dj_max_tokens"), "{err}");
   }
 }

@@ -223,18 +223,16 @@ pub enum IoEvent {
   /// `infra::local::dispatch`; a no-op on the Spotify network).
   GetLocalPlaylists,
   /// List the audio files in a local folder, identified by its `file://` URI.
-  /// The URI is only read by `infra::local::dispatch` (the `local-files`
-  /// feature); without it the event is an inert no-op.
+  /// Carries the track table epoch captured when the folder was opened.
   #[cfg_attr(not(feature = "local-files"), allow(dead_code))]
-  GetLocalTracks(String),
+  GetLocalTracks(String, u64),
   /// List the user's Subsonic server playlists (handled by
   /// `infra::subsonic::dispatch`; a no-op on the Spotify network).
   GetSubsonicPlaylists,
   /// List the tracks of a Subsonic playlist, identified by its
-  /// `subsonic:playlist:` URI. Only read by `infra::subsonic::dispatch` (the
-  /// `subsonic` feature); without it the event is an inert no-op.
+  /// `subsonic:playlist:` URI and the track table epoch when it was opened.
   #[cfg_attr(not(feature = "subsonic"), allow(dead_code))]
-  GetSubsonicTracks(String),
+  GetSubsonicTracks(String, u64),
   /// Run a Subsonic catalog search and populate `app.search_results`. Only read
   /// by `infra::subsonic::dispatch`; an inert no-op without the `subsonic` feature.
   #[cfg_attr(not(feature = "subsonic"), allow(dead_code))]
@@ -242,10 +240,9 @@ pub enum IoEvent {
   /// List the Qobuz sidebar rows: favorites, playlists, albums (handled by
   /// `infra::qobuz::dispatch`; a no-op on the Spotify network).
   GetQobuzPlaylists,
-  /// List the tracks of a Qobuz sidebar row by its `qobuz:` URI. Only read by
-  /// `infra::qobuz::dispatch`; without the feature the event is an inert no-op.
+  /// List a Qobuz sidebar row's tracks by URI and track table epoch.
   #[cfg_attr(not(feature = "qobuz"), allow(dead_code))]
-  GetQobuzTracks(String),
+  GetQobuzTracks(String, u64),
   /// Run a Qobuz catalog search and populate `app.search_results`. Only read
   /// by `infra::qobuz::dispatch`; an inert no-op without the `qobuz` feature.
   #[cfg_attr(not(feature = "qobuz"), allow(dead_code))]
@@ -304,9 +301,9 @@ pub enum IoEvent {
   /// `infra::youtube::dispatch`; a no-op on the Spotify network).
   GetYouTubePlaylists,
   /// Open a local YouTube playlist's tracks in the shared track table,
-  /// identified by its `youtube:playlist:` URI.
+  /// identified by its `youtube:playlist:` URI and track table epoch.
   #[cfg_attr(not(feature = "youtube"), allow(dead_code))]
-  GetYouTubeTracks(String),
+  GetYouTubeTracks(String, u64),
   /// Create a local YouTube playlist with the given name.
   #[cfg_attr(not(feature = "youtube"), allow(dead_code))]
   CreateYouTubePlaylist(String),
@@ -493,6 +490,24 @@ fn owner_still_owns(queued: PlaybackOwner, now: PlaybackOwner) -> bool {
     )
 }
 
+impl IoEvent {
+  /// A request that decides what plays next. Dispatching one discards a
+  /// startup radio restore that has not taken the sink yet.
+  #[cfg(feature = "internet-radio")]
+  pub(crate) fn supersedes_radio_restore(&self) -> bool {
+    matches!(
+      self,
+      IoEvent::StartPlayback(..)
+        | IoEvent::PausePlayback
+        | IoEvent::NextTrack
+        | IoEvent::PreviousTrack
+        | IoEvent::ForcePreviousTrack
+        | IoEvent::AdvanceNativeQueue
+        | IoEvent::TransferPlaybackToDevice(..)
+    )
+  }
+}
+
 impl Network {
   pub fn new(spotify: Option<SpotifyLogin>, app: &Arc<Mutex<App>>) -> Self {
     Network {
@@ -585,12 +600,12 @@ impl Network {
         | IoEvent::SyncPlayback
         | IoEvent::PartyPlaybackCommand(_)
         | IoEvent::GetLocalPlaylists
-        | IoEvent::GetLocalTracks(_)
+        | IoEvent::GetLocalTracks(..)
         | IoEvent::GetSubsonicPlaylists
-        | IoEvent::GetSubsonicTracks(_)
+        | IoEvent::GetSubsonicTracks(..)
         | IoEvent::GetSubsonicSearchResults(_)
         | IoEvent::GetQobuzPlaylists
-        | IoEvent::GetQobuzTracks(_)
+        | IoEvent::GetQobuzTracks(..)
         | IoEvent::GetQobuzSearchResults(_)
         | IoEvent::QobuzLogin
         | IoEvent::AppleMusicHandoff { .. }
@@ -600,7 +615,7 @@ impl Network {
         | IoEvent::GetRadioSearchResults(_)
         | IoEvent::GetYouTubeSearchResults(_)
         | IoEvent::GetYouTubePlaylists
-        | IoEvent::GetYouTubeTracks(_)
+        | IoEvent::GetYouTubeTracks(..)
         | IoEvent::CreateYouTubePlaylist(_)
         | IoEvent::DeleteYouTubePlaylist(_)
         | IoEvent::AddTrackToYouTubePlaylist(..)
@@ -696,6 +711,19 @@ impl Network {
     )
   }
 
+  /// The track table epoch a decoded-source list load was opened at. These
+  /// loads keep their own loading flag instead of the global spinner, which may
+  /// belong to a newer event by the time they finish.
+  pub(crate) fn source_track_table_load_epoch(io_event: &IoEvent) -> Option<u64> {
+    match io_event {
+      IoEvent::GetLocalTracks(_, epoch)
+      | IoEvent::GetSubsonicTracks(_, epoch)
+      | IoEvent::GetQobuzTracks(_, epoch)
+      | IoEvent::GetYouTubeTracks(_, epoch) => Some(*epoch),
+      _ => None,
+    }
+  }
+
   #[allow(clippy::cognitive_complexity)]
   pub async fn handle_network_event(&mut self, mut io_event: IoEvent) {
     let pending_playlist_id = match &io_event {
@@ -709,6 +737,8 @@ impl Network {
     // loudly.
     let bypass_auth = Self::event_bypasses_spotify_auth(&io_event);
     let on_spotify_lane = Self::runs_on_spotify_lane(&io_event);
+    let source_load_epoch = Self::source_track_table_load_epoch(&io_event);
+    let uses_spinner = !on_spotify_lane && source_load_epoch.is_none();
     // Only the `GetCurrentPlayback` handler releases the tick's poll latch, so
     // a poll dropped at the gate below must release it here (#563).
     let is_playback_poll = matches!(io_event, IoEvent::GetCurrentPlayback);
@@ -1145,16 +1175,16 @@ impl Network {
       }
       // Local-files browse events are handled by infra::local::dispatch before
       // reaching the network; they only arrive here when the feature is off.
-      IoEvent::GetLocalPlaylists | IoEvent::GetLocalTracks(_) => {}
+      IoEvent::GetLocalPlaylists | IoEvent::GetLocalTracks(..) => {}
       // Subsonic browse/search events are handled by infra::subsonic::dispatch
       // before reaching the network; they only arrive here when the feature is off.
       IoEvent::GetSubsonicPlaylists
-      | IoEvent::GetSubsonicTracks(_)
+      | IoEvent::GetSubsonicTracks(..)
       | IoEvent::GetSubsonicSearchResults(_) => {}
       // Qobuz browse/search/login events are handled by infra::qobuz::dispatch
       // before reaching the network; they only arrive here when the feature is off.
       IoEvent::GetQobuzPlaylists
-      | IoEvent::GetQobuzTracks(_)
+      | IoEvent::GetQobuzTracks(..)
       | IoEvent::GetQobuzSearchResults(_)
       | IoEvent::QobuzLogin => {}
       // Consumed by infra::apple_music::dispatch; only a build without the
@@ -1175,7 +1205,7 @@ impl Network {
       // off.
       IoEvent::GetYouTubeSearchResults(_)
       | IoEvent::GetYouTubePlaylists
-      | IoEvent::GetYouTubeTracks(_)
+      | IoEvent::GetYouTubeTracks(..)
       | IoEvent::CreateYouTubePlaylist(_)
       | IoEvent::DeleteYouTubePlaylist(_)
       | IoEvent::AddTrackToYouTubePlaylist(..)
@@ -1202,10 +1232,11 @@ impl Network {
 
     {
       let mut app = self.app.lock().await;
-      // Lane events never set the spinner, and clearing it here would hide a
-      // pump event still in flight.
-      if !on_spotify_lane {
+      if uses_spinner {
         app.is_loading = false;
+      }
+      if let Some(epoch) = source_load_epoch {
+        app.finish_source_track_table_load(epoch);
       }
       app.note_display_changes();
     }

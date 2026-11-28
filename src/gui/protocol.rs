@@ -3746,7 +3746,7 @@ mod tests {
     let loading = &pushed(&diff(&before, &app, Language::En), "track_table")["payload"];
     assert!(loading["uri"].is_null());
     assert_eq!(loading["tracks"], serde_json::json!([]));
-    assert!(matches!(rx.try_recv(), Ok(IoEvent::GetSubsonicTracks(u)) if u == uri));
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::GetSubsonicTracks(u, _)) if u == uri));
 
     let before = app.display_revisions();
     app.set_source_track_table(

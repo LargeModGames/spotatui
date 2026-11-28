@@ -226,6 +226,32 @@ impl App {
     self.native_should_drive() && !self.queue_owns_playback()
   }
 
+  /// The count a startup radio restore compares before it takes the sink.
+  #[cfg(feature = "internet-radio")]
+  pub(crate) fn playback_requests(&self) -> u64 {
+    self.playback_requests
+  }
+
+  /// Make a pending startup radio restore yield to a newer playback intent.
+  pub(crate) fn invalidate_radio_restore(&mut self) {
+    #[cfg(feature = "internet-radio")]
+    {
+      self.playback_requests = self.playback_requests.wrapping_add(1);
+    }
+  }
+
+  /// Mark the radio session as being replaced on its own player, or done.
+  #[cfg(feature = "internet-radio")]
+  pub(crate) fn set_radio_retuning(&mut self, retuning: bool) {
+    self.radio_retuning = retuning;
+  }
+
+  /// Whether the radio sink is empty only because a new station is loading.
+  #[cfg(feature = "internet-radio")]
+  pub(crate) fn radio_retuning(&self) -> bool {
+    self.radio_retuning
+  }
+
   /// Record that `source` took the audio sink; its start path calls this
   /// before it pauses librespot.
   #[cfg(any(test, feature = "audio-decode"))]

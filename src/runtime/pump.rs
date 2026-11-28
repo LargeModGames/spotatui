@@ -8,6 +8,12 @@ use crate::core::queue::{
 };
 use crate::infra::network::{IoEvent, Network};
 
+#[cfg(feature = "internet-radio")]
+type RadioRestoreItem = crate::infra::radio::dispatch::RadioTuneIn;
+#[cfg(not(feature = "internet-radio"))]
+type RadioRestoreItem = ();
+pub(super) type RadioRestore = tokio::task::JoinSet<RadioRestoreItem>;
+
 /// Signalled after the pump runs an event, so a frontend that pushes its
 /// changes (the GUI) does not wait for its next tick to show the result.
 #[cfg_attr(not(feature = "tui"), allow(dead_code))]
@@ -83,7 +89,11 @@ async fn run_spotify_lane(mut lane_rx: tokio::sync::mpsc::UnboundedReceiver<(IoE
 
 // CLI mode never starts the pump; only a frontend launch does.
 #[cfg_attr(not(feature = "tui"), allow(dead_code))]
-pub(super) async fn start_tokio(io_rx: std::sync::mpsc::Receiver<IoEvent>, network: &mut Network) {
+pub(super) async fn start_tokio(
+  io_rx: std::sync::mpsc::Receiver<IoEvent>,
+  network: &mut Network,
+  mut radio_restore: RadioRestore,
+) {
   // Bridge the sync dispatch channel onto the async runtime: a dedicated
   // thread does blocking recv() and forwards into a tokio channel the pump can
   // await, replacing the old try_recv() + 5ms sleep poll (which added 0-5ms
@@ -128,6 +138,17 @@ pub(super) async fn start_tokio(io_rx: std::sync::mpsc::Receiver<IoEvent>, netwo
         network.flush_deferred().await;
         continue;
       }
+      restored = radio_restore.join_next(), if !radio_restore.is_empty() => {
+        #[cfg(feature = "internet-radio")]
+        if let Some(Ok(tune_in)) = restored {
+          crate::infra::radio::dispatch::finish_radio(&network.app, tune_in).await;
+          network.app.lock().await.note_display_changes();
+          events_handled().notify_one();
+        }
+        #[cfg(not(feature = "internet-radio"))]
+        let _ = restored;
+        continue;
+      }
     };
 
     // Source-agnostic service events (lyrics, cover art, telemetry,
@@ -163,6 +184,13 @@ pub(super) async fn start_tokio(io_rx: std::sync::mpsc::Receiver<IoEvent>, netwo
         app.set_status_message(message, 6);
         app.is_loading = false;
         continue;
+      }
+      #[cfg(feature = "internet-radio")]
+      if !radio_restore.is_empty() && io_event.supersedes_radio_restore() {
+        // Startup has only one saved station. Dropping its join set aborts
+        // the work and discards even a result that is already ready. A result
+        // the pump took first meets the request count in `finish_radio`.
+        radio_restore = RadioRestore::new();
       }
       // The Apple Music router runs before every other router: while Music owns
       // playback it takes the transport events, and it holds a start for
@@ -255,13 +283,12 @@ pub(super) async fn start_tokio(io_rx: std::sync::mpsc::Receiver<IoEvent>, netwo
       {
         network.handle_network_event(io_event).await;
       } else {
-        // A source router consumed the event and returned without touching
-        // `is_loading`, which `App::dispatch` set to true. Only
-        // `handle_network_event` resets it, and we skipped that path, so clear
-        // it here — otherwise selecting/loading Local, Subsonic, Qobuz, Radio,
-        // or YouTube content leaves the UI stuck on the loading indicator.
+        // A routed event skips the network handler's spinner cleanup.
         let mut app = network.app.lock().await;
-        app.is_loading = false;
+        match Network::source_track_table_load_epoch(&io_event) {
+          Some(epoch) => app.finish_source_track_table_load(epoch),
+          None => app.is_loading = false,
+        }
         app.note_display_changes();
       }
     }
@@ -360,6 +387,88 @@ mod tests {
     assert!(start_playback_has_taker(&IoEvent::NextTrack, false));
   }
 
+  #[cfg(feature = "internet-radio")]
+  #[tokio::test]
+  async fn a_playback_request_cancels_an_in_flight_radio_restore() {
+    use crate::core::app::App;
+    use std::sync::Arc;
+    use std::time::Duration;
+    use tokio::sync::{oneshot, Mutex};
+
+    let (pump_tx, pump_rx) = std::sync::mpsc::channel();
+    let app = Arc::new(Mutex::new(App::default()));
+    let mut network = Network::new(None, &app);
+    let mut restore = RadioRestore::new();
+    let (started, running) = oneshot::channel();
+    let (cancelled, finished) = oneshot::channel::<()>();
+    restore.spawn(async move {
+      let _cancelled = cancelled;
+      started.send(()).unwrap();
+      std::future::pending().await
+    });
+    running.await.unwrap();
+    let pump = tokio::spawn(async move { start_tokio(pump_rx, &mut network, restore).await });
+
+    pump_tx
+      .send(IoEvent::StartPlayback(None, None, None))
+      .unwrap();
+    assert!(tokio::time::timeout(Duration::from_secs(2), finished)
+      .await
+      .unwrap()
+      .is_err());
+    drop(pump_tx);
+    pump.await.unwrap();
+    assert!(!app.lock().await.decoded_sink_claimed());
+  }
+
+  #[tokio::test]
+  async fn a_stale_source_playlist_load_leaves_the_search_spinner_in_place() {
+    use crate::core::app::{App, TrackTableContext};
+    use crate::core::user_config::UserConfig;
+    use std::sync::{mpsc::channel, Arc};
+    use tokio::sync::Mutex;
+
+    let (app_tx, app_rx) = channel();
+    let mut app = App::new(app_tx, UserConfig::new(), None);
+    app.open_source_playlist_tracks("subsonic:playlist:1".into());
+    assert!(!app.is_loading);
+    app.set_track_table(Vec::new(), TrackTableContext::SavedTracks);
+    app.dispatch(IoEvent::GetSubsonicSearchResults("new search".into()));
+
+    let app = Arc::new(Mutex::new(app));
+    let mut network = Network::new(None, &app);
+    let (pump_tx, pump_rx) = channel();
+    pump_tx.send(app_rx.try_recv().unwrap()).unwrap();
+    drop(pump_tx);
+
+    start_tokio(pump_rx, &mut network, RadioRestore::new()).await;
+
+    assert!(app.lock().await.is_loading);
+  }
+
+  #[tokio::test]
+  async fn the_pump_ends_a_source_playlist_loading_flag_when_the_load_finishes() {
+    use crate::core::app::App;
+    use crate::core::user_config::UserConfig;
+    use std::sync::{mpsc::channel, Arc};
+    use tokio::sync::Mutex;
+
+    let (app_tx, app_rx) = channel();
+    let mut app = App::new(app_tx, UserConfig::new(), None);
+    app.open_source_playlist_tracks("subsonic:playlist:1".into());
+    assert!(app.is_source_track_table_loading());
+
+    let app = Arc::new(Mutex::new(app));
+    let mut network = Network::new(None, &app);
+    let (pump_tx, pump_rx) = channel();
+    pump_tx.send(app_rx.try_recv().unwrap()).unwrap();
+    drop(pump_tx);
+
+    start_tokio(pump_rx, &mut network, RadioRestore::new()).await;
+
+    assert!(!app.lock().await.is_source_track_table_loading());
+  }
+
   #[cfg(feature = "gui")]
   #[tokio::test]
   async fn a_spotify_start_without_a_session_pushes_the_status_channel() {
@@ -383,7 +492,7 @@ mod tests {
       .unwrap();
     drop(pump_tx);
 
-    start_tokio(pump_rx, &mut network).await;
+    start_tokio(pump_rx, &mut network, RadioRestore::new()).await;
 
     let app = app.lock().await;
     let status = crate::gui::protocol::pushed(
@@ -432,9 +541,12 @@ mod tests {
     pump_tx.send(IoEvent::FinishNativeQueue).unwrap();
     drop(pump_tx);
 
-    tokio::time::timeout(Duration::from_secs(2), start_tokio(pump_rx, &mut network))
-      .await
-      .expect("the crawl must not hold the pump");
+    tokio::time::timeout(
+      Duration::from_secs(2),
+      start_tokio(pump_rx, &mut network, RadioRestore::new()),
+    )
+    .await
+    .expect("the crawl must not hold the pump");
 
     assert_eq!(
       app
@@ -483,7 +595,7 @@ mod tests {
     pump_tx.send(IoEvent::FinishNativeQueue).unwrap();
     drop(pump_tx);
 
-    start_tokio(pump_rx, &mut network).await;
+    start_tokio(pump_rx, &mut network, RadioRestore::new()).await;
 
     let app = app.lock().await;
     assert_eq!(
