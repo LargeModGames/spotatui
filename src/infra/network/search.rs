@@ -47,12 +47,25 @@ fn search_limit(requested: u32) -> String {
 }
 
 pub trait SearchNetwork {
-  async fn get_search_results(&mut self, search_term: String, country: Option<Country>);
+  async fn get_search_results(
+    &mut self,
+    search_term: String,
+    country: Option<Country>,
+    source_rev: u64,
+  );
   async fn search_tracks_for_playlist(&mut self, search_term: String);
 }
 
 impl SearchNetwork for Network {
-  async fn get_search_results(&mut self, search_term: String, country: Option<Country>) {
+  async fn get_search_results(
+    &mut self,
+    search_term: String,
+    country: Option<Country>,
+    source_rev: u64,
+  ) {
+    if self.app.lock().await.source_revision() != source_rev {
+      return;
+    }
     // Don't pass market to search - when market is specified, Spotify doesn't return
     // available_markets field, but rspotify 0.14 models require it for tracks/albums.
     // We'll handle null playlist fields by searching playlists separately without requiring all fields.
@@ -89,21 +102,27 @@ impl SearchNetwork for Network {
     let track_result = match track_search {
       Ok(res) => Some(res.tracks),
       Err(e) => {
-        self.handle_error(anyhow!(e)).await;
+        self
+          .handle_search_error_if_current(source_rev, anyhow!(e))
+          .await;
         return;
       }
     };
     let album_result = match album_search {
       Ok(res) => Some(res.albums),
       Err(e) => {
-        self.handle_error(anyhow!(e)).await;
+        self
+          .handle_search_error_if_current(source_rev, anyhow!(e))
+          .await;
         return;
       }
     };
     let show_result = match show_search {
       Ok(res) => Some(res.shows),
       Err(e) => {
-        self.handle_error(anyhow!(e)).await;
+        self
+          .handle_search_error_if_current(source_rev, anyhow!(e))
+          .await;
         return;
       }
     };
@@ -115,6 +134,9 @@ impl SearchNetwork for Network {
     let playlist_result = playlist_search.ok().map(|res| res.playlists);
 
     let mut app = self.app.lock().await;
+    if app.source_revision() != source_rev {
+      return;
+    }
 
     // Extract ids for follow/saved checks from raw rspotify pages before conversion.
     if let Some(ref track_results) = track_result {
@@ -219,6 +241,15 @@ impl SearchNetwork for Network {
   }
 }
 
+impl Network {
+  async fn handle_search_error_if_current(&mut self, source_rev: u64, err: anyhow::Error) {
+    let mut app = self.app.lock().await;
+    if app.source_revision() == source_rev {
+      self.report_error_locked(&mut app, err);
+    }
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -262,7 +293,9 @@ mod tests {
       let (spotify, _fake) = fake_spotify_login(base_url);
       let mut network = Network::new(Some(spotify), &app);
 
-      network.get_search_results("queen".to_string(), None).await;
+      network
+        .get_search_results("queen".to_string(), None, 0)
+        .await;
       server.abort();
 
       let seen = seen.lock().unwrap();
@@ -278,5 +311,87 @@ mod tests {
     })
     .await
     .expect("search limit test timed out");
+  }
+
+  #[tokio::test]
+  async fn stale_queued_spotify_search_skips_http_after_source_switch() {
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+      let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+      let base_url = format!("http://{}/v1/", listener.local_addr().unwrap());
+      let seen = Arc::new(std::sync::Mutex::new(0usize));
+      let count = seen.clone();
+      let server = tokio::spawn(async move {
+        while let Ok((mut stream, _)) = listener.accept().await {
+          *count.lock().unwrap() += 1;
+          stream
+            .write_all(b"HTTP/1.1 500 Internal Server Error\r\nconnection: close\r\n\r\n")
+            .await
+            .unwrap();
+        }
+      });
+
+      let (tx, _rx) = std::sync::mpsc::channel();
+      let mut app = App::new(tx, UserConfig::new(), Some(std::time::SystemTime::now()));
+      let state_dir = tempfile::tempdir().unwrap();
+      app.state_path = Some(state_dir.path().join("state.yml"));
+      let stale_rev = app.source_revision();
+      app.set_active_source(crate::core::source::Source::YouTube);
+      let app = Arc::new(Mutex::new(app));
+      let (spotify, _fake) = fake_spotify_login(base_url);
+      let mut network = Network::new(Some(spotify), &app);
+
+      network
+        .get_search_results("queen".to_string(), None, stale_rev)
+        .await;
+      server.abort();
+
+      assert_eq!(
+        *seen.lock().unwrap(),
+        0,
+        "superseded queued search should not send HTTP requests"
+      );
+    })
+    .await
+    .expect("stale queued search test timed out");
+  }
+
+  #[tokio::test]
+  async fn handle_search_error_if_current_drops_stale_error() {
+    let (tx, _rx) = std::sync::mpsc::channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(std::time::SystemTime::now()));
+    let state_dir = tempfile::tempdir().unwrap();
+    app.state_path = Some(state_dir.path().join("state.yml"));
+    let initial_rev = app.source_revision();
+    app.set_active_source(crate::core::source::Source::YouTube);
+    let app = Arc::new(Mutex::new(app));
+    let mut network = Network::new(None, &app);
+
+    network
+      .handle_search_error_if_current(initial_rev, anyhow!("stale failure"))
+      .await;
+    assert!(!app.lock().await.status_message_is_error());
+  }
+
+  #[tokio::test]
+  async fn stale_queued_spotify_search_without_login_skips_not_connected_message() {
+    let (tx, _rx) = std::sync::mpsc::channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(std::time::SystemTime::now()));
+    let state_dir = tempfile::tempdir().unwrap();
+    app.state_path = Some(state_dir.path().join("state.yml"));
+    let stale_rev = app.source_revision();
+    app.set_active_source(crate::core::source::Source::Radio);
+    let app = Arc::new(Mutex::new(app));
+    let mut network = Network::new(None, &app);
+
+    network
+      .handle_network_event(IoEvent::GetSearchResults(
+        "queen".to_string(),
+        None,
+        stale_rev,
+      ))
+      .await;
+
+    let guard = app.lock().await;
+    assert!(guard.status_message().is_none());
   }
 }

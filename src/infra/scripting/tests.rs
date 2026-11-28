@@ -2152,7 +2152,7 @@ mod data_read_tests {
 
     engine.process_data_requests_for_test(&mut app, Instant::now());
     match rx.try_recv() {
-      Ok(IoEvent::GetSearchResults(q, _)) => assert_eq!(q, "daft punk"),
+      Ok(IoEvent::GetSearchResults(q, _, _)) => assert_eq!(q, "daft punk"),
       _ => panic!("expected GetSearchResults dispatch (IoEvent is not Debug)"),
     }
   }

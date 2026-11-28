@@ -53,7 +53,7 @@ pub enum IoEvent {
   /// Refresh the device list without opening the device picker (plugin data reads).
   #[cfg_attr(not(feature = "scripting"), allow(dead_code))]
   GetDevicesSilent,
-  GetSearchResults(String, Option<Country>),
+  GetSearchResults(String, Option<Country>, u64),
   /// Playlist id/URI, page offset.
   GetPlaylistItems(String, u32),
   /// Playlist id/URI, query.
@@ -236,7 +236,7 @@ pub enum IoEvent {
   /// Run a Subsonic catalog search and populate `app.search_results`. Only read
   /// by `infra::subsonic::dispatch`; an inert no-op without the `subsonic` feature.
   #[cfg_attr(not(feature = "subsonic"), allow(dead_code))]
-  GetSubsonicSearchResults(String),
+  GetSubsonicSearchResults(String, u64),
   /// List the Qobuz sidebar rows: favorites, playlists, albums (handled by
   /// `infra::qobuz::dispatch`; a no-op on the Spotify network).
   GetQobuzPlaylists,
@@ -246,10 +246,10 @@ pub enum IoEvent {
   /// Run a Qobuz catalog search and populate `app.search_results`. Only read
   /// by `infra::qobuz::dispatch`; an inert no-op without the `qobuz` feature.
   #[cfg_attr(not(feature = "qobuz"), allow(dead_code))]
-  GetQobuzSearchResults(String),
+  GetQobuzSearchResults(String, u64),
   /// Start the in-TUI Qobuz browser login (handled by `infra::qobuz::dispatch`).
   #[cfg_attr(not(feature = "qobuz"), allow(dead_code))]
-  QobuzLogin,
+  QobuzLogin(Option<u64>),
   /// A start held back while Music paused: sent after an acknowledged pause
   /// or proof the Apple Event was not delivered. The Music router hands
   /// `event` back to the pump. Never bypasses the claim gate.
@@ -291,12 +291,12 @@ pub enum IoEvent {
   /// Only read by `infra::radio::dispatch`; an inert no-op without the
   /// `internet-radio` feature.
   #[cfg_attr(not(feature = "internet-radio"), allow(dead_code))]
-  GetRadioSearchResults(String),
+  GetRadioSearchResults(String, u64),
   /// Run a YouTube search (via yt-dlp) and populate `app.search_results`.
   /// Only read by `infra::youtube::dispatch`; an inert no-op without the
   /// `youtube` feature.
   #[cfg_attr(not(feature = "youtube"), allow(dead_code))]
-  GetYouTubeSearchResults(String),
+  GetYouTubeSearchResults(String, u64),
   /// Load the local YouTube playlists file into the sidebar (handled by
   /// `infra::youtube::dispatch`; a no-op on the Spotify network).
   GetYouTubePlaylists,
@@ -595,17 +595,17 @@ impl Network {
         | IoEvent::GetLocalTracks(..)
         | IoEvent::GetSubsonicPlaylists
         | IoEvent::GetSubsonicTracks(..)
-        | IoEvent::GetSubsonicSearchResults(_)
+        | IoEvent::GetSubsonicSearchResults(..)
         | IoEvent::GetQobuzPlaylists
         | IoEvent::GetQobuzTracks(..)
-        | IoEvent::GetQobuzSearchResults(_)
-        | IoEvent::QobuzLogin
+        | IoEvent::GetQobuzSearchResults(..)
+        | IoEvent::QobuzLogin(..)
         | IoEvent::AppleMusicHandoff { .. }
         | IoEvent::AppleMusicVolume { .. }
         | IoEvent::AppleMusicPage { .. }
         | IoEvent::GetRadioStations
-        | IoEvent::GetRadioSearchResults(_)
-        | IoEvent::GetYouTubeSearchResults(_)
+        | IoEvent::GetRadioSearchResults(..)
+        | IoEvent::GetYouTubeSearchResults(..)
         | IoEvent::GetYouTubePlaylists
         | IoEvent::GetYouTubeTracks(..)
         | IoEvent::CreateYouTubePlaylist(_)
@@ -734,19 +734,15 @@ impl Network {
 
     if !bypass_auth {
       if self.spotify.is_none() {
-        self
-          .show_status_message(
-            self
-              .strings()
-              .await
-              .status
-              .infra
-              .spotify_not_connected
-              .to_string(),
-            6,
-          )
-          .await;
         let mut app = self.app.lock().await;
+        let is_current_search = !matches!(
+          &io_event,
+          IoEvent::GetSearchResults(_, _, source_rev) if app.source_revision() != *source_rev
+        );
+        if is_current_search {
+          let message = app.strings().status.infra.spotify_not_connected.to_string();
+          app.set_status_message(message, 6);
+        }
         app.is_loading = false;
         app.is_volume_change_in_flight = false;
         if is_playback_poll {
@@ -795,8 +791,10 @@ impl Network {
       IoEvent::GetCurrentPlayback => {
         self.get_current_playback().await;
       }
-      IoEvent::GetSearchResults(search_term, country) => {
-        self.get_search_results(search_term, country).await;
+      IoEvent::GetSearchResults(search_term, country, source_rev) => {
+        self
+          .get_search_results(search_term, country, source_rev)
+          .await;
       }
 
       IoEvent::GetPlaylistItems(playlist_id, playlist_offset) => {
@@ -1165,13 +1163,13 @@ impl Network {
       // before reaching the network; they only arrive here when the feature is off.
       IoEvent::GetSubsonicPlaylists
       | IoEvent::GetSubsonicTracks(..)
-      | IoEvent::GetSubsonicSearchResults(_) => {}
+      | IoEvent::GetSubsonicSearchResults(..) => {}
       // Qobuz browse/search/login events are handled by infra::qobuz::dispatch
       // before reaching the network; they only arrive here when the feature is off.
       IoEvent::GetQobuzPlaylists
       | IoEvent::GetQobuzTracks(..)
-      | IoEvent::GetQobuzSearchResults(_)
-      | IoEvent::QobuzLogin => {}
+      | IoEvent::GetQobuzSearchResults(..)
+      | IoEvent::QobuzLogin(..) => {}
       // Consumed by infra::apple_music::dispatch; only a build without the
       // Apple Music router gets here.
       IoEvent::AppleMusicHandoff { .. } | IoEvent::AppleMusicPage { .. } => {
@@ -1184,11 +1182,11 @@ impl Network {
       }
       // Radio browse/search events are handled by infra::radio::dispatch before
       // reaching the network; they only arrive here when the feature is off.
-      IoEvent::GetRadioStations | IoEvent::GetRadioSearchResults(_) => {}
+      IoEvent::GetRadioStations | IoEvent::GetRadioSearchResults(..) => {}
       // YouTube search/playlist events are handled by infra::youtube::dispatch
       // before reaching the network; they only arrive here when the feature is
       // off.
-      IoEvent::GetYouTubeSearchResults(_)
+      IoEvent::GetYouTubeSearchResults(..)
       | IoEvent::GetYouTubePlaylists
       | IoEvent::GetYouTubeTracks(..)
       | IoEvent::CreateYouTubePlaylist(_)
@@ -1227,9 +1225,8 @@ impl Network {
     }
   }
 
-  async fn handle_error(&mut self, e: anyhow::Error) {
+  pub(crate) fn report_error_locked(&self, app: &mut App, e: anyhow::Error) {
     let rate_limited = requests::is_rate_limited_error(&e);
-    let mut app = self.app.lock().await;
     // The first hit of a window under the pump: every later event is held
     // back, so a status message is enough. The CLI keeps its exit signal.
     if self.defers_rate_limited && rate_limited {
@@ -1241,7 +1238,12 @@ impl Network {
       app.set_error_status_message(message, 8);
       return;
     }
-    report_request_error(&mut app, e);
+    report_request_error(app, e);
+  }
+
+  async fn handle_error(&mut self, e: anyhow::Error) {
+    let mut app = self.app.lock().await;
+    self.report_error_locked(&mut app, e);
   }
 
   /// Holds a Spotify-bound event back while a rate-limit window is open: queued

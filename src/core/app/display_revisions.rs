@@ -183,6 +183,11 @@ impl App {
     self.display_revisions.bump(domain);
   }
 
+  /// Current source revision, used to drop stale async search results after a source switch.
+  pub(crate) fn source_revision(&self) -> u64 {
+    self.display_revisions.source
+  }
+
   /// A copy of every display revision, for a frontend to diff against.
   #[cfg(any(test, feature = "gui"))]
   pub fn display_revisions(&self) -> DisplayRevisions {

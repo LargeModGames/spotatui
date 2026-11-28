@@ -2789,7 +2789,7 @@ mod tests {
 
     assert!(matches!(
       rx.try_recv(),
-      Ok(IoEvent::GetSearchResults(query, _)) if query == "kygo"
+      Ok(IoEvent::GetSearchResults(query, _, _)) if query == "kygo"
     ));
   }
 
@@ -2830,6 +2830,33 @@ mod tests {
       app.display_revisions().get(DisplayDomain::Search),
       marked.get(DisplayDomain::Search)
     );
+  }
+
+  #[test]
+  fn selecting_a_different_source_clears_stale_search_results_over_the_wire() {
+    let (mut app, _rx) = app();
+    let dir = tempfile::tempdir().unwrap();
+    app.state_path = Some(dir.path().join("state.yml"));
+    apply_from_page(
+      &mut app,
+      &action_frame(Action::SelectSource(Source::YouTube)),
+    );
+    app.set_search_results(crate::core::app::SearchResult {
+      tracks: Some(liked_page(0, 1, 1, false)),
+      query: Some("kygo".to_string()),
+      ..Default::default()
+    });
+
+    let messages = apply_from_page(
+      &mut app,
+      &action_frame(Action::SelectSource(Source::Spotify)),
+    );
+
+    assert_eq!(pushed(&messages, "source")["payload"]["active"], "Spotify");
+    let search = &pushed(&messages, "search")["payload"];
+    assert_eq!(search["ran"], false);
+    assert_eq!(search["query"], serde_json::Value::Null);
+    assert_eq!(search["tracks"], serde_json::json!([]));
   }
 
   fn stats_data() -> crate::infra::history::StatsData {

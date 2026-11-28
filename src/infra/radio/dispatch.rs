@@ -47,8 +47,8 @@ pub async fn route_radio_event(app: &Arc<Mutex<App>>, event: &IoEvent) -> bool {
       load_radio_stations(app).await;
       true
     }
-    IoEvent::GetRadioSearchResults(query) => {
-      run_radio_search(app, query).await;
+    IoEvent::GetRadioSearchResults(query, source_rev) => {
+      run_radio_search(app, query, *source_rev).await;
       true
     }
     // A station play. Radio "queues" collapse to the one station at the offset:
@@ -148,23 +148,28 @@ async fn load_radio_stations(app: &Arc<Mutex<App>>) {
 ///
 /// Like the Subsonic search, only the songs block is populated — each row is a
 /// station; Enter on one dispatches its `radio:` URI back through this module.
-async fn run_radio_search(app: &Arc<Mutex<App>>, query: &str) {
+async fn run_radio_search(app: &Arc<Mutex<App>>, query: &str, source_rev: u64) {
+  if app.lock().await.source_revision() != source_rev {
+    return;
+  }
   let source = RadioSource::new();
   match source.search(query).await {
-    Ok(results) => app
-      .lock()
-      .await
-      .show_source_search_tracks(query, results.tracks),
+    Ok(results) => {
+      app
+        .lock()
+        .await
+        .show_source_search_tracks_if_current(source_rev, query, results.tracks);
+    }
     Err(e) => {
-      set_error(
-        app,
-        crate::infra::app_strings(app)
-          .await
+      let mut guard = app.lock().await;
+      if guard.source_revision() == source_rev {
+        let message = guard
+          .strings()
           .status
           .infra
-          .radio_search_failed(&e.to_string()),
-      )
-      .await
+          .radio_search_failed(&e.to_string());
+        guard.set_status_message(message, 6);
+      }
     }
   }
 }

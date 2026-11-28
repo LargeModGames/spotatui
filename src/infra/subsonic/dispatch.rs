@@ -73,8 +73,8 @@ pub async fn route_subsonic_event(app: &Arc<Mutex<App>>, event: &IoEvent) -> boo
       load_subsonic_tracks(app, uri, *epoch).await;
       true
     }
-    IoEvent::GetSubsonicSearchResults(query) => {
-      run_subsonic_search(app, query).await;
+    IoEvent::GetSubsonicSearchResults(query, source_rev) => {
+      run_subsonic_search(app, query, *source_rev).await;
       true
     }
     // Start a playlist of subsonic tracks: queue all and start at the offset.
@@ -259,31 +259,55 @@ async fn load_subsonic_tracks(app: &Arc<Mutex<App>>, playlist_uri: &str, epoch: 
   }
 }
 
+async fn build_search_source(app: &Arc<Mutex<App>>, source_rev: u64) -> Option<SubsonicSource> {
+  match build_sync_source(app).await {
+    Ok(source) => {
+      if app.lock().await.source_revision() != source_rev {
+        return None;
+      }
+      Some(source)
+    }
+    Err(_) => {
+      let mut guard = app.lock().await;
+      if guard.source_revision() == source_rev {
+        let message = guard.strings().status.infra.subsonic_no_server.to_string();
+        guard.set_status_message(message, 6);
+      }
+      None
+    }
+  }
+}
+
 /// Run a catalog search and populate `app.search_results`.
 ///
 /// M2 populates **only** the songs block: album/artist search-result Enter
 /// dispatches rspotify-bound `GetAlbum`/`GetArtist` events that fail for Subsonic
 /// ids, so those blocks are left `None` to avoid dead rows. Album/artist
 /// drill-down is a tracked follow-up.
-async fn run_subsonic_search(app: &Arc<Mutex<App>>, query: &str) {
-  let Some(source) = build_source(app).await else {
+async fn run_subsonic_search(app: &Arc<Mutex<App>>, query: &str, source_rev: u64) {
+  if app.lock().await.source_revision() != source_rev {
+    return;
+  }
+  let Some(source) = build_search_source(app, source_rev).await else {
     return;
   };
   match source.search(query).await {
-    Ok(results) => app
-      .lock()
-      .await
-      .show_source_search_tracks(query, results.tracks),
+    Ok(results) => {
+      app
+        .lock()
+        .await
+        .show_source_search_tracks_if_current(source_rev, query, results.tracks);
+    }
     Err(e) => {
-      set_error(
-        app,
-        crate::infra::app_strings(app)
-          .await
+      let mut guard = app.lock().await;
+      if guard.source_revision() == source_rev {
+        let message = guard
+          .strings()
           .status
           .infra
-          .subsonic_search_failed(&e.to_string()),
-      )
-      .await
+          .subsonic_search_failed(&e.to_string());
+        guard.set_status_message(message, 6);
+      }
     }
   }
 }
@@ -1076,8 +1100,13 @@ mod tests {
     app.user_config.behavior.subsonic_password = Some("demo".to_string());
     let app = Arc::new(Mutex::new(app));
 
+    let source_rev = app.lock().await.source_revision();
     assert!(
-      route_subsonic_event(&app, &IoEvent::GetSubsonicSearchResults("love".to_string())).await
+      route_subsonic_event(
+        &app,
+        &IoEvent::GetSubsonicSearchResults("love".to_string(), source_rev)
+      )
+      .await
     );
     let uris: Vec<String> = app
       .lock()
@@ -1103,6 +1132,27 @@ mod tests {
     assert!(
       s.current().is_some_and(|t| !t.name.is_empty()),
       "metadata must resolve from the search results"
+    );
+  }
+
+  #[tokio::test]
+  async fn stale_subsonic_search_skips_missing_server_message() {
+    let dir = tempfile::tempdir().unwrap();
+    let (tx, _rx) = channel();
+    let mut state = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    state.state_path = Some(dir.path().join("state.yml"));
+    state.set_active_source(Source::Subsonic);
+    let stale_rev = state.source_revision();
+    state.set_active_source(Source::Spotify);
+    let status_before = state.status_message().map(str::to_string);
+    let app = Arc::new(Mutex::new(state));
+
+    assert!(build_search_source(&app, stale_rev).await.is_none());
+    let guard = app.lock().await;
+    assert_eq!(guard.status_message(), status_before.as_deref());
+    assert_ne!(
+      guard.status_message(),
+      Some(guard.strings().status.infra.subsonic_no_server)
     );
   }
 }

@@ -71,12 +71,12 @@ pub async fn route_qobuz_event(app: &Arc<Mutex<App>>, event: &IoEvent) -> bool {
       load_qobuz_tracks(app, uri, *epoch).await;
       true
     }
-    IoEvent::GetQobuzSearchResults(query) => {
-      run_qobuz_search(app, query).await;
+    IoEvent::GetQobuzSearchResults(query, source_rev) => {
+      run_qobuz_search(app, query, *source_rev).await;
       true
     }
-    IoEvent::QobuzLogin => {
-      begin_login(app).await;
+    IoEvent::QobuzLogin(search_rev) => {
+      begin_login(app, *search_rev).await;
       true
     }
     // Start a list of Qobuz tracks: queue all and start at the offset.
@@ -177,6 +177,8 @@ enum WhenLoggedOut {
   Login,
   /// A track listing can prompt for login while it still owns the table.
   LoginForTracks(u64),
+  /// A search can prompt for login only while its source revision is still current.
+  LoginForSearch(u64),
   /// Playback paths only show the login message.
   Message,
 }
@@ -185,7 +187,15 @@ impl WhenLoggedOut {
   fn is_current(self, app: &App) -> bool {
     match self {
       Self::LoginForTracks(epoch) => app.is_current_source_track_table_load(epoch),
+      Self::LoginForSearch(source_rev) => app.source_revision() == source_rev,
       Self::Login | Self::Message => true,
+    }
+  }
+
+  fn search_revision(self) -> Option<u64> {
+    match self {
+      Self::LoginForSearch(source_rev) => Some(source_rev),
+      Self::Login | Self::LoginForTracks(_) | Self::Message => None,
     }
   }
 }
@@ -198,10 +208,12 @@ async fn build_source(
 ) -> Option<QobuzSource> {
   let Some(token) = auth::current_token() else {
     match when_logged_out {
-      WhenLoggedOut::Login | WhenLoggedOut::LoginForTracks(_) => {
+      WhenLoggedOut::Login
+      | WhenLoggedOut::LoginForTracks(_)
+      | WhenLoggedOut::LoginForSearch(_) => {
         let mut app = app.lock().await;
         if when_logged_out.is_current(&app) {
-          app.dispatch(IoEvent::QobuzLogin);
+          app.dispatch(IoEvent::QobuzLogin(when_logged_out.search_revision()));
         }
       }
       WhenLoggedOut::Message => {
@@ -317,26 +329,67 @@ async fn set_error(app: &Arc<Mutex<App>>, message: String) {
 
 static LOGIN_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 
+fn is_search_login_current(app: &App, search_rev: Option<u64>) -> bool {
+  search_rev.is_none_or(|rev| app.source_revision() == rev)
+}
+
+async fn report_login_error_if_current(
+  app: &Arc<Mutex<App>>,
+  search_rev: Option<u64>,
+  step: QobuzStep,
+  err: anyhow::Error,
+) {
+  let mut guard = app.lock().await;
+  if is_search_login_current(&guard, search_rev) {
+    report_locked(&mut guard, step, err);
+  }
+}
+
+fn finish_login_error(app: &mut App, search_rev: Option<u64>, err: &anyhow::Error) {
+  if is_search_login_current(app, search_rev) {
+    let message = app
+      .strings()
+      .status
+      .infra
+      .qobuz_login_failed(&format!("{err:#}"));
+    app.set_status_message(message, 8);
+  }
+}
+
+fn finish_login_success(
+  app: &mut App,
+  search_rev: Option<u64>,
+  io_tx: Option<&std::sync::mpsc::Sender<IoEvent>>,
+) {
+  if is_search_login_current(app, search_rev) {
+    let message = app.strings().status.infra.qobuz_logged_in;
+    app.set_status_message(message, 4);
+  }
+  if search_rev.is_none() || app.active_source == Source::Qobuz {
+    if let Some(tx) = io_tx {
+      let _ = tx.send(IoEvent::GetQobuzPlaylists);
+    }
+  }
+}
+
 /// Start the in-TUI browser login on a detached task so the pump keeps running.
-async fn begin_login(app: &Arc<Mutex<App>>) {
-  if LOGIN_IN_PROGRESS.swap(true, Ordering::SeqCst) {
-    set_error(
-      app,
-      crate::infra::app_strings(app)
-        .await
-        .status
-        .infra
-        .qobuz_login_busy
-        .to_string(),
-    )
-    .await;
-    return;
+async fn begin_login(app: &Arc<Mutex<App>>, search_rev: Option<u64>) {
+  {
+    let mut guard = app.lock().await;
+    if !is_search_login_current(&guard, search_rev) {
+      return;
+    }
+    if LOGIN_IN_PROGRESS.swap(true, Ordering::SeqCst) {
+      let message = guard.strings().status.infra.qobuz_login_busy.to_string();
+      guard.set_status_message(message, 6);
+      return;
+    }
   }
   let constants = match constants(app).await {
     Ok(c) => c,
     Err(e) => {
       LOGIN_IN_PROGRESS.store(false, Ordering::SeqCst);
-      report(app, QobuzStep::Constants, e).await;
+      report_login_error_if_current(app, search_rev, QobuzStep::Constants, e).await;
       return;
     }
   };
@@ -344,13 +397,17 @@ async fn begin_login(app: &Arc<Mutex<App>>) {
     Ok(a) => a,
     Err(e) => {
       LOGIN_IN_PROGRESS.store(false, Ordering::SeqCst);
-      report(app, QobuzStep::Login, e).await;
+      report_login_error_if_current(app, search_rev, QobuzStep::Login, e).await;
       return;
     }
   };
   let url = attempt.url();
-  {
+  let io_tx = {
     let mut guard = app.lock().await;
+    if !is_search_login_current(&guard, search_rev) {
+      LOGIN_IN_PROGRESS.store(false, Ordering::SeqCst);
+      return;
+    }
     if let Err(e) = open::that_detached(&url) {
       log::warn!("[qobuz] failed to open browser automatically: {e}");
       {
@@ -363,8 +420,8 @@ async fn begin_login(app: &Arc<Mutex<App>>) {
         guard.set_status_message(strings.status.infra.qobuz_browser_login, 12)
       };
     }
-  }
-  let io_tx = app.lock().await.io_tx_clone();
+    guard.io_tx_clone()
+  };
   let app = Arc::clone(app);
   tokio::spawn(async move {
     match attempt.wait().await {
@@ -372,24 +429,13 @@ async fn begin_login(app: &Arc<Mutex<App>>) {
         if let Err(e) = auth::save_login(&credentials) {
           log::warn!("[qobuz] cannot save credentials: {e:#}");
         }
-        {
-          let mut guard = app.lock().await;
-          let message = guard.strings().status.infra.qobuz_logged_in;
-          guard.set_status_message(message, 4);
-        };
-        if let Some(tx) = io_tx {
-          let _ = tx.send(IoEvent::GetQobuzPlaylists);
-        }
+        let mut guard = app.lock().await;
+        finish_login_success(&mut guard, search_rev, io_tx.as_ref());
       }
       Err(e) => {
         log::warn!("[qobuz] login failed: {e:#}");
         let mut guard = app.lock().await;
-        let message = guard
-          .strings()
-          .status
-          .infra
-          .qobuz_login_failed(&format!("{e:#}"));
-        guard.set_status_message(message, 8);
+        finish_login_error(&mut guard, search_rev, &e);
       }
     }
     LOGIN_IN_PROGRESS.store(false, Ordering::SeqCst);
@@ -428,6 +474,16 @@ async fn load_qobuz_tracks(app: &Arc<Mutex<App>>, playlist_uri: &str, epoch: u64
   finish_qobuz_tracks(&mut app, playlist_uri, epoch, source.token(), result);
 }
 
+fn report_unauthorized_locked(app: &mut App, step: QobuzStep, still_logged_in: bool) {
+  let strings = &app.strings().status.infra;
+  let message = if still_logged_in {
+    strings.qobuz_operation_failed(step.label(strings), "HTTP 401")
+  } else {
+    strings.qobuz_login_expired.to_string()
+  };
+  app.set_error_status_message(message, 8);
+}
+
 /// Apply a finished listing under the App lock. A stale 401 still forgets the
 /// token it was sent with, so the list opened since then logs in again instead
 /// of failing on the same token.
@@ -448,30 +504,52 @@ fn finish_qobuz_tracks(
       app.set_source_track_table(playlist_uri, tracks, TrackTableContext::QobuzPlaylist);
     }
     Err(_) if unauthorized => {
-      let strings = &app.strings().status.infra;
-      let message = if still_logged_in {
-        strings.qobuz_operation_failed(strings.qobuz_step_tracks, "HTTP 401")
-      } else {
-        strings.qobuz_login_expired.to_string()
-      };
-      app.set_error_status_message(message, 8);
+      report_unauthorized_locked(app, QobuzStep::Tracks, still_logged_in);
     }
     Err(e) => report_locked(app, QobuzStep::Tracks, e),
   }
 }
 
+/// Apply a finished search under the App lock. A stale 401 still forgets the
+/// token it was sent with, so the next Qobuz search logs in again instead of
+/// failing on the same expired token, without suppressing a replacement token.
+fn finish_qobuz_search(
+  app: &mut App,
+  source_rev: u64,
+  query: &str,
+  sent_token: &str,
+  result: Result<Vec<crate::core::plugin_api::TrackInfo>>,
+) {
+  let unauthorized = result.as_ref().is_err_and(|err| err.is::<Unauthorized>());
+  let still_logged_in = unauthorized && auth::forget_token(sent_token);
+  if app.source_revision() != source_rev {
+    return;
+  }
+  match result {
+    Ok(tracks) => {
+      app.show_source_search_tracks(query, tracks);
+    }
+    Err(_) if unauthorized => {
+      report_unauthorized_locked(app, QobuzStep::Search, still_logged_in);
+    }
+    Err(e) => report_locked(app, QobuzStep::Search, e),
+  }
+}
+
 /// Run a catalog search and populate the songs block of `app.search_results`.
-async fn run_qobuz_search(app: &Arc<Mutex<App>>, query: &str) {
-  let Some(source) = build_source(app, WhenLoggedOut::Login).await else {
+async fn run_qobuz_search(app: &Arc<Mutex<App>>, query: &str, source_rev: u64) {
+  if app.lock().await.source_revision() != source_rev {
+    return;
+  }
+  let Some(source) = build_source(app, WhenLoggedOut::LoginForSearch(source_rev)).await else {
     return;
   };
-  match source.search(query).await {
-    Ok(results) => app
-      .lock()
-      .await
-      .show_source_search_tracks(query, results.tracks),
-    Err(e) => report(app, QobuzStep::Search, e).await,
+  if app.lock().await.source_revision() != source_rev {
+    return;
   }
+  let result = source.search(query).await.map(|results| results.tracks);
+  let mut guard = app.lock().await;
+  finish_qobuz_search(&mut guard, source_rev, query, source.token(), result);
 }
 
 // ---------------------------------------------------------------------------
@@ -1035,6 +1113,30 @@ async fn teardown_qobuz(app: &Arc<Mutex<App>>) {
 mod tests {
   use super::*;
 
+  static TOKEN_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+  struct SavedToken(Option<String>);
+
+  impl SavedToken {
+    fn capture() -> Self {
+      Self(auth::current_token())
+    }
+  }
+
+  impl Drop for SavedToken {
+    fn drop(&mut self) {
+      auth::set_token(self.0.take());
+    }
+  }
+
+  struct ResetLoginInProgress;
+
+  impl Drop for ResetLoginInProgress {
+    fn drop(&mut self) {
+      LOGIN_IN_PROGRESS.store(false, Ordering::SeqCst);
+    }
+  }
+
   #[test]
   fn a_segment_failure_replaces_the_decoder_error() {
     let failure = progressive::Failure::default();
@@ -1066,6 +1168,8 @@ mod tests {
   #[test]
   fn a_qobuz_listing_401_only_forgets_the_token_it_sent() {
     use crate::core::user_config::UserConfig;
+    let _token_lock = TOKEN_TEST_LOCK.blocking_lock();
+    let _saved = SavedToken::capture();
     const SENT: &str = "listing-401-token";
     const NEW: &str = "new-login-token";
     for (stale, replaced) in [(true, false), (true, true), (false, false), (false, true)] {
@@ -1080,7 +1184,6 @@ mod tests {
       }
       app.set_status_message("Current status", 6);
 
-      let saved = auth::current_token();
       auth::set_token(Some(if replaced { NEW } else { SENT }.into()));
       finish_qobuz_tracks(
         &mut app,
@@ -1090,7 +1193,6 @@ mod tests {
         Err(Unauthorized.into()),
       );
       let left = auth::current_token();
-      auth::set_token(saved);
 
       assert_eq!(left.as_deref(), replaced.then_some(NEW), "stale={stale}");
       let strings = &crate::core::i18n::EN.status.infra;
@@ -1109,6 +1211,170 @@ mod tests {
   fn qobuz_uris_are_recognised_by_scheme() {
     assert!(is_qobuz_uri("qobuz:track:1"));
     assert!(!is_qobuz_uri("subsonic:track:1"));
+  }
+
+  #[tokio::test]
+  async fn queued_qobuz_search_superseded_before_start_is_dropped() {
+    let dir = tempfile::tempdir().unwrap();
+    let (tx, _rx) = std::sync::mpsc::channel();
+    let mut inner = App::new(tx, crate::core::user_config::UserConfig::new(), None);
+    inner.state_path = Some(dir.path().join("state.yml"));
+    inner.set_active_source(Source::Qobuz);
+    let stale_rev = inner.source_revision();
+    inner.set_active_source(Source::Spotify);
+    let app = Arc::new(Mutex::new(inner));
+
+    assert!(
+      route_qobuz_event(
+        &app,
+        &IoEvent::GetQobuzSearchResults("miles".to_string(), stale_rev)
+      )
+      .await
+    );
+    let guard = app.lock().await;
+    assert_eq!(guard.active_source, Source::Spotify);
+    assert!(!guard.status_message_is_error());
+    assert!(guard.search_results().tracks.is_none());
+  }
+
+  #[tokio::test]
+  async fn stale_qobuz_search_setup_does_not_dispatch_login() {
+    let _token_lock = TOKEN_TEST_LOCK.lock().await;
+    let _saved = SavedToken::capture();
+    auth::set_token(None);
+
+    let dir = tempfile::tempdir().unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut inner = App::new(tx, crate::core::user_config::UserConfig::new(), None);
+    inner.state_path = Some(dir.path().join("state.yml"));
+    inner.set_active_source(Source::Qobuz);
+    let stale_rev = inner.source_revision();
+    inner.set_active_source(Source::Spotify);
+    let app = Arc::new(Mutex::new(inner));
+
+    assert!(build_source(&app, WhenLoggedOut::LoginForSearch(stale_rev))
+      .await
+      .is_none());
+    assert!(
+      rx.try_recv().is_err(),
+      "stale setup must not queue QobuzLogin"
+    );
+  }
+
+  #[tokio::test]
+  async fn stale_queued_qobuz_search_login_does_not_start_or_publish_busy() {
+    let _token_lock = TOKEN_TEST_LOCK.lock().await;
+    let dir = tempfile::tempdir().unwrap();
+    let (tx, _rx) = std::sync::mpsc::channel();
+    let mut inner = App::new(tx, crate::core::user_config::UserConfig::new(), None);
+    inner.state_path = Some(dir.path().join("state.yml"));
+    inner.set_active_source(Source::Qobuz);
+    let stale_rev = inner.source_revision();
+    inner.set_active_source(Source::Spotify);
+    let app = Arc::new(Mutex::new(inner));
+
+    {
+      LOGIN_IN_PROGRESS.store(true, Ordering::SeqCst);
+      let _reset = ResetLoginInProgress;
+      assert!(route_qobuz_event(&app, &IoEvent::QobuzLogin(Some(stale_rev))).await);
+    }
+    assert!(!LOGIN_IN_PROGRESS.load(Ordering::SeqCst));
+    assert!(app.lock().await.status_message().is_none());
+
+    assert!(route_qobuz_event(&app, &IoEvent::QobuzLogin(Some(stale_rev))).await);
+    assert!(!LOGIN_IN_PROGRESS.load(Ordering::SeqCst));
+    assert!(app.lock().await.status_message().is_none());
+  }
+
+  #[test]
+  fn a_qobuz_search_401_only_forgets_the_token_it_sent() {
+    use crate::core::user_config::UserConfig;
+    let _token_lock = TOKEN_TEST_LOCK.blocking_lock();
+    let _saved = SavedToken::capture();
+    const SENT: &str = "search-401-token";
+    const NEW: &str = "new-login-token";
+    for (stale, replaced) in [(true, false), (true, true), (false, false), (false, true)] {
+      let (tx, _rx) = std::sync::mpsc::channel();
+      let mut app = App::new(tx, UserConfig::new(), None);
+      app.set_active_source(Source::Qobuz);
+      let source_rev = app.source_revision();
+      if stale {
+        app.set_active_source(Source::Spotify);
+      }
+      app.set_status_message("Current status", 6);
+
+      auth::set_token(Some(if replaced { NEW } else { SENT }.into()));
+      finish_qobuz_search(
+        &mut app,
+        source_rev,
+        "miles",
+        SENT,
+        Err(Unauthorized.into()),
+      );
+      let left = auth::current_token();
+
+      assert_eq!(left.as_deref(), replaced.then_some(NEW), "stale={stale}");
+      let strings = &crate::core::i18n::EN.status.infra;
+      let expected_status = match (stale, replaced) {
+        (true, _) => "Current status".to_string(),
+        (false, true) => strings.qobuz_operation_failed(strings.qobuz_step_search, "HTTP 401"),
+        (false, false) => strings.qobuz_login_expired.to_string(),
+      };
+      assert_eq!(app.status_message(), Some(expected_status.as_str()));
+      assert_eq!(app.status_message_is_error(), !stale);
+    }
+  }
+
+  #[test]
+  fn stale_search_login_callback_error_does_not_overwrite_status() {
+    use crate::core::user_config::UserConfig;
+    let (tx, _rx) = std::sync::mpsc::channel();
+    let mut app = App::new(tx, UserConfig::new(), None);
+    app.set_active_source(Source::Qobuz);
+    let stale_rev = app.source_revision();
+    app.set_active_source(Source::Spotify);
+    app.set_status_message("Current status", 6);
+
+    finish_login_error(&mut app, Some(stale_rev), &anyhow!("timed out"));
+    assert_eq!(app.status_message(), Some("Current status"));
+
+    // Explicit login failures (`None`) remain visible regardless of source switches.
+    finish_login_error(&mut app, None, &anyhow!("timed out"));
+    let expected = crate::core::i18n::EN
+      .status
+      .infra
+      .qobuz_login_failed("timed out");
+    assert_eq!(app.status_message(), Some(expected.as_str()));
+  }
+
+  #[test]
+  fn stale_search_login_callback_success_does_not_overwrite_status_or_fetch_playlists() {
+    use crate::core::user_config::UserConfig;
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut app = App::new(tx.clone(), UserConfig::new(), None);
+    app.set_active_source(Source::Qobuz);
+    let stale_rev = app.source_revision();
+    app.set_active_source(Source::Spotify);
+    app.set_status_message("Current status", 6);
+
+    finish_login_success(&mut app, Some(stale_rev), Some(&tx));
+    assert_eq!(app.status_message(), Some("Current status"));
+    assert!(rx.try_recv().is_err());
+
+    // Switching back to Qobuz while sign-in is still in flight still refreshes the sidebar.
+    app.set_active_source(Source::Qobuz);
+    finish_login_success(&mut app, Some(stale_rev), Some(&tx));
+    assert_eq!(app.status_message(), Some("Current status"));
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::GetQobuzPlaylists)));
+
+    // Explicit login completions (`None`) still publish status and fetch playlists.
+    app.set_active_source(Source::Spotify);
+    finish_login_success(&mut app, None, Some(&tx));
+    assert_eq!(
+      app.status_message(),
+      Some(crate::core::i18n::EN.status.infra.qobuz_logged_in)
+    );
+    assert!(matches!(rx.try_recv(), Ok(IoEvent::GetQobuzPlaylists)));
   }
 }
 

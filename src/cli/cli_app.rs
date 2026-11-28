@@ -505,9 +505,10 @@ impl CliApp {
 
   // spotatui play -n NAME ...
   pub async fn play(&mut self, name: String, item: Type, queue: bool, random: bool) -> Result<()> {
+    let source_rev = self.net.app.lock().await.source_revision();
     self
       .net
-      .handle_network_event(IoEvent::GetSearchResults(name.clone(), None))
+      .handle_network_event(IoEvent::GetSearchResults(name.clone(), None, source_rev))
       .await;
     // Get the uri of the first found
     // item + the offset or return an error message
@@ -524,9 +525,10 @@ impl CliApp {
 
   // spotatui search SEARCH ...
   pub async fn query(&mut self, search: String, format: String, item: Type) -> String {
+    let source_rev = self.net.app.lock().await.source_revision();
     self
       .net
-      .handle_network_event(IoEvent::GetSearchResults(search.clone(), None))
+      .handle_network_event(IoEvent::GetSearchResults(search.clone(), None, source_rev))
       .await;
 
     let app = self.net.app.lock().await;
