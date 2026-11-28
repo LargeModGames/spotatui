@@ -1,0 +1,1 @@
+- **Local, YouTube, and Qobuz playlist load errors clear the GUI loading state**: failures during playlist loading now set the error status flag so the GUI shows the failure instead of staying on "Loading playlist…" ([#1204](https://github.com/LargeModGames/spotatui/issues/1204)).

@@ -296,7 +296,7 @@ fn report_locked(app: &mut App, step: QobuzStep, err: anyhow::Error) {
   } else {
     log::warn!("[qobuz] {step}: {err:#}");
     let strings = app.strings();
-    app.set_status_message(
+    app.set_error_status_message(
       strings
         .status
         .infra
@@ -308,7 +308,7 @@ fn report_locked(app: &mut App, step: QobuzStep, err: anyhow::Error) {
 
 /// Deliberate divergence from `handle_error`: a status message, no error route.
 async fn set_error(app: &Arc<Mutex<App>>, message: String) {
-  app.lock().await.set_status_message(message, 6);
+  app.lock().await.set_error_status_message(message, 6);
 }
 
 // ---------------------------------------------------------------------------
@@ -1034,6 +1034,9 @@ async fn teardown_qobuz(app: &Arc<Mutex<App>>) {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::core::user_config::UserConfig;
+  use std::sync::mpsc::channel;
+  use std::time::SystemTime;
 
   #[test]
   fn a_segment_failure_replaces_the_decoder_error() {
@@ -1103,6 +1106,42 @@ mod tests {
       assert_eq!(app.status_message_is_error(), !stale);
       assert!(app.track_table.tracks.is_empty());
     }
+  }
+
+  #[test]
+  fn generic_qobuz_track_load_failure_marks_status_as_error() {
+    let (tx, rx) = channel();
+    let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
+    app.open_source_playlist_tracks("qobuz:playlist:1".into());
+    let Ok(IoEvent::GetQobuzTracks(_, epoch)) = rx.try_recv() else {
+      panic!("expected GetQobuzTracks");
+    };
+
+    finish_qobuz_tracks(
+      &mut app,
+      "qobuz:playlist:1",
+      epoch,
+      "sent-token",
+      Err(anyhow::anyhow!("502 Bad Gateway")),
+    );
+
+    assert!(app.track_table.tracks.is_empty());
+    assert!(app.status_message().is_some());
+    assert!(app.status_message_is_error());
+  }
+
+  #[tokio::test]
+  async fn set_error_marks_status_as_error() {
+    let (tx, _rx) = channel();
+    let app = Arc::new(Mutex::new(App::new(
+      tx,
+      UserConfig::new(),
+      Some(SystemTime::now()),
+    )));
+    set_error(&app, "Qobuz error".into()).await;
+    let app = app.lock().await;
+    assert_eq!(app.status_message(), Some("Qobuz error"));
+    assert!(app.status_message_is_error());
   }
 
   #[test]

@@ -281,7 +281,7 @@ async fn load_playlist_tracks(app: &Arc<Mutex<App>>, uri: &str, epoch: u64) {
       .infra
       .youtube_playlists_failed(&e.to_string()),
   };
-  app.set_status_message(message, 6);
+  app.set_error_status_message(message, 6);
 }
 
 /// Create a playlist and refresh the sidebar.
@@ -995,7 +995,7 @@ pub async fn teardown_youtube(app: &Arc<Mutex<App>>) {
 }
 
 async fn set_error(app: &Arc<Mutex<App>>, message: String) {
-  app.lock().await.set_status_message(message, 6);
+  app.lock().await.set_error_status_message(message, 6);
 }
 
 #[cfg(test)]
@@ -1323,5 +1323,38 @@ mod tests {
       app.lock().await.youtube_playback.is_none(),
       "a foreign start must tear down the YouTube session (device handoff)"
     );
+  }
+
+  #[tokio::test]
+  async fn missing_playlist_tracks_marks_status_as_error() {
+    let (tx, rx) = channel();
+    let app = Arc::new(Mutex::new(App::new(
+      tx,
+      UserConfig::new(),
+      Some(SystemTime::now()),
+    )));
+    app
+      .lock()
+      .await
+      .open_source_playlist_tracks("youtube:playlist:missing-test-1204".into());
+    let event = rx
+      .try_recv()
+      .expect("opening a youtube playlist dispatches its load");
+
+    assert!(route_youtube_event(&app, &event).await);
+
+    let app = app.lock().await;
+    assert!(app.track_table.tracks.is_empty());
+    assert!(app.status_message().is_some());
+    assert!(app.status_message_is_error());
+  }
+
+  #[tokio::test]
+  async fn set_error_marks_status_as_error() {
+    let app = Arc::new(Mutex::new(test_app()));
+    set_error(&app, "YouTube playlist error".into()).await;
+    let app = app.lock().await;
+    assert_eq!(app.status_message(), Some("YouTube playlist error"));
+    assert!(app.status_message_is_error());
   }
 }
