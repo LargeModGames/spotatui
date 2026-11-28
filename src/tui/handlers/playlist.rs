@@ -141,17 +141,6 @@ pub fn handler(key: Key, app: &mut App) {
     k if common_key_events::high_event(k) && total_display_count(app) > 0 => {
       app.view.selected_playlist_index = Some(0);
     }
-    k if common_key_events::middle_event(k) => {
-      let count = total_display_count(app);
-      if count > 0 {
-        let next_index = if count.is_multiple_of(2) {
-          count.saturating_sub(1) / 2
-        } else {
-          count / 2
-        };
-        app.view.selected_playlist_index = Some(next_index);
-      }
-    }
     k if common_key_events::low_event(k) => {
       let count = total_display_count(app);
       if count > 0 {
@@ -200,7 +189,7 @@ pub fn handler(key: Key, app: &mut App) {
         }
       }
     }
-    Key::Char('m')
+    Key::Char('M')
       if app
         .availability(Requirement::Capability(Capability::PlaylistSync))
         .is_available() =>
@@ -518,7 +507,6 @@ mod tests {
       (Key::Ctrl('p'), 2),
       (Key::Ctrl('n'), 0),
       (Key::Char('H'), 0),
-      (Key::Char('M'), 1),
       (Key::Char('L'), 3),
     ] {
       let (mut app, _dir) = pin_app_with(key, Source::Spotify);
@@ -537,7 +525,7 @@ mod tests {
 
   #[test]
   fn existing_sidebar_actions_keep_priority_over_a_rebound_pin_key() {
-    for key in [Key::Enter, Key::Char(','), Key::Char('D'), Key::Char('m')] {
+    for key in [Key::Enter, Key::Char(','), Key::Char('D'), Key::Char('M')] {
       let mut config = UserConfig::new();
       config.keys.pin_playlist = key;
       let (mut app, _dir) = pin_app_with_config(config, Source::Spotify, true);
@@ -557,7 +545,7 @@ mod tests {
           );
           assert_eq!(app.view.dialog.as_deref(), Some("One"));
         }
-        Key::Char('m') => {
+        Key::Char('M') => {
           if app.get_current_route().active_block
             == ActiveBlock::Dialog(DialogContext::PlaylistSyncPicker)
           {
@@ -990,7 +978,7 @@ mod tests {
     });
     app.view.selected_playlist_index = Some(0);
 
-    handler(Key::Char('m'), &mut app);
+    handler(Key::Char('M'), &mut app);
 
     assert_eq!(
       app.get_current_route().active_block,

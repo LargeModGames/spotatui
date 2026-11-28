@@ -128,6 +128,7 @@ feature_list![
   "spotify-session",
   "streaming",
   "soloist",
+  "milkdrop",
   "apple-music",
   "audio-viz",
   "audio-viz-cpal",

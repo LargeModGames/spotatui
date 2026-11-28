@@ -33,12 +33,6 @@ pub fn handler(key: Key, app: &mut App) {
         app.view.recently_played_index = next_index;
       }
     }
-    k if common_key_events::middle_event(k) => {
-      if let Some(recently_played_result) = &app.recently_played {
-        let next_index = common_key_events::on_middle_press_handler(&recently_played_result.items);
-        app.view.recently_played_index = next_index;
-      }
-    }
     k if common_key_events::low_event(k) => {
       if let Some(recently_played_result) = &app.recently_played {
         let next_index = common_key_events::on_low_press_handler(&recently_played_result.items);

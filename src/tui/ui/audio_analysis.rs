@@ -61,6 +61,8 @@ pub fn draw_in(f: &mut Frame<'_>, app: &App, area: Rect, margin: u16) {
   let tick_rate = normalize_tick_rate_milliseconds(tick_rate as i64);
   let visualizer_style = app.user_config.behavior.visualizer_style;
   let pitch_view = app.pitch_view_shows();
+  #[cfg(feature = "milkdrop")]
+  let milkdrop_title = format!("MilkDrop: {}", super::milkdrop::current_name());
   let (style_name, chart_name) = if pitch_view {
     (
       app.strings().screens.spotify_pitch,
@@ -83,6 +85,12 @@ pub fn draw_in(f: &mut Frame<'_>, app: &App, area: Rect, margin: u16) {
     )
   };
 
+  #[cfg(feature = "milkdrop")]
+  let style_name = if app.view.milkdrop && !pitch_view {
+    milkdrop_title.as_str()
+  } else {
+    style_name
+  };
   let info_block = Block::default()
     .title(Span::styled(
       app.strings().screens.visualization_title(style_name),
@@ -153,6 +161,11 @@ pub fn draw_in(f: &mut Frame<'_>, app: &App, area: Rect, margin: u16) {
     f.render_widget(bar_chart_block, visualizer_area);
 
     // Render the appropriate visualizer based on user setting
+    #[cfg(feature = "milkdrop")]
+    if app.view.milkdrop {
+      super::milkdrop::render(f.buffer_mut(), inner_area);
+      return;
+    }
     match visualizer_style {
       VisualizerStyle::BarGraph => render_bar_graph(f, &spectrum.bands, inner_area),
       VisualizerStyle::Cava => render_cava(

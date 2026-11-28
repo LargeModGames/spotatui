@@ -90,7 +90,7 @@ unmatched list does not cost a search per track on every launch.
 
 ## Making a link
 
-In the sidebar, highlight the playlist that is the master and press `m`. A
+In the sidebar, highlight the playlist that is the master and press `M`. A
 picker lists the other sources that can take a mirror: the ones compiled into
 this build, with Spotify only while a session exists and Subsonic only with a
 server configured. Enter looks for a playlist of yours with the master's name

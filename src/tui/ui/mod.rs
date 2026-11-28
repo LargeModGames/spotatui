@@ -11,6 +11,8 @@ pub mod help;
 pub mod home;
 pub mod library;
 pub mod lyrics;
+#[cfg(feature = "milkdrop")]
+pub mod milkdrop;
 pub mod now_playing;
 pub mod panes;
 pub mod player;

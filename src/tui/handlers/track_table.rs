@@ -65,10 +65,6 @@ pub fn handler(key: Key, app: &mut App) {
       let next_index = common_key_events::on_high_press_handler();
       app.view.track_table_index = next_index;
     }
-    k if common_key_events::middle_event(k) => {
-      let next_index = common_key_events::on_middle_press_handler(&app.track_table.tracks);
-      app.view.track_table_index = next_index;
-    }
     k if common_key_events::low_event(k) => {
       let next_index = common_key_events::on_low_press_handler(&app.track_table.tracks);
       app.view.track_table_index = next_index;

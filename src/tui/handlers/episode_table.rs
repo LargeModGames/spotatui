@@ -32,12 +32,6 @@ pub fn handler(key: Key, app: &mut App) {
         app.view.episode_list_index = next_index;
       }
     }
-    k if common_key_events::middle_event(k) => {
-      if let Some(episodes) = app.library().show_episodes.get_results(None) {
-        let next_index = common_key_events::on_middle_press_handler(&episodes.items);
-        app.view.episode_list_index = next_index;
-      }
-    }
     k if common_key_events::low_event(k) => {
       if let Some(episodes) = app.library().show_episodes.get_results(None) {
         let next_index = common_key_events::on_low_press_handler(&episodes.items);

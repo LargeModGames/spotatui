@@ -48,12 +48,6 @@ pub fn handler(key: Key, app: &mut App) {
         app.view.artists_list_index = next_index;
       }
     }
-    k if common_key_events::middle_event(k) => {
-      if !app.artists.is_empty() {
-        let next_index = common_key_events::on_middle_press_handler(&app.artists);
-        app.view.artists_list_index = next_index;
-      }
-    }
     k if common_key_events::low_event(k) => {
       if !app.artists.is_empty() {
         let next_index = common_key_events::on_low_press_handler(&app.artists);
@@ -302,7 +296,7 @@ mod tests {
   }
 
   #[test]
-  fn high_middle_low_jump_within_artists() {
+  fn high_and_low_jump_within_artists() {
     let (mut app, _rx) = app_with_saved_artists();
     app.view.artists_list_index = 1;
 
@@ -311,9 +305,6 @@ mod tests {
 
     handler(Key::Char('L'), &mut app);
     assert_eq!(app.view.artists_list_index, 1);
-
-    handler(Key::Char('M'), &mut app);
-    assert!(app.view.artists_list_index <= 1);
   }
 
   #[test]

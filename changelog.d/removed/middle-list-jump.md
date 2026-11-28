@@ -1,0 +1,1 @@
+- **The `M` list jump**: `M` selected the middle of the rows that were loaded, which in a paged list is the middle of one page. `H` and `L` still jump to the top and the bottom. Mirroring a playlist moves from `m` to `M`.

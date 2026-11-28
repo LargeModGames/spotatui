@@ -231,6 +231,8 @@ impl TerminalSession {
     if self.keyboard_enhancement_enabled {
       let _ = execute!(stdout(), PopKeyboardEnhancementFlags);
     }
+    #[cfg(feature = "milkdrop")]
+    ui::milkdrop::clear(&mut stdout());
     ratatui::restore();
   }
 }
@@ -393,6 +395,9 @@ pub async fn start_ui(
           f.set_cursor_position(position);
         }
       })?;
+      // The MilkDrop image goes after ratatui's cells, over the cells it skipped.
+      #[cfg(feature = "milkdrop")]
+      ui::milkdrop::flush(frame.buffer, &mut stdout())?;
       if let (Some(inspector), Some(snapshot)) = (&inspector, pending_snapshot.take()) {
         let route = format!("{:?}/{:?}", current_route.id, current_route.active_block);
         inspector.write_frame(&snapshot, &route, frame.buffer);
@@ -453,6 +458,12 @@ pub async fn start_ui(
             cover_art_full_image_support: cover_art_full_image_support(),
           },
         );
+        #[cfg(feature = "milkdrop")]
+        if app.view.milkdrop {
+          if let Some(audio) = driver.recent_audio() {
+            ui::milkdrop::feed(&audio);
+          }
+        }
       }
     }
 

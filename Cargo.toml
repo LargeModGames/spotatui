@@ -29,6 +29,8 @@ exclude = [
 [dependencies]
 rspotify = { version = "0.16", default-features = false, features = ["cli", "env-file", "client-reqwest"] }
 ratatui = { version = "0.30", features = ["crossterm", "layout-cache"], default-features = false, optional = true }
+tidewarp = { version = "0.3", optional = true, features = ["gpu", "textures"] }
+tidewarp-term = { version = "0.3", optional = true }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_yaml = "0.9"
@@ -256,6 +258,8 @@ qobuz = ["audio-decode-queue", "queue", "queue-download", "reqwest/stream", "dep
 # process the user downloads from Spotify, driven over its loopback WebSocket.
 # No new crates. Opt-in at runtime through `behavior.playback_engine`.
 soloist = ["streaming"]
+# MilkDrop-format visuals from the tidewarp engine as a terminal visualizer style.
+milkdrop = ["tui", "audio-viz-cpal", "dep:tidewarp", "dep:tidewarp-term"]
 # Apple Music on macOS: a remote for the Music app, which plays the audio itself.
 # No decoder and no Apple crates; off by default and not in `all-sources`, since
 # it only works on macOS. The macOS rows in cd.yml and the `macos` CI job enable it.

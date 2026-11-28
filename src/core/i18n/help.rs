@@ -30,7 +30,6 @@ pub struct HelpStrings {
   pub move_up: &'static str,
   pub move_right: &'static str,
   pub list_top: &'static str,
-  pub list_middle: &'static str,
   pub list_bottom: &'static str,
   pub search: &'static str,
   pub filter_help: &'static str,
@@ -40,6 +39,10 @@ pub struct HelpStrings {
   pub active_mode: &'static str,
   pub audio_analysis: &'static str,
   pub visualizer_style: &'static str,
+  #[cfg(feature = "milkdrop")]
+  pub milkdrop_preset: &'static str,
+  #[cfg(feature = "milkdrop")]
+  pub milkdrop_open: &'static str,
   pub lyrics_view: &'static str,
   pub lyrics_scroll: &'static str,
   pub lyrics_follow: &'static str,
@@ -202,7 +205,6 @@ pub const EN: HelpStrings = HelpStrings {
   move_up: "Move selection up",
   move_right: "Move selection right",
   list_top: "Move selection to top of list",
-  list_middle: "Move selection to middle of list",
   list_bottom: "Move selection to bottom of list",
   search: "Enter input for search",
   filter_help: "Filter help rows",
@@ -212,6 +214,10 @@ pub const EN: HelpStrings = HelpStrings {
   active_mode: "Enter active mode",
   audio_analysis: "Go to audio analysis screen",
   visualizer_style: "Cycle visualizer style (in audio analysis)",
+  #[cfg(feature = "milkdrop")]
+  milkdrop_preset: "Previous / next MilkDrop preset (in MilkDrop)",
+  #[cfg(feature = "milkdrop")]
+  milkdrop_open: "Show MilkDrop visuals",
   lyrics_view: "Go to lyrics view",
   lyrics_scroll: "Scroll lyrics (pauses auto-follow)",
   lyrics_follow: "Resume following the current lyric line",
@@ -375,7 +381,6 @@ pub const ZH_HANS: HelpStrings = HelpStrings {
   move_up: "向上移动选中项",
   move_right: "向右移动选中项",
   list_top: "选中列表顶部",
-  list_middle: "选中列表中部",
   list_bottom: "选中列表底部",
   search: "进入搜索输入框",
   filter_help: "筛选帮助条目",
@@ -546,7 +551,6 @@ pub const ZH_HANT: HelpStrings = HelpStrings {
   move_up: "向上移動選取項目",
   move_right: "向右移動選取項目",
   list_top: "選取清單頂端",
-  list_middle: "選取清單中段",
   list_bottom: "選取清單底端",
   search: "進入搜尋輸入框",
   filter_help: "篩選說明項目",

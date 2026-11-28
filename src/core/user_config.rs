@@ -599,7 +599,6 @@ pub fn key_to_config_string(key: &Key) -> String {
 fn check_reserved_keys(key: Key) -> Result<()> {
   let reserved = [
     Key::Char('H'),
-    Key::Char('M'),
     Key::Char('L'),
     Key::Up,
     Key::Down,
@@ -670,6 +669,8 @@ pub struct KeyBindingsString {
   copy_song_url: Option<String>,
   copy_album_url: Option<String>,
   audio_analysis: Option<String>,
+  #[cfg(feature = "milkdrop")]
+  milkdrop: Option<String>,
   #[serde(alias = "basic_view")]
   lyrics_view: Option<String>,
   miniplayer_view: Option<String>,
@@ -747,6 +748,8 @@ pub struct KeyBindings {
   pub copy_song_url: Key,
   pub copy_album_url: Key,
   pub audio_analysis: Key,
+  #[cfg(feature = "milkdrop")]
+  pub milkdrop: Key,
   pub lyrics_view: Key,
   pub miniplayer_view: Key,
   pub cover_art_view: Key,
@@ -1445,6 +1448,8 @@ impl UserConfig {
         copy_song_url: Key::Char('c'),
         copy_album_url: Key::Char('C'),
         audio_analysis: Key::Char('v'),
+        #[cfg(feature = "milkdrop")]
+        milkdrop: Key::Char('m'),
         lyrics_view: Key::Char('B'),
         miniplayer_view: Key::Char('T'),
         cover_art_view: Key::Char('G'),
@@ -1683,6 +1688,8 @@ impl UserConfig {
     to_keys!(copy_song_url);
     to_keys!(copy_album_url);
     to_keys!(audio_analysis);
+    #[cfg(feature = "milkdrop")]
+    to_keys!(milkdrop);
     to_keys!(lyrics_view);
     to_keys!(miniplayer_view);
     to_keys!(cover_art_view);
@@ -2467,6 +2474,8 @@ impl UserConfig {
       k.copy_song_url,
       k.copy_album_url,
       k.audio_analysis,
+      #[cfg(feature = "milkdrop")]
+      k.milkdrop,
       k.lyrics_view,
       k.miniplayer_view,
       k.cover_art_view,
@@ -2816,6 +2825,8 @@ impl UserConfig {
       copy_song_url: Some(key_to_config_string(self.keys.copy_song_url)),
       copy_album_url: Some(key_to_config_string(self.keys.copy_album_url)),
       audio_analysis: Some(key_to_config_string(self.keys.audio_analysis)),
+      #[cfg(feature = "milkdrop")]
+      milkdrop: Some(key_to_config_string(self.keys.milkdrop)),
       lyrics_view: Some(key_to_config_string(self.keys.lyrics_view)),
       miniplayer_view: Some(key_to_config_string(self.keys.miniplayer_view)),
       cover_art_view: Some(key_to_config_string(self.keys.cover_art_view)),

@@ -25,10 +25,6 @@ pub fn handler(key: Key, app: &mut App) {
     k if common_key_events::high_event(k) => {
       app.view.local_playlists_index = common_key_events::on_high_press_handler();
     }
-    k if common_key_events::middle_event(k) => {
-      app.view.local_playlists_index =
-        common_key_events::on_middle_press_handler(app.local_playlists());
-    }
     k if common_key_events::low_event(k) => {
       app.view.local_playlists_index =
         common_key_events::on_low_press_handler(app.local_playlists());
