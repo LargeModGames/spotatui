@@ -85,7 +85,12 @@ pub async fn route_local_event(app: &Arc<Mutex<App>>, event: &IoEvent) -> bool {
     },
     // Any other start is a real Spotify play: relinquish the device first, then
     // let the network handle it.
-    IoEvent::StartPlayback(..) | IoEvent::ReplayStartPlayback(..) => {
+    IoEvent::StartPlayback(..) => {
+      teardown_local(app).await;
+      false
+    }
+    #[cfg(feature = "streaming")]
+    IoEvent::ReplayStartPlayback(..) => {
       teardown_local(app).await;
       false
     }

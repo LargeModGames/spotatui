@@ -74,7 +74,12 @@ pub async fn route_radio_event(app: &Arc<Mutex<App>>, event: &IoEvent) -> bool {
     },
     // Any other start is a local/Subsonic/Spotify play: relinquish the device,
     // then let the normal dispatch run.
-    IoEvent::StartPlayback(..) | IoEvent::ReplayStartPlayback(..) => {
+    IoEvent::StartPlayback(..) => {
+      teardown_radio(app).await;
+      false
+    }
+    #[cfg(feature = "streaming")]
+    IoEvent::ReplayStartPlayback(..) => {
       teardown_radio(app).await;
       false
     }
