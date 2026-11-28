@@ -10,6 +10,9 @@ pub fn handler(key: Key, app: &mut App) {
     Key::Char('d') => {
       app.apply(Action::DisableRecapPrompt);
     }
+    Key::Esc => {
+      app.apply(Action::DismissRecapPrompt);
+    }
     _ => {}
   }
 }
