@@ -905,4 +905,23 @@ mod tests {
     assert_eq!(resolve(Color::Indexed(232), &palette), [8, 8, 8]);
     assert_eq!(resolve(Color::Indexed(255), &palette), [238, 238, 238]);
   }
+
+  // `from_name` ends in a `_ => Custom` fallback, so a preset without an arm
+  // there still compiles and then loads back from `config.yml` as Custom.
+  #[test]
+  fn every_theme_preset_round_trips_through_its_config_name() {
+    let mut seen = std::collections::HashSet::new();
+    for preset in ThemePreset::all() {
+      let name = preset.name();
+      assert_eq!(
+        ThemePreset::from_name(name),
+        *preset,
+        "{preset:?} is saved as {name:?} but does not load back from that name"
+      );
+      assert!(
+        seen.insert(name),
+        "{preset:?} shares the name {name:?} with another preset"
+      );
+    }
+  }
 }

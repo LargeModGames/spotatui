@@ -1,0 +1,1 @@
+- **Similarly named Lua plugins save their data separately**: plugins whose names sanitize to the same identifier (such as `mix.notes.lua` and `mix_notes.lua`) now write to distinct storage namespaces instead of sharing `plugin-data/<plugin_id>.json` ([#1190](https://github.com/LargeModGames/spotatui/issues/1190)).

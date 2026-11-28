@@ -700,7 +700,7 @@ pub(super) fn install_api(
   }
 
   // Plugin-scoped persistent storage: a flat JSON object per plugin under
-  // <config_dir>/plugin-data/<plugin_id>.json. Lazily loaded on first touch,
+  // <config_dir>/plugin-data/<namespace>.json. Lazily loaded on first touch,
   // flushed by the engine (throttled on tick, forced on quit).
   {
     let shared_get = shared.clone();
@@ -779,7 +779,7 @@ pub(super) fn install_api(
 
 /// The storage namespace for the plugin currently on the call stack.
 fn storage_namespace(shared: &Rc<ScriptShared>) -> mlua::Result<String> {
-  let namespace = super::shared::plugin_id(&shared.current_plugin.borrow());
+  let namespace = super::shared::storage_namespace_id(&shared.current_plugin.borrow());
   if namespace.is_empty() {
     return Err(mlua::Error::RuntimeError(
       "spotatui.storage_*: no plugin context (storage is only available from plugin code)"
@@ -789,33 +789,83 @@ fn storage_namespace(shared: &Rc<ScriptShared>) -> mlua::Result<String> {
   Ok(namespace)
 }
 
-/// Load a namespace from disk on first touch. Missing or corrupt files map to
-/// an empty namespace (corruption is logged, never fatal).
+/// Read one storage JSON file: `None` if missing, `Some(Some(map))` if valid,
+/// or `Some(None)` if unreadable/corrupt (logged, never fatal).
+fn read_storage_map(
+  path: &std::path::Path,
+) -> Option<Option<serde_json::Map<String, serde_json::Value>>> {
+  let text = match std::fs::read_to_string(path) {
+    Ok(text) => text,
+    Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+    Err(e) => {
+      log::warn!(
+        "[lua] failed to read plugin storage {} ({e}); starting empty",
+        path.display()
+      );
+      return Some(None);
+    }
+  };
+  match serde_json::from_str::<serde_json::Value>(&text) {
+    Ok(serde_json::Value::Object(map)) => Some(Some(map)),
+    Ok(_) => {
+      log::warn!(
+        "[lua] plugin storage {} is not a JSON object; starting empty",
+        path.display()
+      );
+      Some(None)
+    }
+    Err(e) => {
+      log::warn!(
+        "[lua] plugin storage {} is corrupt ({e}); starting empty",
+        path.display()
+      );
+      Some(None)
+    }
+  }
+}
+
+/// Returns `true` when both optional paths resolve to the same on-disk file
+/// (e.g. `Mix_Notes.json` and `mix_notes.json` on a case-insensitive volume).
+fn same_save_file(a: Option<&std::path::PathBuf>, b: &std::path::Path) -> bool {
+  let Some(a) = a else {
+    return false;
+  };
+  match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+    (Ok(ca), Ok(cb)) => ca == cb,
+    _ => false,
+  }
+}
+
+/// Load a namespace from disk on first touch. When a hashed namespace file
+/// (`<id>.<hash>.json`) does not exist yet, fall back to the legacy `<id>.json`
+/// file as the starting value unless another loaded plugin owns that save path.
+/// Missing or corrupt files map to an empty namespace.
 fn ensure_storage_loaded(shared: &Rc<ScriptShared>, namespace: &str) {
   if shared.storage.borrow().contains_key(namespace) {
     return;
   }
   let loaded = shared
     .storage_path(namespace)
-    .and_then(|path| match std::fs::read_to_string(&path) {
-      Ok(text) => match serde_json::from_str::<serde_json::Value>(&text) {
-        Ok(serde_json::Value::Object(map)) => Some(map),
-        Ok(_) => {
-          log::warn!(
-            "[lua] plugin storage {} is not a JSON object; starting empty",
-            path.display()
-          );
-          None
-        }
-        Err(e) => {
-          log::warn!(
-            "[lua] plugin storage {} is corrupt ({e}); starting empty",
-            path.display()
-          );
-          None
-        }
-      },
-      Err(_) => None, // missing file: first run
+    .and_then(|path| match read_storage_map(&path) {
+      Some(result) => result,
+      None => namespace
+        .split_once('.')
+        .map(|(legacy_id, _)| legacy_id)
+        .and_then(|legacy_id| {
+          let legacy_path = shared.storage_path(legacy_id)?;
+          let owned_by_loaded = shared.loaded_namespaces.borrow().iter().any(|loaded| {
+            loaded == legacy_id
+              || (loaded.eq_ignore_ascii_case(legacy_id)
+                && same_save_file(shared.storage_path(loaded).as_ref(), &legacy_path))
+          });
+          if owned_by_loaded {
+            None
+          } else {
+            Some(legacy_path)
+          }
+        })
+        .and_then(|legacy_path| read_storage_map(&legacy_path))
+        .flatten(),
     })
     .unwrap_or_default();
   shared

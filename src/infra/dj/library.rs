@@ -13,7 +13,7 @@
 //! [`super::resolve`] does: they take `&Network` and *return* an answer instead of
 //! writing into `App`.
 
-use super::{dedupe_key, DjLibrary, MAX_LIBRARY_TRACKS};
+use super::{library_key, DjLibrary, MAX_LIBRARY_TRACKS};
 use crate::infra::network::Network;
 use serde::Deserialize;
 use std::collections::HashSet;
@@ -63,10 +63,24 @@ struct TrackItem {
   track: Option<TrackRef>,
 }
 
+impl TrackItem {
+  /// The row's song, if it is one. Podcast episodes share the row shape, so a
+  /// row is skipped when Spotify says its `type` is anything but `track`. Rows
+  /// without a type are kept.
+  fn music_track(&self) -> Option<&TrackRef> {
+    self
+      .track
+      .as_ref()
+      .filter(|track| track.kind.as_deref().is_none_or(|kind| kind == "track"))
+  }
+}
+
 #[derive(Deserialize)]
 struct TrackRef {
   id: Option<String>,
   name: Option<String>,
+  #[serde(default, rename = "type")]
+  kind: Option<String>,
   #[serde(default)]
   artists: Vec<ArtistRef>,
 }
@@ -74,6 +88,21 @@ struct TrackRef {
 #[derive(Deserialize)]
 struct ArtistRef {
   name: Option<String>,
+}
+
+/// The avoid-library key for a playlist track, or `None` for a track without a
+/// title.
+///
+/// Keyed on the first artist's full name: joining the list and splitting it
+/// again at commas would turn `Tyler, The Creator` into `Tyler`.
+fn track_library_key(track: &TrackRef) -> Option<String> {
+  let name = track.name.as_deref().filter(|name| !name.is_empty())?;
+  let artist = track
+    .artists
+    .iter()
+    .find_map(|artist| artist.name.as_deref())
+    .unwrap_or_default();
+  Some(library_key(name, artist))
 }
 
 /// Whether this playlist counts as one of the listener's own.
@@ -115,8 +144,9 @@ pub async fn build_index(net: &Network, owner_id: &str) -> anyhow::Result<DjLibr
       // crawled again: fail the crawl so the next ask retries it.
       Err(e) if crate::infra::network::requests::is_rate_limited_error(&e) => return Err(e),
       Err(e) => {
-        // Keep going, but stop claiming the index is complete: the tracks in
-        // this playlist will not be filtered, and only `truncated` says so.
+        // Keep going, but stop claiming the index is complete: the tracks on
+        // the pages that failed will not be filtered, and only `truncated`
+        // says so.
         library.truncated = true;
         log::debug!("DJ: skipping playlist {id} while indexing: {e}");
       }
@@ -191,7 +221,7 @@ async fn collect_playlist(
           // size, and the crawl pays that per 100 tracks.
           (
             "fields",
-            "items(item(id,name,artists(name))),next".to_string(),
+            "items(item(id,name,type,artists(name))),next".to_string(),
           ),
           ("limit", TRACK_PAGE.to_string()),
           ("offset", offset.to_string()),
@@ -201,20 +231,14 @@ async fn collect_playlist(
 
     let count = page.items.len();
     for item in &page.items {
-      // Episodes and removed tracks arrive as a null `track`.
-      let Some(track) = item.track.as_ref() else {
+      // Removed tracks arrive as a null `track`; episodes are skipped by type.
+      let Some(track) = item.music_track() else {
         continue;
       };
-      let Some(name) = track.name.as_deref().filter(|name| !name.is_empty()) else {
+      let Some(key) = track_library_key(track) else {
         continue;
       };
-      let artists = track
-        .artists
-        .iter()
-        .filter_map(|artist| artist.name.clone())
-        .collect::<Vec<_>>()
-        .join(", ");
-      library.keys.insert(dedupe_key(name, &artists));
+      library.keys.insert(key);
       if let Some(id) = track.id.clone() {
         library.ids.insert(id);
       }
@@ -303,6 +327,66 @@ mod tests {
     assert!(page.items[0].track.is_some());
     assert!(page.items[1].track.is_some(), "the `item` alias must parse");
     assert!(page.items[2].track.is_none(), "a null track is skipped");
+    assert!(
+      page.items[..2]
+        .iter()
+        .all(|row| row.music_track().is_some()),
+      "a row without a type is still a song"
+    );
+  }
+
+  #[test]
+  fn a_playlist_episode_is_not_counted_as_a_music_track() {
+    let page: TrackPage = serde_json::from_str(
+      r#"{
+        "items": [
+          {"item": {
+            "type": "track", "id": "song", "name": "Song",
+            "artists": [{"name": "Band"}]
+          }},
+          {"item": {"type": "episode", "id": "episode", "name": "Interview"}}
+        ],
+        "next": null
+      }"#,
+    )
+    .unwrap();
+    let ids: Vec<_> = page
+      .items
+      .iter()
+      .filter_map(|row| row.music_track()?.id.as_deref())
+      .collect();
+
+    assert_eq!(ids, ["song"]);
+    // The episode is still a row, so it still counts toward the next page.
+    assert_eq!(page.items.len(), 2);
+  }
+
+  #[test]
+  fn playlist_tracks_are_keyed_on_the_first_artists_full_name() {
+    let page: TrackPage = serde_json::from_str(
+      r#"{"items":[
+        {"track":{"id":"t1","name":"Same Title","artists":[{"name":"Tyler, The Creator"}]}},
+        {"track":{"id":"t2","name":"Weird Fishes / Arpeggi",
+          "artists":[{"name":"Radiohead"},{"name":"Thom Yorke"}]}},
+        {"track":{"id":"t3","name":"","artists":[{"name":"Radiohead"}]}}
+      ],"next":null}"#,
+    )
+    .unwrap();
+    let keys: HashSet<String> = page
+      .items
+      .iter()
+      .filter_map(|item| item.track.as_ref())
+      .filter_map(track_library_key)
+      .collect();
+
+    assert_eq!(keys.len(), 2, "a track without a title is not keyed");
+    // A suggestion for a same-titled song by `Tyler` is not skipped before the
+    // search.
+    assert!(!keys.contains(&library_key("Same Title", "Tyler")));
+    assert!(keys.contains(&library_key("Same Title", "Tyler, The Creator")));
+    // A multi-artist credit still matches a suggestion naming its first artist.
+    assert!(keys.contains(&library_key("weird fishes arpeggi", "Radiohead")));
+    assert!(!keys.contains(&library_key("Weird Fishes / Arpeggi", "Thom Yorke")));
   }
 
   #[test]
@@ -336,14 +420,36 @@ mod tests {
       .contains("stopped at"));
 
     let capped = DjLibrary {
+      tracks: MAX_LIBRARY_TRACKS,
       truncated: true,
       ..full
     };
+    let summary = capped.summary_with(&crate::core::i18n::EN);
     assert!(
-      capped
-        .summary_with(&crate::core::i18n::EN)
-        .contains("not filtered"),
+      summary.contains("not filtered"),
       "a partial index has to say so, or the filter looks broken"
+    );
+    assert!(
+      summary.contains(&format!("stopped at {MAX_LIBRARY_TRACKS}")),
+      "{summary}"
+    );
+  }
+
+  #[test]
+  fn an_unreadable_playlist_does_not_look_like_the_track_cap_was_reached() {
+    let partial = DjLibrary {
+      tracks: 12,
+      playlists: 2,
+      truncated: true,
+      ..DjLibrary::default()
+    };
+    let summary = partial.summary_with(&crate::core::i18n::EN);
+
+    assert!(summary.contains("could not be read"), "{summary}");
+    assert!(summary.contains("may not be filtered"), "{summary}");
+    assert!(
+      !summary.contains(&MAX_LIBRARY_TRACKS.to_string()),
+      "{summary}"
     );
   }
 }

@@ -13,7 +13,15 @@ under `streaming_device_name`, and spotatui starts no librespot Spirc device.
   dispatches `IoEvent::ApplyPlaybackEngine`: Soloist stops, then
   `App::apply_playback_engine` shuts librespot down before Soloist starts, or
   moves the sender back and asks for an idle librespot player. A rebuild that
-  ends under Soloist is refused (`accept_rebuilt_native_backend`).
+  ends under Soloist is refused (`accept_rebuilt_native_backend`). The event
+  carries the request's number: an older request that arrives late does
+  nothing, and a stop that times out waits for the old supervisor to exit
+  before the latest switch goes on.
+- Each start has a generation (`begin_soloist_start`). Before its link is
+  installed, a supervisor writes to the `App` only while its generation is
+  current; after, it also needs its link to be the installed one. A
+  superseded child still folds WebSocket events into its own link, so a
+  device change cancels its queued pause or deactivation.
 - When librespot fails three tracks in a row (the audio-key block), the player
   event handler calls `App::offer_soloist_setup`: once per run, a modal offers
   Soloist and opens Settings at the Playback Engine row.

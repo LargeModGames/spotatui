@@ -586,6 +586,12 @@ pub struct App {
   /// The running Soloist engine; `streaming_player` stays `None` while it is set.
   #[cfg(feature = "soloist")]
   soloist_link: Option<Arc<crate::infra::soloist::SoloistLink>>,
+  /// Identifies the Soloist startup and supervisor allowed to report to this App.
+  #[cfg(feature = "soloist")]
+  soloist_generation: u64,
+  /// The latest Playback Engine change; an older `ApplyPlaybackEngine` leaves the engine alone.
+  #[cfg(feature = "soloist")]
+  soloist_engine_request: u64,
   /// A Soloist download from Spotify runs.
   #[cfg(feature = "soloist")]
   soloist_downloading: bool,

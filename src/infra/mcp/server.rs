@@ -204,6 +204,12 @@ async fn handle_request<E: ToolExecutor>(
       )
     }
 
+    // `ping` was removed in the modern revision, but the older ones a legacy
+    // client can negotiate still define it: answer with an empty result.
+    "ping" if matches!(&session.era, Era::Legacy(version) if version != proto::PROTOCOL_MODERN) => {
+      proto::result_response(id, &session.era, Map::new())
+    }
+
     // Not implemented, deliberately: `prompts` and `resources` are not
     // advertised in our capabilities, and `ping` / `logging/setLevel` were
     // removed from the protocol in this revision.
@@ -371,6 +377,28 @@ mod tests {
     let tools = result["tools"].as_array().unwrap();
     assert_eq!(tools.len(), crate::infra::dj::tools::TOOLS.len());
     assert_eq!(tools[0]["name"], json!("get_listening_history"));
+  }
+
+  #[tokio::test]
+  async fn a_client_using_a_supported_legacy_revision_can_ping() {
+    let mut session = Session::default();
+    let init = exchange(
+      &mut session,
+      json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+        "protocolVersion": "2025-06-18",
+        "capabilities": {},
+        "clientInfo": {"name": "test", "version": "1"}
+      }}),
+    )
+    .await;
+    assert_eq!(init["result"]["protocolVersion"], "2025-06-18");
+
+    let ping = exchange(
+      &mut session,
+      json!({"jsonrpc": "2.0", "id": 2, "method": "ping"}),
+    )
+    .await;
+    assert_eq!(ping, json!({"jsonrpc": "2.0", "id": 2, "result": {}}));
   }
 
   #[tokio::test]

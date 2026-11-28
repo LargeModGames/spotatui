@@ -175,16 +175,34 @@ impl ScriptEngine {
 
   pub fn load_user_scripts(&mut self, config_dir: &Path) -> usize {
     *self.shared.config_dir.borrow_mut() = Some(config_dir.to_path_buf());
-    let mut loaded = 0;
+    let scripts: Vec<_> = discover_user_scripts(config_dir)
+      .into_iter()
+      .map(|(path, module_dir)| {
+        let name = module_dir
+          .as_ref()
+          .and_then(|dir| dir.file_name())
+          .or_else(|| path.file_name())
+          .and_then(|name| name.to_str())
+          .unwrap_or("plugin")
+          .to_string();
+        (path, module_dir, name)
+      })
+      .collect();
+    // Register every discovered plugin's namespace upfront so alphabetical
+    // load order (e.g. `mix.notes.lua` before `mix_notes.lua`) still sees
+    // clean-named siblings and skips their legacy `<id>.json`.
+    {
+      let mut known = self.shared.loaded_namespaces.borrow_mut();
+      for (_, _, name) in &scripts {
+        let ns = super::shared::storage_namespace_id(name);
+        if !ns.is_empty() {
+          known.insert(ns);
+        }
+      }
+    }
 
-    for (path, module_dir) in discover_user_scripts(config_dir) {
-      let name = module_dir
-        .as_ref()
-        .and_then(|dir| dir.file_name())
-        .or_else(|| path.file_name())
-        .and_then(|name| name.to_str())
-        .unwrap_or("plugin")
-        .to_string();
+    let mut loaded = 0;
+    for (path, module_dir, name) in scripts {
       if let Some(dir) = module_dir {
         if let Err(e) = self.add_plugin_module_path(&dir) {
           log::warn!("[lua] failed to extend package.path for plugin '{name}': {e}");
@@ -246,6 +264,10 @@ impl ScriptEngine {
   /// Execute a Lua chunk under the given plugin name (used as the chunk name for tracebacks).
   /// Public for tests.
   pub fn load_source(&mut self, plugin_name: &str, source: &str) -> mlua::Result<()> {
+    let ns = super::shared::storage_namespace_id(plugin_name);
+    if !ns.is_empty() {
+      self.shared.loaded_namespaces.borrow_mut().insert(ns);
+    }
     let lua = &self.lua;
     self
       .shared

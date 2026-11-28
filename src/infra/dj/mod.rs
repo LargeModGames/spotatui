@@ -49,7 +49,7 @@ pub mod setup;
 /// verbatim, and the in-TUI DJ's agent loop drives the same table.
 pub mod tools;
 
-pub use brief::dedupe_key;
+pub use brief::{dedupe_key, library_key};
 
 /// Cap on the avoid-library crawl. A listener with more saved tracks than this
 /// gets a partial index rather than an unbounded startup cost, and is told so —
@@ -64,7 +64,7 @@ pub const MAX_LIBRARY_TRACKS: usize = 20_000;
 /// would add staleness for nothing. See [`library`].
 #[derive(Clone, Debug, Default)]
 pub struct DjLibrary {
-  /// [`dedupe_key`] per track, so a suggestion can be rejected before it costs a
+  /// [`library_key`] per track, so a suggestion can be rejected before it costs a
   /// catalogue search.
   pub keys: std::collections::HashSet<String>,
   /// Spotify track IDs, for the exact gate after a suggestion resolves. Catches
@@ -73,7 +73,9 @@ pub struct DjLibrary {
   pub ids: std::collections::HashSet<String>,
   pub playlists: usize,
   pub tracks: usize,
-  /// Whether the crawl stopped at [`MAX_LIBRARY_TRACKS`].
+  /// Whether the index is incomplete: the crawl stopped at
+  /// [`MAX_LIBRARY_TRACKS`], or a playlist could not be read. `tracks` tells the
+  /// two apart, since only the cap brings it to the limit.
   pub truncated: bool,
 }
 
@@ -82,7 +84,11 @@ impl DjLibrary {
   pub fn summary_with(&self, strings: &crate::core::i18n::Strings) -> String {
     let mut text = strings.status.infra.dj_indexed(self.tracks, self.playlists);
     if self.truncated {
-      text.push_str(&strings.status.infra.dj_index_capped(MAX_LIBRARY_TRACKS));
+      if self.tracks >= MAX_LIBRARY_TRACKS {
+        text.push_str(&strings.status.infra.dj_index_capped(MAX_LIBRARY_TRACKS));
+      } else {
+        text.push_str(strings.status.infra.dj_index_incomplete);
+      }
     }
     text
   }

@@ -1,0 +1,1 @@
+- Add a test that every theme preset keeps its name through a config save and load ([#1022](https://github.com/LargeModGames/spotatui/issues/1022)).

@@ -455,6 +455,10 @@ async fn answer(
   body: Option<&Value>,
 ) -> anyhow::Result<Value> {
   #[cfg(test)]
+  if let Some(value) = fake::in_memory_response(method, path, query).await {
+    return Ok(value);
+  }
+  #[cfg(test)]
   if let Some(base_url) = fake::base_url() {
     return fake::request(&base_url, method, path, query, body).await;
   }
@@ -467,14 +471,56 @@ async fn answer(
   }
 }
 
-/// A local HTTP server in place of Spotify, for handler tests.
+/// Local HTTP and in-memory Spotify responses for handler tests.
 #[cfg(test)]
 pub(crate) mod fake {
   use super::*;
   use std::cell::RefCell;
+  use std::collections::VecDeque;
+
+  type Reply = (&'static str, Option<&'static str>, Value);
 
   thread_local! {
     static BASE_URL: RefCell<Option<String>> = const { RefCell::new(None) };
+    static IN_MEMORY_REPLIES: RefCell<Option<VecDeque<Reply>>> = const { RefCell::new(None) };
+  }
+
+  /// Script GET responses by path and offset on a single test thread.
+  pub(crate) fn use_in_memory_spotify(replies: Vec<Reply>) -> InMemorySpotify {
+    IN_MEMORY_REPLIES.with(|slot| {
+      assert!(slot.replace(Some(replies.into())).is_none());
+    });
+    InMemorySpotify
+  }
+
+  pub(crate) struct InMemorySpotify;
+
+  impl Drop for InMemorySpotify {
+    fn drop(&mut self) {
+      IN_MEMORY_REPLIES.with(|slot| *slot.borrow_mut() = None);
+    }
+  }
+
+  pub(super) async fn in_memory_response(
+    method: &Method,
+    path: &str,
+    query: &[(&str, String)],
+  ) -> Option<Value> {
+    let (expected_path, expected_offset, value) = IN_MEMORY_REPLIES.with(|slot| {
+      slot
+        .borrow_mut()
+        .as_mut()
+        .map(|replies| replies.pop_front().expect("unexpected Spotify request"))
+    })?;
+    let offset = query
+      .iter()
+      .find_map(|(key, value)| (*key == "offset").then_some(value.as_str()));
+    assert_eq!(*method, Method::GET);
+    assert_eq!(path, expected_path);
+    assert_eq!(offset, expected_offset);
+    // Let a test change App state while the handler awaits the response.
+    tokio::task::yield_now().await;
+    Some(value)
   }
 
   /// Sends this thread's Spotify calls to `base_url` until the guard drops.

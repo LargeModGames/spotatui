@@ -2962,7 +2962,7 @@ fn shows_page(offset: u32, limit: u32, names: &[&str]) -> Paged<ShowInfo> {
     offset,
     limit,
     total: 40,
-    next: None,
+    next: (offset + limit < 40).then(|| format!("internal://page?offset={}", offset + limit)),
     previous: None,
   }
 }
@@ -2987,7 +2987,7 @@ fn episodes_page(offset: u32, limit: u32, names: &[&str]) -> Paged<EpisodeInfo> 
     offset,
     limit,
     total: 40,
-    next: None,
+    next: (offset + limit < 40).then(|| format!("internal://page?offset={}", offset + limit)),
     previous: None,
   }
 }
