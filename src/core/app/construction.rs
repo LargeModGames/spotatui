@@ -202,6 +202,10 @@ impl Default for App {
       #[cfg(feature = "soloist")]
       soloist_link: None,
       #[cfg(feature = "soloist")]
+      soloist_generation: 0,
+      #[cfg(feature = "soloist")]
+      soloist_engine_request: 0,
+      #[cfg(feature = "soloist")]
       soloist_downloading: false,
       #[cfg(feature = "soloist")]
       librespot_standby: None,
