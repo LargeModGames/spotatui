@@ -13,4 +13,4 @@ id: string | null,
  * Owner's base62 user id, when known. Used for ownership checks (the display
  * `owner` is not stable for comparison).
  */
-owner_id: string | null, collaborative: boolean, public: boolean | null, image_url: string | null, };
+owner_id: string | null, collaborative: boolean, public: boolean | null, image_url: string | null, description?: string, };

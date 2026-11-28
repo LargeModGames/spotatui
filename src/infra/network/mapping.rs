@@ -33,6 +33,21 @@ use rspotify::model::{
   PlayableItem,
 };
 use rspotify::prelude::Id;
+use serde::Deserialize;
+
+/// Spotify's internal API includes a playlist description even though
+/// rspotify's `SimplifiedPlaylist` drops it. Capture both from the same item.
+#[derive(Debug, Deserialize)]
+pub(crate) struct PlaylistWithDescription {
+  #[serde(flatten)]
+  pub(crate) simplified: SimplifiedPlaylist,
+  #[serde(default)]
+  pub(crate) description: Option<String>,
+}
+
+pub(crate) fn playlist_info_with_description(item: &PlaylistWithDescription) -> PlaylistInfo {
+  PlaylistInfo::from_simplified_with_description(&item.simplified, item.description.clone())
+}
 
 /// First image URL of an `images` list, if any.
 fn first_image(images: &[rspotify::model::image::Image]) -> Option<String> {
@@ -495,6 +510,102 @@ mod tests {
       ..Default::default()
     }
   }
+  #[test]
+  fn playlist_description_from_internal_json_is_kept_and_blank_is_dropped() {
+    let item: PlaylistWithDescription = serde_json::from_value(serde_json::json!({
+      "collaborative": false,
+      "description": "<p>Songs for the road &amp; more</p>",
+      "external_urls": { "spotify": "https://open.spotify.com/playlist/1111111111111111111111" },
+      "href": "https://api.spotify.com/v1/playlists/1111111111111111111111",
+      "id": "1111111111111111111111",
+      "images": [{ "height": 300, "url": "https://example.test/playlist.jpg", "width": 300 }],
+      "name": "Road Trip",
+      "owner": {
+        "display_name": "Alice",
+        "external_urls": {},
+        "followers": null,
+        "href": "https://api.spotify.com/v1/users/2222222222222222222222",
+        "id": "2222222222222222222222",
+        "images": [],
+      },
+      "public": true,
+      "snapshot_id": "snapshot",
+      "tracks": { "href": "https://api.spotify.com/v1/playlists/1111111111111111111111/tracks", "total": 1 },
+    }))
+    .unwrap();
+
+    assert_eq!(
+      playlist_info_with_description(&item).description.as_deref(),
+      Some("Songs for the road & more")
+    );
+
+    let blank = PlaylistWithDescription {
+      description: Some("   ".to_string()),
+      ..item
+    };
+    assert_eq!(playlist_info_with_description(&blank).description, None);
+  }
+
+  #[test]
+  fn playlist_description_keeps_words_separate_across_paragraphs_and_line_breaks() {
+    let item: PlaylistWithDescription = serde_json::from_value(serde_json::json!({
+      "collaborative": false,
+      "description": "<p>First line</p><p>Second line<br>and a break</p>",
+      "external_urls": { "spotify": "https://open.spotify.com/playlist/1111111111111111111111" },
+      "href": "https://api.spotify.com/v1/playlists/1111111111111111111111",
+      "id": "1111111111111111111111",
+      "images": [],
+      "name": "Road Trip",
+      "owner": {
+        "display_name": "Alice",
+        "external_urls": {},
+        "followers": null,
+        "href": "https://api.spotify.com/v1/users/2222222222222222222222",
+        "id": "2222222222222222222222",
+        "images": [],
+      },
+      "public": true,
+      "snapshot_id": "snapshot",
+      "tracks": { "href": "https://api.spotify.com/v1/playlists/1111111111111111111111/tracks", "total": 0 },
+    }))
+    .unwrap();
+
+    assert_eq!(
+      playlist_info_with_description(&item).description.as_deref(),
+      Some("First line Second line and a break")
+    );
+  }
+
+  #[test]
+  fn playlist_description_decodes_common_html_entities() {
+    let item: PlaylistWithDescription = serde_json::from_value(serde_json::json!({
+      "collaborative": false,
+      "description": "<p>Rock &#x27;n&#x27; roll &apos;again&apos; &amp; more</p>",
+      "external_urls": { "spotify": "https://open.spotify.com/playlist/1111111111111111111111" },
+      "href": "https://api.spotify.com/v1/playlists/1111111111111111111111",
+      "id": "1111111111111111111111",
+      "images": [],
+      "name": "Road Trip",
+      "owner": {
+        "display_name": "Alice",
+        "external_urls": {},
+        "followers": null,
+        "href": "https://api.spotify.com/v1/users/2222222222222222222222",
+        "id": "2222222222222222222222",
+        "images": [],
+      },
+      "public": true,
+      "snapshot_id": "snapshot",
+      "tracks": { "href": "https://api.spotify.com/v1/playlists/1111111111111111111111/tracks", "total": 0 },
+    }))
+    .unwrap();
+
+    assert_eq!(
+      playlist_info_with_description(&item).description.as_deref(),
+      Some("Rock 'n' roll 'again' & more")
+    );
+  }
+
 
   #[test]
   fn full_track_maps_core_and_extended_fields() {

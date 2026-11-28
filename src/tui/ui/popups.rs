@@ -2108,6 +2108,7 @@ mod playlist_sync_picker_tests {
       collaborative: false,
       public: None,
       image_url: None,
+      description: None,
     });
     app.view.selected_playlist_index = Some(0);
     app.apply(Action::OpenPlaylistSyncPicker);

@@ -814,6 +814,7 @@ mod tests {
       collaborative: false,
       public: None,
       image_url: None,
+      description: None,
     }];
     app.view.selected_playlist_index = Some(0);
 
@@ -987,6 +988,7 @@ mod tests {
       collaborative: false,
       public: None,
       image_url: None,
+      description: None,
     });
     app.view.selected_playlist_index = Some(0);
 

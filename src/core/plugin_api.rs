@@ -165,6 +165,9 @@ pub struct PlaylistInfo {
   pub public: Option<bool>,
   #[serde(default)]
   pub image_url: Option<String>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  #[cfg_attr(all(test, feature = "gui"), ts(optional))]
+  pub description: Option<String>,
 }
 
 /// Synthetic playlist names are rendered from the current table, never matched by text.
@@ -595,6 +598,54 @@ impl DeviceInfo {
   }
 }
 
+fn playlist_description_plain_text(raw: &str) -> Option<String> {
+  let mut text = String::with_capacity(raw.len());
+  let mut rest = raw;
+  while let Some(open) = rest.find('<') {
+    text.push_str(&rest[..open]);
+    rest = &rest[open + 1..];
+    if let Some(close) = rest
+      .find(['<', '>'])
+      .filter(|&i| rest.as_bytes()[i] == b'>')
+    {
+      let tag = rest[..close].strip_prefix('/').unwrap_or(&rest[..close]);
+      if tag.as_bytes().first().is_some_and(u8::is_ascii_alphabetic) {
+        let name = tag
+          .split_ascii_whitespace()
+          .next()
+          .unwrap_or_default()
+          .trim_end_matches('/');
+        if name
+          .bytes()
+          .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, b'-' | b':'))
+        {
+          if matches!(
+            name.to_ascii_lowercase().as_str(),
+            "p" | "br" | "div" | "li"
+          ) {
+            text.push(' ');
+          }
+          rest = &rest[close + 1..];
+          continue;
+        }
+      }
+    }
+    text.push('<');
+  }
+  text.push_str(rest);
+  let text = text
+    .replace("&nbsp;", " ")
+    .replace("&lt;", "<")
+    .replace("&gt;", ">")
+    .replace("&quot;", "\"")
+    .replace("&#39;", "'")
+    .replace("&#x27;", "'")
+    .replace("&apos;", "'")
+    .replace("&amp;", "&");
+  let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
+  (!collapsed.is_empty()).then_some(collapsed)
+}
+
 impl PlaylistInfo {
   pub fn from_simplified(p: &rspotify::model::SimplifiedPlaylist) -> Self {
     use rspotify::prelude::Id;
@@ -614,7 +665,17 @@ impl PlaylistInfo {
       collaborative: p.collaborative,
       public: p.public,
       image_url: p.images.first().map(|img| img.url.clone()),
+      description: None,
     }
+  }
+
+  pub fn from_simplified_with_description(
+    p: &rspotify::model::SimplifiedPlaylist,
+    description: Option<String>,
+  ) -> Self {
+    let mut playlist = Self::from_simplified(p);
+    playlist.description = description.and_then(|text| playlist_description_plain_text(&text));
+    playlist
   }
 }
 
@@ -920,6 +981,17 @@ pub fn lyrics_snapshot(app: &App) -> LyricsSnapshot {
 
 #[cfg(test)]
 mod tests {
+  #[test]
+  fn playlist_descriptions_preserve_literal_angles_and_decode_entities_once() {
+    assert_eq!(
+      super::playlist_description_plain_text(
+        "<p>1 < 2 > 0 &amp;lt;3 <a href=\"url\">A &amp; B</a></p><br />Done",
+      )
+      .as_deref(),
+      Some("1 < 2 > 0 &lt;3 A & B Done")
+    );
+  }
+
   use super::*;
   use crate::core::{source::Source, state::RuntimeState, user_config::UserConfig};
   use chrono::Utc;

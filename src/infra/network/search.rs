@@ -1,10 +1,12 @@
 use super::{IoEvent, Network};
-use crate::core::plugin_api::{AlbumInfo, ArtistInfo, PlaylistInfo, ShowInfo, TrackInfo};
-use crate::infra::network::mapping::map_page;
+use crate::core::plugin_api::{AlbumInfo, ArtistInfo, ShowInfo, TrackInfo};
+use crate::infra::network::mapping::{
+  map_page, playlist_info_with_description, PlaylistWithDescription,
+};
 use anyhow::anyhow;
 use rspotify::model::{
-  artist::FullArtist, enums::Country, page::Page, playlist::SimplifiedPlaylist,
-  show::SimplifiedShow, track::FullTrack, SimplifiedAlbum,
+  artist::FullArtist, enums::Country, page::Page, show::SimplifiedShow, track::FullTrack,
+  SimplifiedAlbum,
 };
 use rspotify::prelude::*;
 use serde::Deserialize;
@@ -29,7 +31,7 @@ struct AlbumSearchResponse {
 
 #[derive(Deserialize, Debug)]
 struct PlaylistSearchResponse {
-  playlists: Page<SimplifiedPlaylist>,
+  playlists: Page<PlaylistWithDescription>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -177,7 +179,7 @@ impl SearchNetwork for Network {
         .map(|p| map_page(p, |a| AlbumInfo::from(a))),
       playlists: playlist_result
         .as_ref()
-        .map(|p| map_page(p, PlaylistInfo::from_simplified)),
+        .map(|p| map_page(p, playlist_info_with_description)),
       shows: show_result
         .as_ref()
         .map(|p| map_page(p, |s| ShowInfo::from(s))),

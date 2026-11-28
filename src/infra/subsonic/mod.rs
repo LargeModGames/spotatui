@@ -499,6 +499,7 @@ impl From<&types::SubsonicPlaylist> for PlaylistInfo {
       collaborative: false,
       public: p.public,
       image_url: None, // Subsonic uses cover_art IDs, not direct URLs
+      description: None,
     }
   }
 }
@@ -516,6 +517,7 @@ impl From<&types::PlaylistDetail> for PlaylistInfo {
       collaborative: false,
       public: p.public,
       image_url: None,
+      description: None,
     }
   }
 }

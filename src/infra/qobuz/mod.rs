@@ -711,6 +711,7 @@ fn favorites_playlist(track_count: u32) -> PlaylistInfo {
     collaborative: false,
     public: Some(false),
     image_url: None,
+    description: None,
   }
 }
 
@@ -726,6 +727,7 @@ fn playlist_to_playlist_info(p: &types::Playlist) -> PlaylistInfo {
     collaborative: false,
     public: p.is_public,
     image_url: p.images300.first().cloned(),
+    description: None,
   }
 }
 
@@ -746,6 +748,7 @@ fn album_to_playlist_info(a: &types::Album) -> PlaylistInfo {
     collaborative: false,
     public: Some(true),
     image_url: a.image.large.clone(),
+    description: None,
   }
 }
 

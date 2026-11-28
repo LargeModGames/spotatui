@@ -2020,6 +2020,7 @@ mod data_read_tests {
       collaborative: false,
       public: Some(true),
       image_url: None,
+      description: None,
     }
   }
 
