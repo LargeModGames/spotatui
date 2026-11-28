@@ -1267,8 +1267,9 @@ mod tests {
 
   /// Delivery credits a rebuild in flight exactly as parking does: the park
   /// would have let the replay wait out that rebuild, so its age check must
-  /// too. Only the soft window can be credited — past the hard limit nothing
-  /// helps.
+  /// too. The age sits halfway into the soft-window overrun — past it the
+  /// hard limit would expire the request however much was credited. Only the
+  /// soft window can be credited; past the hard limit nothing helps.
   #[test]
   fn a_rebuild_in_flight_covers_a_replay_delivered_past_the_soft_window() {
     if parked_start_window() >= max_parked_start_age() {
@@ -1277,9 +1278,10 @@ mod tests {
     let (tx, rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
     app.park_start_playback(Some("spotify:playlist:p".to_string()), None, None, None);
-    let age = parked_start_window() + Duration::from_secs(5);
+    let age = parked_start_window() + (max_parked_start_age() - parked_start_window()) / 2;
+    let excess = age - parked_start_window();
     app.pending_start_playback.as_mut().unwrap().pressed_at = Instant::now() - age;
-    app.note_native_rebuild_started(Instant::now() - Duration::from_secs(10));
+    app.note_native_rebuild_started(Instant::now() - excess - Duration::from_secs(5));
     let carried = app.pending_start_playback.clone().unwrap();
 
     assert!(!app.retire_expired_replay(&carried));
@@ -1297,7 +1299,7 @@ mod tests {
     let (tx, _rx) = channel();
     let mut app = App::new(tx, UserConfig::new(), Some(SystemTime::now()));
     app.park_start_playback(Some("spotify:playlist:p".to_string()), None, None, None);
-    let age = parked_start_window() + Duration::from_secs(5);
+    let age = parked_start_window() + (max_parked_start_age() - parked_start_window()) / 2;
     app.pending_start_playback.as_mut().unwrap().pressed_at = Instant::now() - age;
     let carried = app.pending_start_playback.clone().unwrap();
 
