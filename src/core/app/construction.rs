@@ -250,6 +250,14 @@ impl Default for App {
       #[cfg(feature = "art-decode")]
       desired_cover_art_key: None,
       #[cfg(feature = "art-decode")]
+      desired_cover_art_generation: 0,
+      #[cfg(feature = "cover-art")]
+      browse_preview_cover_art: crate::core::art::CoverArtStore::default(),
+      #[cfg(feature = "cover-art")]
+      desired_browse_preview_cover_art_key: None,
+      #[cfg(feature = "cover-art")]
+      desired_browse_preview_cover_art_generation: 0,
+      #[cfg(feature = "art-decode")]
       cover_art_palette: None,
       #[cfg(feature = "art-decode")]
       cover_theme_state: crate::core::cover_theme::CoverThemeState::default(),

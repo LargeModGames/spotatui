@@ -633,6 +633,7 @@ impl App {
         collaborative: false,
         public: None,
         image_url: None,
+        description: None,
       }];
       // "All songs" has no count until the first page sizes the library.
       self.apple_music.uncounted =

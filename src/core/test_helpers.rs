@@ -122,6 +122,7 @@ pub fn playlist_info(id: &str, name: &str, owner_id: &str, collaborative: bool) 
     collaborative,
     public: Some(false),
     image_url: None,
+    description: None,
   }
 }
 

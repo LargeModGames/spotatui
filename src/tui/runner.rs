@@ -41,6 +41,16 @@ fn cover_art_full_image_support() -> bool {
   }
 }
 
+#[cfg(feature = "cover-art")]
+fn cover_art_fade_active() -> bool {
+  crate::tui::cover_art::fade_active()
+}
+
+#[cfg(not(feature = "cover-art"))]
+fn cover_art_fade_active() -> bool {
+  false
+}
+
 fn back_key_clears_playlist_filter(app: &mut App, active_block: ActiveBlock) -> bool {
   active_block == ActiveBlock::TrackTable && handlers::clear_active_track_filter(app)
 }
@@ -86,6 +96,35 @@ fn create_playlist_captures_key_before_back(app: &App) -> bool {
 fn friends_captures_key_before_back(app: &App) -> bool {
   app.get_current_route().active_block == ActiveBlock::Friends
     && (app.view.friend_add_dialog_visible || !app.view.friend_search_input.is_empty())
+}
+
+#[cfg(feature = "cover-art")]
+fn note_mouse_preview_input(app: &mut App, kind: crossterm::event::MouseEventKind) {
+  app.note_mouse_input();
+  if kind != crossterm::event::MouseEventKind::Moved {
+    app.clear_hovered_preview_item();
+  }
+}
+
+#[cfg(feature = "cover-art")]
+fn preview_art_key(app: &App) -> Option<String> {
+  crate::core::driver::browse_preview_art_request_for(app).map(|request| request.key().to_string())
+}
+
+#[cfg(feature = "cover-art")]
+fn apply_preview_art_change(app: &mut App, before: Option<String>) {
+  if before == preview_art_key(app) {
+    return;
+  }
+  let request = crate::core::driver::browse_preview_art_request_for(app);
+  let cached = request
+    .as_ref()
+    .is_some_and(|request| crate::core::art::cached_decoded_art(request.key()).is_some());
+  if cached {
+    app.select_browse_preview_art(request.as_ref());
+  } else {
+    app.note_browse_preview_art_selection(request.as_ref());
+  }
 }
 
 /// Blocks that must see the configurable back key *before* the runner acts on it
@@ -152,6 +191,7 @@ fn animation_active(app: &App) -> bool {
       && app.lyrics_status() == crate::core::app::LyricsStatus::Found)
     || app.view.liked_song_animation_frame.is_some()
     || app.theme_fade_active()
+    || cover_art_fade_active()
 }
 
 /// One keypress, from the runner's event loop. Returns `true` when the user asked
@@ -246,6 +286,10 @@ pub async fn start_ui(
   // `App` construction must not touch stdout.
   #[cfg(feature = "cover-art")]
   crate::tui::cover_art::init_renderer();
+  #[cfg(not(feature = "art-decode"))]
+  info!("cover art cache inactive: this build has no image decoding");
+  #[cfg(all(feature = "art-decode", not(feature = "cover-art")))]
+  info!("cover art rendering inactive: this build decodes art only for the adaptive theme");
   execute!(stdout(), EnableMouseCapture)?;
   let keyboard_enhancement_supported = supports_keyboard_enhancement().unwrap_or(false);
   let keyboard_enhancement_enabled = keyboard_enhancement_supported
@@ -329,7 +373,12 @@ pub async fn start_ui(
       // Drop protocol caches for art the store no longer holds; rebuilds are
       // lazy, so this is a no-op whenever the art is unchanged.
       #[cfg(feature = "cover-art")]
-      crate::tui::cover_art::sync(&app.cover_art);
+      crate::tui::cover_art::sync(
+        &app.cover_art,
+        app.browse_preview_cover_art(),
+        std::time::Instant::now(),
+        app.user_config.behavior.fade_song_selection_cover_art,
+      );
 
       // The cursor must be invisible while the frame diff is written. Ratatui
       // applies the diff first and shows or hides the cursor afterwards, so a
@@ -358,7 +407,6 @@ pub async fn start_ui(
           ActiveBlock::Analysis => ui::audio_analysis::draw(f, &app),
           ActiveBlock::LyricsView => ui::draw_lyrics_view(f, &app),
           ActiveBlock::MiniPlayer => ui::draw_miniplayer(f, &app),
-          #[cfg(feature = "cover-art")]
           ActiveBlock::CoverArtView => ui::draw_cover_art_view(f, &app),
           ActiveBlock::AnnouncementPrompt => ui::draw_announcement_prompt(f, &app),
           ActiveBlock::RecapPrompt => {
@@ -407,6 +455,10 @@ pub async fn start_ui(
     match events.next()? {
       event::Event::Input(key) => {
         let mut app = app.lock().await;
+        #[cfg(feature = "cover-art")]
+        let before_preview_art = preview_art_key(&app);
+        #[cfg(feature = "cover-art")]
+        app.note_keyboard_input();
         if key == Key::Ctrl('c') {
           app.close_io_channel();
           break;
@@ -418,12 +470,20 @@ pub async fn start_ui(
           break;
         }
         driver.run_pending_script_commands(&mut app);
+        #[cfg(feature = "cover-art")]
+        apply_preview_art_change(&mut app, before_preview_art);
       }
       event::Event::Snapshot(snapshot) => pending_snapshot = Some(snapshot),
       event::Event::Mouse(mouse) => {
         let mut app = app.lock().await;
         if !app.user_config.behavior.disable_mouse_inputs {
+          #[cfg(feature = "cover-art")]
+          let before_preview_art = preview_art_key(&app);
+          #[cfg(feature = "cover-art")]
+          note_mouse_preview_input(&mut app, mouse.kind);
           handlers::mouse_handler(mouse, &mut app);
+          #[cfg(feature = "cover-art")]
+          apply_preview_art_change(&mut app, before_preview_art);
         }
       }
       event::Event::Tick(elapsed) => {
@@ -442,6 +502,8 @@ pub async fn start_ui(
         let viz_bars = ui::audio_analysis::visualizer_inner_width(&app).map(|width| {
           ui::audio_analysis::visualizer_bar_count(app.user_config.behavior.visualizer_style, width)
         });
+        #[cfg(feature = "cover-art")]
+        let browse_preview_area = ui::browse_preview_area(&app);
         driver.tick(
           &mut app,
           elapsed,
@@ -451,6 +513,8 @@ pub async fn start_ui(
             viz: viz_bars.map(crate::core::driver::VizNeed::Bars),
             #[cfg(feature = "art-decode")]
             cover_art_full_image_support: cover_art_full_image_support(),
+            #[cfg(feature = "cover-art")]
+            browse_preview_area,
           },
         );
       }
@@ -976,5 +1040,65 @@ mod tests {
     dispatch_key(Key::Char('q'), &mut app);
 
     assert_ne!(app.get_current_route().id, RouteId::Friends);
+  }
+
+  #[cfg(feature = "cover-art")]
+  #[test]
+  fn non_moved_mouse_event_clears_stale_hovered_preview_item() {
+    use crate::core::plugin_api::TrackInfo;
+    use crate::core::test_helpers::full_track;
+
+    let mut app = app();
+    app.push_navigation_stack(RouteId::TrackTable, ActiveBlock::TrackTable);
+    let tracks = vec![
+      TrackInfo::from(&full_track("0000000000000000000001", "First")),
+      TrackInfo::from(&full_track("0000000000000000000002", "Second")),
+    ];
+    app.set_track_table(tracks.clone(), TrackTableContext::SavedTracks);
+    app.select_track_row(1);
+    app.set_hovered_preview_item(
+      RouteId::TrackTable,
+      ActiveBlock::TrackTable,
+      crate::core::app::BrowsePreviewItem::Track(tracks[0].clone()),
+    );
+    app.note_mouse_input();
+
+    note_mouse_preview_input(&mut app, crossterm::event::MouseEventKind::ScrollDown);
+
+    assert!(app.view.hovered_preview_item.is_none());
+    assert_eq!(app.preview_track_name(), Some("Second".to_string()));
+  }
+
+  #[cfg(feature = "cover-art")]
+  #[test]
+  fn hovering_a_new_song_starts_the_art_transition_immediately() {
+    use crate::core::plugin_api::TrackInfo;
+    use crate::core::test_helpers::full_track;
+
+    let mut app = app();
+    app.push_navigation_stack(RouteId::TrackTable, ActiveBlock::TrackTable);
+    let mut first = TrackInfo::from(&full_track("0000000000000000000001", "First"));
+    first.image_url = Some("https://example.test/hover-first.jpg".into());
+    let mut second = TrackInfo::from(&full_track("0000000000000000000002", "Second"));
+    second.image_url = Some("https://example.test/hover-second.jpg".into());
+    app.set_track_table(
+      vec![first.clone(), second.clone()],
+      TrackTableContext::SavedTracks,
+    );
+    app.select_track_row(0);
+    let before = preview_art_key(&app);
+
+    app.note_mouse_input();
+    app.set_hovered_preview_item(
+      RouteId::TrackTable,
+      ActiveBlock::TrackTable,
+      crate::core::app::BrowsePreviewItem::Track(second.clone()),
+    );
+    apply_preview_art_change(&mut app, before);
+
+    assert_eq!(
+      app.browse_preview_cover_art().transition().unwrap().0,
+      "https://example.test/hover-second.jpg"
+    );
   }
 }

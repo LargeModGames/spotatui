@@ -378,6 +378,7 @@ pub(crate) fn parse_playlists(json: &str) -> Result<PlaylistsPage> {
         collaborative: false,
         public: None,
         image_url: None,
+        description: None,
       })
     })
     .collect::<Result<_>>()?;

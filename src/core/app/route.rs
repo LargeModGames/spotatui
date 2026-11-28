@@ -6,7 +6,7 @@ pub(super) const DEFAULT_ROUTE: Route = Route {
   hovered_block: ActiveBlock::Library,
 };
 
-#[derive(PartialEq, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub enum SearchResultBlock {
   AlbumSearch,
   SongSearch,

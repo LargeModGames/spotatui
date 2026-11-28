@@ -75,6 +75,55 @@ pub enum PendingTrackSelection {
   Index(usize),
 }
 
+#[cfg(feature = "cover-art")]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PreviewInputSource {
+  #[default]
+  Keyboard,
+  Mouse,
+}
+
+#[cfg(feature = "cover-art")]
+#[derive(Clone, Debug)]
+pub(crate) enum BrowsePreviewItem {
+  Track(TrackInfo),
+  Playlist(PlaylistInfo),
+  Artist(crate::core::plugin_api::ArtistInfo),
+  Album(crate::core::plugin_api::AlbumInfo),
+  Show(crate::core::plugin_api::ShowInfo),
+}
+
+#[cfg(feature = "cover-art")]
+impl BrowsePreviewItem {
+  pub(crate) fn title(&self, strings: &crate::core::i18n::Strings) -> String {
+    match self {
+      Self::Track(track) => track.display_name(strings).to_string(),
+      Self::Playlist(playlist) => playlist.display_name(strings).to_string(),
+      Self::Artist(artist) => artist.name.clone(),
+      Self::Album(album) => album.name.clone(),
+      Self::Show(show) => show.name.clone(),
+    }
+  }
+
+  pub(crate) fn image_url(&self) -> Option<&str> {
+    match self {
+      Self::Track(track) => track.image_url.as_deref(),
+      Self::Playlist(playlist) => playlist.image_url.as_deref(),
+      Self::Artist(artist) => artist.image_url.as_deref(),
+      Self::Album(album) => album.image_url.as_deref(),
+      Self::Show(show) => show.image_url.as_deref(),
+    }
+  }
+}
+
+#[cfg(feature = "cover-art")]
+#[derive(Clone, Debug)]
+pub(crate) struct HoveredPreviewItem {
+  pub route: RouteId,
+  pub active_block: ActiveBlock,
+  pub item: BrowsePreviewItem,
+}
+
 impl App {
   pub fn replace_track_table_tracks(&mut self, tracks: Vec<TrackInfo>) {
     self.track_table_epoch = self.track_table_epoch.wrapping_add(1);
@@ -281,6 +330,476 @@ impl App {
     &self.search_results
   }
 
+  #[cfg(feature = "cover-art")]
+  pub(crate) fn note_keyboard_input(&mut self) {
+    self.view.preview_input_source = PreviewInputSource::Keyboard;
+    self.clear_hovered_preview_item();
+  }
+
+  #[cfg(feature = "cover-art")]
+  pub(crate) fn note_mouse_input(&mut self) {
+    self.view.preview_input_source = PreviewInputSource::Mouse;
+  }
+
+  #[cfg(feature = "cover-art")]
+  pub(crate) fn clear_hovered_preview_item(&mut self) {
+    self.view.hovered_preview_item = None;
+    self.view.hovered_playlist_index = None;
+  }
+
+  #[cfg(feature = "cover-art")]
+  pub(crate) fn set_hovered_playlist_index(&mut self, index: usize) {
+    self.view.hovered_playlist_index = Some(index);
+  }
+
+  #[cfg(feature = "cover-art")]
+  pub(crate) fn set_hovered_preview_item(
+    &mut self,
+    route: RouteId,
+    active_block: ActiveBlock,
+    item: BrowsePreviewItem,
+  ) {
+    self.view.hovered_preview_item = Some(HoveredPreviewItem {
+      route,
+      active_block,
+      item,
+    });
+  }
+
+  #[cfg(feature = "cover-art")]
+  pub(crate) fn preview_item(&self) -> Option<BrowsePreviewItem> {
+    let route = self.get_current_route();
+    if self.view.preview_input_source == PreviewInputSource::Mouse {
+      if let Some(hovered) = &self.view.hovered_preview_item {
+        if hovered.route == route.id
+          && (hovered.active_block == route.active_block
+            || hovered.active_block == route.hovered_block)
+        {
+          return Some(hovered.item.clone());
+        }
+      }
+    }
+    self
+      .preview_playlist()
+      .map(BrowsePreviewItem::Playlist)
+      .or_else(|| self.selected_preview_item())
+  }
+
+  #[cfg(all(test, feature = "cover-art"))]
+  pub(crate) fn preview_track_name(&self) -> Option<String> {
+    match self.preview_item()? {
+      BrowsePreviewItem::Track(track) => Some(track.name),
+      _ => None,
+    }
+  }
+
+  #[cfg(feature = "cover-art")]
+  pub(crate) fn selected_preview_item(&self) -> Option<BrowsePreviewItem> {
+    if let Some(item) = self.selected_search_preview_item() {
+      return Some(item);
+    }
+    self.selected_preview_track().map(BrowsePreviewItem::Track)
+  }
+
+  #[cfg(feature = "cover-art")]
+  pub(crate) fn selected_search_preview_item(&self) -> Option<BrowsePreviewItem> {
+    let route = self.get_current_route();
+    if route.id != RouteId::Search || route.active_block != ActiveBlock::SearchResultBlock {
+      return None;
+    }
+    let block = self.view.search_selected_block;
+    let index = match block {
+      SearchResultBlock::AlbumSearch => self.view.search_selected_album_index?,
+      SearchResultBlock::SongSearch => self.view.search_selected_tracks_index?,
+      SearchResultBlock::ArtistSearch => self.view.search_selected_artists_index?,
+      SearchResultBlock::PlaylistSearch => self.view.search_selected_playlists_index?,
+      SearchResultBlock::ShowSearch => self.view.search_selected_shows_index?,
+      SearchResultBlock::Empty => return None,
+    };
+    self.search_preview_item_at_index(block, index)
+  }
+
+  #[cfg(feature = "cover-art")]
+  pub(crate) fn search_preview_item_at_index(
+    &self,
+    block: SearchResultBlock,
+    index: usize,
+  ) -> Option<BrowsePreviewItem> {
+    let results = self.search_results();
+    match block {
+      SearchResultBlock::AlbumSearch => results
+        .albums
+        .as_ref()?
+        .items
+        .get(index)
+        .cloned()
+        .map(BrowsePreviewItem::Album),
+      SearchResultBlock::SongSearch => results
+        .tracks
+        .as_ref()?
+        .items
+        .get(index)
+        .cloned()
+        .map(BrowsePreviewItem::Track),
+      SearchResultBlock::ArtistSearch => results
+        .artists
+        .as_ref()?
+        .items
+        .get(index)
+        .cloned()
+        .map(BrowsePreviewItem::Artist),
+      SearchResultBlock::PlaylistSearch => results
+        .playlists
+        .as_ref()?
+        .items
+        .get(index)
+        .cloned()
+        .map(BrowsePreviewItem::Playlist),
+      SearchResultBlock::ShowSearch => results
+        .shows
+        .as_ref()?
+        .items
+        .get(index)
+        .cloned()
+        .map(BrowsePreviewItem::Show),
+      SearchResultBlock::Empty => None,
+    }
+  }
+
+  #[cfg(feature = "cover-art")]
+  pub(crate) fn browse_preview_panel_art_requests(
+    &self,
+    max: usize,
+  ) -> Vec<crate::core::art::CoverArtRequest> {
+    fn cover_art_request_for_track(track: &TrackInfo) -> Option<crate::core::art::CoverArtRequest> {
+      #[cfg(feature = "local-files")]
+      if let Some(uri) = track.uri.as_deref() {
+        if uri.starts_with("file://") {
+          if let Ok(path) = crate::infra::local::file_uri_to_path(uri) {
+            return Some(crate::core::art::CoverArtRequest::LocalFile {
+              key: uri.to_string(),
+              path,
+            });
+          }
+        }
+      }
+      track
+        .image_url
+        .as_ref()
+        .map(|url| crate::core::art::CoverArtRequest::Url(url.clone()))
+    }
+
+    let route = self.get_current_route();
+    let mut out: Vec<crate::core::art::CoverArtRequest> = Vec::new();
+    let push_request = |request: crate::core::art::CoverArtRequest,
+                        out: &mut Vec<crate::core::art::CoverArtRequest>| {
+      if out.len() >= max {
+        return;
+      }
+      if !out.iter().any(|r| r.key() == request.key()) {
+        out.push(request);
+      }
+    };
+
+    match route.id {
+      RouteId::Search if route.active_block == ActiveBlock::SearchResultBlock => {
+        let block = self.view.search_selected_block;
+        let (selected, offset, len): (usize, usize, usize) = match block {
+          SearchResultBlock::SongSearch => (
+            self.view.search_selected_tracks_index.unwrap_or(0),
+            self.view.search_tracks_scroll_offset.get(),
+            self
+              .search_results()
+              .tracks
+              .as_ref()
+              .map_or(0, |p| p.items.len()),
+          ),
+          SearchResultBlock::AlbumSearch => (
+            self.view.search_selected_album_index.unwrap_or(0),
+            self.view.search_albums_scroll_offset.get(),
+            self
+              .search_results()
+              .albums
+              .as_ref()
+              .map_or(0, |p| p.items.len()),
+          ),
+          SearchResultBlock::ArtistSearch => (
+            self.view.search_selected_artists_index.unwrap_or(0),
+            self.view.search_artists_scroll_offset.get(),
+            self
+              .search_results()
+              .artists
+              .as_ref()
+              .map_or(0, |p| p.items.len()),
+          ),
+          SearchResultBlock::PlaylistSearch => (
+            self.view.search_selected_playlists_index.unwrap_or(0),
+            self.view.search_playlists_scroll_offset.get(),
+            self
+              .search_results()
+              .playlists
+              .as_ref()
+              .map_or(0, |p| p.items.len()),
+          ),
+          SearchResultBlock::ShowSearch => (
+            self.view.search_selected_shows_index.unwrap_or(0),
+            self.view.search_shows_scroll_offset.get(),
+            self
+              .search_results()
+              .shows
+              .as_ref()
+              .map_or(0, |p| p.items.len()),
+          ),
+          SearchResultBlock::Empty => return out,
+        };
+        let start = offset.min(len.saturating_sub(1));
+        let end = (start + 30).min(len);
+        for i in start..end {
+          if let Some(item) = self.search_preview_item_at_index(block, i) {
+            let request = match &item {
+              BrowsePreviewItem::Track(track) => cover_art_request_for_track(track),
+              _ => item
+                .image_url()
+                .map(|url| crate::core::art::CoverArtRequest::Url(url.to_string())),
+            };
+            if let Some(request) = request {
+              push_request(request, &mut out);
+            }
+          }
+        }
+        let _ = selected;
+      }
+      RouteId::TrackTable | RouteId::Recommendations
+        if route.active_block == ActiveBlock::TrackTable =>
+      {
+        let offset = self.view.track_table_scroll_offset.get();
+        let len = self.track_table.tracks.len();
+        let start = offset.min(len.saturating_sub(1));
+        let end = (start + 30).min(len);
+        for i in start..end {
+          if let Some(track) = self.track_table.tracks.get(i) {
+            if let Some(request) = cover_art_request_for_track(track) {
+              push_request(request, &mut out);
+            }
+          }
+        }
+      }
+      RouteId::RecentlyPlayed if route.active_block == ActiveBlock::RecentlyPlayed => {
+        let len = self.recently_played.as_ref().map_or(0, |p| p.items.len());
+        let start = self.view.recently_played_index.saturating_sub(15).min(len);
+        let end = (start + 30).min(len);
+        if let Some(page) = self.recently_played.as_ref() {
+          for i in start..end {
+            if let Some(track) = page.items.get(i) {
+              if let Some(request) = cover_art_request_for_track(track) {
+                push_request(request, &mut out);
+              }
+            }
+          }
+        }
+      }
+      RouteId::AlbumTracks if route.active_block == ActiveBlock::AlbumTracks => {
+        match self.album_table_context {
+          AlbumTableContext::Full => {
+            if let Some(selected) = self.selected_album_full.as_ref() {
+              let len = selected.album.tracks.len();
+              let start = self
+                .view
+                .saved_album_tracks_index
+                .saturating_sub(15)
+                .min(len);
+              let end = (start + 30).min(len);
+              for i in start..end {
+                if let Some(mut track) = selected.album.tracks.get(i).cloned() {
+                  if track.image_url.is_none() {
+                    track.image_url = selected.album.image_url.clone();
+                  }
+                  if let Some(request) = cover_art_request_for_track(&track) {
+                    push_request(request, &mut out);
+                  }
+                }
+              }
+            }
+          }
+          AlbumTableContext::Simplified => {
+            if let Some(selected) = self.selected_album_simplified.as_ref() {
+              let len = selected.tracks.items.len();
+              let start = selected.selected_index.saturating_sub(15).min(len);
+              let end = (start + 30).min(len);
+              for i in start..end {
+                if let Some(mut track) = selected.tracks.items.get(i).cloned() {
+                  if track.image_url.is_none() {
+                    track.image_url = selected.album.image_url.clone();
+                  }
+                  if let Some(request) = cover_art_request_for_track(&track) {
+                    push_request(request, &mut out);
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+      RouteId::Artist if route.active_block == ActiveBlock::ArtistBlock => {
+        if let Some(artist) = self.artist.as_ref() {
+          if artist.artist_selected_block == ArtistBlock::TopTracks {
+            let len = artist.top_tracks.len();
+            let start = artist.selected_top_track_index.saturating_sub(15).min(len);
+            let end = (start + 30).min(len);
+            for i in start..end {
+              if let Some(track) = artist.top_tracks.get(i) {
+                if let Some(request) = cover_art_request_for_track(track) {
+                  push_request(request, &mut out);
+                }
+              }
+            }
+          }
+        }
+      }
+      RouteId::Queue if route.active_block == ActiveBlock::Queue => {
+        let len = self.native_queue.len();
+        let idx = self.view.queue_selected_index.saturating_sub(1);
+        let start = idx.saturating_sub(15).min(len.saturating_sub(1));
+        let end = (start + 30).min(len);
+        for i in start..end {
+          if let Some(track) = self.native_queue.get(i) {
+            if let Some(request) = cover_art_request_for_track(track) {
+              push_request(request, &mut out);
+            }
+          }
+        }
+      }
+      _ => {}
+    }
+    out
+  }
+
+  #[cfg(feature = "cover-art")]
+  pub(crate) fn selected_preview_track(&self) -> Option<TrackInfo> {
+    let route = self.get_current_route();
+    let index = match route.id {
+      RouteId::Search => self.view.search_selected_tracks_index?,
+      RouteId::TrackTable | RouteId::Recommendations => self.view.track_table_index,
+      RouteId::AlbumTracks => match self.album_table_context {
+        AlbumTableContext::Full => self.view.saved_album_tracks_index,
+        AlbumTableContext::Simplified => self.selected_album_simplified.as_ref()?.selected_index,
+      },
+      RouteId::RecentlyPlayed => self.view.recently_played_index,
+      RouteId::Artist => self.artist.as_ref()?.selected_top_track_index,
+      RouteId::Queue => self.view.queue_selected_index.checked_sub(1)?,
+      RouteId::CreatePlaylist => self.view.create_playlist_selected_result,
+      _ => return None,
+    };
+    self.preview_track_at_index(index, route.active_block)
+  }
+
+  #[cfg(feature = "cover-art")]
+  pub(crate) fn hover_preview_track_at_index(&self, index: usize) -> Option<TrackInfo> {
+    let block = self.get_current_route().hovered_block;
+    self.preview_track_at_index(index, block)
+  }
+
+  #[cfg(feature = "cover-art")]
+  fn preview_track_at_index(&self, index: usize, block: ActiveBlock) -> Option<TrackInfo> {
+    let route = self.get_current_route();
+    match route.id {
+      RouteId::Search => {
+        if block != ActiveBlock::SearchResultBlock
+          || self.view.search_selected_block != SearchResultBlock::SongSearch
+        {
+          return None;
+        }
+        self
+          .search_results
+          .tracks
+          .as_ref()?
+          .items
+          .get(index)
+          .cloned()
+      }
+      RouteId::TrackTable | RouteId::Recommendations => {
+        if block != ActiveBlock::TrackTable {
+          return None;
+        }
+        self.track_table.tracks.get(index).cloned()
+      }
+      RouteId::AlbumTracks => {
+        if block != ActiveBlock::AlbumTracks {
+          return None;
+        }
+        let mut track = match self.album_table_context {
+          AlbumTableContext::Full => self
+            .selected_album_full
+            .as_ref()?
+            .album
+            .tracks
+            .get(index)?
+            .clone(),
+          AlbumTableContext::Simplified => self
+            .selected_album_simplified
+            .as_ref()?
+            .tracks
+            .items
+            .get(index)?
+            .clone(),
+        };
+        let album_art = match self.album_table_context {
+          AlbumTableContext::Full => self
+            .selected_album_full
+            .as_ref()?
+            .album
+            .image_url
+            .as_deref(),
+          AlbumTableContext::Simplified => self
+            .selected_album_simplified
+            .as_ref()?
+            .album
+            .image_url
+            .as_deref(),
+        };
+        if track.image_url.is_none() {
+          track.image_url = album_art.map(str::to_string);
+        }
+        Some(track)
+      }
+      RouteId::RecentlyPlayed => {
+        if block != ActiveBlock::RecentlyPlayed {
+          return None;
+        }
+        self.recently_played.as_ref()?.items.get(index).cloned()
+      }
+      RouteId::Artist => {
+        if block != ActiveBlock::ArtistBlock {
+          return None;
+        }
+        let artist = self.artist.as_ref()?;
+        if artist.artist_selected_block != ArtistBlock::TopTracks {
+          return None;
+        }
+        artist.top_tracks.get(index).cloned()
+      }
+      RouteId::Queue => {
+        if block != ActiveBlock::Queue {
+          return None;
+        }
+        self.native_queue.get(index).cloned()
+      }
+      RouteId::CreatePlaylist => {
+        if block != ActiveBlock::CreatePlaylistForm {
+          return None;
+        }
+        match self.view.create_playlist_focus {
+          CreatePlaylistFocus::SearchResults => {
+            self.create_playlist_search_results.get(index).cloned()
+          }
+          CreatePlaylistFocus::AddedTracks => self.create_playlist_tracks.get(index).cloned(),
+          CreatePlaylistFocus::SearchInput => None,
+        }
+      }
+      _ => None,
+    }
+  }
+
   /// Replace every search page, keeping each cursor inside its new page.
   pub(crate) fn set_search_results(&mut self, results: SearchResult) {
     self.search_results = results;
@@ -318,6 +837,27 @@ impl App {
   #[cfg(test)]
   pub(crate) fn select_track_row(&mut self, index: usize) {
     self.view.track_table_index = index;
+  }
+
+  pub(crate) fn select_search_result_row(
+    &mut self,
+    block: SearchResultBlock,
+    index: Option<usize>,
+  ) {
+    self.view.search_selected_tracks_index = None;
+    self.view.search_selected_album_index = None;
+    self.view.search_selected_artists_index = None;
+    self.view.search_selected_playlists_index = None;
+    self.view.search_selected_shows_index = None;
+    match block {
+      SearchResultBlock::AlbumSearch => self.view.search_selected_album_index = index,
+      SearchResultBlock::SongSearch => self.view.search_selected_tracks_index = index,
+      SearchResultBlock::ArtistSearch => self.view.search_selected_artists_index = index,
+      SearchResultBlock::PlaylistSearch => self.view.search_selected_playlists_index = index,
+      SearchResultBlock::ShowSearch => self.view.search_selected_shows_index = index,
+      SearchResultBlock::Empty => {}
+    }
+    self.view.search_selected_block = block;
   }
 
   /// Park a row index for the page a `LoadMore` is about to fetch; the next
@@ -437,5 +977,147 @@ mod tests {
       app.display_revisions().get(DisplayDomain::Search),
       before + 1
     );
+  }
+
+  #[cfg(feature = "cover-art")]
+  #[test]
+  fn simplified_album_preview_uses_the_simplified_selection() {
+    use crate::core::plugin_api::AlbumInfo;
+    use crate::core::test_helpers::full_track;
+
+    let mut app = App::default();
+    app.push_navigation_stack(RouteId::AlbumTracks, ActiveBlock::AlbumTracks);
+    app.album_table_context = AlbumTableContext::Simplified;
+    app.selected_album_simplified = Some(SelectedAlbum {
+      album: AlbumInfo::default(),
+      tracks: Paged {
+        items: vec![
+          TrackInfo::from(&full_track("0000000000000000000001", "First")),
+          TrackInfo::from(&full_track("0000000000000000000002", "Second")),
+        ],
+        total: 2,
+        ..Default::default()
+      },
+      selected_index: 1,
+    });
+    app.view.saved_album_tracks_index = 0;
+
+    assert_eq!(
+      app.selected_preview_track().map(|track| track.name),
+      Some("Second".to_string())
+    );
+  }
+
+  #[cfg(feature = "cover-art")]
+  #[test]
+  fn hovered_song_is_used_when_mouse_was_the_last_input() {
+    use crate::core::test_helpers::full_track;
+
+    let mut app = App::default();
+    app.push_navigation_stack(RouteId::TrackTable, ActiveBlock::TrackTable);
+    let tracks = vec![
+      TrackInfo::from(&full_track("0000000000000000000001", "First")),
+      TrackInfo::from(&full_track("0000000000000000000002", "Second")),
+    ];
+    app.set_track_table(tracks.clone(), TrackTableContext::SavedTracks);
+    app.select_track_row(1);
+    app.set_hovered_preview_item(
+      RouteId::TrackTable,
+      ActiveBlock::TrackTable,
+      BrowsePreviewItem::Track(tracks[0].clone()),
+    );
+    app.note_mouse_input();
+
+    assert_eq!(app.preview_track_name(), Some("First".to_string()));
+  }
+
+  #[cfg(feature = "cover-art")]
+  #[test]
+  fn every_search_result_type_provides_a_preview_item() {
+    use crate::core::plugin_api::{AlbumInfo, ArtistInfo, ShowInfo};
+    use crate::core::test_helpers::{full_track, playlist_info};
+
+    let mut app = App::default();
+    app.push_navigation_stack(RouteId::Search, ActiveBlock::SearchResultBlock);
+    app.set_search_results(SearchResult {
+      albums: Some(Paged {
+        items: vec![AlbumInfo {
+          name: "Album Name".to_string(),
+          ..Default::default()
+        }],
+        total: 1,
+        ..Default::default()
+      }),
+      artists: Some(Paged {
+        items: vec![ArtistInfo {
+          name: "Artist Name".to_string(),
+          ..Default::default()
+        }],
+        total: 1,
+        ..Default::default()
+      }),
+      playlists: Some(Paged {
+        items: vec![playlist_info("playlist", "Playlist Name", "Owner", false)],
+        total: 1,
+        ..Default::default()
+      }),
+      shows: Some(Paged {
+        items: vec![ShowInfo {
+          name: "Show Name".to_string(),
+          ..Default::default()
+        }],
+        total: 1,
+        ..Default::default()
+      }),
+      tracks: Some(Paged {
+        items: vec![TrackInfo::from(&full_track(
+          "0000000000000000000001",
+          "Song Name",
+        ))],
+        total: 1,
+        ..Default::default()
+      }),
+      ..Default::default()
+    });
+
+    for (block, expected) in [
+      (SearchResultBlock::AlbumSearch, "Album Name"),
+      (SearchResultBlock::ArtistSearch, "Artist Name"),
+      (SearchResultBlock::PlaylistSearch, "Playlist Name"),
+      (SearchResultBlock::ShowSearch, "Show Name"),
+      (SearchResultBlock::SongSearch, "Song Name"),
+    ] {
+      app.select_search_result_row(block, Some(0));
+      assert_eq!(
+        app
+          .selected_preview_item()
+          .map(|item| item.title(app.strings())),
+        Some(expected.to_string())
+      );
+    }
+  }
+
+  #[cfg(feature = "cover-art")]
+  #[test]
+  fn keyboard_input_reverts_the_preview_to_the_selected_song() {
+    use crate::core::test_helpers::full_track;
+
+    let mut app = App::default();
+    app.push_navigation_stack(RouteId::TrackTable, ActiveBlock::TrackTable);
+    let tracks = vec![
+      TrackInfo::from(&full_track("0000000000000000000001", "First")),
+      TrackInfo::from(&full_track("0000000000000000000002", "Second")),
+    ];
+    app.set_track_table(tracks.clone(), TrackTableContext::SavedTracks);
+    app.select_track_row(1);
+    app.set_hovered_preview_item(
+      RouteId::TrackTable,
+      ActiveBlock::TrackTable,
+      BrowsePreviewItem::Track(tracks[0].clone()),
+    );
+    app.note_mouse_input();
+    app.note_keyboard_input();
+
+    assert_eq!(app.preview_track_name(), Some("Second".to_string()));
   }
 }

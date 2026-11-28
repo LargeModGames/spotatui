@@ -6,7 +6,9 @@
 
 use anyhow::anyhow;
 use log::{debug, info};
-use std::sync::{Arc, OnceLock};
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 /// Cap on a cover-art response body, checked against both the declared and
 /// the actual size. Real covers are a few hundred KiB; the cap only exists so
@@ -21,7 +23,102 @@ const MAX_COVER_ART_BYTES: u64 = 16 * 1024 * 1024;
 /// terminal cell grid can show.
 const MAX_COVER_ART_DIMENSION: u32 = 4096;
 
+/// Total budget for decoded cover art held in RAM. Covers every cached image
+/// process-wide; an image that cannot fit on its own leaves the cache inactive
+/// rather than thrashing on every track change.
+/// 64 MiB holds dozens of typical 640 px covers, and any 8-bit cover within
+/// [`MAX_COVER_ART_DIMENSION`] fits.
+const DECODED_ART_CACHE_BUDGET_BYTES: u64 = 64 * 1024 * 1024;
+
+const LOAD_SAMPLE_WINDOW: usize = 8;
+
+pub(crate) fn redacted_art_key(key: &str) -> &str {
+  key.find(['?', '#']).map_or(key, |index| &key[..index])
+}
+
 static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+static DECODED_ART_CACHE: OnceLock<Mutex<DecodedArtCache>> = OnceLock::new();
+
+struct DecodedArtCache {
+  entries: VecDeque<(String, Arc<image::DynamicImage>)>,
+  bytes: u64,
+  budget: u64,
+}
+
+impl Default for DecodedArtCache {
+  fn default() -> Self {
+    Self::new(DECODED_ART_CACHE_BUDGET_BYTES)
+  }
+}
+
+impl DecodedArtCache {
+  fn new(budget: u64) -> Self {
+    Self {
+      entries: VecDeque::new(),
+      bytes: 0,
+      budget,
+    }
+  }
+
+  fn image_bytes(image: &image::DynamicImage) -> u64 {
+    u64::from(image.width())
+      * u64::from(image.height())
+      * u64::from(image.color().bytes_per_pixel())
+  }
+
+  fn get(&mut self, key: &str) -> Option<Arc<image::DynamicImage>> {
+    let index = self
+      .entries
+      .iter()
+      .position(|(entry_key, _)| entry_key == key)?;
+    let entry = self.entries.remove(index)?;
+    self
+      .entries
+      .push_back((entry.0.clone(), Arc::clone(&entry.1)));
+    Some(entry.1)
+  }
+
+  fn put(&mut self, key: &str, image: Arc<image::DynamicImage>) {
+    let bytes = Self::image_bytes(&image);
+    if bytes > self.budget {
+      return;
+    }
+    if let Some(index) = self
+      .entries
+      .iter()
+      .position(|(entry_key, _)| entry_key == key)
+    {
+      let previous = self.entries.remove(index).expect("checked position");
+      self.bytes = self.bytes.saturating_sub(Self::image_bytes(&previous.1));
+    }
+    self.entries.push_back((key.to_string(), image));
+    self.bytes = self.bytes.saturating_add(bytes);
+    while self.bytes > self.budget {
+      let Some(evicted) = self.entries.pop_front() else {
+        break;
+      };
+      self.bytes = self.bytes.saturating_sub(Self::image_bytes(&evicted.1));
+    }
+  }
+}
+
+fn decoded_art_cache() -> &'static Mutex<DecodedArtCache> {
+  DECODED_ART_CACHE.get_or_init(|| Mutex::new(DecodedArtCache::default()))
+}
+
+pub(crate) fn cached_decoded_art(key: &str) -> Option<Arc<image::DynamicImage>> {
+  decoded_art_cache()
+    .lock()
+    .unwrap_or_else(|e| e.into_inner())
+    .get(key)
+}
+
+pub(crate) fn remember_decoded_art(key: &str, image: Arc<image::DynamicImage>) {
+  decoded_art_cache()
+    .lock()
+    .unwrap_or_else(|e| e.into_inner())
+    .put(key, image);
+}
 
 /// The process-wide cover-art HTTP client, so keep-alive connections to the
 /// art CDN are reused across track changes. Built fallibly *outside*
@@ -68,6 +165,13 @@ impl CoverArtRequest {
   }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CoverArtTarget {
+  Playing,
+  #[cfg(feature = "cover-art")]
+  BrowsePreview,
+}
+
 /// Status of the currently-playing track's cover art, mirroring `LyricsStatus`.
 /// Drives the placeholder message shown when art can't be displayed, so a
 /// missing image reads as an explicit state rather than silently showing
@@ -86,6 +190,9 @@ pub enum CoverArtStatus {
   Unavailable,
   /// A fetch/decode was attempted for the current track but failed.
   Failed,
+  /// Cover art is switched off by configuration or the decode cache is
+  /// disabled by its byte cap, so no art will be fetched for this session.
+  Inactive,
 }
 
 /// Downloads and decodes the cover-art image at `url`, off any external lock.
@@ -103,7 +210,12 @@ pub enum CoverArtStatus {
 /// only a hint and `bytes()` would buffer an arbitrarily large body, so the
 /// [`MAX_COVER_ART_BYTES`] cap is enforced on the declared size first and
 /// again while accumulating the actual bytes.
-pub async fn fetch_and_decode(url: &str) -> anyhow::Result<image::DynamicImage> {
+pub async fn fetch_and_decode(url: &str) -> anyhow::Result<Arc<image::DynamicImage>> {
+  if let Some(cached) = cached_decoded_art(url) {
+    debug!("reusing cached cover art: {}", redacted_art_key(url));
+    return Ok(cached);
+  }
+
   info!("getting new cover art image...");
 
   let res = client()?
@@ -136,7 +248,9 @@ pub async fn fetch_and_decode(url: &str) -> anyhow::Result<image::DynamicImage> 
   }
   debug!("finished reading response: {} bytes", file.len());
 
-  decode_bounded(&file)
+  let image = Arc::new(decode_bounded(&file)?);
+  remember_decoded_art(url, Arc::clone(&image));
+  Ok(image)
 }
 
 /// Decode a downloaded cover-art body with strict dimension limits, so a
@@ -156,28 +270,117 @@ fn decode_bounded(bytes: &[u8]) -> anyhow::Result<image::DynamicImage> {
 /// produced it, plus its load status. Lives on `App` so any frontend can read
 /// it; the TUI caches its terminal protocols on [`Self::key`] and rebuilds
 /// them only when the key changes.
-#[derive(Default)]
 pub struct CoverArtStore {
   art: Option<(String, Arc<image::DynamicImage>)>,
+  cached_bytes: u64,
+  cap_bytes: u64,
+  cache_inactive: bool,
   /// Status of the current track's cover art, driving the placeholder message.
   pub status: CoverArtStatus,
+  fetch_started: Option<Instant>,
+  transition: Option<CoverArtTransition>,
+  snap_generation: u64,
+  load_samples: VecDeque<Duration>,
+}
+
+struct CoverArtTransition {
+  key: String,
+  started: Instant,
+}
+
+impl Default for CoverArtStore {
+  fn default() -> Self {
+    Self {
+      art: None,
+      cached_bytes: 0,
+      cap_bytes: DECODED_ART_CACHE_BUDGET_BYTES,
+      cache_inactive: false,
+      status: CoverArtStatus::NotStarted,
+      fetch_started: None,
+      transition: None,
+      snap_generation: 0,
+      load_samples: VecDeque::new(),
+    }
+  }
 }
 
 impl CoverArtStore {
+  /// Decode budget in bytes. Zero, or an image too large to fit on its own,
+  /// leaves the cache inactive rather than thrashing on every track change.
+  pub fn cache_active(&self) -> bool {
+    !self.cache_inactive && self.cap_bytes > 0
+  }
+
+  /// Decoded bytes currently held by the cache, for tests and diagnostics.
+  #[cfg_attr(not(test), allow(dead_code))]
+  pub fn cached_bytes(&self) -> u64 {
+    self.cached_bytes
+  }
+
+  #[cfg(test)]
+  pub(crate) fn with_cap_bytes(cap_bytes: u64) -> Self {
+    Self {
+      cap_bytes,
+      ..Self::default()
+    }
+  }
+
   /// The cache-identity key of the stored image (the URL or file URI it was
   /// decoded from), if any art is loaded.
   pub fn key(&self) -> Option<&str> {
     self.art.as_ref().map(|(key, _)| key.as_str())
   }
 
-  /// The decoded image, if any art is loaded. Read by whichever frontend
-  /// renders it; a decode-only build (`art-decode` without `cover-art`)
-  /// fetches art solely for the adaptive theme and has no reader.
-  #[cfg_attr(not(feature = "cover-art"), allow(dead_code))]
-  pub fn image(&self) -> Option<&image::DynamicImage> {
-    self.art.as_ref().map(|(_, image)| image.as_ref())
+  /// The key and start time of the art transition that is currently pending.
+  /// The TUI uses this to start fading the old image as soon as a new one is
+  /// requested, rather than waiting for the fetch to finish.
+  pub fn transition(&self) -> Option<(&str, Instant)> {
+    self
+      .transition
+      .as_ref()
+      .map(|transition| (transition.key.as_str(), transition.started))
   }
 
+  /// Record that art for `key` is on its way, without timing a fetch. The
+  /// frontend starts fading from `started` while the debounce and the load are
+  /// still pending; a repeated call for the same key keeps the first start.
+  pub fn begin_transition_at(&mut self, key: &str, started: Instant) {
+    if self
+      .transition
+      .as_ref()
+      .is_some_and(|transition| transition.key == key)
+    {
+      return;
+    }
+    self.transition = Some(CoverArtTransition {
+      key: key.to_string(),
+      started,
+    });
+  }
+
+  pub fn begin_fetch(&mut self, key: &str) {
+    let started = Instant::now();
+    self.fetch_started = Some(started);
+    self.begin_transition_at(key, started);
+  }
+
+  pub fn begin_clear(&mut self) {
+    self.transition = Some(CoverArtTransition {
+      key: String::new(),
+      started: Instant::now(),
+    });
+  }
+
+  pub fn snap_generation(&self) -> u64 {
+    self.snap_generation
+  }
+
+  pub fn snap(&mut self) {
+    self.transition = None;
+    self.snap_generation = self.snap_generation.wrapping_add(1);
+  }
+
+  /// Share the decoded image with a renderer without copying its pixels.
   #[cfg(feature = "cover-art")]
   pub fn image_shared(&self) -> Option<Arc<image::DynamicImage>> {
     self.art.as_ref().map(|(_, image)| Arc::clone(image))
@@ -190,9 +393,68 @@ impl CoverArtStore {
   /// Store an already-decoded image under its cache key, replacing whatever
   /// was held. Cheap: the slow fetch/decode happens in [`fetch_and_decode`],
   /// off the `App` lock.
-  pub fn store_decoded(&mut self, key: String, image: image::DynamicImage) {
-    info!("got new cover art: {key}");
-    self.art = Some((key, Arc::new(image)));
+  pub fn store_decoded(&mut self, key: String, image: impl Into<Arc<image::DynamicImage>>) {
+    info!("got new cover art: {}", redacted_art_key(&key));
+    let image = image.into();
+    let bytes = DecodedArtCache::image_bytes(&image);
+    if bytes > self.cap_bytes {
+      info!(
+        "cover art cache inactive: decoded image needs {bytes} bytes (cap {})",
+        self.cap_bytes
+      );
+      self.art = None;
+      self.cached_bytes = 0;
+      self.cache_inactive = true;
+      return;
+    }
+    if self.cached_bytes.saturating_add(bytes) > self.cap_bytes {
+      info!(
+        "cover art cache evicting {:?} ({} decoded bytes) to stay within {} bytes",
+        self.key(),
+        self.cached_bytes,
+        self.cap_bytes
+      );
+      self.art = None;
+      self.cached_bytes = 0;
+    }
+    remember_decoded_art(&key, Arc::clone(&image));
+    self.art = Some((key, image));
+    self.cached_bytes = bytes;
+    self.cache_inactive = false;
+  }
+
+  pub fn mark_loaded(&mut self) {
+    self.status = if self.cache_active() {
+      CoverArtStatus::Loaded
+    } else {
+      CoverArtStatus::Inactive
+    };
+  }
+
+  #[cfg(test)]
+  pub fn note_fetch_started(&mut self) {
+    self.fetch_started = Some(Instant::now());
+  }
+
+  pub fn note_fetch_finished(&mut self, success: bool) {
+    let Some(started) = self.fetch_started.take() else {
+      return;
+    };
+    if !success {
+      return;
+    }
+    while self.load_samples.len() >= LOAD_SAMPLE_WINDOW {
+      self.load_samples.pop_front();
+    }
+    self.load_samples.push_back(started.elapsed());
+  }
+
+  pub fn average_load_duration(&self) -> Option<Duration> {
+    if self.load_samples.is_empty() {
+      return None;
+    }
+    let total = self.load_samples.iter().copied().sum::<Duration>();
+    Some(total / self.load_samples.len() as u32)
   }
 
   /// Drop any stored cover art so the pane renders nothing. Used when
@@ -200,6 +462,7 @@ impl CoverArtStore {
   /// stale art from the previous track can never linger on screen.
   pub fn clear(&mut self) {
     self.art = None;
+    self.cached_bytes = 0;
   }
 }
 
@@ -262,11 +525,12 @@ mod tests {
       let _ = stream
         .write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: image/jpeg\r\n\r\n");
       let chunk = vec![0u8; 1024 * 1024];
-      for _ in 0..17 {
+      for _ in 0..16 {
         if stream.write_all(&chunk).is_err() {
-          break;
+          return;
         }
       }
+      let _ = stream.write_all(&[0]);
     });
 
     let err = fetch_and_decode(&format!("http://{addr}/art.jpg"))
@@ -305,22 +569,163 @@ mod tests {
   }
 
   #[test]
+  fn redacted_art_key_drops_query_and_fragment_secrets() {
+    let key = "https://example.test/rest/getCoverArt.view?u=alice&t=abc#detail";
+    assert_eq!(
+      redacted_art_key(key),
+      "https://example.test/rest/getCoverArt.view"
+    );
+  }
+
+  #[test]
+  fn decoded_art_cache_evicts_by_decoded_bytes_not_image_count() {
+    let mut cache = DecodedArtCache::new(12);
+    for i in 0..4 {
+      cache.put(
+        &format!("key-{i}"),
+        Arc::new(image::DynamicImage::new_rgb8(1, 1)),
+      );
+    }
+    assert!(cache.get("key-0").is_some());
+
+    cache.put("key-4", Arc::new(image::DynamicImage::new_rgb8(1, 1)));
+
+    assert!(cache.get("key-1").is_none());
+    assert!(cache.get("key-0").is_some());
+    assert!(cache.get("key-2").is_some());
+    assert!(cache.get("key-4").is_some());
+  }
+
+  #[test]
+  fn decoded_art_cache_refuses_an_image_larger_than_the_budget() {
+    let mut cache = DecodedArtCache::new(2);
+    cache.put("too-large", Arc::new(image::DynamicImage::new_rgb8(1, 1)));
+
+    assert!(cache.get("too-large").is_none());
+    assert_eq!(cache.bytes, 0);
+    assert!(cache.entries.is_empty());
+  }
+
+  #[tokio::test]
+  async fn fetch_reuses_a_cached_decoded_image() {
+    let url = format!("http://127.0.0.1:9/cached-{}", std::process::id());
+    let image = Arc::new(image::DynamicImage::new_rgb8(4, 4));
+    remember_decoded_art(&url, Arc::clone(&image));
+
+    let decoded = fetch_and_decode(&url).await.unwrap();
+
+    assert!(Arc::ptr_eq(&decoded, &image));
+  }
+
+  #[test]
+  fn storing_decoded_art_makes_it_available_for_recall() {
+    let key = "https://example.test/store-recall.jpg";
+    let image = Arc::new(image::DynamicImage::new_rgb8(3, 3));
+    assert!(cached_decoded_art(key).is_none());
+
+    let mut store = CoverArtStore::default();
+    store.store_decoded(key.to_string(), Arc::clone(&image));
+
+    let recalled = cached_decoded_art(key).expect("stored art should be cached");
+    assert!(Arc::ptr_eq(&recalled, &image));
+  }
+
+  #[test]
+  fn store_mark_loaded_sets_the_status() {
+    let mut store = CoverArtStore::default();
+    store.mark_loaded();
+    assert_eq!(store.status, CoverArtStatus::Loaded);
+  }
+
+  #[test]
   fn store_replaces_and_clear_drops_the_held_art() {
     let mut store = CoverArtStore::default();
     assert!(!store.available());
     assert_eq!(store.key(), None);
+    assert_eq!(store.cached_bytes(), 0);
+    assert!(store.cache_active());
 
     store.store_decoded("a".to_string(), image::DynamicImage::new_rgb8(1, 1));
     assert!(store.available());
     assert_eq!(store.key(), Some("a"));
-    assert!(store.image().is_some());
+    assert_eq!(store.cached_bytes(), 3);
 
     store.store_decoded("b".to_string(), image::DynamicImage::new_rgb8(2, 2));
     assert_eq!(store.key(), Some("b"));
+    assert_eq!(store.cached_bytes(), 12);
 
     store.clear();
     assert!(!store.available());
     assert_eq!(store.key(), None);
-    assert!(store.image().is_none());
+    assert_eq!(store.cached_bytes(), 0);
+  }
+
+  #[test]
+  fn the_default_decode_budget_is_sixty_four_mebibytes() {
+    assert_eq!(DECODED_ART_CACHE_BUDGET_BYTES, 64 * 1024 * 1024);
+    assert_eq!(
+      CoverArtStore::default().cap_bytes,
+      DECODED_ART_CACHE_BUDGET_BYTES
+    );
+  }
+
+  #[test]
+  fn an_image_larger_than_the_budget_leaves_the_cache_inactive() {
+    let mut store = CoverArtStore::with_cap_bytes(8);
+    store.store_decoded("big".into(), image::DynamicImage::new_rgba8(3, 1));
+
+    assert!(!store.cache_active());
+    assert!(!store.available());
+    assert_eq!(store.cached_bytes(), 0);
+    assert_eq!(store.key(), None);
+  }
+
+  #[test]
+  fn adding_an_image_over_budget_evicts_the_least_recent_entry_by_bytes() {
+    let mut store = CoverArtStore::with_cap_bytes(24);
+    store.store_decoded("old".into(), image::DynamicImage::new_rgba8(2, 2));
+    assert_eq!(store.cached_bytes(), 16);
+
+    store.store_decoded("new".into(), image::DynamicImage::new_rgba8(2, 2));
+
+    assert!(store.cache_active());
+    assert_eq!(store.key(), Some("new"));
+    assert_eq!(store.cached_bytes(), 16);
+  }
+
+  #[test]
+  fn average_load_duration_uses_a_bounded_rolling_window() {
+    let mut store = CoverArtStore::default();
+    assert_eq!(store.average_load_duration(), None);
+
+    for duration in [100, 200, 300] {
+      store
+        .load_samples
+        .push_back(Duration::from_millis(duration));
+    }
+    assert_eq!(
+      store.average_load_duration(),
+      Some(Duration::from_millis(200))
+    );
+
+    for _ in 0..LOAD_SAMPLE_WINDOW {
+      store.load_samples.push_back(Duration::from_millis(50));
+    }
+    assert_eq!(store.load_samples.len(), LOAD_SAMPLE_WINDOW + 3);
+    store.note_fetch_started();
+    store.note_fetch_finished(true);
+    assert_eq!(store.load_samples.len(), LOAD_SAMPLE_WINDOW);
+    assert!(store.average_load_duration() <= Some(Duration::from_millis(200)));
+  }
+
+  #[test]
+  fn a_transition_keeps_the_first_start_when_the_key_repeats() {
+    let mut store = CoverArtStore::default();
+    let started = Instant::now() - Duration::from_millis(50);
+
+    store.begin_transition_at("new", started);
+    store.begin_transition_at("new", Instant::now());
+
+    assert_eq!(store.transition(), Some(("new", started)));
   }
 }

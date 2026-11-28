@@ -564,6 +564,28 @@ mod tests {
     assert!(ids(&app).contains(&"behavior.default_sort_saved_albums".to_string()));
   }
 
+  #[cfg(feature = "cover-art")]
+  #[test]
+  fn the_fade_row_disappears_as_soon_as_song_details_are_staged_off() {
+    let mut app = filtered_app("", false);
+    let ids = |app: &App| -> Vec<String> {
+      filtered_setting_indices(app)
+        .into_iter()
+        .map(|index| app.settings_items[index].id.clone())
+        .collect()
+    };
+    let fade = "behavior.fade_song_selection_cover_art".to_string();
+    assert!(ids(&app).contains(&fade));
+
+    let details = app
+      .settings_items
+      .iter()
+      .position(|item| item.id == "behavior.show_song_selection_details")
+      .unwrap();
+    app.settings_items[details].value = SettingValue::Bool(false);
+    assert!(!ids(&app).contains(&fade));
+  }
+
   #[test]
   fn a_spotify_only_key_row_carries_a_hint_without_a_session() {
     let mut app = filtered_app("", false);

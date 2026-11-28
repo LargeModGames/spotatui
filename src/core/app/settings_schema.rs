@@ -131,6 +131,18 @@ pub(crate) fn setting_requirement(id: &str) -> Requirement {
   }
 }
 
+#[cfg(feature = "cover-art")]
+fn staged_bool_setting(items: &[SettingItem], id: &str, fallback: bool) -> bool {
+  items
+    .iter()
+    .find(|item| item.id == id)
+    .and_then(|item| match &item.value {
+      SettingValue::Bool(value) => Some(*value),
+      _ => None,
+    })
+    .unwrap_or(fallback)
+}
+
 /// The one button a settings row can carry, beside its value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SettingButton {
@@ -847,6 +859,28 @@ impl App {
       },
       #[cfg(feature = "cover-art")]
       SettingItem {
+        id: "behavior.show_song_selection_details".to_string(),
+        name: strings
+          .behavior_show_song_selection_details_name
+          .to_string(),
+        description: strings
+          .behavior_show_song_selection_details_description
+          .to_string(),
+        value: SettingValue::Bool(self.user_config.behavior.show_song_selection_details),
+      },
+      #[cfg(feature = "cover-art")]
+      SettingItem {
+        id: "behavior.fade_song_selection_cover_art".to_string(),
+        name: strings
+          .behavior_fade_song_selection_cover_art_name
+          .to_string(),
+        description: strings
+          .behavior_fade_song_selection_cover_art_description
+          .to_string(),
+        value: SettingValue::Bool(self.user_config.behavior.fade_song_selection_cover_art),
+      },
+      #[cfg(feature = "cover-art")]
+      SettingItem {
         id: "behavior.cover_art_dither".to_string(),
         name: strings.behavior_cover_art_dither_name.to_string(),
         description: strings.behavior_cover_art_dither_description.to_string(),
@@ -1370,10 +1404,19 @@ impl App {
 
   /// Whether a row is drawn now: key rows always, other rows only when their requirement is met.
   pub(crate) fn setting_offered(&self, item: &SettingItem) -> bool {
-    matches!(item.value, SettingValue::Key(_))
+    let offered = matches!(item.value, SettingValue::Key(_))
       || self
         .availability(setting_requirement(&item.id))
-        .is_available()
+        .is_available();
+    #[cfg(feature = "cover-art")]
+    let offered = offered
+      && (item.id != "behavior.fade_song_selection_cover_art"
+        || staged_bool_setting(
+          &self.settings_items,
+          "behavior.show_song_selection_details",
+          self.user_config.behavior.show_song_selection_details,
+        ));
+    offered
   }
 
   /// The startup routes the cycle offers; a stored Spotify route stays in it so the cycle cannot strand it.
@@ -1480,6 +1523,39 @@ mod tests {
       app.user_config.behavior.language = crate::core::i18n::Language::En;
       app.refresh_language();
     }
+  }
+
+  #[cfg(feature = "cover-art")]
+  #[test]
+  fn the_fade_row_is_offered_only_while_song_details_are_enabled() {
+    let mut app = App::default();
+    app.load_settings_for_category();
+    let details = app
+      .settings_items
+      .iter()
+      .position(|item| item.id == "behavior.show_song_selection_details")
+      .unwrap();
+    let fade = app
+      .settings_items
+      .iter()
+      .position(|item| item.id == "behavior.fade_song_selection_cover_art")
+      .unwrap();
+    assert!(app.setting_offered(&app.settings_items[fade]));
+
+    app.settings_items[details].value = SettingValue::Bool(false);
+    assert!(!app.setting_offered(&app.settings_items[fade]));
+
+    app.settings_items[details].value = SettingValue::Bool(true);
+    assert!(app.setting_offered(&app.settings_items[fade]));
+
+    app.settings_items.clear();
+    app.user_config.behavior.show_song_selection_details = false;
+    let fade = app
+      .settings_items_for_category()
+      .into_iter()
+      .find(|item| item.id == "behavior.fade_song_selection_cover_art")
+      .unwrap();
+    assert!(!app.setting_offered(&fade));
   }
 
   #[test]

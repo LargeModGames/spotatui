@@ -82,9 +82,90 @@ pub trait PlaybackNetwork {
   #[allow(dead_code)]
   async fn add_item_to_queue(&mut self, item: PlayableId<'static>);
   async fn get_queue(&mut self);
-  /// Fetch, decode and store the current track's cover art (off the `App` lock).
   #[cfg(feature = "art-decode")]
-  async fn fetch_cover_art(&mut self, request: crate::core::art::CoverArtRequest);
+  async fn fetch_cover_art(
+    &mut self,
+    request: crate::core::art::CoverArtRequest,
+    target: crate::core::art::CoverArtTarget,
+    generation: u64,
+  );
+  #[cfg(feature = "art-decode")]
+  async fn prefetch_cover_art(&mut self, request: crate::core::art::CoverArtRequest);
+}
+
+#[cfg(feature = "art-decode")]
+fn cover_art_fetch_is_desired(
+  app: &crate::core::app::App,
+  target: crate::core::art::CoverArtTarget,
+  key: &str,
+  generation: u64,
+) -> bool {
+  use crate::core::art::CoverArtTarget;
+
+  match target {
+    CoverArtTarget::Playing => {
+      app.desired_cover_art_key.as_deref() == Some(key) && app.cover_art_generation_is(generation)
+    }
+    #[cfg(feature = "cover-art")]
+    CoverArtTarget::BrowsePreview => {
+      app.browse_preview_art_key_is_desired(key) && app.browse_preview_art_generation_is(generation)
+    }
+  }
+}
+
+#[cfg(feature = "art-decode")]
+async fn load_cover_art(
+  request: crate::core::art::CoverArtRequest,
+) -> Result<Arc<image::DynamicImage>, Arc<anyhow::Error>> {
+  use crate::core::art::{cached_decoded_art, fetch_and_decode, CoverArtRequest};
+  use std::collections::HashMap;
+  use std::sync::{Mutex, OnceLock, Weak};
+  use tokio::sync::OnceCell;
+
+  type Load = OnceCell<Result<Arc<image::DynamicImage>, Arc<anyhow::Error>>>;
+  static IN_FLIGHT: OnceLock<Mutex<HashMap<String, Weak<Load>>>> = OnceLock::new();
+
+  let key = request.key().to_string();
+  if let Some(image) = cached_decoded_art(&key) {
+    return Ok(image);
+  }
+
+  let load = {
+    let mut in_flight = IN_FLIGHT
+      .get_or_init(Mutex::default)
+      .lock()
+      .unwrap_or_else(|e| e.into_inner());
+    in_flight.retain(|_, load| load.strong_count() > 0);
+    if let Some(load) = in_flight.get(&key).and_then(Weak::upgrade) {
+      load
+    } else {
+      let load = Arc::new(Load::new());
+      in_flight.insert(key.clone(), Arc::downgrade(&load));
+      load
+    }
+  };
+  load
+    .get_or_init(|| async move {
+      if let Some(image) = cached_decoded_art(&key) {
+        return Ok(image);
+      }
+      match request {
+        CoverArtRequest::Url(url) => fetch_and_decode(&url).await.map_err(Arc::new),
+        #[cfg(feature = "local-files")]
+        CoverArtRequest::LocalFile { path, .. } => {
+          let image =
+            tokio::task::spawn_blocking(move || crate::infra::local::extract_embedded_cover(&path))
+              .await
+              .map_err(|err| Arc::new(anyhow!(err)))?
+              .map_err(Arc::new)?;
+          let image = Arc::new(image);
+          crate::core::art::remember_decoded_art(&key, Arc::clone(&image));
+          Ok(image)
+        }
+      }
+    })
+    .await
+    .clone()
 }
 
 fn trim_api_playback_uris(
@@ -1459,70 +1540,70 @@ impl PlaybackNetwork for Network {
     app.is_fetching_current_playback = false;
   }
 
-  /// Fetch and decode the current track's cover art, then store it. Runs entirely
-  /// off the `App` lock (the download/decode is the slow part and must never hold
-  /// the render loop's mutex, #142); the guard is only re-acquired at the end to
-  /// store the finished image and update the status. Cover art is non-essential,
-  /// so a failure only logs and flips the status to `Failed` (never surfaces a
-  /// blocking error).
   #[cfg(feature = "art-decode")]
-  async fn fetch_cover_art(&mut self, request: crate::core::art::CoverArtRequest) {
-    use crate::core::art::{fetch_and_decode, CoverArtRequest, CoverArtStatus};
+  async fn fetch_cover_art(
+    &mut self,
+    request: crate::core::art::CoverArtRequest,
+    target: crate::core::art::CoverArtTarget,
+    generation: u64,
+  ) {
+    use crate::core::art::{CoverArtStatus, CoverArtTarget};
 
     let key = request.key().to_string();
 
-    // Skip the download/decode when we already hold art for this exact key
-    // (e.g. consecutive tracks that share an album cover): just mark it loaded.
     {
-      let mut app = self.app.lock().await;
-      if app.desired_cover_art_key.as_deref() != Some(key.as_str()) {
-        return;
-      }
-      if app.cover_art.key() == Some(key.as_str()) {
-        app.cover_art.status = CoverArtStatus::Loaded;
+      let app = self.app.lock().await;
+      if !cover_art_fetch_is_desired(&app, target, &key, generation) {
         return;
       }
     }
 
-    let result = match request {
-      CoverArtRequest::Url(url) => fetch_and_decode(&url).await,
-      #[cfg(feature = "local-files")]
-      CoverArtRequest::LocalFile { path, .. } => {
-        // Tag read + image decode are blocking; keep them off the async runtime.
-        match tokio::task::spawn_blocking(move || {
-          crate::infra::local::extract_embedded_cover(&path)
-        })
-        .await
-        {
-          Ok(inner) => inner,
-          Err(join_err) => Err(anyhow!(join_err)),
-        }
-      }
-    };
+    let result = load_cover_art(request).await;
 
     // Dominant-color extraction for the adaptive theme: one pass over a 64x64
     // thumbnail, but still done here, off the App lock, like the decode above.
     let palette = result
       .as_ref()
       .ok()
-      .and_then(crate::core::cover_theme::extract_palette);
+      .and_then(|img| crate::core::cover_theme::extract_palette(img));
 
     let mut app = self.app.lock().await;
-    if app.desired_cover_art_key.as_deref() != Some(key.as_str()) {
+    if !cover_art_fetch_is_desired(&app, target, &key, generation) {
       return;
     }
-    match result {
-      Ok(img) => {
+    match (target, result) {
+      (CoverArtTarget::Playing, Ok(img)) => {
         app.store_cover_art(key, img, palette);
-        app.cover_art.status = CoverArtStatus::Loaded;
+        app.cover_art.mark_loaded();
       }
-      Err(err) => {
+      #[cfg(feature = "cover-art")]
+      (CoverArtTarget::BrowsePreview, Ok(img)) => {
+        app.store_browse_preview_art(key, img);
+      }
+      (CoverArtTarget::Playing, Err(err)) => {
         log::warn!("cover art load failed: {err}");
+        app.cover_art.note_fetch_finished(false);
         // Drop any stale art so the pane shows the "unavailable" placeholder
         // rather than the previous track's image.
         app.clear_cover_art();
         app.cover_art.status = CoverArtStatus::Failed;
       }
+      #[cfg(feature = "cover-art")]
+      (CoverArtTarget::BrowsePreview, Err(err)) => {
+        log::warn!("search cover art load failed: {err}");
+        app.fail_browse_preview_art();
+      }
+    }
+  }
+
+  #[cfg(feature = "art-decode")]
+  async fn prefetch_cover_art(&mut self, request: crate::core::art::CoverArtRequest) {
+    let key = request.key().to_string();
+    if let Err(err) = load_cover_art(request).await {
+      log::debug!(
+        "cover art prefetch failed for {}: {err}",
+        crate::core::art::redacted_art_key(&key)
+      );
     }
   }
 
@@ -4281,5 +4362,133 @@ mod tests {
       Some("Another source owns playback")
     );
     assert!(app.lock().await.saved_spotify_device_id().is_none());
+  }
+
+  #[cfg(feature = "art-decode")]
+  #[tokio::test]
+  async fn overlapping_cover_art_loads_share_one_request() {
+    use crate::core::art::CoverArtRequest;
+    use crate::infra::network::metadata::tests::read_http_request;
+    use tokio::io::AsyncWriteExt;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/shared-art.jpg", listener.local_addr().unwrap());
+    let serve = async {
+      let (mut socket, _) = listener.accept().await.unwrap();
+      read_http_request(&mut socket).await;
+      socket
+        .write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+        .await
+        .unwrap();
+    };
+    let (first, second, ()) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+      tokio::join!(
+        load_cover_art(CoverArtRequest::Url(url.clone())),
+        load_cover_art(CoverArtRequest::Url(url)),
+        serve
+      )
+    })
+    .await
+    .expect("both callers should finish after one response");
+    assert!(Arc::ptr_eq(&first.unwrap_err(), &second.unwrap_err()));
+  }
+
+  #[cfg(feature = "cover-art")]
+  #[tokio::test]
+  async fn a_cached_image_is_reused_for_another_target() {
+    use crate::core::app::App;
+    use crate::core::art::{remember_decoded_art, CoverArtRequest, CoverArtStatus, CoverArtTarget};
+    use crate::core::user_config::UserConfig;
+    use std::sync::mpsc::channel;
+    use std::time::SystemTime;
+
+    let key = "https://cache.test/shared-preview.jpg";
+    let image = Arc::new(image::DynamicImage::new_rgb8(2, 2));
+    remember_decoded_art(key, Arc::clone(&image));
+
+    let (io_tx, _rx) = channel();
+    let mut seeded = App::new(io_tx, UserConfig::new(), Some(SystemTime::now()));
+    let generation = seeded.begin_cover_art_fetch(&CoverArtRequest::Url(key.to_string()));
+    let app = Arc::new(tokio::sync::Mutex::new(seeded));
+    let mut network = Network::new(None, &app);
+
+    network
+      .fetch_cover_art(
+        CoverArtRequest::Url(key.to_string()),
+        CoverArtTarget::Playing,
+        generation,
+      )
+      .await;
+
+    let guard = app.lock().await;
+    assert_eq!(guard.cover_art.key(), Some(key));
+    assert!(Arc::ptr_eq(
+      &guard.cover_art.image_shared().expect("cached image"),
+      &image
+    ));
+    assert_eq!(guard.cover_art.status, CoverArtStatus::Loaded);
+  }
+
+  #[cfg(feature = "cover-art")]
+  #[tokio::test]
+  async fn a_preview_result_that_is_no_longer_desired_is_dropped() {
+    use crate::core::app::App;
+    use crate::core::art::{remember_decoded_art, CoverArtRequest, CoverArtStatus, CoverArtTarget};
+    use crate::core::user_config::UserConfig;
+    use std::sync::mpsc::channel;
+    use std::time::SystemTime;
+
+    let key = "https://cache.test/stale-preview.jpg";
+    remember_decoded_art(key, Arc::new(image::DynamicImage::new_rgb8(2, 2)));
+
+    let (io_tx, _rx) = channel();
+    let mut seeded = App::new(io_tx, UserConfig::new(), Some(SystemTime::now()));
+    let request = CoverArtRequest::Url(key.to_string());
+    let generation = seeded.begin_browse_preview_art_fetch(&request);
+    seeded.drop_browse_preview_art(CoverArtStatus::NotStarted);
+    let app = Arc::new(tokio::sync::Mutex::new(seeded));
+    let mut network = Network::new(None, &app);
+
+    network
+      .fetch_cover_art(request, CoverArtTarget::BrowsePreview, generation)
+      .await;
+
+    let guard = app.lock().await;
+    assert!(guard.browse_preview_cover_art().key().is_none());
+    assert_eq!(
+      guard.browse_preview_cover_art().status,
+      CoverArtStatus::NotStarted
+    );
+  }
+
+  #[cfg(feature = "cover-art")]
+  #[test]
+  fn an_older_fetch_generation_is_not_desired_after_a_newer_fetch() {
+    use crate::core::app::App;
+    use crate::core::art::{CoverArtRequest, CoverArtTarget};
+
+    let mut app = App::default();
+    let request = CoverArtRequest::Url("https://generation.test/cover.jpg".into());
+    let old_generation = app.begin_browse_preview_art_fetch(&request);
+    assert!(cover_art_fetch_is_desired(
+      &app,
+      CoverArtTarget::BrowsePreview,
+      request.key(),
+      old_generation
+    ));
+
+    let new_generation = app.begin_browse_preview_art_fetch(&request);
+    assert!(!cover_art_fetch_is_desired(
+      &app,
+      CoverArtTarget::BrowsePreview,
+      request.key(),
+      old_generation
+    ));
+    assert!(cover_art_fetch_is_desired(
+      &app,
+      CoverArtTarget::BrowsePreview,
+      request.key(),
+      new_generation
+    ));
   }
 }

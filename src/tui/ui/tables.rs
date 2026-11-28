@@ -868,6 +868,7 @@ mod tests {
       collaborative: false,
       public: None,
       image_url: None,
+      description: None,
     }
   }
 

@@ -118,12 +118,14 @@ pub(super) fn cover_art_action(
   desired_key: Option<&str>,
   last_requested_key: Option<&str>,
   art_loaded: bool,
+  art_loading: bool,
+  art_failed: bool,
   enabled: bool,
   snapshot_present: bool,
 ) -> CoverArtAction {
   match desired_key {
     Some(key) => {
-      if last_requested_key == Some(key) {
+      if last_requested_key == Some(key) && (art_loaded || art_loading || art_failed) {
         CoverArtAction::Keep
       } else {
         CoverArtAction::Fetch
@@ -131,7 +133,9 @@ pub(super) fn cover_art_action(
     }
     None => CoverArtAction::Drop {
       clear: last_requested_key.is_some() || art_loaded,
-      status: if enabled && snapshot_present {
+      status: if !enabled && snapshot_present {
+        CoverArtStatus::Inactive
+      } else if enabled && snapshot_present {
         CoverArtStatus::Unavailable
       } else {
         CoverArtStatus::NotStarted
@@ -345,11 +349,11 @@ mod tests {
     #[test]
     fn newly_resolved_art_fetches_and_unchanged_art_keeps() {
       assert_eq!(
-        cover_art_action(Some("url-a"), None, false, true, true),
+        cover_art_action(Some("url-a"), None, false, false, false, true, true),
         CoverArtAction::Fetch
       );
       assert_eq!(
-        cover_art_action(Some("url-a"), Some("url-a"), true, true, true),
+        cover_art_action(Some("url-a"), Some("url-a"), true, false, false, true, true),
         CoverArtAction::Keep
       );
     }
@@ -360,19 +364,51 @@ mod tests {
       // the track identity flips, so the desired key appears (or changes)
       // ticks later. The key comparison, not an identity latch, must fire.
       assert_eq!(
-        cover_art_action(None, None, false, true, true),
+        cover_art_action(None, None, false, false, false, true, true),
         CoverArtAction::Drop {
           clear: false,
           status: CoverArtStatus::Unavailable
         }
       );
       assert_eq!(
-        cover_art_action(Some("real-url"), None, false, true, true),
+        cover_art_action(Some("real-url"), None, false, false, false, true, true),
         CoverArtAction::Fetch
       );
       assert_eq!(
-        cover_art_action(Some("next-url"), Some("real-url"), true, true, true),
+        cover_art_action(
+          Some("next-url"),
+          Some("real-url"),
+          true,
+          false,
+          false,
+          true,
+          true
+        ),
         CoverArtAction::Fetch
+      );
+    }
+
+    #[test]
+    fn a_requested_but_not_loaded_key_refetches() {
+      assert_eq!(
+        cover_art_action(
+          Some("url-a"),
+          Some("url-a"),
+          false,
+          false,
+          false,
+          true,
+          true
+        ),
+        CoverArtAction::Fetch
+      );
+      assert_eq!(
+        cover_art_action(Some("url-a"), Some("url-a"), false, true, false, true, true),
+        CoverArtAction::Keep
+      );
+      assert_eq!(
+        cover_art_action(Some("url-a"), Some("url-a"), false, false, true, true, true),
+        CoverArtAction::Keep
       );
     }
 
@@ -380,7 +416,7 @@ mod tests {
     fn losing_the_art_drops_the_stale_image_once() {
       // A track with art was playing; now radio (no art) is: clear once...
       assert_eq!(
-        cover_art_action(None, Some("url-a"), true, true, true),
+        cover_art_action(None, Some("url-a"), true, false, false, true, true),
         CoverArtAction::Drop {
           clear: true,
           status: CoverArtStatus::Unavailable
@@ -388,7 +424,7 @@ mod tests {
       );
       // ...and quiet ticks afterwards have nothing left to clear.
       assert_eq!(
-        cover_art_action(None, None, false, true, true),
+        cover_art_action(None, None, false, false, false, true, true),
         CoverArtAction::Drop {
           clear: false,
           status: CoverArtStatus::Unavailable
@@ -397,16 +433,16 @@ mod tests {
     }
 
     #[test]
-    fn disabled_art_and_silence_read_as_not_started() {
+    fn disabled_art_reads_as_inactive_but_silence_reads_as_not_started() {
       assert_eq!(
-        cover_art_action(None, Some("url-a"), true, false, true),
+        cover_art_action(None, Some("url-a"), true, false, false, false, true),
         CoverArtAction::Drop {
           clear: true,
-          status: CoverArtStatus::NotStarted
+          status: CoverArtStatus::Inactive
         }
       );
       assert_eq!(
-        cover_art_action(None, None, false, true, false),
+        cover_art_action(None, None, false, false, false, true, false),
         CoverArtAction::Drop {
           clear: false,
           status: CoverArtStatus::NotStarted

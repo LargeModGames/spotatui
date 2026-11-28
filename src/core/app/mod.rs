@@ -285,6 +285,14 @@ pub struct App {
   /// keys are discarded.
   #[cfg(feature = "art-decode")]
   pub desired_cover_art_key: Option<String>,
+  #[cfg(feature = "art-decode")]
+  desired_cover_art_generation: u64,
+  #[cfg(feature = "cover-art")]
+  browse_preview_cover_art: crate::core::art::CoverArtStore,
+  #[cfg(feature = "cover-art")]
+  desired_browse_preview_cover_art_key: Option<String>,
+  #[cfg(feature = "cover-art")]
+  desired_browse_preview_cover_art_generation: u64,
   /// Accent colors extracted from the current cover art. Stored even while
   /// Adaptive Theme is off, so toggling it on recolors immediately without a
   /// refetch. Cleared together with the art itself.

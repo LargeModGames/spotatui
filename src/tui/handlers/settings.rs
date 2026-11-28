@@ -873,9 +873,13 @@ mod tests {
 
   #[cfg(feature = "cover-art")]
   #[test]
-  fn dither_behavior_rows_apply_and_clamp_on_save() {
+  fn browse_preview_and_dither_behavior_rows_apply_and_clamp_on_save() {
     let mut app = App::default();
     open_settings(&mut app);
+    let visible = setting_index(&app, "behavior.show_song_selection_details");
+    app.settings_items[visible].value = SettingValue::Bool(false);
+    let fade = setting_index(&app, "behavior.fade_song_selection_cover_art");
+    app.settings_items[fade].value = SettingValue::Bool(false);
     let enabled = setting_index(&app, "behavior.cover_art_dither");
     app.settings_items[enabled].value = SettingValue::Bool(true);
     let algorithm = setting_index(&app, "behavior.cover_art_dither_algorithm");
@@ -891,6 +895,8 @@ mod tests {
     assert_eq!(app.settings_items[scale].value, SettingValue::Number(3));
     app.settings_items[scale].value = SettingValue::Number(100);
     app.apply_settings_changes();
+    assert!(!app.user_config.behavior.show_song_selection_details);
+    assert!(!app.user_config.behavior.fade_song_selection_cover_art);
     assert!(app.user_config.behavior.cover_art_dither);
     assert_eq!(
       app.user_config.behavior.cover_art_dither_algorithm,

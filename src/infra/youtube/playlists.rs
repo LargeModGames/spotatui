@@ -249,6 +249,7 @@ pub fn playlist_to_info(p: &StoredPlaylist) -> PlaylistInfo {
     collaborative: false,
     public: None,
     image_url: None,
+    description: None,
   }
 }
 

@@ -99,6 +99,8 @@ Build with `--features cover-art` to show the cover-art settings. Dithering is o
 ```yaml
 behavior:
   cover_art_dither: true
+  show_song_selection_details: true
+  fade_song_selection_cover_art: true
   cover_art_dither_algorithm: stucki   # default; also bayer8x8 or atkinson
   cover_art_dither_pixel_scale: 1      # 1..=3; higher means larger visual pixels
 theme:
@@ -106,7 +108,7 @@ theme:
   # cover_art_dither_color: '120, 160, 220' # exact RGB override
 ```
 
-The color override can also be a named theme color such as `LightBlue`. It survives theme-preset changes, and setting it back to `auto` clears it. Dithered art uses that accent with the surface's current background. Every slot, including a small playbar, makes its mask from the original decoded image at its own output resolution. Scale `1` uses every output pixel on graphics terminals or every Braille dot on basic terminals; higher values make larger visual pixels. The slot stays clear while a new dither is prepared, so the first artwork shown is already dithered. The basic-terminal grid has fewer dots than a graphics protocol, so its smallest images retain less detail. To give playbar art more room, increase `behavior.playbar_cover_art_size_percent` (up to `200`); the available playbar height still limits the final size.
+The color override can also be a named theme color such as `LightBlue`. It survives theme-preset changes, and setting it back to `auto` clears it. Dithered art uses that accent with the surface's current background. Every slot, including a small playbar, makes its mask from the original decoded image at its own output resolution. Scale `1` uses every output pixel on graphics terminals or every Braille dot on basic terminals; higher values make larger visual pixels. The slot stays clear while a new dither is prepared, so the first artwork shown is already dithered. The basic-terminal grid has fewer dots than a graphics protocol, so its smallest images retain less detail. To give playbar art more room, increase `behavior.playbar_cover_art_size_percent` (up to `200`); the available playbar height still limits the final size. On cover-art builds, the selected or hovered song's artwork and details are shown in a box below song lists by default; set `show_song_selection_details: false` to hide the box. Set `fade_song_selection_cover_art: false` to swap preview art instantly instead of fading between selections.
 
 ## Startup route
 
@@ -371,6 +373,8 @@ These keys also go under `behavior:`. Defaults below are the built-in values whe
 | `player_bar_visualizer` | `spectrum` | What the desktop app and the browser GUI draw behind the player bar: `off`, `spectrum` or `waveform`. Linux and Windows only (Linux builds require the `audio-viz` feature). A click on empty space in the bar also changes it. Its look is set in `visualizer.yml` (see the Themes guide). |
 | `stop_after_current_track` | `false` | Pause native Spotify streaming when the current track finishes; does not apply to other sources or remote Connect devices. |
 | `draw_cover_art` | `true` | Enable rendering song/episode cover art; needs a cover-art build. |
+| `show_song_selection_details` | `true` | Show the selected or hovered song's artwork and details in a box below song lists. Needs a cover-art build. |
+| `fade_song_selection_cover_art` | `true` | Fade between preview artwork when the highlighted song or playlist changes. Needs a cover-art build. |
 | `cover_art_theme` | `false` | Recolor UI accents from the current cover art, fading on track change. Requires `art-decode`, which `cover-art` includes. |
 | `keepawake_enabled` | `true` | Prevent the system from sleeping while music is playing. |
 | `enable_media_keys` | `true` | Let OS media keys, headphone buttons and remote controls (`playerctl`, Now Playing) control playback. |

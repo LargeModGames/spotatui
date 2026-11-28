@@ -550,6 +550,18 @@ impl App {
           }
         }
         #[cfg(feature = "cover-art")]
+        "behavior.show_song_selection_details" => {
+          if let SettingValue::Bool(v) = setting.value {
+            self.user_config.behavior.show_song_selection_details = v;
+          }
+        }
+        #[cfg(feature = "cover-art")]
+        "behavior.fade_song_selection_cover_art" => {
+          if let SettingValue::Bool(v) = setting.value {
+            self.user_config.behavior.fade_song_selection_cover_art = v;
+          }
+        }
+        #[cfg(feature = "cover-art")]
         "behavior.cover_art_dither" => {
           if let SettingValue::Bool(v) = setting.value {
             self.user_config.behavior.cover_art_dither = v;

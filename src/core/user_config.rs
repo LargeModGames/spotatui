@@ -794,6 +794,10 @@ pub struct BehaviorConfigString {
   #[cfg(feature = "cover-art")]
   pub cover_art_dither: Option<bool>,
   #[cfg(feature = "cover-art")]
+  pub show_song_selection_details: Option<bool>,
+  #[cfg(feature = "cover-art")]
+  pub fade_song_selection_cover_art: Option<bool>,
+  #[cfg(feature = "cover-art")]
   pub cover_art_dither_algorithm: Option<String>,
   #[cfg(feature = "cover-art")]
   pub cover_art_dither_pixel_scale: Option<i64>,
@@ -934,6 +938,10 @@ pub struct BehaviorConfig {
   pub cover_art_theme: bool,
   #[cfg(feature = "cover-art")]
   pub cover_art_dither: bool,
+  #[cfg(feature = "cover-art")]
+  pub show_song_selection_details: bool,
+  #[cfg(feature = "cover-art")]
+  pub fade_song_selection_cover_art: bool,
   #[cfg(feature = "cover-art")]
   pub cover_art_dither_algorithm: String,
   #[cfg(feature = "cover-art")]
@@ -1493,6 +1501,10 @@ impl UserConfig {
         #[cfg(feature = "cover-art")]
         cover_art_dither: false,
         #[cfg(feature = "cover-art")]
+        show_song_selection_details: true,
+        #[cfg(feature = "cover-art")]
+        fade_song_selection_cover_art: true,
+        #[cfg(feature = "cover-art")]
         cover_art_dither_algorithm: "stucki".to_string(),
         #[cfg(feature = "cover-art")]
         cover_art_dither_pixel_scale: 1,
@@ -1997,6 +2009,12 @@ impl UserConfig {
     {
       if let Some(value) = behavior_config.cover_art_dither {
         self.behavior.cover_art_dither = value;
+      }
+      if let Some(value) = behavior_config.show_song_selection_details {
+        self.behavior.show_song_selection_details = value;
+      }
+      if let Some(value) = behavior_config.fade_song_selection_cover_art {
+        self.behavior.fade_song_selection_cover_art = value;
       }
       if let Some(value) = behavior_config.cover_art_dither_algorithm {
         self.behavior.cover_art_dither_algorithm =
@@ -2649,6 +2667,10 @@ impl UserConfig {
       cover_art_theme: Some(self.behavior.cover_art_theme),
       #[cfg(feature = "cover-art")]
       cover_art_dither: Some(self.behavior.cover_art_dither),
+      #[cfg(feature = "cover-art")]
+      show_song_selection_details: Some(self.behavior.show_song_selection_details),
+      #[cfg(feature = "cover-art")]
+      fade_song_selection_cover_art: Some(self.behavior.fade_song_selection_cover_art),
       #[cfg(feature = "cover-art")]
       cover_art_dither_algorithm: Some(self.behavior.cover_art_dither_algorithm.clone()),
       #[cfg(feature = "cover-art")]
@@ -3460,6 +3482,35 @@ mod tests {
       serde_yaml::from_str("cover_art_dither_pixel_scale: -3").unwrap();
     config.load_behaviorconfig(low).unwrap();
     assert_eq!(config.behavior.cover_art_dither_pixel_scale, 1);
+  }
+
+  #[cfg(feature = "cover-art")]
+  #[test]
+  fn song_selection_details_and_fade_visibility_load_and_round_trip() {
+    use super::{BehaviorConfigString, UserConfig, UserConfigPaths, UserConfigString};
+    let mut config = UserConfig::new();
+    assert!(config.behavior.show_song_selection_details);
+    assert!(config.behavior.fade_song_selection_cover_art);
+
+    let behavior: BehaviorConfigString = serde_yaml::from_str(
+      "show_song_selection_details: false\nfade_song_selection_cover_art: false",
+    )
+    .unwrap();
+    config.load_behaviorconfig(behavior).unwrap();
+    assert!(!config.behavior.show_song_selection_details);
+    assert!(!config.behavior.fade_song_selection_cover_art);
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.yml");
+    config.path_to_config = Some(UserConfigPaths {
+      config_file_path: path.clone(),
+    });
+    config.save_config().unwrap();
+    let saved: UserConfigString =
+      serde_yaml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let saved_behavior = saved.behavior.unwrap();
+    assert_eq!(saved_behavior.show_song_selection_details, Some(false));
+    assert_eq!(saved_behavior.fade_song_selection_cover_art, Some(false));
   }
 
   #[cfg(feature = "cover-art")]

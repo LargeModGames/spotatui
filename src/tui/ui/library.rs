@@ -68,7 +68,7 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       strings.local_files,
       &items,
       highlight_state,
-      app.view.selected_playlist_index,
+      app.highlighted_playlist_index(),
       &app.view.playlist_scroll_offset,
     );
     return;
@@ -98,7 +98,7 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       strings.apple_music,
       &items,
       highlight_state,
-      app.view.selected_playlist_index,
+      app.highlighted_playlist_index(),
       &app.view.playlist_scroll_offset,
     );
     return;
@@ -123,7 +123,7 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       strings.subsonic,
       &items,
       highlight_state,
-      app.view.selected_playlist_index,
+      app.highlighted_playlist_index(),
       &app.view.playlist_scroll_offset,
     );
     return;
@@ -152,7 +152,7 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       strings.qobuz,
       &items,
       highlight_state,
-      app.view.selected_playlist_index,
+      app.highlighted_playlist_index(),
       &app.view.playlist_scroll_offset,
     );
     return;
@@ -178,7 +178,7 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       strings.radio_stations,
       &items,
       highlight_state,
-      app.view.selected_playlist_index,
+      app.highlighted_playlist_index(),
       &app.view.playlist_scroll_offset,
     );
     return;
@@ -201,7 +201,7 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
       strings.youtube_playlists,
       &items,
       highlight_state,
-      app.view.selected_playlist_index,
+      app.highlighted_playlist_index(),
       &app.view.playlist_scroll_offset,
     );
     return;
@@ -273,7 +273,7 @@ pub fn draw_playlist_block(f: &mut Frame<'_>, app: &App, layout_chunk: Rect) {
     &title,
     &display_list,
     highlight_state,
-    app.view.selected_playlist_index,
+    app.highlighted_playlist_index(),
     &app.view.playlist_scroll_offset,
   );
 }
@@ -368,6 +368,7 @@ mod tests {
       collaborative: false,
       public: None,
       image_url: None,
+      description: None,
     }
   }
 

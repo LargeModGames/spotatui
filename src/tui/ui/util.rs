@@ -122,12 +122,23 @@ pub fn draw_selectable_list<S>(
 
 #[cfg(feature = "cover-art")]
 pub fn cover_art_status(app: &App) -> &'static str {
+  cover_art_status_for(app, &app.cover_art)
+}
+
+#[cfg(feature = "cover-art")]
+pub fn browse_preview_cover_art_status(app: &App) -> &'static str {
+  cover_art_status_for(app, app.browse_preview_cover_art())
+}
+
+#[cfg(feature = "cover-art")]
+fn cover_art_status_for(app: &App, store: &crate::core::art::CoverArtStore) -> &'static str {
   use crate::core::art::CoverArtStatus;
   let strings = &app.strings().screens;
-  match app.cover_art.status {
+  match store.status {
     CoverArtStatus::Loading => strings.cover_loading,
     CoverArtStatus::Unavailable => strings.cover_source_unavailable,
     CoverArtStatus::Failed => strings.cover_failed,
+    CoverArtStatus::Inactive => strings.cover_cache_inactive,
     CoverArtStatus::Loaded | CoverArtStatus::NotStarted => strings.cover_empty,
   }
 }

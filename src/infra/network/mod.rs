@@ -336,13 +336,18 @@ pub enum IoEvent {
   /// The in-app login failed or timed out, with the reason to show.
   #[cfg_attr(not(feature = "spotify-session"), allow(dead_code))]
   CancelSpotifyLogin(String),
-  /// Fetch and decode the current track's cover art (album-art URL, source
-  /// thumbnail, or a local file's embedded picture). Dispatched by the shared
-  /// track-change detector; handled off the `App` lock so the render loop never
-  /// blocks on the download/decode. Source-agnostic and independent of Spotify
-  /// auth.
   #[cfg(feature = "art-decode")]
-  FetchCoverArt(crate::core::art::CoverArtRequest),
+  FetchCoverArt(
+    crate::core::art::CoverArtRequest,
+    crate::core::art::CoverArtTarget,
+    u64,
+  ),
+  /// Warm the decoded-art cache without touching any UI slot.
+  #[cfg(feature = "art-decode")]
+  PrefetchCoverArt(
+    crate::core::art::CoverArtRequest,
+    tokio::sync::OwnedSemaphorePermit,
+  ),
   /// Download the official Soloist build for this system from Spotify (the
   /// Soloist Path row's button). Needs no Spotify login.
   #[cfg(feature = "soloist")]
@@ -536,7 +541,10 @@ impl Network {
   /// feature is disabled).
   fn event_bypasses_spotify_auth(io_event: &IoEvent) -> bool {
     #[cfg(feature = "art-decode")]
-    if matches!(io_event, IoEvent::FetchCoverArt(_)) {
+    if matches!(
+      io_event,
+      IoEvent::FetchCoverArt(..) | IoEvent::PrefetchCoverArt(..)
+    ) {
       return true;
     }
     #[cfg(feature = "soloist")]
@@ -629,7 +637,10 @@ impl Network {
       return false;
     }
     #[cfg(feature = "art-decode")]
-    if matches!(io_event, IoEvent::FetchCoverArt(_)) {
+    if matches!(
+      io_event,
+      IoEvent::FetchCoverArt(..) | IoEvent::PrefetchCoverArt(..)
+    ) {
       return true;
     }
     #[cfg(feature = "soloist")]
@@ -1063,8 +1074,12 @@ impl Network {
         self.get_lyrics(track, artists, duration, spotify_id).await;
       }
       #[cfg(feature = "art-decode")]
-      IoEvent::FetchCoverArt(request) => {
-        self.fetch_cover_art(request).await;
+      IoEvent::FetchCoverArt(request, target, generation) => {
+        self.fetch_cover_art(request, target, generation).await;
+      }
+      #[cfg(feature = "art-decode")]
+      IoEvent::PrefetchCoverArt(request, _permit) => {
+        self.prefetch_cover_art(request).await;
       }
       #[cfg(feature = "soloist")]
       IoEvent::DownloadSoloist => {

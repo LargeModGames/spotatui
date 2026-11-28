@@ -1,0 +1,1 @@
+- **Decoded cover art is now cached with a 64 MiB budget**: artwork is reused across loads, and the same cache can be warmed by background prefetch requests. A cover that exceeds the budget shows an inactive placeholder instead of being repeatedly fetched.

@@ -115,6 +115,54 @@ impl App {
 }
 
 impl App {
+  pub(crate) fn highlighted_playlist_index(&self) -> Option<usize> {
+    #[cfg(feature = "cover-art")]
+    {
+      self
+        .view
+        .hovered_playlist_index
+        .or(self.view.selected_playlist_index)
+    }
+    #[cfg(not(feature = "cover-art"))]
+    {
+      self.view.selected_playlist_index
+    }
+  }
+
+  #[cfg(feature = "cover-art")]
+  pub(crate) fn sidebar_playlist_preview_focused(&self) -> bool {
+    self.get_current_route().active_block == ActiveBlock::MyPlaylists
+      || (self.view.preview_input_source == PreviewInputSource::Mouse
+        && self.view.hovered_playlist_index.is_some())
+  }
+
+  /// The sidebar playlist whose art and details belong in the preview pane.
+  #[cfg(feature = "cover-art")]
+  pub(crate) fn preview_playlist(&self) -> Option<PlaylistInfo> {
+    if !self.sidebar_playlist_preview_focused() {
+      return None;
+    }
+    self.preview_playlist_at_index(self.highlighted_playlist_index()?)
+  }
+
+  #[cfg(feature = "cover-art")]
+  pub(crate) fn preview_playlist_at_index(&self, index: usize) -> Option<PlaylistInfo> {
+    match self.active_source {
+      Source::Spotify => {
+        let item = self.get_playlist_display_item_at(index.checked_sub(1)?)?;
+        self.get_playlist_for_item(item).cloned()
+      }
+      Source::Qobuz => self
+        .qobuz_playlists()
+        .get(index)
+        .filter(|playlist| playlist.uri.starts_with("qobuz:playlist:"))
+        .cloned(),
+      Source::Subsonic => self.subsonic_playlists().get(index).cloned(),
+      Source::YouTube => self.youtube_playlists().get(index).cloned(),
+      Source::Local | Source::Radio | Source::AppleMusic => None,
+    }
+  }
+
   pub fn clear_playlist_track_dialog_state(&mut self) {
     self.pending_playlist_track_add = None;
     self.pending_playlist_track_removal = None;
@@ -895,5 +943,69 @@ mod tests {
     // Test happy-path in-memory sort
     assert!(app.try_sort_playlist_tracks_from_cached_pages(&playlist_id));
     assert_eq!(app.track_table.tracks.len(), 2);
+  }
+
+  #[cfg(feature = "cover-art")]
+  #[test]
+  fn hovered_playlist_wins_until_the_mouse_leaves() {
+    let mut app = App::default();
+    app.user_config.behavior.pin_community_playlist = false;
+    app.all_playlists = vec![
+      playlist_info("playlist-alpha", "Alpha", "spotatui-owner", false),
+      playlist_info("playlist-bravo", "Bravo", "spotatui-owner", false),
+    ];
+    app.playlist_folder_items = vec![
+      PlaylistFolderItem::Playlist {
+        index: 0,
+        current_id: 0,
+      },
+      PlaylistFolderItem::Playlist {
+        index: 1,
+        current_id: 0,
+      },
+    ];
+    app.push_navigation_stack(RouteId::Home, ActiveBlock::MyPlaylists);
+    app.set_current_route_state(
+      Some(ActiveBlock::MyPlaylists),
+      Some(ActiveBlock::MyPlaylists),
+    );
+    app.view.selected_playlist_index = Some(1);
+    app.note_mouse_input();
+    app.set_hovered_playlist_index(2);
+
+    assert_eq!(app.highlighted_playlist_index(), Some(2));
+    assert_eq!(
+      app.preview_playlist().map(|playlist| playlist.name),
+      Some("Bravo".to_string())
+    );
+
+    app.clear_hovered_preview_item();
+
+    assert_eq!(app.highlighted_playlist_index(), Some(1));
+    assert_eq!(
+      app.preview_playlist().map(|playlist| playlist.name),
+      Some("Alpha".to_string())
+    );
+  }
+
+  #[cfg(feature = "cover-art")]
+  #[test]
+  fn keyboard_navigation_ignores_a_stale_hovered_playlist_block() {
+    let mut app = app_with_sidebar_playlist();
+    app.push_navigation_stack(RouteId::Home, ActiveBlock::TrackTable);
+    app.set_current_route_state(None, Some(ActiveBlock::MyPlaylists));
+    app.view.selected_playlist_index = Some(2);
+    app.note_mouse_input();
+    app.set_hovered_playlist_index(0);
+    assert_eq!(app.highlighted_playlist_index(), Some(0));
+
+    app.note_keyboard_input();
+    assert_eq!(app.highlighted_playlist_index(), Some(2));
+    assert!(app.preview_playlist().is_none());
+
+    app.note_mouse_input();
+    assert!(app.preview_playlist().is_none());
+    app.set_hovered_playlist_index(2);
+    assert!(app.preview_playlist().is_some());
   }
 }

@@ -231,6 +231,7 @@ impl MediaSource for LocalSource {
         public: None,
         image_url: None,
         owner_id: None,
+        description: None,
       })
       .collect();
 
@@ -261,6 +262,7 @@ impl MediaSource for LocalSource {
           public: None,
           image_url: None,
           owner_id: None,
+          description: None,
         },
       );
     }

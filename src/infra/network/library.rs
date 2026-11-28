@@ -1,4 +1,6 @@
-use super::mapping::{map_page, playlist_items_page};
+use super::mapping::{
+  map_page, playlist_info_with_description, playlist_items_page, PlaylistWithDescription,
+};
 use super::requests::{
   is_forbidden_error, is_not_found_error, is_rate_limited_error, spotify_api_request_json_for,
   spotify_get_typed_for,
@@ -17,7 +19,7 @@ use reqwest::Method;
 use rspotify::model::{
   idtypes::{AlbumId, PlaylistId, ShowId, TrackId, UserId},
   page::Page,
-  playlist::{PlaylistItem, SimplifiedPlaylist},
+  playlist::PlaylistItem,
   track::SavedTrack,
 };
 use rspotify::prelude::*;
@@ -1388,7 +1390,7 @@ async fn finish_playlists_fetch(
       }
       let mut attempts = 0u8;
       let page = loop {
-        match spotify_get_typed_for::<Page<SimplifiedPlaylist>>(
+        match spotify_get_typed_for::<Page<PlaylistWithDescription>>(
           "me/playlists",
           &[("limit", limit.to_string()), ("offset", offset.to_string())],
         )
@@ -1410,7 +1412,7 @@ async fn finish_playlists_fetch(
       if page.items.is_empty() {
         break;
       }
-      all_playlists.extend(page.items.iter().map(PlaylistInfo::from_simplified));
+      all_playlists.extend(page.items.iter().map(playlist_info_with_description));
       if page.next.is_none() {
         break;
       }
@@ -1583,7 +1585,7 @@ impl LibraryNetwork for Network {
     // Always use the compat path: parses raw JSON to serde_json::Value first,
     // which silently deduplicates keys (last-wins). This handles the known Spotify
     // API bug where "items" appears twice in the same JSON object.
-    let first_page = match spotify_get_typed_for::<Page<SimplifiedPlaylist>>(
+    let first_page = match spotify_get_typed_for::<Page<PlaylistWithDescription>>(
       "me/playlists",
       &[("limit", limit.to_string()), ("offset", "0".to_string())],
     )
@@ -1603,10 +1605,10 @@ impl LibraryNetwork for Network {
     let first_items: Vec<PlaylistInfo> = first_page
       .items
       .iter()
-      .map(PlaylistInfo::from_simplified)
+      .map(playlist_info_with_description)
       .collect();
     let has_more = first_page.next.is_some() && !first_page.items.is_empty();
-    let mapped_first = map_page(&first_page, PlaylistInfo::from_simplified);
+    let mapped_first = map_page(&first_page, playlist_info_with_description);
 
     let (generation, page_one_selection, previous_complete) = {
       let mut app = self.app.lock().await;
@@ -3397,6 +3399,7 @@ fn rootlist_playlist_info(
     collaborative,
     public: None,
     image_url: None,
+    description: None,
   }
 }
 

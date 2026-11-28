@@ -118,6 +118,12 @@ pub const EN: SettingsStrings = SettingsStrings {
   behavior_draw_cover_art_forced_description: "Force rendering of cover art despite terminal support",
   behavior_playbar_cover_art_size_percent_name: "Cover Art Size",
   behavior_playbar_cover_art_size_percent_description: "Playbar cover art size as a percentage (25-200)",
+  behavior_show_song_selection_details_name: "Show Song Selection Details",
+  behavior_show_song_selection_details_description:
+    "Show the selected song's artwork and details below song lists, plus artwork for the selected sidebar playlist",
+  behavior_fade_song_selection_cover_art_name: "Fade Selected Song Cover Art",
+  behavior_fade_song_selection_cover_art_description:
+    "Fade between selected song cover art in song list previews",
   behavior_cover_art_dither_name: "Dither Cover Art",
   behavior_cover_art_dither_description: "Dither all cover-art sizes in two theme-aware colors",
   behavior_cover_art_dither_algorithm_name: "Cover Art Dither Algorithm",

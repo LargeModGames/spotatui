@@ -33,27 +33,26 @@ use rspotify::model::{
   PlayableItem,
 };
 use rspotify::prelude::Id;
+use serde::Deserialize;
 
-/// First image URL of an `images` list, if any.
-fn first_image(images: &[rspotify::model::image::Image]) -> Option<String> {
-  images.first().map(|img| img.url.clone())
+/// Spotify's internal API includes a playlist description even though
+/// rspotify's `SimplifiedPlaylist` drops it. Capture both from the same item.
+#[derive(Debug, Deserialize)]
+pub(crate) struct PlaylistWithDescription {
+  #[serde(flatten)]
+  pub(crate) simplified: SimplifiedPlaylist,
+  #[serde(default)]
+  pub(crate) description: Option<String>,
 }
 
-/// A track's cover: the smallest image at least 300 px wide, which stays sharp on a
-/// card, else the largest; with no widths known, the first (Spotify lists largest first).
-fn track_cover(images: &[rspotify::model::image::Image]) -> Option<String> {
-  images
-    .iter()
-    .filter(|img| img.width.is_some_and(|width| width >= 300))
-    .min_by_key(|img| img.width)
-    .or_else(|| {
-      images
-        .iter()
-        .filter(|img| img.width.is_some())
-        .max_by_key(|img| img.width)
-    })
-    .or_else(|| images.first())
-    .map(|img| img.url.clone())
+pub(crate) fn playlist_info_with_description(item: &PlaylistWithDescription) -> PlaylistInfo {
+  PlaylistInfo::from_simplified_with_description(&item.simplified, item.description.clone())
+}
+
+/// First image URL of an `images` list, if any. Spotify lists largest first, so
+/// this is also the URL playing art uses for the same item.
+fn first_image(images: &[rspotify::model::image::Image]) -> Option<String> {
+  images.first().map(|img| img.url.clone())
 }
 
 /// Convert a chrono `Duration` to non-negative milliseconds.
@@ -115,7 +114,7 @@ impl From<&FullTrack> for TrackInfo {
       is_local: t.is_local,
       track_number: t.track_number,
       explicit: t.explicit,
-      image_url: track_cover(&t.album.images),
+      image_url: first_image(&t.album.images),
       release_date: t.album.release_date.clone(),
     }
   }
@@ -497,6 +496,102 @@ mod tests {
   }
 
   #[test]
+  fn playlist_description_from_internal_json_is_kept_and_blank_is_dropped() {
+    let item: PlaylistWithDescription = serde_json::from_value(serde_json::json!({
+      "collaborative": false,
+      "description": "<p>Songs for the road &amp; more</p>",
+      "external_urls": { "spotify": "https://open.spotify.com/playlist/1111111111111111111111" },
+      "href": "https://api.spotify.com/v1/playlists/1111111111111111111111",
+      "id": "1111111111111111111111",
+      "images": [{ "height": 300, "url": "https://example.test/playlist.jpg", "width": 300 }],
+      "name": "Road Trip",
+      "owner": {
+        "display_name": "Alice",
+        "external_urls": {},
+        "followers": null,
+        "href": "https://api.spotify.com/v1/users/2222222222222222222222",
+        "id": "2222222222222222222222",
+        "images": [],
+      },
+      "public": true,
+      "snapshot_id": "snapshot",
+      "tracks": { "href": "https://api.spotify.com/v1/playlists/1111111111111111111111/tracks", "total": 1 },
+    }))
+    .unwrap();
+
+    assert_eq!(
+      playlist_info_with_description(&item).description.as_deref(),
+      Some("Songs for the road & more")
+    );
+
+    let blank = PlaylistWithDescription {
+      description: Some("   ".to_string()),
+      ..item
+    };
+    assert_eq!(playlist_info_with_description(&blank).description, None);
+  }
+
+  #[test]
+  fn playlist_description_keeps_words_separate_across_paragraphs_and_line_breaks() {
+    let item: PlaylistWithDescription = serde_json::from_value(serde_json::json!({
+      "collaborative": false,
+      "description": "<p>First line</p><p>Second line<br>and a break</p>",
+      "external_urls": { "spotify": "https://open.spotify.com/playlist/1111111111111111111111" },
+      "href": "https://api.spotify.com/v1/playlists/1111111111111111111111",
+      "id": "1111111111111111111111",
+      "images": [],
+      "name": "Road Trip",
+      "owner": {
+        "display_name": "Alice",
+        "external_urls": {},
+        "followers": null,
+        "href": "https://api.spotify.com/v1/users/2222222222222222222222",
+        "id": "2222222222222222222222",
+        "images": [],
+      },
+      "public": true,
+      "snapshot_id": "snapshot",
+      "tracks": { "href": "https://api.spotify.com/v1/playlists/1111111111111111111111/tracks", "total": 0 },
+    }))
+    .unwrap();
+
+    assert_eq!(
+      playlist_info_with_description(&item).description.as_deref(),
+      Some("First line Second line and a break")
+    );
+  }
+
+  #[test]
+  fn playlist_description_decodes_common_html_entities() {
+    let item: PlaylistWithDescription = serde_json::from_value(serde_json::json!({
+      "collaborative": false,
+      "description": "<p>Rock &#x27;n&#x27; roll &apos;again&apos; &amp; more</p>",
+      "external_urls": { "spotify": "https://open.spotify.com/playlist/1111111111111111111111" },
+      "href": "https://api.spotify.com/v1/playlists/1111111111111111111111",
+      "id": "1111111111111111111111",
+      "images": [],
+      "name": "Road Trip",
+      "owner": {
+        "display_name": "Alice",
+        "external_urls": {},
+        "followers": null,
+        "href": "https://api.spotify.com/v1/users/2222222222222222222222",
+        "id": "2222222222222222222222",
+        "images": [],
+      },
+      "public": true,
+      "snapshot_id": "snapshot",
+      "tracks": { "href": "https://api.spotify.com/v1/playlists/1111111111111111111111/tracks", "total": 0 },
+    }))
+    .unwrap();
+
+    assert_eq!(
+      playlist_info_with_description(&item).description.as_deref(),
+      Some("Rock 'n' roll 'again' & more")
+    );
+  }
+
+  #[test]
   fn full_track_maps_core_and_extended_fields() {
     let ft = full_track("4uLU6hMCjMI75M1A2tKUQC", "Never Gonna Give You Up");
     let info = TrackInfo::from(&ft);
@@ -536,7 +631,7 @@ mod tests {
   }
 
   #[test]
-  fn full_track_takes_the_album_cover_sized_for_a_card() {
+  fn full_track_uses_the_first_album_cover_for_browse_previews() {
     let image = |url: &str, width: Option<u32>| rspotify::model::image::Image {
       url: url.to_string(),
       width,
@@ -550,10 +645,10 @@ mod tests {
       image("64", Some(64)),
       image("300", Some(300)),
     ];
-    assert_eq!(cover(&ft).as_deref(), Some("300"));
+    assert_eq!(cover(&ft).as_deref(), Some("640"));
 
     ft.album.images = vec![image("64", Some(64)), image("120", Some(120))];
-    assert_eq!(cover(&ft).as_deref(), Some("120"));
+    assert_eq!(cover(&ft).as_deref(), Some("64"));
 
     ft.album.images = vec![image("first", None), image("second", None)];
     assert_eq!(cover(&ft).as_deref(), Some("first"));
