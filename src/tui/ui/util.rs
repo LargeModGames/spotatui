@@ -138,6 +138,7 @@ fn cover_art_status_for(app: &App, store: &crate::core::art::CoverArtStore) -> &
     CoverArtStatus::Loading => strings.cover_loading,
     CoverArtStatus::Unavailable => strings.cover_source_unavailable,
     CoverArtStatus::Failed => strings.cover_failed,
+    CoverArtStatus::Inactive => strings.cover_cache_inactive,
     CoverArtStatus::Loaded | CoverArtStatus::NotStarted => strings.cover_empty,
   }
 }

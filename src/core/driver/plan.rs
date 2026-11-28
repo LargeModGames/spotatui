@@ -133,7 +133,9 @@ pub(super) fn cover_art_action(
     }
     None => CoverArtAction::Drop {
       clear: last_requested_key.is_some() || art_loaded,
-      status: if enabled && snapshot_present {
+      status: if !enabled && snapshot_present {
+        CoverArtStatus::Inactive
+      } else if enabled && snapshot_present {
         CoverArtStatus::Unavailable
       } else {
         CoverArtStatus::NotStarted
@@ -431,12 +433,12 @@ mod tests {
     }
 
     #[test]
-    fn disabled_art_and_silence_read_as_not_started() {
+    fn disabled_art_reads_as_inactive_but_silence_reads_as_not_started() {
       assert_eq!(
         cover_art_action(None, Some("url-a"), true, false, false, false, true),
         CoverArtAction::Drop {
           clear: true,
-          status: CoverArtStatus::NotStarted
+          status: CoverArtStatus::Inactive
         }
       );
       assert_eq!(

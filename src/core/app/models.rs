@@ -467,6 +467,214 @@ impl App {
   }
 
   #[cfg(feature = "cover-art")]
+  pub(crate) fn browse_preview_panel_art_requests(
+    &self,
+    max: usize,
+  ) -> Vec<crate::core::art::CoverArtRequest> {
+    fn cover_art_request_for_track(track: &TrackInfo) -> Option<crate::core::art::CoverArtRequest> {
+      #[cfg(feature = "local-files")]
+      if let Some(uri) = track.uri.as_deref() {
+        if uri.starts_with("file://") {
+          if let Ok(path) = crate::infra::local::file_uri_to_path(uri) {
+            return Some(crate::core::art::CoverArtRequest::LocalFile {
+              key: uri.to_string(),
+              path,
+            });
+          }
+        }
+      }
+      track
+        .image_url
+        .as_ref()
+        .map(|url| crate::core::art::CoverArtRequest::Url(url.clone()))
+    }
+
+    let route = self.get_current_route();
+    let mut out: Vec<crate::core::art::CoverArtRequest> = Vec::new();
+    let push_request = |request: crate::core::art::CoverArtRequest,
+                        out: &mut Vec<crate::core::art::CoverArtRequest>| {
+      if out.len() >= max {
+        return;
+      }
+      if !out.iter().any(|r| r.key() == request.key()) {
+        out.push(request);
+      }
+    };
+
+    match route.id {
+      RouteId::Search if route.active_block == ActiveBlock::SearchResultBlock => {
+        let block = self.view.search_selected_block;
+        let (selected, offset, len): (usize, usize, usize) = match block {
+          SearchResultBlock::SongSearch => (
+            self.view.search_selected_tracks_index.unwrap_or(0),
+            self.view.search_tracks_scroll_offset.get(),
+            self
+              .search_results()
+              .tracks
+              .as_ref()
+              .map_or(0, |p| p.items.len()),
+          ),
+          SearchResultBlock::AlbumSearch => (
+            self.view.search_selected_album_index.unwrap_or(0),
+            self.view.search_albums_scroll_offset.get(),
+            self
+              .search_results()
+              .albums
+              .as_ref()
+              .map_or(0, |p| p.items.len()),
+          ),
+          SearchResultBlock::ArtistSearch => (
+            self.view.search_selected_artists_index.unwrap_or(0),
+            self.view.search_artists_scroll_offset.get(),
+            self
+              .search_results()
+              .artists
+              .as_ref()
+              .map_or(0, |p| p.items.len()),
+          ),
+          SearchResultBlock::PlaylistSearch => (
+            self.view.search_selected_playlists_index.unwrap_or(0),
+            self.view.search_playlists_scroll_offset.get(),
+            self
+              .search_results()
+              .playlists
+              .as_ref()
+              .map_or(0, |p| p.items.len()),
+          ),
+          SearchResultBlock::ShowSearch => (
+            self.view.search_selected_shows_index.unwrap_or(0),
+            self.view.search_shows_scroll_offset.get(),
+            self
+              .search_results()
+              .shows
+              .as_ref()
+              .map_or(0, |p| p.items.len()),
+          ),
+          SearchResultBlock::Empty => return out,
+        };
+        let start = offset.min(len.saturating_sub(1));
+        let end = (start + 30).min(len);
+        for i in start..end {
+          if let Some(item) = self.search_preview_item_at_index(block, i) {
+            let request = match &item {
+              BrowsePreviewItem::Track(track) => cover_art_request_for_track(track),
+              _ => item
+                .image_url()
+                .map(|url| crate::core::art::CoverArtRequest::Url(url.to_string())),
+            };
+            if let Some(request) = request {
+              push_request(request, &mut out);
+            }
+          }
+        }
+        let _ = selected;
+      }
+      RouteId::TrackTable | RouteId::Recommendations
+        if route.active_block == ActiveBlock::TrackTable =>
+      {
+        let offset = self.view.track_table_scroll_offset.get();
+        let len = self.track_table.tracks.len();
+        let start = offset.min(len.saturating_sub(1));
+        let end = (start + 30).min(len);
+        for i in start..end {
+          if let Some(track) = self.track_table.tracks.get(i) {
+            if let Some(request) = cover_art_request_for_track(track) {
+              push_request(request, &mut out);
+            }
+          }
+        }
+      }
+      RouteId::RecentlyPlayed if route.active_block == ActiveBlock::RecentlyPlayed => {
+        let len = self.recently_played.as_ref().map_or(0, |p| p.items.len());
+        let start = self.view.recently_played_index.saturating_sub(15).min(len);
+        let end = (start + 30).min(len);
+        if let Some(page) = self.recently_played.as_ref() {
+          for i in start..end {
+            if let Some(track) = page.items.get(i) {
+              if let Some(request) = cover_art_request_for_track(track) {
+                push_request(request, &mut out);
+              }
+            }
+          }
+        }
+      }
+      RouteId::AlbumTracks if route.active_block == ActiveBlock::AlbumTracks => {
+        match self.album_table_context {
+          AlbumTableContext::Full => {
+            if let Some(selected) = self.selected_album_full.as_ref() {
+              let len = selected.album.tracks.len();
+              let start = self
+                .view
+                .saved_album_tracks_index
+                .saturating_sub(15)
+                .min(len);
+              let end = (start + 30).min(len);
+              for i in start..end {
+                if let Some(mut track) = selected.album.tracks.get(i).cloned() {
+                  if track.image_url.is_none() {
+                    track.image_url = selected.album.image_url.clone();
+                  }
+                  if let Some(request) = cover_art_request_for_track(&track) {
+                    push_request(request, &mut out);
+                  }
+                }
+              }
+            }
+          }
+          AlbumTableContext::Simplified => {
+            if let Some(selected) = self.selected_album_simplified.as_ref() {
+              let len = selected.tracks.items.len();
+              let start = selected.selected_index.saturating_sub(15).min(len);
+              let end = (start + 30).min(len);
+              for i in start..end {
+                if let Some(mut track) = selected.tracks.items.get(i).cloned() {
+                  if track.image_url.is_none() {
+                    track.image_url = selected.album.image_url.clone();
+                  }
+                  if let Some(request) = cover_art_request_for_track(&track) {
+                    push_request(request, &mut out);
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+      RouteId::Artist if route.active_block == ActiveBlock::ArtistBlock => {
+        if let Some(artist) = self.artist.as_ref() {
+          if artist.artist_selected_block == ArtistBlock::TopTracks {
+            let len = artist.top_tracks.len();
+            let start = artist.selected_top_track_index.saturating_sub(15).min(len);
+            let end = (start + 30).min(len);
+            for i in start..end {
+              if let Some(track) = artist.top_tracks.get(i) {
+                if let Some(request) = cover_art_request_for_track(track) {
+                  push_request(request, &mut out);
+                }
+              }
+            }
+          }
+        }
+      }
+      RouteId::Queue if route.active_block == ActiveBlock::Queue => {
+        let len = self.native_queue.len();
+        let idx = self.view.queue_selected_index.saturating_sub(1);
+        let start = idx.saturating_sub(15).min(len.saturating_sub(1));
+        let end = (start + 30).min(len);
+        for i in start..end {
+          if let Some(track) = self.native_queue.get(i) {
+            if let Some(request) = cover_art_request_for_track(track) {
+              push_request(request, &mut out);
+            }
+          }
+        }
+      }
+      _ => {}
+    }
+    out
+  }
+
+  #[cfg(feature = "cover-art")]
   pub(crate) fn selected_preview_track(&self) -> Option<TrackInfo> {
     let route = self.get_current_route();
     let index = match route.id {

@@ -345,6 +345,12 @@ pub enum IoEvent {
     crate::core::art::CoverArtTarget,
     u64,
   ),
+  /// Warm the decoded-art cache without touching any UI slot.
+  #[cfg(feature = "art-decode")]
+  PrefetchCoverArt(
+    crate::core::art::CoverArtRequest,
+    tokio::sync::OwnedSemaphorePermit,
+  ),
   /// Download the official Soloist build for this system from Spotify (the
   /// Soloist Path row's button). Needs no Spotify login.
   #[cfg(feature = "soloist")]
@@ -520,7 +526,10 @@ impl Network {
   /// feature is disabled).
   fn event_bypasses_spotify_auth(io_event: &IoEvent) -> bool {
     #[cfg(feature = "art-decode")]
-    if matches!(io_event, IoEvent::FetchCoverArt(..)) {
+    if matches!(
+      io_event,
+      IoEvent::FetchCoverArt(..) | IoEvent::PrefetchCoverArt(..)
+    ) {
       return true;
     }
     #[cfg(feature = "soloist")]
@@ -613,7 +622,10 @@ impl Network {
       return false;
     }
     #[cfg(feature = "art-decode")]
-    if matches!(io_event, IoEvent::FetchCoverArt(..)) {
+    if matches!(
+      io_event,
+      IoEvent::FetchCoverArt(..) | IoEvent::PrefetchCoverArt(..)
+    ) {
       return true;
     }
     #[cfg(feature = "soloist")]
@@ -1034,6 +1046,10 @@ impl Network {
       #[cfg(feature = "art-decode")]
       IoEvent::FetchCoverArt(request, target, generation) => {
         self.fetch_cover_art(request, target, generation).await;
+      }
+      #[cfg(feature = "art-decode")]
+      IoEvent::PrefetchCoverArt(request, _permit) => {
+        self.prefetch_cover_art(request).await;
       }
       #[cfg(feature = "soloist")]
       IoEvent::DownloadSoloist => {

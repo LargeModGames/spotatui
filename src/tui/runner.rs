@@ -117,7 +117,14 @@ fn apply_preview_art_change(app: &mut App, before: Option<String>) {
     return;
   }
   let request = crate::core::driver::browse_preview_art_request_for(app);
-  app.note_browse_preview_art_selection(request.as_ref());
+  let cached = request
+    .as_ref()
+    .is_some_and(|request| crate::core::art::cached_decoded_art(request.key()).is_some());
+  if cached {
+    app.select_browse_preview_art(request.as_ref());
+  } else {
+    app.note_browse_preview_art_selection(request.as_ref());
+  }
 }
 
 /// Blocks that must see the configurable back key *before* the runner acts on it

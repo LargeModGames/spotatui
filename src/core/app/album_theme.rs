@@ -162,14 +162,14 @@ impl App {
   }
 
   /// Load the settled preview selection. Unlike [`Self::note_browse_preview_art_selection`]
-  /// this marks the fetch as loading but keeps any
+  /// this may install cached art or mark the fetch as loading, but keeps any
   /// transition already started so the fade is not restarted by the load.
   #[cfg(feature = "cover-art")]
   pub(crate) fn select_browse_preview_art(
     &mut self,
     request: Option<&crate::core::art::CoverArtRequest>,
   ) {
-    use crate::core::art::CoverArtStatus;
+    use crate::core::art::{cached_decoded_art, CoverArtStatus};
     self.desired_browse_preview_cover_art_generation = self
       .desired_browse_preview_cover_art_generation
       .wrapping_add(1);
@@ -180,14 +180,23 @@ impl App {
       }
       Some(request) => {
         let key = request.key().to_string();
-        self.desired_browse_preview_cover_art_key = Some(key.clone());
-        if self.user_config.behavior.fade_song_selection_cover_art {
-          self.browse_preview_cover_art.begin_fetch(&key);
+        if let Some(image) = cached_decoded_art(&key) {
+          self.desired_browse_preview_cover_art_key = Some(key.clone());
+          if !self.user_config.behavior.fade_song_selection_cover_art {
+            self.browse_preview_cover_art.snap();
+          }
+          self.browse_preview_cover_art.store_decoded(key, image);
+          self.browse_preview_cover_art.status = CoverArtStatus::Loaded;
         } else {
-          self.browse_preview_cover_art.begin_clear();
-          self.browse_preview_cover_art.clear();
+          self.desired_browse_preview_cover_art_key = Some(key.clone());
+          if self.user_config.behavior.fade_song_selection_cover_art {
+            self.browse_preview_cover_art.begin_fetch(&key);
+          } else {
+            self.browse_preview_cover_art.begin_clear();
+            self.browse_preview_cover_art.clear();
+          }
+          self.browse_preview_cover_art.status = CoverArtStatus::Loading;
         }
-        self.browse_preview_cover_art.status = CoverArtStatus::Loading;
       }
     }
   }
@@ -235,7 +244,7 @@ impl App {
   ) {
     self.browse_preview_cover_art.note_fetch_finished(true);
     self.browse_preview_cover_art.store_decoded(key, img);
-    self.browse_preview_cover_art.status = crate::core::art::CoverArtStatus::Loaded;
+    self.browse_preview_cover_art.mark_loaded();
   }
 
   #[cfg(feature = "cover-art")]
@@ -447,6 +456,36 @@ mod tests {
 
   #[cfg(feature = "cover-art")]
   #[test]
+  fn selecting_cached_preview_art_loads_after_the_settle_without_restarting_the_fade() {
+    use crate::core::art::{remember_decoded_art, CoverArtStatus};
+    use std::sync::Arc;
+
+    let key = "https://example.test/select-cached.jpg";
+    remember_decoded_art(key, Arc::new(image::DynamicImage::new_rgb8(2, 2)));
+    let mut app = App::default();
+    app.store_browse_preview_art("old".into(), image::DynamicImage::new_rgb8(1, 1));
+    let request = crate::core::art::CoverArtRequest::Url(key.to_string());
+
+    app.note_browse_preview_art_selection(Some(&request));
+    let (target, started) = app.browse_preview_cover_art().transition().unwrap();
+    assert_eq!(target, key);
+    assert_eq!(app.browse_preview_cover_art().key(), Some("old"));
+
+    app.select_browse_preview_art(Some(&request));
+
+    assert_eq!(app.browse_preview_cover_art().key(), Some(key));
+    assert_eq!(
+      app.browse_preview_cover_art().transition(),
+      Some((key, started))
+    );
+    assert_eq!(
+      app.browse_preview_cover_art().status,
+      CoverArtStatus::Loaded
+    );
+  }
+
+  #[cfg(feature = "cover-art")]
+  #[test]
   fn selecting_uncached_preview_art_starts_the_transition_before_the_fetch() {
     use crate::core::art::CoverArtStatus;
 
@@ -498,6 +537,25 @@ mod tests {
       app.browse_preview_cover_art().snap_generation(),
       snap_generation
     );
+  }
+
+  #[cfg(feature = "cover-art")]
+  #[test]
+  fn a_changed_preview_key_keeps_cached_art_already_installed_with_fade_off() {
+    use crate::core::art::remember_decoded_art;
+    use std::sync::Arc;
+
+    let key = "https://example.test/cached.jpg";
+    remember_decoded_art(key, Arc::new(image::DynamicImage::new_rgb8(2, 2)));
+    let mut app = App::default();
+    app.user_config.behavior.fade_song_selection_cover_art = false;
+    let request = crate::core::art::CoverArtRequest::Url(key.to_string());
+    app.select_browse_preview_art(Some(&request));
+    assert_eq!(app.browse_preview_cover_art().key(), Some(key));
+
+    app.note_browse_preview_art_key_changed(Some(key), std::time::Instant::now());
+
+    assert_eq!(app.browse_preview_cover_art().key(), Some(key));
   }
 
   #[cfg(feature = "cover-art")]

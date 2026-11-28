@@ -2119,6 +2119,66 @@ mod tests {
   }
 
   #[test]
+  fn cached_art_swaps_immediately_without_fading() {
+    let key = "https://example.test/render-cached.jpg";
+    crate::core::art::remember_decoded_art(
+      key,
+      std::sync::Arc::new(DynamicImage::ImageRgb8(RgbImage::from_pixel(
+        16,
+        16,
+        Rgb([0, 0, 200]),
+      ))),
+    );
+    let mut store = CoverArtStore::default();
+    store.store_decoded(
+      "old".into(),
+      DynamicImage::ImageRgb8(RgbImage::from_pixel(16, 16, Rgb([200, 0, 0]))),
+    );
+    let renderer = CoverArtRenderer::new(Picker::halfblocks());
+    let config = UserConfig::new();
+    let mut terminal = Terminal::new(TestBackend::new(8, 4)).unwrap();
+    let now = Instant::now();
+    let draw = |terminal: &mut Terminal<TestBackend>, store: &CoverArtStore, now: Instant| {
+      terminal
+        .draw(|frame| {
+          renderer.render_surface_at(
+            &renderer.playbar,
+            frame,
+            Rect::new(0, 0, 8, 4),
+            store,
+            &config,
+            RenderMoment {
+              style: RenderStyle {
+                resize: Resize::Fit(None),
+                background: Color::Rgb(0, 0, 0),
+                fill: false,
+              },
+              now,
+            },
+          )
+        })
+        .unwrap();
+    };
+
+    draw(&mut terminal, &store, now);
+    store.snap();
+    store.store_decoded(
+      key.to_string(),
+      crate::core::art::cached_decoded_art(key).unwrap(),
+    );
+    renderer.sync_surface(&renderer.playbar, &store, now, true);
+    assert!(!renderer.fade_active());
+    draw(&mut terminal, &store, now);
+    assert!(terminal
+      .backend()
+      .buffer()
+      .content()
+      .iter()
+      .any(|cell| cell.fg == ratatui::style::Color::Rgb(0, 0, 200)
+        || cell.bg == ratatui::style::Color::Rgb(0, 0, 200)));
+  }
+
+  #[test]
   fn browse_preview_scales_small_art_to_fill_the_slot() {
     let mut store = CoverArtStore::default();
     store.store_decoded("small".into(), DynamicImage::new_rgb8(8, 8));

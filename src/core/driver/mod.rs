@@ -163,12 +163,29 @@ pub(crate) fn browse_preview_art_request_for(
 }
 
 #[cfg(feature = "cover-art")]
-#[derive(Default)]
 struct BrowsePreviewArtReconcileState {
   last_fetch: Option<(String, u64)>,
   observed_key: Option<String>,
   applied_key: Option<String>,
   changed_at: Option<Instant>,
+  prefetched_key: Option<String>,
+  panel_prefetch_attempted: std::collections::HashSet<String>,
+  prefetch_slots: std::sync::Arc<tokio::sync::Semaphore>,
+}
+
+#[cfg(feature = "cover-art")]
+impl Default for BrowsePreviewArtReconcileState {
+  fn default() -> Self {
+    Self {
+      last_fetch: None,
+      observed_key: None,
+      applied_key: None,
+      changed_at: None,
+      prefetched_key: None,
+      panel_prefetch_attempted: Default::default(),
+      prefetch_slots: std::sync::Arc::new(tokio::sync::Semaphore::new(2)),
+    }
+  }
 }
 
 #[cfg(feature = "cover-art")]
@@ -197,6 +214,28 @@ fn reconcile_browse_preview_art(
     state.applied_key = None;
     app.note_browse_preview_art_key_changed(desired_key, now);
   }
+  let selected_loading =
+    app.browse_preview_cover_art().status == crate::core::art::CoverArtStatus::Loading;
+  let mut dispatched_prefetch = false;
+  if !state
+    .changed_at
+    .is_some_and(|at| now.duration_since(at) >= BROWSE_PREVIEW_ART_SETTLE_DELAY)
+  {
+    if let Some(request) = desired.as_ref() {
+      let key = request.key();
+      if state.prefetched_key.as_deref() != Some(key)
+        && !selected_loading
+        && crate::core::art::cached_decoded_art(key).is_none()
+      {
+        if let Ok(permit) = state.prefetch_slots.clone().try_acquire_owned() {
+          state.prefetched_key = Some(key.to_string());
+          app.dispatch(IoEvent::PrefetchCoverArt(request.clone(), permit));
+          dispatched_prefetch = true;
+        }
+      }
+    }
+  }
+
   let settled = state
     .changed_at
     .is_some_and(|at| now.duration_since(at) >= BROWSE_PREVIEW_ART_SETTLE_DELAY);
@@ -224,11 +263,34 @@ fn reconcile_browse_preview_art(
     requested_key,
     app.browse_preview_cover_art_available(),
     preview_art.status == crate::core::art::CoverArtStatus::Loading,
-    preview_art.status == crate::core::art::CoverArtStatus::Failed,
+    matches!(
+      preview_art.status,
+      crate::core::art::CoverArtStatus::Failed | crate::core::art::CoverArtStatus::Inactive
+    ),
     enabled,
     false,
   );
 
+  let will_fetch_selected = matches!(action, plan::CoverArtAction::Fetch);
+  if enabled && !selected_loading && !dispatched_prefetch && !will_fetch_selected {
+    let desired_key_str = desired.as_ref().map_or("", |d| d.key());
+    for request in app.browse_preview_panel_art_requests(24) {
+      let key = request.key().to_string();
+      if key == desired_key_str
+        || state.prefetched_key.as_deref() == Some(key.as_str())
+        || state.panel_prefetch_attempted.contains(&key)
+        || crate::core::art::cached_decoded_art(&key).is_some()
+      {
+        continue;
+      }
+      let Ok(permit) = state.prefetch_slots.clone().try_acquire_owned() else {
+        break;
+      };
+      app.dispatch(IoEvent::PrefetchCoverArt(request, permit));
+      state.panel_prefetch_attempted.insert(key);
+      break;
+    }
+  }
   match action {
     plan::CoverArtAction::Fetch => {
       let request = desired.expect("Fetch is only planned with a desired request");
@@ -244,10 +306,13 @@ fn reconcile_browse_preview_art(
       app.keep_browse_preview_art_request(desired.map(|request| request.key().to_string()));
     }
     plan::CoverArtAction::Drop { status, .. } => {
+      // Keep outstanding prefetches counted across route and visibility changes.
       state.last_fetch = None;
       state.observed_key = None;
       state.applied_key = None;
       state.changed_at = None;
+      state.prefetched_key = None;
+      state.panel_prefetch_attempted.clear();
       app.drop_browse_preview_art(status);
     }
   }
@@ -318,6 +383,10 @@ pub struct Driver {
   last_cover_art_key: Option<String>,
   #[cfg(feature = "cover-art")]
   browse_preview_art_reconcile: BrowsePreviewArtReconcileState,
+  /// Previous tick's cover-art status, so an inactive state logs and surfaces
+  /// a status message once instead of on every tick.
+  #[cfg(feature = "art-decode")]
+  last_cover_art_status: Option<crate::core::art::CoverArtStatus>,
   /// Throttle state for `last_session.yml` (see `plan::session_persist_action`):
   /// `last_session_save` spaces the periodic writes; `session_was_present`
   /// lets a Some -> None transition (queue ended, switched to Spotify) clear
@@ -405,6 +474,8 @@ impl Driver {
       last_cover_art_key: None,
       #[cfg(feature = "cover-art")]
       browse_preview_art_reconcile: BrowsePreviewArtReconcileState::default(),
+      #[cfg(feature = "art-decode")]
+      last_cover_art_status: None,
       last_session_save: None,
       session_was_present: false,
       #[cfg(feature = "internet-radio")]
@@ -559,7 +630,10 @@ impl Driver {
           self.last_cover_art_key.as_deref(),
           app.cover_art.available(),
           app.cover_art.status == CoverArtStatus::Loading,
-          app.cover_art.status == CoverArtStatus::Failed,
+          matches!(
+            app.cover_art.status,
+            CoverArtStatus::Failed | CoverArtStatus::Inactive
+          ),
           enabled,
           snapshot.is_some(),
         ) {
@@ -581,6 +655,21 @@ impl Driver {
             app.drop_cover_art_request(clear, status);
           }
         }
+        let status = app.cover_art.status;
+        if self.last_cover_art_status != Some(status) {
+          match status {
+            CoverArtStatus::Inactive => {
+              log::info!("cover art inactive for the current item");
+              let message = app.strings().screens.cover_cache_inactive;
+              app.set_status_message(message, 8);
+            }
+            CoverArtStatus::Unavailable => {
+              log::info!("cover art inactive: current source has no art");
+            }
+            _ => {}
+          }
+        }
+        self.last_cover_art_status = Some(status);
       }
 
       #[cfg(feature = "cover-art")]
@@ -1334,6 +1423,10 @@ mod tests {
       let now = Instant::now();
 
       reconcile_browse_preview_art(&mut app, &mut state, now, false, Some((90, 14)));
+      assert!(matches!(
+        rx.try_recv(),
+        Ok(IoEvent::PrefetchCoverArt(request, _)) if request.key() == "https://example.test/second.jpg"
+      ));
       assert!(
         !rx.try_iter().any(|event| matches!(
           event,
@@ -1382,6 +1475,10 @@ mod tests {
       reconcile_browse_preview_art(&mut app, &mut state, now, false, Some((90, 14)));
 
       assert_eq!(app.browse_preview_cover_art().transition().unwrap().0, key);
+      assert!(matches!(
+        rx.try_recv(),
+        Ok(IoEvent::PrefetchCoverArt(request, _)) if request.key() == key
+      ));
       assert!(
         !rx.try_iter().any(|event| matches!(
           event,
@@ -1403,6 +1500,33 @@ mod tests {
         Ok(IoEvent::FetchCoverArt(_, CoverArtTarget::BrowsePreview, _))
       ));
       assert_eq!(app.browse_preview_cover_art().transition().unwrap().0, key);
+    }
+
+    #[test]
+    fn hovered_art_prefetches_during_debounce_without_changing_selected_preview() {
+      let (mut app, rx) = app_with_search_tracks();
+      app.user_config.behavior.draw_cover_art_forced = true;
+      let mut state = BrowsePreviewArtReconcileState::default();
+      let now = Instant::now();
+      let settled_key = "https://example.test/settled.jpg";
+      app.store_browse_preview_art(settled_key.into(), image::DynamicImage::new_rgb8(1, 1));
+      state.observed_key = Some(settled_key.to_string());
+      state.applied_key = Some(settled_key.to_string());
+
+      app.select_search_result_row(SearchResultBlock::SongSearch, Some(0));
+      reconcile_browse_preview_art(&mut app, &mut state, now, false, Some((90, 14)));
+
+      let events: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+      assert!(
+        events.iter().any(|e| matches!(e, IoEvent::PrefetchCoverArt(request, _) if request.key() == "https://example.test/first.jpg")),
+        "expected hovered prefetch, got {} events",
+        events.len()
+      );
+      assert_eq!(app.browse_preview_cover_art().key(), Some(settled_key));
+      assert_eq!(
+        app.browse_preview_cover_art().status,
+        crate::core::art::CoverArtStatus::Loaded
+      );
     }
 
     #[test]
@@ -1482,6 +1606,10 @@ mod tests {
       let now = Instant::now();
 
       reconcile_browse_preview_art(&mut app, &mut state, now, false, Some((90, 14)));
+      assert!(matches!(
+        rx.try_recv(),
+        Ok(IoEvent::PrefetchCoverArt(request, _)) if request.key() == "https://example.test/second.jpg"
+      ));
       for tick in 1..4 {
         reconcile_browse_preview_art(
           &mut app,
@@ -1500,9 +1628,49 @@ mod tests {
         !rx.try_iter().any(|event| matches!(
           event,
           IoEvent::FetchCoverArt(_, CoverArtTarget::BrowsePreview, _)
+            | IoEvent::PrefetchCoverArt(..)
         )),
-        "loading art should not be fetched again"
+        "loading art should not be re-fetched or re-prefetched"
       );
+    }
+
+    #[test]
+    fn oversized_art_does_not_refetch_until_the_preview_key_changes() {
+      use crate::core::art::{CoverArtStatus, CoverArtStore, CoverArtTarget};
+
+      let (mut app, rx) = app_with_search_tracks();
+      app.user_config.behavior.draw_cover_art_forced = true;
+      *app.browse_preview_cover_art_mut() = CoverArtStore::with_cap_bytes(8);
+      let mut state = BrowsePreviewArtReconcileState::default();
+      let now = Instant::now();
+      let area = Some((90, 14));
+      let delay = BROWSE_PREVIEW_ART_SETTLE_DELAY;
+      reconcile_browse_preview_art(&mut app, &mut state, now, false, area);
+      reconcile_browse_preview_art(&mut app, &mut state, now + delay, false, area);
+      rx.try_iter().for_each(drop);
+
+      let key = browse_preview_art_request_for(&app)
+        .unwrap()
+        .key()
+        .to_string();
+      app.store_browse_preview_art(key, image::DynamicImage::new_rgba8(3, 1));
+      assert_eq!(
+        app.browse_preview_cover_art().status,
+        CoverArtStatus::Inactive
+      );
+      reconcile_browse_preview_art(&mut app, &mut state, now + 2 * delay, false, area);
+      assert!(!rx
+        .try_iter()
+        .any(|event| matches!(event, IoEvent::FetchCoverArt(..))));
+
+      app.select_search_result_row(SearchResultBlock::SongSearch, Some(0));
+      reconcile_browse_preview_art(&mut app, &mut state, now + 3 * delay, false, area);
+      reconcile_browse_preview_art(&mut app, &mut state, now + 4 * delay, false, area);
+      assert!(rx.try_iter().any(|event| matches!(
+        event,
+        IoEvent::FetchCoverArt(request, CoverArtTarget::BrowsePreview, _)
+          if request.key() == "https://example.test/first.jpg"
+      )));
     }
 
     #[test]
@@ -1542,6 +1710,37 @@ mod tests {
     }
 
     #[test]
+    fn prefetch_saturation_leaves_room_for_the_selected_preview() {
+      use crate::core::art::CoverArtTarget;
+
+      let (mut app, rx) = app_with_search_tracks();
+      app.user_config.behavior.draw_cover_art_forced = true;
+      let mut state = BrowsePreviewArtReconcileState::default();
+      let prefetch_slots = state.prefetch_slots.clone();
+      let permits = prefetch_slots.try_acquire_many(2).unwrap();
+      let now = Instant::now();
+      let area = Some((90, 14));
+
+      reconcile_browse_preview_art(&mut app, &mut state, now, false, area);
+      assert!(
+        rx.try_recv().is_err(),
+        "do not queue prefetch work at capacity"
+      );
+      reconcile_browse_preview_art(
+        &mut app,
+        &mut state,
+        now + BROWSE_PREVIEW_ART_SETTLE_DELAY,
+        false,
+        area,
+      );
+      assert!(matches!(
+        rx.try_recv(),
+        Ok(IoEvent::FetchCoverArt(_, CoverArtTarget::BrowsePreview, _))
+      ));
+      drop(permits);
+    }
+
+    #[test]
     fn a_fast_sweep_dispatches_only_the_last_preview_fetch() {
       use crate::core::art::CoverArtTarget;
 
@@ -1558,6 +1757,14 @@ mod tests {
       }
       app.select_search_result_row(SearchResultBlock::SongSearch, Some(1));
       reconcile_browse_preview_art(&mut app, &mut state, now + 3 * step, false, area);
+      assert!(matches!(
+        rx.try_recv(),
+        Ok(IoEvent::PrefetchCoverArt(request, _)) if request.key() == "https://example.test/first.jpg"
+      ));
+      assert!(matches!(
+        rx.try_recv(),
+        Ok(IoEvent::PrefetchCoverArt(request, _)) if request.key() == "https://example.test/second.jpg"
+      ));
       assert!(
         !rx.try_iter().any(|event| matches!(
           event,
@@ -1581,6 +1788,48 @@ mod tests {
         Ok(_) => panic!("the preview used the wrong fetch target"),
       }
       assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn a_fast_sweep_keeps_the_old_cached_art_until_the_last_row_settles() {
+      use crate::core::art::remember_decoded_art;
+      use std::sync::Arc;
+
+      let (mut app, rx) = app_with_search_tracks();
+      app.user_config.behavior.draw_cover_art_forced = true;
+      let first = "https://example.test/sweep-first.jpg";
+      let second = "https://example.test/sweep-second.jpg";
+      remember_decoded_art(first, Arc::new(image::DynamicImage::new_rgb8(2, 2)));
+      remember_decoded_art(second, Arc::new(image::DynamicImage::new_rgb8(2, 2)));
+      app.set_search_results(SearchResult {
+        tracks: Some(Paged {
+          items: vec![track("First", Some(first)), track("Second", Some(second))],
+          total: 2,
+          ..Default::default()
+        }),
+        ..Default::default()
+      });
+      app.store_browse_preview_art("initial".into(), image::DynamicImage::new_rgb8(1, 1));
+      let mut state = BrowsePreviewArtReconcileState::default();
+      let now = Instant::now();
+      let area = Some((90, 14));
+      let step = Duration::from_millis(50);
+
+      app.select_search_result_row(SearchResultBlock::SongSearch, Some(0));
+      reconcile_browse_preview_art(&mut app, &mut state, now, false, area);
+      app.select_search_result_row(SearchResultBlock::SongSearch, Some(1));
+      reconcile_browse_preview_art(&mut app, &mut state, now + step, false, area);
+      assert_eq!(app.browse_preview_cover_art().key(), Some("initial"));
+
+      reconcile_browse_preview_art(
+        &mut app,
+        &mut state,
+        now + BROWSE_PREVIEW_ART_SETTLE_DELAY + step,
+        false,
+        area,
+      );
+      assert_eq!(app.browse_preview_cover_art().key(), Some(second));
+      assert!(rx.try_recv().is_err(), "cached art needs no fetch");
     }
   }
 

@@ -2826,6 +2826,18 @@ mod tests {
     assert!(text.contains("Use `d`/`u` or arrow keys to move"), "{text}");
   }
 
+  #[cfg(feature = "cover-art")]
+  #[test]
+  fn an_inactive_art_cache_has_an_explicit_placeholder() {
+    let mut app = App::default();
+    app.cover_art.status = crate::core::art::CoverArtStatus::Inactive;
+
+    assert_eq!(
+      crate::tui::ui::util::cover_art_status(&app),
+      app.strings().screens.cover_cache_inactive
+    );
+  }
+
   #[cfg(not(feature = "cover-art"))]
   #[test]
   fn a_build_without_cover_art_says_so_on_the_fullscreen_view() {
